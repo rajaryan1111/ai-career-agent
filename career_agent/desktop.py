@@ -19,6 +19,7 @@ from .desktop_logic import (
     job_form_values, plan_job_save, profile_form_values,
 )
 from .store import CareerStore
+from .urls import redact_url_credentials
 
 
 class CareerAgentApp:
@@ -275,7 +276,15 @@ class CareerAgentApp:
         for key, value in self.job_edit_baseline.items():
             self.job_vars[key].set(value)
         self._set_job_mode_display()
-        self._report(f"Selected {job.role_title} at {job.employer_name}\nSource listing: {job.source_listing_url}\nEmployer application URL: {job.employer_apply_url or 'Not verified / not supplied'}\nAvailability evidence: {job.provenance_note or 'Not supplied'}")
+        # Redaction is for the report pane only. Records saved before URL validation existed may hold
+        # credential-bearing links; they are shown safely but never rewritten, and the edit form keeps the
+        # stored value so the user can see and correct it themselves.
+        self._report(redact_url_credentials(
+            f"Selected {job.role_title} at {job.employer_name}\n"
+            f"Source listing: {job.source_listing_url}\n"
+            f"Employer application URL: {job.employer_apply_url or 'Not verified / not supplied'}\n"
+            f"Availability evidence: {job.provenance_note or 'Not supplied'}"
+        ))
 
     def _evaluate(self):
         listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)

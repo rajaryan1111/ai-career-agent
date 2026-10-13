@@ -65,6 +65,23 @@ class FormMappingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "required"):
                     build_job_listing(job_form(**overrides), listing_id="new-id")
 
+    def test_build_job_listing_refuses_credentialed_or_non_public_urls(self):
+        for overrides, label in (
+            ({"source_url": "https://user:pass@jobs.example/1"}, "Source listing URL"),
+            ({"source_url": "http://localhost/1"}, "Source listing URL"),
+            ({"source_url": "http://169.254.169.254/latest/meta-data/"}, "Source listing URL"),
+            ({"source_url": "http://2130706433/"}, "Source listing URL"),
+            ({"apply_url": "http://192.168.1.5/apply"}, "Employer apply URL"),
+            ({"apply_url": "https://jobs.example:not-a-port/apply"}, "Employer apply URL"),
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, f"{label} must be a public web address"):
+                    build_job_listing(job_form(**overrides), listing_id="new-id")
+
+    def test_build_job_listing_still_accepts_a_plain_public_url(self):
+        listing = build_job_listing(job_form(), listing_id="new-id")
+        self.assertEqual(listing.source_listing_url, "https://jobs.example/role/1")
+
     def test_build_job_listing_requires_http_urls(self):
         with self.assertRaisesRegex(ValueError, "Source listing URL must start with"):
             build_job_listing(job_form(source_url="jobs.example/1"), listing_id="new-id")

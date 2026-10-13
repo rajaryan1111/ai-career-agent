@@ -466,6 +466,35 @@ class EditJobSaveTests(HandlerTestCase):
         self.assertEqual(self.store.list_jobs(), ())
 
 
+class SelectedJobReportTests(HandlerTestCase):
+    """The report pane must not echo credentials held in rows saved before URL validation existed."""
+
+    def test_selected_job_report_redacts_stored_credentials_without_rewriting_the_record(self):
+        legacy = sample_job(
+            source_listing_url="https://user:pass@jobs.example/role/1?token=abcdef",
+            employer_apply_url="https://jobs.example/apply/1#sig=deadbeef",
+            provenance_note="Checked https://jobs.example/role/1?api_key=abcd",
+        )
+        self.store.save_job(legacy)
+        app = self.make_app()
+        reports = []
+        app._report = reports.append
+        app.jobs_tree.selected = ("j1",)
+
+        app._select_job()
+
+        self.assertEqual(len(reports), 1)
+        report = reports[0]
+        for secret in ("pass@", "abcdef", "deadbeef", "api_key=abcd"):
+            with self.subTest(secret=secret):
+                self.assertNotIn(secret, report)
+        self.assertIn("***@jobs.example", report)
+        # Redaction is display-only: the stored row is untouched...
+        self.assertEqual(self.store.get_job("j1"), legacy)
+        # ...and the edit form still shows the stored value so the candidate can correct it themselves.
+        self.assertEqual(app.job_vars["source_url"].get(), legacy.source_listing_url)
+
+
 class DatabaseErrorTests(HandlerTestCase):
     def closed_store_app(self):
         app = self.make_app(with_profile=True)

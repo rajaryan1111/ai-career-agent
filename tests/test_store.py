@@ -1,7 +1,9 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.store import CareerStore
@@ -347,6 +349,43 @@ class DurabilityTests(unittest.TestCase):
         missing_parent = Path(self._directory.name) / "absent-directory" / "career_agent.sqlite3"
         with self.assertRaises(sqlite3.Error):
             CareerStore(missing_parent)
+
+
+class DatabaseFilePermissionTests(unittest.TestCase):
+    """Owner-only database permissions are a best-effort hardening, never a correctness guarantee."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "permissions.sqlite3"
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_database_file_is_created_owner_only(self):
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_owner_only_database_reopens_and_keeps_its_data(self):
+        job = JobListing(
+            listing_id="perm1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example/role/perm1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+        )
+        with CareerStore(self.path) as store:
+            store.save_job(job, observed_at="2026-10-14T00:00:00+00:00")
+        with CareerStore(self.path) as reopened:
+            self.assertEqual(reopened.get_job("perm1"), job)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
+    def test_a_platform_that_refuses_the_mode_change_still_gets_a_working_database(self):
+        with mock.patch("career_agent.store.os.chmod", side_effect=OSError("mode changes unsupported")):
+            with CareerStore(self.path) as store:
+                self.assertEqual(store.list_jobs(), ())
+
+    def test_in_memory_databases_are_unaffected(self):
+        with CareerStore(":memory:") as store:
+            self.assertEqual(store.list_jobs(), ())
 
 
 if __name__ == "__main__":

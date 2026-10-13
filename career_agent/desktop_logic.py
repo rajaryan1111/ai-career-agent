@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
 
 from .core import Availability, CandidateProfile, JobListing
+from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
 
 APPLICATION_FOLDER_NAME = "AI Career Agent"
@@ -120,8 +120,9 @@ def default_database_path(
 
 
 def _require_http_url(value: str | None, label: str) -> None:
-    if value and not re.match(r"^https?://", value, re.I):
-        raise ValueError(f"{label} must start with http:// or https://.")
+    """Reject anything that is not a plain, public http(s) address (see ``urls.py``)."""
+    if value:
+        validate_public_http_url(value, label=label)
 
 
 def _split_or_none(value: str) -> tuple[str, ...] | None:

@@ -17,6 +17,11 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Separate source-listing and employer-application URLs.
 - Guarded application status transitions; confirmation requires evidence.
 - Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
+- Validation of manually entered links as public http(s) addresses only (no credentials, no
+  localhost/private/internal targets) and display-time redaction of credentials in older rows.
+- A fail-closed source permission gate: no source runs without recorded permission evidence and a
+  passed source-quality gate, and a legitimate empty result is never confused with a blocked,
+  partial, challenged, or failed run.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
 The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine, local JSON export, and explicit delete controls. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
@@ -49,11 +54,12 @@ Python 3.10+; no third-party packages are required.
 python -m unittest discover -s tests -v
 ```
 
-The suite covers the domain rules, SQLite persistence, the CSV audit tool, the Tk-free desktop
-logic (form mapping, save planning, database-path resolution), and the desktop handlers exercised
-through widget stubs. It requires no display and no GUI packages. Automated tests do **not** cover
-widget rendering, window behavior, or operating-system integration: GUI smoke testing on a real
-desktop, including macOS, remains outstanding and is tracked in
+The suite covers the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
+the source permission gate and run-outcome rules, the Tk-free desktop logic (form mapping, save
+planning, database-path resolution), and the desktop handlers exercised through widget stubs. It
+requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
+behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
+remains outstanding and is tracked in
 [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md).
 
 ## Safety and product principles

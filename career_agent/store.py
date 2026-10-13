@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -14,9 +15,30 @@ from .core import (
 
 _SCHEMA_VERSION = 1
 
+#: Owner read/write only: the database holds candidate PII and should not be group/world readable.
+_OWNER_ONLY_MODE = 0o600
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _restrict_to_owner(path: str) -> bool:
+    """Make the database file owner-only where the platform supports it.
+
+    Best effort and non-fatal: an OS or filesystem that refuses the change (or Windows, where the
+    POSIX mode bits are not meaningful) leaves storage working exactly as before. This is a
+    defence-in-depth measure, not an access-control guarantee: SQLite's own ``-wal``/``-shm``/
+    ``-journal`` side files and the containing directory are outside this function's scope.
+
+    Concept adapted from Agent-Reach's owner-only config handling (MIT License, Copyright (c) 2025
+    Agent Eyes): https://github.com/Panniantong/Agent-Reach, ``agent_reach/config.py``.
+    """
+    try:
+        os.chmod(path, _OWNER_ONLY_MODE)
+    except OSError:
+        return False
+    return True
 
 
 def _json_default(value):
@@ -36,6 +58,7 @@ class CareerStore:
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._initialize()
+        _restrict_to_owner(self.database_path)
 
     def close(self) -> None:
         self._connection.close()
