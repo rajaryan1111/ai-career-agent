@@ -19,9 +19,13 @@ Exit criteria: PRD, architecture, rules, design, and memory agree; no stale stat
 
 **Goal:** Turn the existing offline core into a usable end-to-end local application.
 
-Tasks: select the smallest maintainable desktop UI approach; implement candidate profile editing and local PDF/DOCX resume import with review of uncertain fields; job entry/import; eligibility and explainable matching; shortlist; notes; application ledger; persistent storage; export/delete; and clear unsupported-source states.
+Tasks: implement the chosen Python/Tkinter local shell; candidate profile editing; manual job entry; hard eligibility and explainable matching; shortlist; application ledger/status evidence; persistent SQLite storage; export/delete; and clear unsupported-source states. Resume parsing is deliberately deferred to a follow-on local-only increment so it does not block a complete, testable first workflow.
 
-Exit criteria: a user can configure a profile, add and evaluate a job, shortlist it, track an application, restart the app, and find all saved state intact without a network connection or paid API. Tests cover critical workflows and errors. This is an internal milestone, not the final product.
+Exit criteria: a user can configure a profile, add and evaluate a job, shortlist only an explicitly eligible job, track application state with evidence for confirmation, export/delete local data, restart the app, and find saved state intact without a network connection or paid API. Automated tests and manual GUI smoke tests cover critical workflows and invalid inputs. This is an internal local alpha, not the final product.
+
+### Phase 1B — Local resume import and profile review
+
+Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 
 ## Phase 2 — Product reliability and security foundation
 
