@@ -118,3 +118,19 @@ This pass rechecked seven candidate-relevant records against official employer p
 Re-fetched the CSV after the edits. The audit remains 82 rows and 27 columns, with 0 malformed rows, 0 duplicate listing IDs, 73 distinct canonical URL values and 8 repeated-URL groups. Status labels are now **15 open, 56 unknown, 3 expired, 2 closed, 2 not_a_listing and 4 source_review**. Permission remains unknown on 77 rows. These are mixed audit observations, not 15 unique, candidate-ready vacancies; duplicate controls and shared-page tracks remain excluded or unresolved for unique-vacancy counting.
 
 No connector or source API was integrated or queried. No candidate data was submitted to vINe AI's Google Form or Needl.ai by email. The source-quality gate remains **NOT PASSED / research-only**.
+
+
+## Fourth candidate-focused status check — 2026-10-14
+
+Two more records have stronger current availability evidence from their official pages. These updates concern listing status only; they do not approve data collection or resolve every candidate-eligibility question.
+
+| Record | Canonical evidence | Status and caveats |
+|---|---|---|
+| IN-008 — Humans Care Foundation, AI / Machine Learning Engineer | [Official careers index](https://www.thehcf.in/careers) says “Accepting applications 5 open” and lists J01 AI / Machine Learning Engineer among the five roles. [Role page](https://www.thehcf.in/careers/ai-ml-engineer) says Remote, anywhere in India; paid merit-based internship, one month initially with extension on performance; Python, PyTorch/TensorFlow, model evaluation/deployment, RAG and production AI pipelines. | Updated to **open**. The stipend amount, eligibility details, candidate-data privacy/retention and product/source permission remain unresolved. Crucial distinction: HCF separately offers a two-week ₹500 traineeship that the employer describes as training, not a job. Never conflate that candidate-paid programme with the paid internship. |
+| IN-009 — EduRankAI, Deep Learning Engineering Intern (AICTE portal) | [Official AICTE National Internship Portal listing](https://internship.aicte-india.org/internship-details.php?uid=SU5URVJOU0hJUF8xNzg4MzQzNTgxNmE5N2Y1MWRjMWYyYQ%3D%3D) dated 2026-09-02 shows Pan India, Full Time, immediate start, three months, ₹0/month stipend, 12 credits and an apply-by date of 2027-03-02. | Updated to **open** because the listing remains presented with a future application deadline. The zero stipend and full-time workload are material; employer/requisition legitimacy, exact degree/year criteria, schedule, privacy and source/product permission still require review. |
+
+### Latest audit snapshot
+
+After updating and re-fetching the CSV: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URL values, 8 repeated-URL groups. Status labels: **17 open, 54 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review**. Permission field remains unknown for 77 rows. These remain mixed audit records and not 17 unique, fully verified candidate-ready jobs.
+
+**Gate remains NOT PASSED / research-only.** No API was queried; no connector, dependency, or production code was added; no candidate data was sent and no application submitted.
