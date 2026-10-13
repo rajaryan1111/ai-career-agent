@@ -55,6 +55,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - A source-by-source adapter design may make platform limitations easier to isolate.
 - Company intelligence is most cost-effective when generated for shortlisted jobs.
 - A trust-first workflow may differentiate the product better than maximizing automated application volume.
+- A useful first release may focus on permitted job discovery, evidence-backed candidate facts, eligibility filters, tailored application kits, and user-confirmed tracking rather than automated submission.
 
 ## Research claims to verify and keep current
 
@@ -80,6 +81,9 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 9. How can company research be sourced, timestamped, and kept affordable?
 10. Which features produce the greatest measurable time savings?
 11. Which competitor workflows should be tested hands-on before setting product scope?
+12. Can company-specific Greenhouse, Lever, and Ashby job boards provide sufficient discovery coverage without prohibited scraping or a paid data provider?
+13. What are the current official Adzuna API quotas, terms, and data-coverage limitations?
+14. What privacy/data-protection obligations apply to local resume and application data?
 
 ## Proposed validation thresholds (not achieved)
 
@@ -94,6 +98,12 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 These are proposed targets. Do not report them as measured results.
 
 ## Change log
+
+### 2026-10-13 — Claude report critically reviewed
+- Added `research/claude-report-review-and-feasibility-gaps.md` with a critical review of the supplied partial Claude report and independent checks of official LinkedIn, Indeed, Lever, Ashby, and Greenhouse sources.
+- Kept the strongest proposals as hypotheses: candidate fact provenance, hard eligibility gates, visible resume diffs, explicit application states, and catch-up behavior.
+- Flagged unresolved source coverage, Adzuna quota, competitor pricing/quality, and legal/privacy questions; clarified that an anonymous 404 does not establish that a private repository is missing.
+- No implementation started.
 
 ### 2026-10-13 — Initial competitor and feature scan
 - Added `research/competitor-landscape-and-feature-opportunities.md` with a preliminary competitor comparison, initial platform compliance signals, feature opportunities, and validation experiments.
