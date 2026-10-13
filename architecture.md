@@ -69,11 +69,10 @@ Default discovery schedule is 00:00 and 12:00 Asia/Kolkata. The requirement to o
 
 Use OS credential storage where feasible. Never store platform passwords in plaintext. Avoid logging resumes, tokens, or full screening answers. Apply least privilege to integrations. Support profile/application-data deletion. Keep audit records useful without retaining unnecessary sensitive information. Document a threat model before enabling submission automation.
 
-## 10. Architecture decisions pending
+## 10. Remaining architecture decisions
 
-- Desktop framework.
-- Single-language vs hybrid runtime.
-- Database and local encryption strategy.
+- Packaging, installation/update/uninstall, and supported OS matrix for the Tkinter alpha.
+- Local database migrations, encryption-at-rest, backup and restore strategy.
 - Local inference vs optional external AI.
 - Scheduler behavior while offline.
 - Initial job-source adapters.
@@ -92,8 +91,8 @@ The ATS field-coverage study at [research/ats-board-api-field-coverage-review-20
 The [QaliAI/ai-job-agent review](research/open-source-ai-job-agent-review-2026-10-13.md) reinforces three architecture invariants before implementation: (1) per-source transport/schema/rate-limit/permission outcomes must be distinct from a valid empty result; (2) failed or blocked canonical verification means unknown/unverified, never open; and (3) work mode, country eligibility, compensation currency and pay period require separate evidence-backed fields. Do not reuse its SmartRecruiters adapter while our source-policy gate remains blocked. These are acceptance requirements, not implemented features. No code or dependencies added.
 
 
-### Implemented offline core — 2026-10-14
-The first code layer now includes deterministic eligibility evaluation, explainable skill overlap, conservative URL/requisition deduplication, separate source/application URL fields, application-state transition guards, and a standard-library SQLite store for profile/job/tracker records. These are implemented domain/persistence primitives, not a finished desktop application. The database path is explicitly supplied by the caller. No network client, source adapter, resume parser, UI, autofill, or submission path is present. The local test suite currently has 25 passing tests.
+### Implemented local alpha — 2026-10-14
+The repository now includes a Python/Tkinter UI launched with `python -m career_agent`, deterministic eligibility evaluation, explainable skill overlap, conservative URL/requisition deduplication, separate source/application URL fields, optional exact-match work-authorization requirements, guarded application-state transitions, and standard-library SQLite persistence for profile/job/tracker records. The desktop app chooses a per-user application-data path and performs no network requests. This is an internal local alpha, not a packaged production release. Resume parsing, live source adapters, remote execution, autofill, and submission remain deferred or gated; GUI smoke tests and packaging/recovery work are still required.
 
 
 ## 12. Production product architecture and cross-industry extensibility
