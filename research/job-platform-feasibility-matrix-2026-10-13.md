@@ -366,3 +366,12 @@ Reviewed the public MIT-licensed [QaliAI/ai-job-agent](https://github.com/QaliAI
 
 Added SV-034–SV-037 to the validation suite. No upstream code, registry, dependencies, credentials or candidate data were copied; no source endpoints were queried and no applications were submitted. Implementation remains blocked by the source feasibility/permission gate.
 
+
+
+## Follow-up public GitHub research — Remotive API (checked 2026-10-14)
+
+**Status: conditional research candidate; not approved for integration.**
+
+The public repository [remotive-com/remote-jobs-api](https://github.com/remotive-com/remote-jobs-api) documents the endpoint [https://remotive.com/api/remote-jobs](https://remotive.com/api/remote-jobs) for active remote listings. The repository's own terms say results are delayed by 24 hours, recommend no more than four requests per day, require a link to the canonical Remotive listing plus source attribution, prohibit submitting Remotive jobs to third-party job websites, and prohibit displaying listings to collect signups/email addresses.
+
+**Decision:** do not call the endpoint or add a connector during this research pass. Before a bounded test, confirm that the intended local-desktop use fits the current terms; preserve attribution/canonical links; observe the documented request guidance; and evaluate target-role coverage, geographic restrictions, stale/closed handling, and apply-route quality. API availability is not source permission or evidence that a role fits the candidate. See [Public GitHub Reuse Audit](public-github-reuse-audit-2026-10-14.md) and acceptance cases SV-041–SV-042 in the [Source Validation Test Suite](source-validation-test-suite-2026-10-13.md).
