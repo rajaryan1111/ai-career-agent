@@ -133,6 +133,13 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertEqual(confirmed.status, ApplicationStatus.CONFIRMED)
         self.assertEqual(confirmed.status_evidence, "Employer confirmation page shown")
 
+    def test_confirmation_flag_survives_later_status_transitions(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page shown", candidate_confirmed=True)
+        response = confirmed.transition(ApplicationStatus.RESPONSE_RECEIVED, evidence="Employer email received")
+        self.assertTrue(response.candidate_confirmed)
+        self.assertEqual(response.status_evidence, "Employer email received")
+
     def test_invalid_transition_is_rejected(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
         with self.assertRaises(ValueError):
