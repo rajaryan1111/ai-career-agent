@@ -112,6 +112,23 @@ These rules override any imported developer workflow that encourages autonomy or
 - No telemetry or network behavior added to the product merely because an upstream tool has optional telemetry.
 - No use of large AI-generated changes without inspecting the diff and verifying behavior.
 
+
+## Targeted lessons from agency-agents (reviewed 2026-10-13)
+
+Reference review: [Agency Agents repository review](research/agency-agents-repository-review-2026-10-13.md). These are adapted process principles only; no upstream persona catalog or tooling is installed.
+
+### Minimum-change scope check
+For each meaningful change, record the required outcome and why each modified file is necessary. Keep unrelated cleanup or speculative enhancements separate. Inspect the final diff and remove lines that do not support the task. Do not suppress a necessary safety fix merely to keep a diff small.
+
+### Evidence and honest reporting
+Label findings as observed, inferred, unknown/not tested, or proposed. Choose evidence suited to the claim: screenshots prove appearance, assertions/logs establish behavior, source terms establish documented rules, and live samples are needed to measure coverage. A passing test does not prove unrelated properties such as permission, completeness, or successful submission. Verify resulting GitHub state before claiming a push succeeded.
+
+### Matching-evaluation guardrail
+Before adjusting matching/ranking after the research gate, compare against a versioned human-reviewed judgment set covering common and long-tail queries, wording variants, ambiguous job families, and negative controls. Report retrieval coverage separately from ranking quality. Eligibility constraints must remain hard gates and cannot be outweighed by semantic similarity. Do not claim recall without a defensible denominator.
+
+### Prompt/retrieval safety guardrail
+If model prompts or agent instructions are later added, specify task, permitted tools/data, output shape, success criteria, and failure/unknown behavior. Add regression fixtures for ordinary, edge, and adversarial cases where relevant. Treat listings, resumes, documents, and tool output as untrusted data, never as instructions that can expand permission or tool authority. Review executable scripts before running them.
+
 ## Source review and limits
 
 ### gstack
