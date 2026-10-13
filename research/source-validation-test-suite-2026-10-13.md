@@ -71,6 +71,12 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-028 | IN-001 Apple Applied ML Intern | Enforce the official minimum requirement of PhD student in year 2 or beyond; retain unknown listing status until separately verified | Recommended to an undergraduate or marked eligible because the role is in Bengaluru and says intern |
 | SV-029 | IN-022 Sprinto application page | Treat hCaptcha as a human-intervention boundary; never solve, bypass, or automate around it. Listing discovery/detail review remains separate from application submission | Automation attempts to bypass the challenge or claims that a visible Apply link authorizes automated submission |
 
+### SV-031 — Himalayas permission conflict fixture
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-031 | Himalayas public API documentation versus general Terms of Service | Mark source blocked pending written clarification; do not call/search/crawl/cache it during feasibility sampling. If later cleared, record the written scope and meet attribution/link-back and no-third-party-aggregator conditions | Public API availability or attribution is treated as unconditional permission despite the general terms' automated-gathering restriction, or Himalayas is counted as a cleared source without written clarification |
+
 ## 4. Live-source test cases (read-only only)
 
 ### AI Dev Jobs
@@ -83,11 +89,13 @@ These tests can be evaluated against existing seed records before any live conne
 
 Official references: https://aidevboard.com/docs and https://aidevboard.com/terms.
 
-### Himalayas
-- Test a small, fixed set of documented search filters: India + internship/entry-level; worldwide + internship/entry-level; AI; ML.
+### Himalayas — HOLD; do not run the planned query test until permission is clarified
+- Official API docs describe public integration use, but general Terms of Service broadly prohibit automated data gathering without prior written approval.
+- Obtain written clarification for a local-first desktop client before calling filtered endpoints, crawling, caching, or measuring coverage. See [permission review](himalayas-api-permission-terms-conflict-2026-10-13.md).
+- If and only if written clearance is received, test a small, fixed set of documented search filters: India + internship/entry-level; worldwide + internship/entry-level; AI; ML.
 - Capture employmentType, seniority, country/worldwide and timezone restrictions, applicationLink, publication/expiry timestamps, salary currency and period, and stable listing ID.
 - The documented API has a maximum of 20 results per request, rate limits, and data refreshed every 24 hours. Avoid polling more often than daily.
-- If used in a product, show Himalayas as the source with a visible link back to Himalayas and the original listing; do not resubmit its listings to third-party aggregators.
+- If written permission is obtained, show Himalayas as the source with a visible link back to Himalayas and the original listing; do not resubmit its listings to third-party aggregators.
 - Filtered API payloads and target coverage have not yet been verified in this environment.
 
 Official references: https://himalayas.app/api and https://himalayas.app/docs/remote-jobs-api.
@@ -151,7 +159,7 @@ These are proposed internal gates, not results. Report precision among sampled s
 
 - CSV structure passes the initial 27-column/unique-ID check.
 - Several useful negative controls already exist for closed, expired, duplicate, non-listing, role-family and geography cases.
-- The live source coverage gate is **not passed**: the existing API smoke test is not a fixed filtered sample, the target-relevant unique count is not established, and permissions/attribution remain unresolved for candidate feeds.
+- The live source coverage gate is **not passed**: the existing API smoke test is not a fixed filtered sample, the target-relevant unique count is not established, and permissions/attribution remain unresolved for candidate feeds. Himalayas is specifically on hold pending written clarification because its API docs and general terms create a material permission ambiguity.
 - **No implementation code, dependencies, credentials, candidate data transfer, or application submissions are authorized by this document.**
 
 
