@@ -354,3 +354,12 @@ Applied 2026-10-14: Meraki Labs AI Engineer Intern and AtkinsRéalis Robotics & 
 | SV-048 | An employer offers both a paid internship and a separate candidate-paid training programme on the same careers site | Preserve separate programme identity, compensation direction, duration and classification. A candidate-paid training programme must not be represented as employment or merged into a paid internship. | Omitting the candidate fee, counting training as a job, or transferring terms between programmes. |
 
 Applied 2026-10-14: Humans Care Foundation describes a paid one-month initial internship and a separate ₹500 two-week traineeship explicitly described as training, not a job. AICTE's EduRankAI internship listing explicitly states ₹0/month stipend and apply-by date 2027-03-02; zero compensation must remain visible in candidate-facing output. CSV baseline: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs; statuses open 17, unknown 54, expired 3, closed 2, not_a_listing 2, source_review 4; permission unknown 77. Gate remains NOT PASSED.
+
+
+### SV-049 — Separate vacancy availability from candidate fit
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-049 | Employer board currently lists a role as open, but the role requires a degree/year/experience profile not established for the candidate | Keep listing status and candidate-fit/eligibility as separate fields. A vacancy can be open while candidate fit is unknown or poor. State the exact requirement and do not imply eligibility. | Marking a role suitable because it is open, interpreting “related field” as automatically including ECE, or hiding a restrictive degree requirement. |
+
+Applied 2026-10-14: Sprinto AI Implementation Intern is listed on the current employer board and its requirements include a current degree in CS, Engineering, Data Science or a related technical field; global eligibility is not established. Unisys AI Engineering Intern explicitly asks for a current/recent M.Tech in CS, AI/ML or related, so it is not a direct fit for a BTech ECE undergraduate absent further evidence. Concentric AI and AtkinsRéalis keep their internship/full-time or degree-specific contradictions unresolved. Gate remains NOT PASSED.
