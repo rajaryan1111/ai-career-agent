@@ -134,3 +134,13 @@ Two more records have stronger current availability evidence from their official
 After updating and re-fetching the CSV: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URL values, 8 repeated-URL groups. Status labels: **17 open, 54 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review**. Permission field remains unknown for 77 rows. These remain mixed audit records and not 17 unique, fully verified candidate-ready jobs.
 
 **Gate remains NOT PASSED / research-only.** No API was queried; no connector, dependency, or production code was added; no candidate data was sent and no application submitted.
+
+
+## Fourth candidate-focused status check — 2026-10-14
+
+Two records have stronger current availability evidence from official pages:
+
+- **IN-008 — Humans Care Foundation, AI / Machine Learning Engineer.** The [official careers index](https://www.thehcf.in/careers) says it is accepting applications for five open roles, including J01. The [role page](https://www.thehcf.in/careers/ai-ml-engineer) says remote anywhere in India, paid merit-based internship, one month initially with extension on performance, and work involving Python, PyTorch/TensorFlow, model evaluation/deployment, RAG and production AI pipelines. Status updated to open. Stipend amount, eligibility and privacy/source permissions remain unresolved. Important: HCF separately offers a two-week ₹500 traineeship, which the employer describes as training rather than a job; do not merge it with the paid internship.
+- **IN-009 — EduRankAI Deep Learning Engineering Intern (AICTE portal).** The [official portal listing](https://internship.aicte-india.org/internship-details.php?uid=SU5URVJOU0hJUF8xNzg4MzQzNTgxNmE5N2Y1MWRjMWYyYQ%3D%3D) dated 2026-09-02 shows Pan India, full-time, immediate start, three months, ₹0/month stipend, 12 credits and apply-by 2027-03-02. Status updated to open because the listing has a future deadline. Employer/requisition legitimacy, eligibility, workload, privacy and source permission remain unresolved. Zero stipend must remain visible to candidates.
+
+Latest CSV snapshot after updates: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, 8 repeated-URL groups; status labels 17 open, 54 unknown, 3 expired, 2 closed, 2 not_a_listing and 4 source_review. Permission remains unknown for 77 rows. These are mixed audit records, not 17 unique fully verified vacancies. Gate remains NOT PASSED / research-only. No API queried, no production integration added, and no candidate data or applications submitted.
