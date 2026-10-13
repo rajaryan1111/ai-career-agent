@@ -312,7 +312,11 @@ class CareerAgentApp:
             self._evaluate()
             return
         try:
-            tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
+            tracker = self.store.get_tracker(listing_id)
+            if tracker is None:
+                # A tracker record only ever starts at the permitted initial status.
+                tracker = ApplicationTracker(listing_id)
+                self.store.save_tracker(tracker)
             self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
         except ValueError as exc:
             messagebox.showerror("Cannot shortlist", str(exc), parent=self.root)
@@ -397,17 +401,22 @@ class CareerAgentApp:
                     new_status = ApplicationStatus(status_var.get())
                 except ValueError as exc:
                     raise ValueError("Select the status you want to apply.") from exc
-                updated = tracker.transition(
+                stored = self.store.get_tracker(listing_id)
+                current = stored if stored is not None else ApplicationTracker(listing_id)
+                if stored is None and new_status is not ApplicationStatus.DISCOVERED:
+                    # A tracker record only ever starts at the permitted initial status.
+                    self.store.save_tracker(current)
+                updated = current.transition(
                     new_status,
                     evidence=evidence_var.get().strip() or None,
                     candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None,
                 )
-                if updated == tracker:
+                if updated == current and stored is not None:
                     dialog.destroy()
-                    self.status.set(f"No change: the application is already {tracker.status.value}. Nothing was saved.")
+                    self.status.set(f"No change: the application is already {current.status.value}. Nothing was saved.")
                     messagebox.showinfo(
                         "No change",
-                        f"This application is already {tracker.status.value}. Nothing was saved; "
+                        f"This application is already {current.status.value}. Nothing was saved; "
                         "supplied notes are not stored on a no-op.\n\nTo revise the evidence, move the "
                         "status forward with a meaningful note, or keep the existing record as it is.",
                         parent=self.root,

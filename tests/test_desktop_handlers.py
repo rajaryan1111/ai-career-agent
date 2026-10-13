@@ -228,6 +228,37 @@ def sample_job(**overrides):
     return JobListing(**values)
 
 
+#: Permitted path used by tests that need an already-advanced tracker record.
+_PATH_TO_SUBMISSION = (
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.PREPARED,
+    ApplicationStatus.AWAITING_USER,
+    ApplicationStatus.SUBMISSION_ATTEMPTED,
+)
+
+
+def reach_status(store, target, listing_id="j1", *, evidence=None):
+    """Advance a tracker from discovered to ``target`` through permitted transitions (test scaffolding)."""
+    tracker = ApplicationTracker(listing_id)
+    store.save_tracker(tracker)
+    if target is ApplicationStatus.DISCOVERED:
+        return tracker
+    for status in _PATH_TO_SUBMISSION:
+        tracker = tracker.transition(status)
+        store.save_tracker(tracker)
+        if status is target:
+            return tracker
+    if target is ApplicationStatus.CONFIRMED:
+        tracker = tracker.transition(
+            ApplicationStatus.CONFIRMED,
+            evidence=evidence or "Employer confirmation email",
+            candidate_confirmed=True,
+        )
+        store.save_tracker(tracker)
+        return tracker
+    raise AssertionError(f"reach_status does not support {target}")
+
+
 class HandlerTestCase(unittest.TestCase):
     def setUp(self):
         self._directory = tempfile.TemporaryDirectory()
@@ -382,8 +413,7 @@ class EditJobSaveTests(HandlerTestCase):
 
     def test_edit_keeps_identity_and_asks_before_an_eligibility_relevant_change(self):
         self.store.save_job(sample_job())
-        tracker = ApplicationTracker("j1", ApplicationStatus.SHORTLISTED)
-        self.store.save_tracker(tracker)
+        tracker = reach_status(self.store, ApplicationStatus.SHORTLISTED)
         app = self.make_app()
         app.jobs_tree.selected = ("j1",)
         app._select_job()
@@ -489,11 +519,47 @@ class DatabaseErrorTests(HandlerTestCase):
         self.assertIsNone(self.store.get_tracker("j1"))
 
 
+class MissingTrackerRowTests(HandlerTestCase):
+    """A job saved without a tracker row must still start at the permitted initial status."""
+
+    def test_shortlist_creates_the_initial_record_first(self):
+        self.store.save_job(sample_job())
+        self.store.save_profile(PROFILE)
+        self.assertIsNone(self.store.get_tracker("j1"))
+        app = self.make_app()
+        app.selected_job_id = "j1"
+        app._shortlist()
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertFalse(stored.candidate_confirmed)
+        self.assertNotIn("Not eligible to shortlist", MESSAGES.titles())
+
+    def test_status_update_creates_the_initial_record_first(self):
+        self.store.save_job(sample_job())
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("shortlisted")
+        apply()
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertIn("updated to shortlisted", app.status.get())
+
+    def test_status_update_cannot_create_a_record_before_discovery(self):
+        self.store.save_job(sample_job())
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("confirmed")
+        evidence_var.set("fabricated confirmation")
+        apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.DISCOVERED)
+        self.assertFalse(stored.candidate_confirmed)
+
+
 class TrackerUpdateTests(HandlerTestCase):
     def setUp(self):
         super().setUp()
         self.store.save_job(sample_job())
-        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED))
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
 
     def test_confirmation_still_requires_evidence(self):
         app, status_var, evidence_var, apply = self.open_status_dialog()
@@ -514,7 +580,10 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertIn("updated to confirmed", app.status.get())
 
     def test_no_op_transition_does_not_claim_success_and_keeps_the_old_evidence(self):
-        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "original evidence", True))
+        advanced = self.store.get_tracker("j1").transition(
+            ApplicationStatus.CONFIRMED, evidence="original evidence", candidate_confirmed=True
+        )
+        self.store.save_tracker(advanced)
         app, status_var, evidence_var, apply = self.open_status_dialog()
         status_var.set("confirmed")
         evidence_var.set("replacement evidence that must not be stored")
@@ -594,7 +663,7 @@ class ProfileAndDeletionTests(HandlerTestCase):
 
     def test_job_delete_removes_the_tracker_row_and_returns_to_new_mode(self):
         self.store.save_job(sample_job())
-        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.SHORTLISTED))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
         app = self.make_app()
         app.selected_job_id = "j1"
         CONFIG["Delete job"] = True
@@ -607,7 +676,7 @@ class ProfileAndDeletionTests(HandlerTestCase):
     def test_export_writes_a_local_json_file_with_a_privacy_warning(self):
         self.store.save_job(sample_job())
         self.store.save_profile(PROFILE)
-        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer email", True))
+        reach_status(self.store, ApplicationStatus.CONFIRMED, evidence="Employer email")
         destination = Path(self._directory.name) / "export.json"
         FILEDIALOG.path = str(destination)
         app = self.make_app()

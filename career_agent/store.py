@@ -8,8 +8,8 @@ import sqlite3
 from pathlib import Path
 
 from .core import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    JobListing, duplicate_key, is_allowed_tracker_transition,
+    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
+    CandidateProfile, JobListing, duplicate_key, is_allowed_tracker_transition,
 )
 
 _SCHEMA_VERSION = 1
@@ -128,25 +128,18 @@ class CareerStore:
     def save_tracker(self, tracker: ApplicationTracker) -> None:
         """Persist tracker state, enforcing the domain invariants at the storage boundary.
 
-        A confirmed record must carry evidence, and a status change must be one the
-        domain state machine permits (re-applying the current status stays an
-        idempotent no-op). The desktop app already moves through
+        Creating a record always starts at :data:`~career_agent.core.INITIAL_APPLICATION_STATUS`
+        (``discovered``), so a record cannot appear as shortlisted, submitted, confirmed, or
+        completed without having passed through the permitted states. Later writes must be
+        transitions the state machine permits (re-applying the current status stays an
+        idempotent no-op), ``confirmed`` always requires evidence, and ``candidate_confirmed``
+        cannot claim a confirmation that was never recorded. The desktop app moves through
         ``ApplicationTracker.transition`` before saving, so valid sequential use is
-        unaffected; a stale or externally edited record is refused instead of being
-        written. No schema change is required and existing rows are never rewritten.
+        unaffected; an arbitrary or contradictory record is refused instead of being written.
+        No schema change is required and existing rows are never rewritten.
         """
-        if tracker.status is ApplicationStatus.CONFIRMED and not (
-            tracker.status_evidence and tracker.status_evidence.strip()
-        ):
-            raise ValueError(
-                "A confirmed application requires evidence; a click or attempted submission is not proof."
-            )
         stored = self.get_tracker(tracker.listing_id)
-        if stored is not None and not is_allowed_tracker_transition(stored.status, tracker.status):
-            raise ValueError(
-                f"Invalid application transition: {stored.status.value} -> {tracker.status.value}. "
-                "Update the status through ApplicationTracker.transition."
-            )
+        self._check_tracker_invariants(tracker, stored)
         timestamp = _now()
         try:
             with self._connection:
@@ -161,6 +154,45 @@ class CareerStore:
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("Save the job listing before its application tracker.") from exc
+
+    def _check_tracker_invariants(self, tracker: ApplicationTracker, stored: ApplicationTracker | None) -> None:
+        """Refuse tracker writes that contradict the domain state machine.
+
+        ``stored`` is the row already on disk, or ``None`` when this write creates the
+        record. Confirmation is only ever *earned*: ``candidate_confirmed`` may be true
+        only for a record that already carried the flag or that is being confirmed now,
+        so a later status can keep or drop a real confirmation but cannot invent one.
+        """
+        if tracker.status is ApplicationStatus.CONFIRMED and not (
+            tracker.status_evidence and tracker.status_evidence.strip()
+        ):
+            raise ValueError(
+                "A confirmed application requires evidence; a click or attempted submission is not proof."
+            )
+        if stored is None:
+            if tracker.status is not INITIAL_APPLICATION_STATUS:
+                raise ValueError(
+                    f"A new application record must start at {INITIAL_APPLICATION_STATUS.value}, "
+                    f"not {tracker.status.value}; advance it with ApplicationTracker.transition. "
+                    "Nothing was saved."
+                )
+            if tracker.candidate_confirmed:
+                raise ValueError(
+                    "A new application record cannot claim candidate confirmation; confirmation "
+                    "requires a recorded transition with evidence. Nothing was saved."
+                )
+            return
+        if not is_allowed_tracker_transition(stored.status, tracker.status):
+            raise ValueError(
+                f"Invalid application transition: {stored.status.value} -> {tracker.status.value}. "
+                "Update the status through ApplicationTracker.transition."
+            )
+        if tracker.candidate_confirmed and not (stored.candidate_confirmed or tracker.status is ApplicationStatus.CONFIRMED):
+            raise ValueError(
+                "candidate_confirmed cannot be true before a confirmation is recorded: expected a "
+                f"stored confirmation or a transition to {ApplicationStatus.CONFIRMED.value}, "
+                f"not {tracker.status.value}."
+            )
 
     def get_tracker(self, listing_id: str) -> ApplicationTracker | None:
         row = self._connection.execute(

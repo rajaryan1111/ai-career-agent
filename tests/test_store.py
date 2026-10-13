@@ -6,6 +6,40 @@ from pathlib import Path
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.store import CareerStore
 
+#: Permitted path used by tests that need an already-advanced record.
+_PATH_TO_SUBMISSION = (
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.PREPARED,
+    ApplicationStatus.AWAITING_USER,
+    ApplicationStatus.SUBMISSION_ATTEMPTED,
+)
+CONFIRMATION_EVIDENCE = "Employer confirmation email"
+
+
+def reach_status(store, target, listing_id="j1", *, evidence=None):
+    """Advance a tracker from ``discovered`` to ``target`` through permitted transitions.
+
+    Test scaffolding only: it saves the initial record and then moves one permitted step at
+    a time, so tests exercise the same path the application uses instead of writing an
+    arbitrary first status.
+    """
+    tracker = ApplicationTracker(listing_id)
+    store.save_tracker(tracker)
+    if target is ApplicationStatus.DISCOVERED:
+        return tracker
+    for status in _PATH_TO_SUBMISSION:
+        tracker = tracker.transition(status)
+        store.save_tracker(tracker)
+        if status is target:
+            return tracker
+    if target is ApplicationStatus.CONFIRMED:
+        tracker = tracker.transition(
+            ApplicationStatus.CONFIRMED, evidence=evidence or CONFIRMATION_EVIDENCE, candidate_confirmed=True
+        )
+        store.save_tracker(tracker)
+        return tracker
+    raise AssertionError(f"reach_status does not support {target}")
+
 
 class CareerStoreTests(unittest.TestCase):
     def setUp(self):
@@ -81,9 +115,10 @@ class CareerStoreTests(unittest.TestCase):
 
     def test_confirmation_evidence_and_flag_persist(self):
         self.store.save_job(self.job)
-        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer confirmation email", True)
-        self.store.save_tracker(tracker)
-        self.assertEqual(self.store.get_tracker("j1"), tracker)
+        saved = reach_status(self.store, ApplicationStatus.CONFIRMED)
+        self.assertEqual(self.store.get_tracker("j1"), saved)
+        self.assertEqual(saved.status_evidence, CONFIRMATION_EVIDENCE)
+        self.assertTrue(saved.candidate_confirmed)
 
     def test_duplicate_group_uses_conservative_key(self):
         self.store.save_job(self.job)
@@ -108,16 +143,83 @@ class TrackerInvariantTests(unittest.TestCase):
         self.store.close()
 
     def test_confirmation_without_evidence_is_refused(self):
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
         with self.assertRaisesRegex(ValueError, "requires evidence"):
             self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED))
         with self.assertRaisesRegex(ValueError, "requires evidence"):
             self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "   "))
-        self.assertIsNone(self.store.get_tracker("j1"))
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        self.assertFalse(self.store.get_tracker("j1").candidate_confirmed)
 
     def test_confirmation_with_evidence_is_accepted(self):
-        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer confirmation email", True)
-        self.store.save_tracker(tracker)
-        self.assertEqual(self.store.get_tracker("j1"), tracker)
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        stored = self.store.get_tracker("j1")
+        confirmed = stored.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation email", candidate_confirmed=True)
+        self.store.save_tracker(confirmed)
+        self.assertEqual(self.store.get_tracker("j1"), confirmed)
+        self.assertTrue(self.store.get_tracker("j1").candidate_confirmed)
+
+    def test_initial_status_must_be_discovered(self):
+        for status in (
+            ApplicationStatus.SHORTLISTED,
+            ApplicationStatus.SUBMISSION_ATTEMPTED,
+            ApplicationStatus.SUBMITTED_UNVERIFIED,
+            ApplicationStatus.INTERVIEW,
+            ApplicationStatus.WITHDRAWN,
+        ):
+            with self.subTest(status=status.value):
+                with self.assertRaisesRegex(ValueError, "must start at discovered"):
+                    self.store.save_tracker(ApplicationTracker("j1", status, "invented history"))
+        with self.assertRaisesRegex(ValueError, "must start at discovered"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "fabricated confirmation", True))
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+    def test_initial_status_discovered_is_accepted(self):
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.DISCOVERED)
+        self.assertEqual(stored.status_evidence, None)
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_initial_record_cannot_claim_confirmation(self):
+        with self.assertRaisesRegex(ValueError, "cannot claim candidate confirmation"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED, "note", True))
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+    def test_confirmation_flag_cannot_appear_before_confirmation(self):
+        cases = (
+            (ApplicationStatus.DISCOVERED, ApplicationStatus.SHORTLISTED),
+            (ApplicationStatus.DISCOVERED, ApplicationStatus.WITHDRAWN),
+            (ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED),
+            (ApplicationStatus.AWAITING_USER, ApplicationStatus.SUBMISSION_ATTEMPTED),
+            (ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.SUBMITTED_UNVERIFIED),
+        )
+        for current, next_status in cases:
+            with self.subTest(current=current.value, next=next_status.value):
+                store = CareerStore(":memory:")
+                self.addCleanup(store.close)
+                store.save_job(self.job)
+                stored = reach_status(store, current)
+                self.assertFalse(stored.candidate_confirmed, "test scaffolding must not confirm the record")
+                with self.assertRaisesRegex(ValueError, "cannot be true before a confirmation is recorded"):
+                    store.save_tracker(ApplicationTracker("j1", next_status, "unearned confirmation", True))
+                unchanged = store.get_tracker("j1")
+                self.assertEqual(unchanged.status, current)
+                self.assertFalse(unchanged.candidate_confirmed)
+
+    def test_confirmation_flag_is_preserved_after_a_real_confirmation(self):
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = self.store.get_tracker("j1").transition(
+            ApplicationStatus.CONFIRMED, evidence=CONFIRMATION_EVIDENCE, candidate_confirmed=True
+        )
+        self.store.save_tracker(confirmed)
+        interviewed = confirmed.transition(ApplicationStatus.INTERVIEW, evidence="Invite received")
+        self.store.save_tracker(interviewed)
+        withdrawn = interviewed.transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
+        self.store.save_tracker(withdrawn)
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.WITHDRAWN)
+        self.assertTrue(stored.candidate_confirmed)
 
     def test_status_jump_is_refused_and_the_stored_row_is_unchanged(self):
         self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
@@ -133,10 +235,46 @@ class TrackerInvariantTests(unittest.TestCase):
         saved = self.store.get_tracker("j1")
         self.assertEqual(saved.status, ApplicationStatus.PREPARED)
 
+    def test_rows_created_by_an_earlier_build_stay_usable(self):
+        self.store.save_job(self.job)
+        # Simulate a row written by a build that did not validate the first write.
+        self.store._connection.execute(
+            "INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed, updated_at)"
+            " VALUES ('j1', 'shortlisted', NULL, 0, '2026-10-01T00:00:00+00:00')"
+        )
+        self.store._connection.commit()
+        legacy = self.store.get_tracker("j1")
+        self.assertEqual(legacy.status, ApplicationStatus.SHORTLISTED)
+
+        prepared = legacy.transition(ApplicationStatus.PREPARED)
+        self.store.save_tracker(prepared)
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.PREPARED)
+
+        with self.assertRaisesRegex(ValueError, "Invalid application transition"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "unsubstantiated"))
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.PREPARED)
+
+    def test_legacy_confirmed_row_keeps_its_flag_as_it_advances(self):
+        self.store.save_job(self.job)
+        self.store._connection.execute(
+            "INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed, updated_at)"
+            " VALUES ('j1', 'confirmed', 'Employer email from an earlier build', 1, '2026-10-01T00:00:00+00:00')"
+        )
+        self.store._connection.commit()
+        legacy = self.store.get_tracker("j1")
+        self.assertTrue(legacy.candidate_confirmed)
+
+        response = legacy.transition(ApplicationStatus.RESPONSE_RECEIVED, evidence="Screening request received")
+        self.store.save_tracker(response)
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.RESPONSE_RECEIVED)
+        self.assertTrue(stored.candidate_confirmed)
+
     def test_backwards_state_change_is_refused(self):
-        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer email", True))
+        reach_status(self.store, ApplicationStatus.CONFIRMED)
         with self.assertRaisesRegex(ValueError, "Invalid application transition"):
             self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.CONFIRMED)
 
 
 class DurabilityTests(unittest.TestCase):
@@ -162,7 +300,7 @@ class DurabilityTests(unittest.TestCase):
         store = CareerStore(self.path)
         store.save_profile(profile)
         store.save_job(self._job())
-        store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer email", True))
+        reach_status(store, ApplicationStatus.CONFIRMED, evidence="Employer email")
         store.close()
 
         reopened = CareerStore(self.path)

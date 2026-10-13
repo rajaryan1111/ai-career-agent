@@ -252,6 +252,13 @@ _TRACKER_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
 }
 
 
+#: The only status a tracker record may be created with. A record with no history
+#: cannot legitimately appear shortlisted, submitted, confirmed, or completed, so the
+#: first write must be the honest starting point and every later status must be a
+#: permitted transition from it.
+INITIAL_APPLICATION_STATUS = ApplicationStatus.DISCOVERED
+
+
 def is_allowed_tracker_transition(current: ApplicationStatus, new_status: ApplicationStatus) -> bool:
     """True when the domain state machine permits this status change.
 

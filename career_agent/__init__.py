@@ -4,12 +4,14 @@ from .core import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, EligibilityReport, JobListing, RequirementResult,
     canonicalize_url, deduplicate_listings, duplicate_key,
-    evaluate_eligibility, is_allowed_tracker_transition, job_to_public_dict, score_relevance,
+    INITIAL_APPLICATION_STATUS, evaluate_eligibility, is_allowed_tracker_transition,
+    job_to_public_dict, score_relevance,
 )
 
 __all__ = [
     "CareerStore", "ApplicationStatus", "ApplicationTracker", "Availability", "CandidateProfile",
     "Decision", "EligibilityReport", "JobListing", "RequirementResult",
     "canonicalize_url", "deduplicate_listings", "duplicate_key",
-    "evaluate_eligibility", "is_allowed_tracker_transition", "job_to_public_dict", "score_relevance",
+    "INITIAL_APPLICATION_STATUS", "evaluate_eligibility", "is_allowed_tracker_transition",
+    "job_to_public_dict", "score_relevance",
 ]
