@@ -707,5 +707,11 @@ These are proposed targets. Do not report them as measured results.
 - Resolved the former MVP contradiction: resume parsing is deferred to a follow-on local-only increment; the first complete workflow uses manually entered/reviewed profile facts and job records. Long-term scope remains cross-industry, while source discovery and remote execution stay gated.
 - Added an explicit optional `allowed_work_authorizations` field to job records. If a role states allowed work-authorization values, evaluation requires exact matching; missing or mismatched values cannot pass. Country eligibility remains a separate check.
 - Added a reproducible CSV integrity summary tool with input SHA-256, malformed-row/duplicate checks, canonical URL groups, status/permission counts and apply-route outcomes. It deliberately leaves direct-link validity percentage unmeasured because the current outcomes do not support a defensible common denominator.
-- Added tests for work-authorization eligibility and CSV audit behavior; CI now runs unit tests, Python syntax compilation, and the audit utility on Python 3.10–3.12. GUI smoke tests and actual GitHub Actions results must still be confirmed before calling this release-ready.
+- Added tests for work-authorization eligibility and CSV audit behavior; CI now runs unit tests, Python syntax compilation, and the audit utility on Python 3.10–3.12. GUI smoke tests are still required before calling this release-ready. GitHub Actions PR verification passed on Python 3.10, 3.11 and 3.12 (unit tests, compileall, and source CSV audit); PR #1 was merged after all matrix jobs succeeded.
 - Source-quality gate remains **NOT PASSED**. No source connector, external candidate-data transfer, autofill, email action or application submission was enabled.
+
+
+### 2026-10-14 — CI verification completed
+- GitHub Actions run 38463995269 for PR #1 passed all three Python matrix jobs (3.10, 3.11, 3.12). Each job completed the standard-library unit tests, `python -m compileall -q career_agent scripts tests`, and `python scripts/audit_job_source_csv.py` successfully.
+- Added a backward-compatibility regression test confirming previously persisted job payloads without `allowed_work_authorizations` still decode using the dataclass default. PR #1 was squash-merged to `main` as `ab6586680b4ef1930205e861c08a06f738ced3b5`.
+- CI success does not replace the manual GUI smoke-test checklist, cross-platform packaging tests, or the still-closed live source permission/quality gate.
