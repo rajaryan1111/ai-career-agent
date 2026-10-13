@@ -1,7 +1,7 @@
 # Architecture Notes
 
-**Status:** Provisional implementation baseline for offline domain core; full desktop architecture remains open  
-**Last updated:** 2026-10-13
+**Status:** Production-oriented modular architecture direction; desktop/runtime choices remain open and source integrations remain gated  
+**Last updated:** 2026-10-14
 
 ## 1. Architectural direction
 
@@ -11,7 +11,7 @@ Do not split into microservices for the initial product. A modular monolith or d
 
 ## 2. Conceptual data flow
 
-Resume import → parse into candidate profile → user verifies fields → permitted job-source adapters discover listings → normalize and deduplicate → freshness/scam checks → hard eligibility filters → explainable relevance scoring → shortlist → company research → prepare application → permitted submission or user intervention → record evidence/status → dashboard and analytics.
+Resume import → local parsing into a candidate profile → user verifies critical fields → configurable occupation/role taxonomy and preferences → permitted source adapters discover listings → normalize/deduplicate and check freshness → hard eligibility filters → explainable, occupation-aware relevance scoring → shortlist/company research → truthful application preparation → policy-gated permitted submission or exception handling → evidence-backed status and outcome analytics. A durable queue/scheduler coordinates work; a desktop UI and optional always-on worker share explicit contracts, not hidden shared state.
 
 ## 3. Local-first boundary
 
@@ -61,9 +61,9 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
 - Field-level uncertainty: preserve missing vs. zero, raw pay ranges, currency, unit/period, source wording and evidence. Do not normalize ambiguous compensation to annual salary.
 - Contract fixtures per source for pagination, timestamp units, empty/error responses, missing fields, challenge pages, dedup/reposts, and malformed payloads. Keep live smoke tests separate from deterministic offline tests.
 
-## 8. Scheduling limitation
+## 8. Scheduling and deployment boundary
 
-Default schedule is 00:00 and 12:00 Asia/Kolkata. A desktop-only scheduler cannot execute when the computer is off or asleep. Research OS wake scheduling, missed-run catch-up, and optional cloud scheduling. Do not silently imply continuous availability.
+Default discovery schedule is 00:00 and 12:00 Asia/Kolkata. The requirement to operate while the laptop is off means desktop-only scheduling is insufficient. Evaluate an always-on worker as a separate deployable component with durable queues, idempotent run keys, bounded retries, health/last-run reporting, missed-run catch-up, and alertable failures. A remote worker must not silently receive resumes or email contents: minimize data, encrypt transport/storage, document retention/location, and make remote processing opt-in. A free tier is not a reliability guarantee; disclose sleep, quota, cold-start, and uptime limitations. Never claim background operation until the deployed worker is actually verified.
 
 ## 9. Security considerations
 
@@ -94,3 +94,22 @@ The [QaliAI/ai-job-agent review](research/open-source-ai-job-agent-review-2026-1
 
 ### Implemented offline core — 2026-10-14
 The first code layer now includes deterministic eligibility evaluation, explainable skill overlap, conservative URL/requisition deduplication, separate source/application URL fields, application-state transition guards, and a standard-library SQLite store for profile/job/tracker records. These are implemented domain/persistence primitives, not a finished desktop application. The database path is explicitly supplied by the caller. No network client, source adapter, resume parser, UI, autofill, or submission path is present. The local test suite currently has 25 passing tests.
+
+
+## 12. Production product architecture and cross-industry extensibility
+
+### 12.1 Modular product boundaries
+
+Keep a modular monolith/domain core until measured complexity justifies service separation. Define explicit interfaces for candidate profile/resume extraction, occupation taxonomy, job-source discovery, normalization/deduplication, eligibility, relevance ranking, company intelligence, application preparation, platform-specific application adapters, scheduler/queue, email/calendar integrations, audit/evidence, and UI. Do not introduce microservices or a multi-agent framework without a concrete operational need.
+
+### 12.2 Industry-agnostic core with occupation packs
+
+The shared engine must not assume AI/ML or software engineering. Occupation packs/configuration may contribute synonyms, skill families, credentials, portfolio/work-sample requirements, seniority signals, tools, and role-specific evaluation rubrics for fields such as design, VLSI/embedded, mechanical, civil, software/data, business, and other professions. Keep these as versioned data/rules or isolated modules behind stable interfaces; preserve the source evidence and explain each match. Unsupported roles must degrade transparently, not receive fabricated precision. Validate on representative resumes and job descriptions across different domains before claiming broad coverage.
+
+### 12.3 Remote worker and durable orchestration
+
+Separate the desktop experience from the optional always-on execution worker. The worker should claim durable tasks, use idempotency keys for discovery/application actions where possible, record per-source outcomes, resume interrupted work, enforce concurrency/rate limits, and isolate adapter failures. The desktop is the control plane for profile, permissions, policies, logs, and status; it must show the worker's actual health and last successful run. Do not treat the local SQLite file as automatically safe or synchronized for remote execution; define a deliberate storage/sync boundary first.
+
+### 12.4 Production readiness
+
+Require schema migrations, backup/restore and export/delete flows, secure secret storage, structured redacted logs, supported-platform packaging and update strategy, adapter health/version tracking, deterministic tests plus integration tests, and pilot evidence. Each source's discovery permission and submission permission are distinct. A supported adapter must have current permission evidence, documented limitations, fixtures, error handling, and a regression path. No feature is production-ready solely because a happy-path demo succeeds.
