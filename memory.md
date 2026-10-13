@@ -6,7 +6,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
-- Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the desktop UI and remote worker are still pending.
+- Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented; resume parsing, source adapters and remote worker remain gated or pending.
 - Last updated: 2026-10-14.
 
 ## Confirmed user decisions
@@ -80,7 +80,7 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 4. How will the app recover from missed runs when the computer is offline?
 5. Which candidate segment should be used for initial quality validation?
 6. What test set and metrics establish resume extraction and matching quality?
-7. Which desktop framework and local storage approach best meet privacy and maintenance goals?
+7. How well does the Tkinter/SQLite alpha package and behave on macOS, Windows, and Linux; what migration/backup/encryption work is needed before release?
 8. What evidence is sufficient to mark an application as confirmed?
 9. How can company research be sourced, timestamped, and kept affordable?
 10. Which features produce the greatest measurable time savings?
@@ -700,3 +700,12 @@ These are proposed targets. Do not report them as measured results.
 - User wants maximum autonomy after setup. Use scoped, revocable standing authorization for routine permitted actions rather than prompting for every job; keep platform terms, employer instructions, truthful answers, sensitive declarations, unsupported steps, and ambiguous submissions as hard boundaries.
 - Product success is real-world usefulness and improved job-search outcomes, not application volume alone. Selection cannot be guaranteed. Require evidence-backed capabilities, representative cross-industry evaluation, integration/pilot tests, and honest release claims.
 - Updated the six canonical documents (`prd.md`, `architecture.md`, `rules.md`, `phases.md`, `design.md`, `memory.md`) to align the production product commitment, cross-industry scope, remote-worker requirement, and evidence-gated automation. Existing source-quality gate remains NOT PASSED; this documentation change does not authorize a live source adapter or submission workflow.
+
+
+### 2026-10-14 — Local desktop alpha and contract reconciliation
+- Added a Python/Tkinter local desktop workflow launched with `python -m career_agent`, backed by the existing SQLite store. It supports manual profile entry, manual job entry, eligibility review, PASS-only shortlisting, guarded tracker updates, local JSON export and explicit deletion. It performs no network requests and does not submit applications.
+- Resolved the former MVP contradiction: resume parsing is deferred to a follow-on local-only increment; the first complete workflow uses manually entered/reviewed profile facts and job records. Long-term scope remains cross-industry, while source discovery and remote execution stay gated.
+- Added an explicit optional `allowed_work_authorizations` field to job records. If a role states allowed work-authorization values, evaluation requires exact matching; missing or mismatched values cannot pass. Country eligibility remains a separate check.
+- Added a reproducible CSV integrity summary tool with input SHA-256, malformed-row/duplicate checks, canonical URL groups, status/permission counts and apply-route outcomes. It deliberately leaves direct-link validity percentage unmeasured because the current outcomes do not support a defensible common denominator.
+- Added tests for work-authorization eligibility and CSV audit behavior; CI now runs unit tests, Python syntax compilation, and the audit utility on Python 3.10–3.12. GUI smoke tests and actual GitHub Actions results must still be confirmed before calling this release-ready.
+- Source-quality gate remains **NOT PASSED**. No source connector, external candidate-data transfer, autofill, email action or application submission was enabled.
