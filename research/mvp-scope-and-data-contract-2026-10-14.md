@@ -44,7 +44,7 @@ A standing user policy can reduce repeated prompts only inside its explicit, rev
 Store only explicitly supplied or user-reviewed facts. Missing values remain unknown.
 
 - Identity/contact: optional, added only when needed by a future workflow.
-- Country and work authorization: separate concepts; do not infer one from the other.
+- Country and work authorization: separate concepts; do not infer one from the other. If a role has an explicit work-authorization requirement, represent allowed values as a controlled, explicit list and compare against the candidate's reviewed value using exact matching only. Missing values remain UNKNOWN; no semantic/fuzzy inference is allowed.
 - Education: degree/discipline, study status, graduation year; do not fuzzy-assume degree equivalence.
 - Experience: numeric years only when the user supplies/reviews the value.
 - Skills: normalized labels with no inferred proficiency claims.
@@ -77,7 +77,7 @@ Hard eligibility is three-valued:
 - **FAIL:** at least one mandatory requirement is explicitly violated.
 - **UNKNOWN:** at least one mandatory requirement cannot be evaluated due to missing, ambiguous, stale, or conflicting evidence, and no explicit failure already determines the result.
 
-A known failure wins over unknowns for the overall decision. Unknown never qualifies for an eligible shortlist. Ranking/relevance never overrides hard eligibility. Relevance is an explanation of overlap, not a probability of hiring.
+A known failure wins over unknowns for the overall decision. Unknown never qualifies for an eligible shortlist. Work-authorization checks are evaluated only when the listing explicitly supplies an allowed-value list; that check uses exact matching and cannot infer equivalence from free text. Ranking/relevance never overrides hard eligibility. Relevance is an explanation of overlap, not a probability of hiring.
 
 For restricted hiring countries, compare the candidate's country against an explicit allowed-country list. For worldwide roles, require explicit source evidence and still check any other work authorization or residency criteria that apply.
 
