@@ -113,3 +113,32 @@ No external code, dependency, workflow, dataset, API key, token, candidate data,
 | Scraped job datasets | Not imported | Provenance, license, freshness, and collection permission are not sufficiently established |
 
 **Bottom line:** this search produced useful architecture and evaluation ideas, plus one conditional API lead. It did not identify anything that should be blindly copied into the running project. No code, dependencies, credentials, or datasets were added, and the source-quality and implementation gates remain closed.
+
+
+## Second search pass — remote-job API documentation (2026-10-14)
+
+A second, narrower pass searched for Arbeitnow, Jobicy, Himalayas, The Muse, job-API catalogs, evaluation datasets, and India internship APIs. The most useful additional result was Jobicy's official API repository; the review also cross-checked the existing Himalayas permission decision.
+
+### Jobicy — high-priority candidate for a bounded coverage test; not production-approved
+
+- Official repository: https://github.com/Jobicy/remote-jobs-api
+- Examples repository: https://github.com/Jobicy/jobicy-api-examples
+- API documentation: https://jobicy.com/jobs-rss-feed
+- Public endpoint documented by the repository: https://jobicy.com/api/v2/remote-jobs
+- The repository says the public endpoint requires no API key, supports structured JSON, geographic/category/keyword filters, cursor pagination, and returns postings published within the last seven days. Its published Fair Use section says listings may be used in one's own products/user experiences without individual permission, while requiring the canonical Jobicy URL and attribution. It says not to start new automated polling/synchronization passes more frequently than once per hour and prohibits misleading/abusive uses.
+- The README explicitly separates the MIT license for code/examples from rights in Jobicy listings, employer content, logos, and third-party data. Data use is governed by the Fair Use rules, not by the repository code license.
+- Important quality limitation: Jobicy's batch status check reflects Jobicy's records, not a live request to the employer's ATS. A missing listing from the rolling seven-day feed does not establish that the job is closed; the provider explicitly recommends keeping 'unknown' distinct from 'closed'.
+- Decision: **prioritize for a small human-reviewed source-quality/coverage test after the project gate permits that test**. Do not integrate it into the product yet. Verify current terms, preserve attribution/canonical links, obey polling/rate limits, assess India/internship/fresher coverage and location whitelists, and independently verify a sample against canonical employer pages. No API request was made during this GitHub review.
+
+### Himalayas — existing blocked decision remains unchanged
+
+- Official API repository reviewed: https://github.com/Himalayas-App/remote-jobs-api
+- Its README describes daily-refreshed remote job data, a maximum of 20 items per page, a rate limit, and filters for country, worldwide eligibility, seniority, employment type, timezone, and salary metadata. Its repository license explicitly says the MIT license covers code/specification/documentation but not the job data; the data-use terms require linking to the canonical Himalayas listing, crediting Himalayas, and not resubmitting its listings to third-party aggregators.
+- Decision: **remain blocked pending written clarification**, consistent with the existing feasibility matrix and [Himalayas permission/terms conflict review](himalayas-api-permission-terms-conflict-2026-10-13.md). The API repository's integration examples and attribution terms do not cancel the separately documented broader Terms of Service concern about automated data gathering. Do not query or cache the feed before the conflict is resolved.
+
+### Arbeitnow and The Muse search results — not added as accepted sources
+
+- Search surfaced third-party API catalogs and an example tracker with a May 2025, 100-listing Germany snapshot. The catalog explicitly describes itself as a third-party profile, not the API operator; the tracker is historical and does not establish current coverage, provider terms, or target fit.
+- Decision: retain only as possible future research leads, not as accepted datasets or source integrations. No third-party snapshot was imported.
+
+This second pass does not change the project gate. The only additional action is documenting Jobicy as a promising conditional source-test candidate; no source was queried, and no code, data, dependency, or credential was added.
