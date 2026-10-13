@@ -15,38 +15,7 @@ from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
 from .core import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing, evaluate_eligibility, score_relevance
 from .store import CareerStore
-
-
-def split_values(value: str) -> tuple[str, ...]:
-    """Split comma/newline-delimited values, removing blanks and case-insensitive duplicates."""
-    result, seen = [], set()
-    for part in re.split(r"[,\n]", value):
-        item = part.strip()
-        if item and item.casefold() not in seen:
-            result.append(item)
-            seen.add(item.casefold())
-    return tuple(result)
-
-
-def optional_int(value: str, label: str) -> int | None:
-    if not value.strip():
-        return None
-    try:
-        return int(value.strip())
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a whole number.") from exc
-
-
-def optional_float(value: str, label: str) -> float | None:
-    if not value.strip():
-        return None
-    try:
-        number = float(value.strip())
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a number.") from exc
-    if number < 0:
-        raise ValueError(f"{label} cannot be negative.")
-    return number
+from .validation import optional_float, optional_int, split_values
 
 
 def default_database_path() -> Path:
