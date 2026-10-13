@@ -198,3 +198,35 @@ The purpose of this audit is not to maximize the number of links. It is to measu
 - The CSV's `permission_status=unknown` means access permission for the product's intended use has not been verified; it is not a claim that access is forbidden or allowed.
 - An official careers page can support the facts displayed there, but it does not by itself establish permission for bulk crawling or automated application submission.
 - Current status must be timestamped and rechecked close to the time of recommendation.
+
+
+## Fifth pass — aggregator/API comparison and Superpowers review (2026-10-13)
+
+### Newly checked aggregator/API evidence
+
+- **AI Dev Jobs API docs:** https://aidevboard.com/docs
+- **AI Dev Jobs terms:** https://aidevboard.com/terms
+- **Remote OK FAQ/feed guidance:** https://remoteok.com/faq
+- **Remote OK terms:** https://remoteok.com/legal
+
+AI Dev Jobs' current documentation says anonymous read access is available with hourly IP throttling; its API supports location, level, work mode, explicit global-remote scope and job details/matching. Its terms state listings are not guaranteed complete, accurate or available, prohibit exceeding API rate limits, and say data may be used in applications but not resold as a standalone dataset. This makes it a meaningful discovery candidate for a small API audit, not a source of truth. The job board's own match score should not replace our independently validated hard eligibility gates.
+
+Remote OK's FAQ documents free public JSON and RSS feeds. When building an aggregator or sharing its feed, it asks consumers to credit Remote OK and link back to each original job post. Its current legal terms were updated 20 July 2026; these should be reviewed against the intended client behavior before adoption. The current category pages are broad remote-job discovery pages and did not, in this pass, establish a verified individual student/entry-level AI/ML vacancy.
+
+### Source comparison / duplicate test
+
+A separate Ema record was added for the AI Dev Jobs aggregator copy of the same role already recorded from the official Ashby page. This is intentionally **not a new unique vacancy**. The aggregator labels the record "part-time mid"; the official employer description identifies a six-month program intended for final-year undergraduate students, requiring graduation by June next year and GPA 8.0+, and says 20–30 hours/week during semester and full-time in summer. This illustrates:
+- source-level duplicate resolution must be separate from vacancy counts;
+- source fields can disagree (especially seniority and job type);
+- canonical employer details should win where discrepancies affect eligibility;
+- source provenance should remain visible instead of silently flattening conflicting fields.
+
+The CSV now has **22 records/rows including header-excluded seed entries and source-level audit rows**; it still does **not** constitute the planned 50 individually audited unique listings. Two additions are source-level checks rather than vacancies, and one is a duplicate copy of an already represented job. Do not count them toward the 25 India + 25 international unique-listing target.
+
+### Current interpretation and next action
+
+- AI Dev Jobs is the higher-priority next technical *research* candidate because its API exposes documented source filters and open read access, but freshness, unique coverage, India entry-level yield and job-detail agreement still need measured checks.
+- Remote OK is a secondary source candidate with clear feed availability and attribution/link-back expectations; platform terms and role quality need further review.
+- The next dataset milestone remains 50 unique, individually checked listings: 25 India/India-eligible internship/fresher roles and 25 international-remote roles, with negative controls retained separately from unique eligible vacancies.
+- No source is marked integration-approved solely because it has an API or publicly reachable feed.
+- No implementation started.
