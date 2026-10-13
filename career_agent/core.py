@@ -228,7 +228,7 @@ class ApplicationTracker:
 
     def transition(
         self, new_status: ApplicationStatus, *, evidence: str | None = None,
-        candidate_confirmed: bool = False,
+        candidate_confirmed: bool | None = None,
     ) -> "ApplicationTracker":
         if new_status == self.status:
             return self
@@ -240,7 +240,7 @@ class ApplicationTracker:
             listing_id=self.listing_id,
             status=new_status,
             status_evidence=evidence.strip() if evidence else None,
-            candidate_confirmed=candidate_confirmed,
+            candidate_confirmed=self.candidate_confirmed if candidate_confirmed is None else candidate_confirmed,
         )
 
 
