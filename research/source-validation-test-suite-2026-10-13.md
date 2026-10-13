@@ -159,7 +159,7 @@ These are proposed internal gates, not results. Report precision among sampled s
 
 A second direct retrieval pass attempted the three documented Himalayas filtered searches (India+AI+Entry-level+Intern; India+machine learning+Entry-level+Intern; worldwide+AI+Entry-level+Intern) and a documented AI Dev Jobs read-only search (q=intern, location=India, level=junior, limit=10, page=1). All four URLs were inaccessible through the current web retrieval interface; no HTTP status/body/headers were returned. The sample remains not measured, not empty and not evidence of provider downtime.
 
-A documentation discrepancy was also identified: the Himalayas API landing page describes cursor pagination for /jobs/api, while the provider's public OpenAPI file describes limit/offset pagination. Both specify a maximum of 20 records. Do not implement full-feed pagination until the actual response contract or provider guidance resolves this discrepancy. The bounded pilot should use the filtered endpoint if a normal HTTPS client can retrieve it, and still capture request/response metadata.
+At the time of the first check, the Himalayas API landing page and its public OpenAPI file appeared inconsistent about browse pagination. A subsequent check of the current landing page resolved the choice: it explicitly deprecates offset and recommends cursor/nextCursor for browse; filtered search uses 1-based page pagination. Treat the older OpenAPI/example as stale. The live filtered response is still unverified and request/response metadata must be captured in the bounded pilot.
 
 References: https://himalayas.app/api ; https://himalayas.app/docs/remote-jobs-api ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json ; https://aidevboard.com/docs
 
