@@ -331,11 +331,11 @@ Sprinto's official AI Implementation Intern page describes AI infrastructure, mo
 The audit CSV remains a mixed research/control set with 60 data rows and 27 columns; strict parse validation after these edits found no malformed rows or duplicate IDs. See the official-employer freshness audit and source validation suite.
 
 
-### 2026-10-13 addendum — repeat API retrieval attempt and pagination discrepancy
+### 2026-10-13 addendum — repeat API retrieval attempt and earlier pagination note (superseded below)
 
 A follow-up direct retrieval pass again could not retrieve the three filtered Himalayas JSON URLs or a documented AI Dev Jobs India/junior query through the current web retrieval interface. No status, body or headers were returned; do not infer zero matches or provider downtime. Live target coverage remains unmeasured.
 
-The Himalayas API landing page describes cursor pagination for the browse endpoint, while the provider's public OpenAPI file describes limit/offset. Both specify a 20-record maximum. Treat this as an unresolved API-contract discrepancy: do not implement full-feed pagination until a live response or provider clarification confirms the contract. See the retrieval attempt report.
+At the time, the current landing page and the public OpenAPI artifact appeared inconsistent. A subsequent check resolved the implementation choice: the current landing page explicitly deprecates offset and recommends cursor/nextCursor for browse; filtered search uses page-based pagination. The OpenAPI artifact and example appear stale. See the correction below and the retrieval attempt report.
 
 ### 2026-10-13 addendum — Himalayas pagination documentation freshness
 
