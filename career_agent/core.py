@@ -76,7 +76,6 @@ class JobListing:
     role_type: str | None = None
     eligibility_scope: str = "unknown"  # worldwide | restricted | unknown
     eligible_countries: tuple[str, ...] = ()
-    allowed_work_authorizations: tuple[str, ...] | None = None
     allowed_degree_disciplines: tuple[str, ...] | None = None
     allowed_study_statuses: tuple[str, ...] | None = None
     allowed_graduation_years: tuple[int, ...] | None = None
@@ -84,6 +83,7 @@ class JobListing:
     maximum_experience_years: float | None = None
     required_skills: frozenset[str] = field(default_factory=frozenset)
     provenance_note: str | None = None
+    allowed_work_authorizations: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,8 +131,10 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     """
     results: list[RequirementResult] = []
 
-    if job.availability_status is Availability.OPEN:
-        results.append(RequirementResult("availability", Decision.PASS, "The recorded listing status is open; recheck the original listing before acting."))
+    if job.availability_status is Availability.OPEN and job.provenance_note and job.provenance_note.strip():
+        results.append(RequirementResult("availability", Decision.PASS, "The listing is marked open and has a recorded evidence/note; recheck the original listing before acting.", job.provenance_note.strip()))
+    elif job.availability_status is Availability.OPEN:
+        results.append(RequirementResult("availability", Decision.UNKNOWN, "The listing is marked open but has no recorded availability evidence/note."))
     elif job.availability_status in {Availability.CLOSED, Availability.EXPIRED, Availability.NOT_A_LISTING, Availability.SOURCE_REVIEW}:
         results.append(RequirementResult("availability", Decision.FAIL, f"Listing status is {job.availability_status.value}; it must not be recommended as an open vacancy."))
     else:
@@ -329,4 +331,6 @@ def job_to_public_dict(job: JobListing) -> Mapping[str, Any]:
         "work_mode": job.work_mode,
         "eligibility_scope": job.eligibility_scope,
         "eligible_countries": list(job.eligible_countries),
+        "allowed_work_authorizations": list(job.allowed_work_authorizations) if job.allowed_work_authorizations is not None else None,
+        "provenance_note": job.provenance_note,
     }
