@@ -69,3 +69,22 @@ The best new lead for further verification is Airbus GenAI Intern, while GM requ
 ## Dataset integrity check (after append)
 
 A strict CSV parser found six pre-existing row-alignment defects in older entries: four unquoted commas split trailing review notes, and two rows had a stray `unknown` placeholder before the application URL. These have now been repaired without changing the intended evidence, and the entire file was re-parsed. The CSV has 49 data rows; header and every data row now have exactly 27 columns. Follow-up edits must keep CSV fields quoted correctly and rerun this validation.
+
+
+## 2026-10-13 addendum — Apple degree gate and Sprinto application boundary
+
+### IN-001 — Apple Applied ML Intern, Wireless Technologies & Ecosystems
+Canonical page: https://jobs.apple.com/en-in/details/200686019-0321/applied-ml-intern-wireless-technologies-ecosystems
+
+The official page states the minimum qualification is a PhD student in year 2 or beyond in AI/ML, Computer Science, Communication Engineering or a related field. It also describes strong ML/statistics/optimization and programming requirements; LLMs, RAG and AI agents are desirable rather than substitutes for the degree requirement. The listing was posted 27 September 2026, lists Bengaluru and 40 weekly hours, and shows a Submit CV action. The audit row now records the PhD gate and keeps vacancy status unknown pending a separate live-status check. Do not recommend it to an undergraduate based on the word “Intern”.
+
+### IN-022 — Sprinto AI Implementation Intern
+Canonical page: https://jobs.lever.co/Sprinto/6dfd5f41-57b6-40e8-9eab-ba4083c1a7c4
+
+The official role page describes AI infrastructure, model training/evaluation pipelines, document parsing/search and LLM integration. The linked application page displays an hCaptcha challenge. Treat that as a hard human-intervention boundary: do not solve, bypass, or automate around the challenge. A visible Apply action supports listing discovery but does not establish permission for automated submission.
+
+### Validation update
+- Updated IN-001 with the explicit PhD-year eligibility gate and retained status unknown.
+- Added SV-028 for Apple degree eligibility and SV-029 for the Sprinto CAPTCHA boundary in the source validation test suite.
+- Updated the full CSV and strictly re-parsed it: 60 data rows, 27 columns, zero malformed rows, 60 unique IDs.
+- No candidate data was sent, no application was submitted, and no challenge was solved or bypassed.
