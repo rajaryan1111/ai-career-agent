@@ -117,3 +117,12 @@ The current official Humans Care Foundation careers index says it is accepting a
 Latest CSV baseline: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, 8 repeated-URL groups. Statuses: 17 open, 54 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review. Permission remains unknown for 77 rows. These are mixed audit observations, not unique candidate-ready jobs.
 
 **Decision remains NOT PASSED / research-only.** The 20 unique relevant current-vacancy threshold, measured direct-link validity, full applicant-country audit and source terms remain unresolved. No source API was queried and no production integration was added.
+
+
+## 11. Fifth candidate-focused status check — 2026-10-14
+
+The current official Sprinto Lever careers board lists AI Implementation Intern under AI Office with Remote workplace and an Apply route. The canonical role page gives AI infrastructure, evaluation pipelines, document parsing, search and LLM integration responsibilities, and asks for a currently pursuing degree in CS, Engineering, Data Science or related technical field. CSV record IN-022 is updated to open; Bengaluru/Remote is not proof of worldwide eligibility, and duration, compensation and source/product permission remain unknown.
+
+The Drivetrain employer board also currently lists its India-based remote GenAI internship. IN-002 was updated to open. This brings the audit to 18 open-labelled rows. This is still not a candidate-ready count: candidate eligibility and role-level terms differ, duplicates remain, and permission is unknown for most rows. Unisys AI Engineering Intern explicitly targets current/recent M.Tech candidates, so it should not be treated as a direct fit for the BTech ECE target. Concentric AI and AtkinsRéalis both have title/employment-type or degree-eligibility ambiguities and remain unknown.
+
+**Gate remains NOT PASSED / research-only.** No source APIs queried, no production integration or dependency added, no candidate data sent, and no application submitted.
