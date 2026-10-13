@@ -64,6 +64,8 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Run hard eligibility rules separately from relevance scoring.
 - Evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
 - Explain positive matches, missing requirements, and unresolved questions.
+- Keep country eligibility and work authorization separate. If an explicit allowed-work-authorization list exists, use exact matching; missing values remain unknown.
+- A listing manually marked open without a recorded availability evidence/note must remain unknown for eligibility.
 - Exclude known hard-eligibility failures from auto-apply eligibility.
 - Allow users to configure preferences and thresholds.
 - Keep a record of the scoring inputs and rule version used.
