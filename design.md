@@ -1,7 +1,7 @@
 # Product Design Notes
 
-**Status:** Conceptual UX direction — no UI implementation  
-**Last updated:** 2026-10-13
+**Status:** Product UX specification; UI implementation pending  
+**Last updated:** 2026-10-14
 
 ## 1. Design objective
 
@@ -67,3 +67,26 @@ Desktop-first, clean, information-dense but readable. Use restrained status colo
 - How should source failures and unavailable integrations be displayed?
 - How should users set match thresholds without needing ML expertise?
 - What is the clearest distinction between submitted and confirmed applications?
+
+
+## 11. Cross-industry onboarding and role setup
+
+Onboarding must not presume the user is a software/AI candidate. Ask for target occupation families, role titles and synonyms, experience stage, education/certifications where relevant, location/country/work authorization, work mode, employment type, compensation preferences, and exclusions. Show optional fields only when relevant to the selected role. Let users maintain multiple target-role profiles without duplicating their verified personal facts.
+
+Occupation-aware match explanations should use familiar role language and distinguish required credentials/tools from preferred skills. For example, design roles may emphasize portfolio/tools; VLSI/embedded roles may emphasize hardware/EDA/firmware; mechanical and civil roles may emphasize domain tools, credentials, site/work-mode requirements; business roles may emphasize function-specific experience. These are illustrative patterns, not hardcoded eligibility assumptions.
+
+## 12. Production dashboard and operational transparency
+
+The Overview must show the last and next scheduled run in Asia/Kolkata, worker health, missed/partial runs, source-level counts/errors, new jobs, duplicate suppression, eligibility/unknown reasons, application statuses, and any action needing attention. Clearly separate planned, experimental, permission-gated, and production-supported integrations. Never show a green success indicator for an unverified submission.
+
+Applications should expose an auditable timeline: discovered, checked, shortlisted, prepared, submission attempted, submitted-unverified, confirmed (with evidence), failed/unknown, response/interview, and final outcome. Provide retry/recovery actions that first check for possible prior success. The interface must explain why a task paused and how to resolve it without requiring users to understand internal technical details.
+
+## 13. Trust, standing authorization, and remote operation
+
+During setup, users can configure a revocable standing policy for routine, permitted applications so the system does not ask for per-job approval repeatedly. Explain which sources/actions the policy covers and how to pause/revoke it. The policy cannot override provider/employer restrictions or permit guesses on mandatory facts, sensitive declarations, assessments, CAPTCHA/OTP, or ambiguous submission results.
+
+If background execution requires a remote worker, show a separate consent and data-flow explanation before sending any candidate data off-device. Display the actual worker status and last heartbeat; never imply that a local-only app runs while the laptop is powered off. Offer export, deletion, backup/restore, and connection revocation in understandable settings.
+
+## 14. Accessibility and internationalization
+
+Use clear language, keyboard-accessible workflows, readable status text that does not rely on color alone, timezone-aware scheduling, locale-aware dates and compensation units, and extensible country/work-authorization fields. Avoid treating English-language resumes or one country's education terminology as universal.
