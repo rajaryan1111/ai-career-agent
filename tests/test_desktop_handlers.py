@@ -63,6 +63,18 @@ class Widget:
     def title(self, *args, **kwargs):
         return None
 
+    def geometry(self, *args, **kwargs):
+        return None
+
+    def minsize(self, *args, **kwargs):
+        return None
+
+    def protocol(self, *args, **kwargs):
+        return None
+
+    def add(self, *args, **kwargs):
+        return None
+
     def transient(self, *args, **kwargs):
         return None
 
@@ -270,6 +282,21 @@ class HandlerTestCase(unittest.TestCase):
         self.addCleanup(setattr, desktop.tk, "StringVar", original)
         app._update_status()
         return app, created[0], created[1], BUTTONS.command
+
+
+class StartupPathTests(unittest.TestCase):
+    """The window construction path runs with stub widgets; rendering is still unverified."""
+
+    def test_window_construction_and_refresh_paths_execute(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = desktop.CareerAgentApp(Widget(), database_path=Path(directory) / "startup.sqlite3")
+        self.assertTrue(app.job_save_mode is desktop.JobSaveMode.NEW)
+        self.assertIn("New listing", app.job_mode.get())
+        self.assertEqual(app.job_vars["availability"].get(), "unknown")
+        self.assertEqual(app.job_vars["scope"].get(), "unknown")
+        self.assertEqual(app.db_path.name, "startup.sqlite3")
+        app.close()
+        self.assertTrue(app.root.destroyed)
 
 
 class NewJobSaveTests(HandlerTestCase):
