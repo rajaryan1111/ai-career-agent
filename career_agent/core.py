@@ -76,6 +76,7 @@ class JobListing:
     role_type: str | None = None
     eligibility_scope: str = "unknown"  # worldwide | restricted | unknown
     eligible_countries: tuple[str, ...] = ()
+    allowed_work_authorizations: tuple[str, ...] | None = None
     allowed_degree_disciplines: tuple[str, ...] | None = None
     allowed_study_statuses: tuple[str, ...] | None = None
     allowed_graduation_years: tuple[int, ...] | None = None
@@ -151,6 +152,14 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
             results.append(RequirementResult("country", Decision.FAIL, "Candidate country is not in the explicit allowed-country list.", ", ".join(job.eligible_countries)))
     else:
         results.append(RequirementResult("country", Decision.UNKNOWN, "Worldwide eligibility or the allowed-country list has not been verified."))
+
+    if job.allowed_work_authorizations is not None:
+        _check_membership(
+            results, "work_authorization", profile.work_authorization, job.allowed_work_authorizations,
+            "Candidate work-authorization value exactly matches an explicitly allowed value.",
+            "Candidate work-authorization value does not match the explicitly allowed values.",
+            "Work-authorization requirement or candidate work-authorization value is missing.",
+        )
 
     _check_membership(results, "degree_discipline", profile.degree_discipline, job.allowed_degree_disciplines,
                       "Candidate discipline matches an explicitly allowed discipline.",
