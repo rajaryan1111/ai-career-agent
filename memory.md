@@ -678,3 +678,12 @@ These are proposed targets. Do not report them as measured results.
 - Added `career_agent/store.py`, a standard-library SQLite repository for a candidate profile, normalized job records, first/last-seen timestamps, conservative duplicate groups, and application tracker state. It provides explicit profile/job deletion and cascades tracker deletion with its job.
 - Added storage tests and a GitHub Actions workflow for Python 3.10, 3.11, and 3.12. Local verification: `python -m unittest discover -s tests -v` passed all 25 tests; `python -m compileall -q career_agent tests` passed.
 - Storage uses an explicitly supplied database path; the package does not create a candidate database or collect candidate data unless the future app calls these methods. No live source adapter or UI exists yet.
+
+
+### 2026-10-14 — Review of multica-ai/andrej-karpathy-skills
+- Reviewed the upstream README, SKILL.md, CLAUDE.md, CURSOR.md, EXAMPLES.md, Cursor rule and Claude plugin metadata at https://github.com/multica-ai/andrej-karpathy-skills (main tree inspected on 2026-10-14; skill file SHA `6a62d0441753157ca6ca50479e490c2948033adb`).
+- The repository packages one behavioral skill around four principles: think before coding, simplicity first, surgical changes, and goal-driven execution/verification.
+- Adopted an original, project-specific adaptation in [development-workflow.md](development-workflow.md): surface consequential assumptions, choose the smallest complete solution, keep diffs surgical, define observable acceptance criteria, run tests/checks, inspect and re-fetch the resulting GitHub state, and report verification honestly.
+- Kept project-specific constraints authoritative. In particular, these principles do not re-close development after the user's decision to build the offline core; nor do they waive source permission, privacy, candidate truth, eligibility, cost, or application-integrity requirements.
+- Did not copy the upstream entire EXAMPLES.md, Claude plugin manifests, or Cursor plugin rule into the product repository. They are environment-specific or duplicative; our existing workflow now carries the relevant concepts without installing a toolchain or adding dependencies.
+- Upstream README identifies MIT license. This pass adapted principles in original wording rather than copying substantial source text or adding upstream code. No software dependencies, source connectors, or product runtime files were added in this reference-review pass.
