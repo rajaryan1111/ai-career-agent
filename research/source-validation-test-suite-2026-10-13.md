@@ -12,16 +12,16 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 64 |
+| Non-empty data rows | 67 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
-| Status = open | 10 |
-| Status = unknown | 44 |
+| Status = open | 12 |
+| Status = unknown | 45 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
 | Status = source_review | 4 |
-| Distinct canonical URL values | 55 |
+| Distinct canonical URL values | 58 |
 | Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
 These are mixed listing/source/control records. **They are not confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
@@ -251,3 +251,14 @@ This case is grounded in the Walmart and Unisys Workday recheck on 2026-10-13. I
 The Threxil Systems pages checked on 2026-10-13 explicitly state “work from anywhere,” identify two open roles, and welcome freshers/self-taught developers on the individual role pages. That is stronger work-location and role-status evidence than a bare “remote” label or a form alone. It still does not establish every jurisdiction's legal/work-authorization eligibility, compensation/duration, employer legitimacy, or permission for automated collection, caching, autofill, or submission. Keep those dimensions independent; retain human review and do not infer source permission from public visibility.
 
 References: https://www.threxil.com/careers ; https://www.threxil.com/careers/apply/ai-intern ; https://www.threxil.com/careers/apply/frontend-ai-intern
+
+
+### International-remote sample expansion — evidence tiers
+
+Add the following records to the next human-labelled source-quality evaluation:
+
+- **INT-023 MailerMen:** official employer-hosted listing says Remote (Worldwide), Actively hiring, freshers only, and was updated on 2026-10-13. Record as explicit worldwide eligibility evidence while keeping source permission unresolved.
+- **INT-024 QovaTech:** official career page says open internship and remote-friendly; applicant-country eligibility is not stated. Do not infer worldwide eligibility from the company serving clients worldwide.
+- **INT-025 DataRobot:** official Workday result lists Remote Canada-Ontario and US offices; direct page retrieval was unreadable. Preserve unknown status and treat geography as a negative control.
+
+These three rows extend the international remote comparison but do not close the 25-listing segment or the overall source-quality gate. A public employer page, an active form, and permission to automate remain three separate questions.
