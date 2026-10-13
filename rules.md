@@ -80,6 +80,11 @@
 - The research/product decision gate remains in force. A development workflow document does not authorize implementation, paid services, external data transmission, deployment, or application submission.
 - Model/agent reviews are not independent evidence; critical claims require source evidence, reproducible checks, or human review.
 
+
+- Evidence-backed LLM outputs: when a generated job/candidate/research claim affects a critical decision, retain source URLs and supporting evidence where available; weak or conflicting evidence should remain explicitly unknown or be refused, not confidently guessed. LLM confidence/similarity never overrides deterministic eligibility gates.
+- Keep retries and retrieval fallbacks bounded and auditable; test critical eligibility, deduplication, stale status, and application state transitions without requiring live provider/network calls where feasible.
+- Before completing any change, check whether every modified file, dependency, external service, and config change is necessary for the stated intent; split or remove unjustified scope.
+
 ## 10. Change management
 
 - Update `memory.md` whenever a meaningful decision, evidence item, unresolved question, or rejected assumption emerges.
