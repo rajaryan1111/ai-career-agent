@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 
 **Project:** AI Career Agent  
-**Status:** Production-oriented product definition; safe offline-core implementation underway, live integrations gated by source-specific evidence  
+**Status:** Production-oriented product definition; local desktop alpha implemented, live integrations gated by source-specific evidence  
 **Last updated:** 2026-10-14
 
 ## 1. Product vision
@@ -62,7 +62,7 @@ The intended audience is cross-industry and cross-experience: students, interns,
 
 ### Matching and eligibility
 - Run hard eligibility rules separately from relevance scoring.
-- After research authorizes implementation, evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
+- Evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
 - Explain positive matches, missing requirements, and unresolved questions.
 - Exclude known hard-eligibility failures from auto-apply eligibility.
 - Allow users to configure preferences and thresholds.
