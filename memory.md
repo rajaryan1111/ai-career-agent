@@ -673,3 +673,8 @@ These are proposed targets. Do not report them as measured results.
 - This was a focused convenience sample, not representative validation. No link-validity percentage is claimed; the 50-record ≥90% direct-employer-link gate remains unproven.
 - No forms submitted, resume uploaded, candidate data entered/transmitted, or email sent. No source permission inferred from a reachable page.
 - Source-quality gate remains NOT PASSED / research-only. No production implementation or dependencies added.
+
+### 2026-10-14 — Local persistence and continuous verification
+- Added `career_agent/store.py`, a standard-library SQLite repository for a candidate profile, normalized job records, first/last-seen timestamps, conservative duplicate groups, and application tracker state. It provides explicit profile/job deletion and cascades tracker deletion with its job.
+- Added storage tests and a GitHub Actions workflow for Python 3.10, 3.11, and 3.12. Local verification: `python -m unittest discover -s tests -v` passed all 25 tests; `python -m compileall -q career_agent tests` passed.
+- Storage uses an explicitly supplied database path; the package does not create a candidate database or collect candidate data unless the future app calls these methods. No live source adapter or UI exists yet.
