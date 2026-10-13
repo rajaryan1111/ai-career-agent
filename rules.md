@@ -46,6 +46,7 @@
 - Do not retry an ambiguous submission until checking whether it may already have succeeded.
 - Prevent duplicates across sources and repeated scheduled runs.
 - Ask about sensitive declarations, unfamiliar questions, assessments, or missing information.
+- Respect explicit role-specific application instructions. If an employer prohibits AI assistance for application answers, do not draft, generate, autofill, or submit the prohibited responses; clearly surface the restriction and leave those answers to the candidate.
 - Default: auto-submit only supported cases that meet strict eligibility and quality rules; pause on exceptions.
 
 ## 6. Privacy and security
