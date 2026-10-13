@@ -1,6 +1,6 @@
 # Research and Delivery Phases
 
-**Status:** Proposed roadmap — no implementation authorized yet  
+**Status:** Research and safe-core implementation in parallel  
 **Last updated:** 2026-10-13
 
 ## Phase 0 — Product framing (current)
@@ -54,9 +54,9 @@ Compare desktop frameworks and local storage, decide local parsing/matching, pac
 
 Exit criteria: architecture justified by evidence; budget/platform scope explicit; go/no-go decision recorded.
 
-## Phase 6 — MVP implementation (not started)
+## Phase 6 — MVP implementation (safe offline core started)
 
-**Not authorized during the current research phase.** Begin only after Phase 5 approval, in small testable increments, starting with local profile management and verified job discovery before submission automation.
+Implementation is authorized for dependency-free, offline domain logic and tests while research continues. The first increment covers eligibility, transparent relevance indicators, conservative deduplication, URL/provenance separation, and guarded application-state transitions. Do not add live source connectors, resume ingestion, candidate-data transfer, autofill, or submission until their specific gates pass.
 
 ## Phase 7 — Controlled pilot and expansion (future)
 
@@ -64,4 +64,4 @@ Pilot with consenting users, measure matching quality/time saved/failure rates/a
 
 ## Current phase status
 
-Phase 0 is in progress. Phases 1–3 are next. No code or application automation should be built yet.
+Safe offline-core implementation has started; source-permission and job-quality research continues in parallel. The source-quality gate remains NOT PASSED, so no live source integration or application automation is authorized.
