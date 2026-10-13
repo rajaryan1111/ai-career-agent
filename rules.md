@@ -3,9 +3,9 @@
 **Status:** Baseline rules — amend only with a documented reason  
 **Last updated:** 2026-10-13
 
-## 1. Research before implementation
+## 1. Research alongside bounded implementation
 
-- Do not start coding until the core feasibility questions have evidence-backed answers.
+- Do not enable live source integrations, candidate-data transfer, resume parsing/upload, form automation, or application submission until the relevant feasibility, permission, privacy, and quality gates have evidence-backed answers. The safe offline domain core may be implemented in parallel with research, provided it makes no network calls and does not handle real candidate data.
 - Separate verified facts, assumptions, hypotheses, and decisions.
 - Cite sources for platform policies, API capabilities, pricing, and competitor features.
 - Prefer official documentation and current terms over blogs or marketing claims.
