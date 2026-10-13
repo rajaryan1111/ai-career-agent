@@ -174,3 +174,21 @@ The official careers page currently states “2 roles open”, “Fully remote�
 
 ### Evidence and integrity note
 This pass relied on current official employer pages for availability and role description. It did not verify applicant privacy terms, automated collection/republication rights, or all legal work-eligibility conditions. Do not submit resumes, contact employers, or automate applications as part of this audit. Gate remains **NOT PASSED / research-only**.
+
+
+## Seventh candidate-focused batch — 2026-10-14
+
+This batch rechecked current public-web evidence and added Valura.AI as a new, conservative audit lead.
+
+| ID | Record | Current page evidence | Status decision | Candidate fit / unresolved items |
+|---|---|---|---|---|
+| IN-036 | Valura.AI — AI Engineering Intern (Python) | [Official role page](https://careers.valura.ai/836918cc-4b0f-4207-b364-e277600fd43f) says posted 2026-07-27; locations include Chennai, GIFT City or Remote; duration 3–6 months with full-time preferred; 0–3 years experience; Python, LLM APIs, agent orchestration, MCP, RAG, retrieval and evaluation work. | **Unknown** — apply route exists, but no explicit current-open wording was captured in this pass. | Strong technical overlap with AI-agent/RAG/evaluation work. Degree requirement, applicant-country/work authorization, stipend amount and current intake remain unresolved. Do not promote to open or candidate-eligible based on the Apply route alone. |
+
+Additional controls:
+- [RadialBrain's official careers page](https://www.radialbrain.com/careers/) states its internships are for current students and remote across India; it describes an AI Engineering Intern role involving agents, automation and product engineering. No explicit current-open statement was found, so IN-015 remains `unknown`.
+- [Unisys AI Engineering Intern](https://unisys.wd5.myworkdayjobs.com/en-US/External/job/AI-Engineering-Intern_REQ574280) is Bangalore-based and asks for current/recent M.Tech candidates; it is not a direct match for the target BTech ECE undergraduate without further eligibility evidence.
+- [Jobicy's Spotify CoLM 2026 listing](https://jobicy.com/jobs/154386-colm-2026-intern) specifies UK, USA and Sweden and says the expression of interest is for candidates participating in CoLM, not a general vacancy. Treat it as an international-geography/posting-type negative control, not an India-eligible role.
+- A current search result for Flocci's AI Engineering Intern displayed a 2026-09-30 application close date. Because that date precedes this review, it is excluded unless canonical evidence confirms reopening.
+- Jobicy's [official API documentation](https://jobicy.com/jobs-rss-feed) allows normal product integrations subject to attribution and preservation of its canonical listing URL. Its public feed does not guarantee an employer ATS URL; absence from the last-seven-days feed is not proof of closure. No API endpoint was queried in this pass.
+
+After adding IN-036, the CSV has 83 records, 27 columns, 0 malformed-width rows, 0 duplicate IDs, 74 distinct canonical URLs and 8 repeated-URL groups. Status labels: 19 open, 53 unknown, 3 expired, 2 closed, 2 not_a_listing and 4 source_review; permission is unknown for 78 records. These are mixed audit records, not unique candidate-ready vacancies. The 50-record sample and the overall source-quality gate remain **NOT PASSED / research-only**.
