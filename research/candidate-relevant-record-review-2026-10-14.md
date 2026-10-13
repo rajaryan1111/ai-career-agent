@@ -209,3 +209,10 @@ New direct destination findings:
 The roster includes the GM role once: IN-006 and IN-026 are locale/parameter variants for the same requisition, so IN-026 is excluded. The sample has 50 records and 50 unique canonical URL values. Direct-employer link validity is still **not measured**: page retrieval does not prove that the Apply action works, and careers-index links are not necessarily role-deep-links.
 
 CSV baseline after status corrections: 83 records, 27 columns, 0 malformed rows, 0 duplicate listing IDs, 74 distinct canonical URLs, 8 repeated URL groups. Status counts are 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, and 4 source_review; permission remains unknown for 78 rows. These are mixed audit records, not unique eligible vacancies. Gate remains **NOT PASSED / research-only**.
+
+
+## Application-route verification update — 2026-10-14
+
+A focused browser spot check tested ten employer application paths. Confirmed rendered forms: Drivetrain, Trackmind, Sprinto, and CertiK. HCF redirected to a sign-in gate; Zyora displayed an embedded form but no distinct role-specific route; Needl.ai publishes an email route (not tested); RadialBrain's Google Forms click returned an internal fetch error without HTTP status; Valura.AI's visible button did not expose a destination; MailerMen's resolved /apply route was blocked by the research browser. These last three remain unknown, not broken.
+
+This is not a representative 50-record test. Trackmind has contradictory employment-type/experience text, and CertiK's PhD/U.S.-work-eligibility requirements make it a negative control rather than an India-undergraduate lead. No application was submitted, no candidate data was entered or transmitted, and no source permission was inferred from page accessibility.
