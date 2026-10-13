@@ -601,3 +601,14 @@ These are proposed targets. Do not report them as measured results.
 ### 2026-10-14 — Bruker record timestamp correction
 - Updated IN-033 (Bruker Graduate Apprenticeship Trainee - AI/ML) after direct official iCIMS page recheck: Bengaluru, Intern/Apprentice, requisition 2026-19820, posted date 2026-09-10, recent bachelor's in Computer Science & Allied Courses. Status remains unknown because current-open wording, ECE-as-allied eligibility, deadline and apprenticeship details were not fully confirmed. Permission remains unknown.
 - CSV was re-fetched after update and will be integrity-checked before reporting completion; status counts should be unchanged.
+
+
+### 2026-10-14 — Third India-focused employer-page recheck
+- Rechecked General Motors, Meraki Labs, Sarvam, vINe AI, AtkinsRéalis, Needl.ai and Concentric AI against official employer pages. Updated CSV records IN-006, IN-023, IN-024, IN-027, IN-030, IN-031 and IN-032; all last-checked dates are 2026-10-14.
+- vINe AI's official careers page explicitly lists ML Engineer Intern under “Open Positions” and Remote AI/ML internships; status updated to open, but application form is a Google Form whose privacy terms were not verified. No candidate data was submitted.
+- Needl.ai's official careers page lists AI Engineering Intern among open positions; status updated to open. Role is Bengaluru hybrid (three office days/week), targets recent B.Tech/M.Tech or equivalent CSE/EE/related graduates or 1–2 years experience; monthly stipend mentioned but amount absent. No email/application sent.
+- GM's official Workday content identifies JR-202613434, Bengaluru on-site, full-time, 45 hours/week, six months, Python/NumPy/Pandas/ML, and explicitly says no immigration-related sponsorship. ECE not explicit in degree list and current-open evidence not sufficiently fresh/explicit; status remains unknown.
+- Meraki Labs and AtkinsRéalis internship-title pages both state Full time employment type; Concentric lists Machine Learning Intern but Job Type Full-time. These role-type contradictions remain unknown. Meraki's academic/institution bar is highly selective; Atkins' named degree list does not explicitly include ECE.
+- Sarvam role is technically relevant (speech data pipeline, Python, audio/video, ML inference) but current indexed evidence was crawled about four months ago, so remains unknown/stale lead.
+- CSV integrity after edits: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, 8 repeated URL groups. Status counts: 15 open, 56 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review. Permission field remains unknown for 77 records.
+- Added SV-047 to validate intern-title versus employment-type consistency and prevent inferred degree equivalence. Gate remains NOT PASSED / research-only; no source API queried, code/dependencies/connectors added, candidate data transferred, autofill or application submission performed.
