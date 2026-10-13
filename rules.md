@@ -37,6 +37,7 @@
 - Do not use unauthorized scraping or submission automation.
 - Stop or request user intervention when a workflow is unsupported or uncertain.
 - Never describe a source as fully supported until the workflow has been tested and its permission basis documented.
+- A public API or feed is not, by itself, an unconditional permission grant. If API docs and general terms appear inconsistent or broad terms prohibit automated data collection, hold the source until written clarification resolves the intended use. Attribution does not replace permission. Current example: Himalayas is blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
 ## 5. Application integrity
 
