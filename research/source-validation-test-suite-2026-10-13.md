@@ -302,3 +302,12 @@ Grounded in the Jobicy API examples repository (https://github.com/Jobicy/jobicy
 ## 2026-10-14 baseline refresh note
 
 The source-audit CSV now contains 82 records. The 25-record international-remote explicit-geography comparison target is met for research purposes, with one additional Yotta Labs record retained as a contradictory-geography control and excluded from that target count. This does not establish 25 current open vacancies, candidate eligibility from India, or permission to automate any source. The source-quality gate remains unpassed; the next gate work is record-level freshness/status/eligibility review, source permission confirmation, and measured acceptance metrics.
+
+
+### SV-044 — Acceptance-gate denominators and evidence tiers
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-044 | A source-quality report aggregates a mixed audit CSV containing vacancies, duplicate source observations, negative controls, category/feed rows, stale records, and unresolved statuses | State the denominator and inclusion rules for each metric; count exact requisitions once; exclude non-listings and comparison controls from the eligible-vacancy numerator; report `unknown` separately; distinguish canonical-page readability from HTTP/link validity; provide dated evidence for status, eligibility, role relevance, and source permission. Mark a criterion unmeasured when evidence does not support a numeric result. | Counting mixed rows as vacancies, using page visibility as proof a role is open, treating a JS shell as a dead link or a readable page as a valid application route without evidence, hiding unresolved permission blockers, or declaring the gate passed from sample size alone. |
+
+Assessment record: [Source-Quality Gate Assessment — 2026-10-14](source-quality-gate-assessment-2026-10-14.md). The current decision is **NOT PASSED**: structural CSV checks pass, but the valid/relevant listing threshold and permission gate fail or lack sufficient evidence; the direct-link rate and full worldwide-eligibility audit remain unmeasured. This test is a research acceptance requirement only; no implementation is authorized.
