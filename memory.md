@@ -6,8 +6,8 @@ This file is the durable record of meaningful decisions, research findings, assu
 
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
-- Current stage: research and product strategy; no implementation.
-- Last updated: 2026-10-13.
+- Current stage: safe offline-core implementation plus parallel source/competitor research.
+- Last updated: 2026-10-14.
 
 ## Confirmed user decisions
 
@@ -22,7 +22,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 9. Application policy: strict eligibility and match criteria.
 10. Submission confirmation: ask only for missing information, sensitive declarations, unsupported steps, or uncertainty.
 11. Default search schedule: 00:00 and 12:00 Asia/Kolkata.
-12. Research-only constraint: do not write code or begin implementation until the product and feasibility research reaches a meaningful decision point.
+12. Superseded on 2026-10-14: the strict research-only constraint applied to all code. The user has now directed that development must proceed. Implement the safe, offline, dependency-free domain core in parallel with research; live source connectors, candidate-data transfer, resume parsing/upload, autofill, and application submission remain gated by evidence and explicit scope review.
 
 ## GitHub documentation workflow
 
@@ -98,6 +98,13 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 These are proposed targets. Do not report them as measured results.
 
 ## Change log
+
+### 2026-10-14 — Safe offline-core implementation authorized
+- Decision: begin building the software now while source and competitor research continues in parallel. This supersedes the earlier blanket no-code/research-only constraint, but does not waive source-specific permission, data quality, privacy, or application-integrity gates.
+- Added a dependency-free Python domain core in `career_agent/`: three-valued eligibility, explicit country scope, transparent skill overlap, conservative URL/requisition deduplication, separate source/application URLs, and guarded application-status transitions.
+- Added 18 standard-library unit tests covering eligibility, unknown handling, explicit worldwide scope, URL normalization, duplicate behavior, source/apply URL separation, and application confirmation evidence. Local test run: 18 passed.
+- Added a root README with current implementation status and test instructions. No source connector, live API call, network client, candidate-data transfer, resume parser, autofill, submission workflow, or third-party dependency was added.
+- Current decision: implementation is allowed for safe local core only. The source-quality gate remains NOT PASSED for live integrations and job recommendation claims.
 
 ### 2026-10-13 — Live job-source smoke test
 - Opened the official AI Dev Jobs public jobs endpoint and Remote OK JSON feed through web retrieval. Both returned structured records; this was a limited smoke test, not a paginated or statistically representative coverage test.
