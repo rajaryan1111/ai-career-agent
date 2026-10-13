@@ -81,7 +81,7 @@ References: https://jobs.ashbyhq.com/cohere/73bd3e2b-6597-4124-b64b-1e5dbc32e785
 
 ### Segmentation refresh after restricted-remote controls
 
-Recalculated after adding three distinct records INT-032–INT-034 and refreshing the existing Azul record INT-006: 61 unique role-like canonical URLs; 38 India-focused records including negative controls; 20 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 5 distinct records to review. The 25-record segment is a source-quality comparison, not 25 India-eligible vacancies; geographic and degree-restricted roles are intentionally retained as negative controls. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
+Recalculated after adding INT-035–INT-040: 67 unique role-like canonical URLs; 38 India-focused records including negative controls; 26 non-India remote comparison records including geographic/freshness controls; and 3 other location/work-mode cases. Of the 26 international-remote comparison records, 25 have an explicit listed country/region and one (Yotta Labs) has a conflict between “Remote (Global)” and the location header, so it is retained as a contradiction test but does not count toward the 25-record explicit-geography target. The 25-record explicit-geography target is now met; this is not a claim that 25 jobs are open or eligible to an India-based candidate. The 25-record segment is a source-quality comparison, not 25 India-eligible vacancies; geographic and degree-restricted roles are intentionally retained as negative controls. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
 
 
 **Classification note:** Cohere Research Internship is counted in the non-India remote comparison because the employer's location whitelist explicitly lists Canada, Europe, the UK and US and does not list India. The phrase “India not listed” in its eligibility field is a documented restriction, not evidence that the role is India-focused. This is a sampling classification only; it does not imply eligibility.
@@ -115,3 +115,25 @@ Official pages checked 2026-10-14:
 - Binance Applied AI Agent Engineer: https://jobs.lever.co/binance/303def79-701c-4b29-aceb-e07877a22d1d
 
 The existing INT-006 Azul Marketing AI Intern record was refreshed rather than duplicated: the new observation shares its canonical requisition URL and is not counted as a distinct role. The new distinct records are INT-032–INT-034. These are eligibility and geography controls, not claims that an India-based undergraduate can apply. No API endpoints were queried, no source integration or candidate-data transfer was performed, and the source-quality/implementation gate remains closed.
+
+
+### 2026-10-14 continuation — complete the 25-record explicit-geography comparison
+
+Five distinct records INT-035–INT-039 were added from official employer-hosted Ashby pages, then INT-040 was added as a sixth record to keep the conflicting-geography Yotta listing outside the explicit-geography target count:
+
+- **INT-035 — Cohere, Software Engineer Intern (Winter 2027):** official Ashby listing labels the role Remote and lists Canada, Dubai, London, UK and US. India is not listed; do not infer worldwide eligibility. No explicit current open/closed label or deadline was captured, so status remains unknown.
+- **INT-036 — Wealth.com, Applied Scientist — AI/ML Intern:** official Ashby page lists Remote, United States and describes LLM, RAG, NLP and computer-vision work, with $45–$55/hour compensation. Bachelor's enrollment is included in minimum qualifications; master's/PhD and additional experience appear preferred. India eligibility is not established; status remains unknown because no explicit current availability label was captured.
+- **INT-037 — Angi, AI Enablement Intern:** official Ashby page lists Remote — United States. Its description says the role focuses on AI adoption across business functions, not building models or production code, so it is a role-family negative control. The search result is stale and current status remains unknown.
+- **INT-038 — Yotta Labs, Research Engineer Intern — AI Systems:** the page header lists the US, Canada, Hong Kong and Singapore, but body text says “Remote (Global).” Treat this as a direct contradiction and do not assume India eligibility. It is included in the comparison set as an explicit contradiction test, but excluded from the 25-record explicit-geography target count.
+- **INT-039 — Higharc, Research Intern, Special Projects (PhD):** official Ashby page lists Remote (United States) and a PhD research role involving VLMs, LLMs and agentic systems. India eligibility is not stated; status remains unknown because the search result is stale and no current availability label was captured.
+- **INT-040 — 1Password, Developer Intern, Ecosystems (Fall 2026):** official Ashby page lists Remote (United States | Canada). The result is several months old and the Fall 2026 cycle may be stale; retain as a freshness control with status unknown, not a confirmed open vacancy.
+
+Official employer pages:
+- Cohere Software Engineer Intern (Winter 2027): https://jobs.ashbyhq.com/cohere/8c035d3d-081d-4c8a-914a-72f4efaad254
+- Wealth.com Applied Scientist — AI/ML Intern: https://jobs.ashbyhq.com/wealth-com/1899d513-4c4a-43b2-a307-8c8e4b877622
+- Angi AI Enablement Intern: https://jobs.ashbyhq.com/angi/18336a40-d7ab-4ead-90fc-e33504430677
+- Yotta Labs Research Engineer Intern — AI Systems: https://jobs.ashbyhq.com/yotta/09821a51-fbe6-42a7-a566-0d2b5d40fae3
+- Higharc Research Intern, Special Projects: https://jobs.ashbyhq.com/Higharc/5a7265ed-8db3-480e-9c04-3c9b2d2c235b
+- 1Password Developer Intern, Ecosystems: https://jobs.ashbyhq.com/1password/44150e12-89b1-4ac7-ad8d-671f5ec650dd
+
+The explicit-geography comparison target is now complete for research purposes, not for current-job availability or India-candidate suitability. A separate validation pass must recheck the records' freshness, canonical page status, degree/experience requirements, source permission, and any ambiguities before the source-quality gate can be considered. No API endpoint was queried, no source integration or candidate-data transfer was performed, and no application was submitted.
