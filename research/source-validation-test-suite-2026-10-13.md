@@ -271,3 +271,20 @@ These three rows extend the international remote comparison but do not close the
 | SV-040 | A role is labelled remote but the employer lists a finite set of employment locations that excludes the candidate's country, or requires work authorization in the country of employment | Preserve `remote` as work mode while independently recording the explicit country/location whitelist and work-authorization rule; classify the candidate as ineligible or eligibility-unconfirmed based on evidence. Do not infer global eligibility from remote work. | Treating remote as worldwide, ignoring a listed-country restriction, or recommending the role to a candidate outside the supported locations without an explicit exception. |
 
 Grounded in the Cohere Research Internship (Winter 2027) page (remote; Canada/Europe/UK/US locations; PhD-level research eligibility and work authorization required) and Zolve's 2026 program page (US-based degree eligibility; applications closed). This is an acceptance test only; no implementation is authorized.
+
+
+### SV-041 — Public API terms, attribution, and rate limits are independent acceptance checks
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-041 | A public GitHub repository documents a job API and describes sharing/attribution conditions, request limits, delays, or restrictions on redistribution | Record the provider's current official terms and allowed use separately from endpoint mechanics; preserve required canonical links/attribution; respect rate limits and delay; keep the source unapproved until intended product use is confirmed to fit the terms | Treating public/keyless access as permission; omitting required attribution; exceeding stated rate guidance; redistributing where prohibited; or approving a source before its intended use is reviewed |
+
+Grounded in the Remotive Remote Jobs API repository, checked 2026-10-14. Its README documents a 24-hour delay, recommends at most four requests per day, requires a canonical Remotive link and source attribution, and prohibits submitting its listings to third-party job websites. This test is a research acceptance requirement only; no API request or connector is authorized.
+
+### SV-042 — Dataset license, source provenance, and freshness are separate
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-042 | A public repository offers a job dataset/snapshot with a repository-level license, but the collection method, upstream source permissions, timestamps, or currentness are incomplete | Keep the dataset out of the production/seed corpus until license, provenance, collection permissions, timestamps, and intended use are reviewed. Historical snapshots may be used only as clearly labeled research fixtures after review; never count them as currently open jobs | Assuming a public repository or CC0/MIT label resolves upstream source rights; treating a stale snapshot as live; or adding unreviewed records to vacancy/coverage counts |
+
+Grounded in the Open Jobs repository, whose README says the live service stopped on 2026-10-10 and its last snapshot was built on 2026-10-05. Its freshness categories are useful research ideas, but this audit did not import or query its dataset. This is an acceptance requirement only; no dataset or implementation is authorized.
