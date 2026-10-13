@@ -62,8 +62,18 @@ The Threxil records are two separate role pages under one employer, not duplicat
 
 ### International-remote follow-up — three additional records
 
+| INT-026 | Cohere — Research Internship (Winter 2027) | Official Ashby page describes a remote research internship and explicitly lists Canada, Europe, UK, and US locations; India is not listed. | Requires a current PhD in ML/NLP/related field (exceptional non-PhD candidates may be considered), full-time 4–6 months, and work authorization in employment country. | `unknown`; preserve as a geography and seniority negative control, not an India-eligible role. |
+| AUD-ZOLVE-20261013 | Zolve — Summer Internship Program 2026 | Official program page says Applications Closed; it describes a US-based remote internship program and lists an AI Intern among multiple roles. | Program-wide eligibility requires pursuing a Bachelor's or Master's degree in the US and valid work authorization conditions. It is a program page, not one requisition. | `not_a_listing`; use as closed-program/geography control, not a vacancy. |
 - **MailerMen (INT-023):** The employer-hosted listing explicitly says Actively hiring, Remote (Worldwide), Freshers only, with a 3-month duration and stipend. It is stronger current and eligibility evidence than a third-party repost, although permission for automated collection/submission remains unknown.
 - **QovaTech (INT-024):** The official page explicitly labels an open internship and remote-friendly setup. It requires a shipped LLM project; “serving clients worldwide” is not treated as proof that applicants from every country are eligible.
 - **DataRobot (INT-025):** The official Workday search result shows US locations and Remote Canada-Ontario. The canonical page was unreadable through the retrieval interface, so status remains unknown and the record is retained as a geographic negative control rather than a confirmed vacancy.
 
 Official pages checked 2026-10-13: https://www.mailermen.com/jobs/machine-learning-intern-python-scikit-learn-remote-worldwide-280 ; https://www.qovatech.com/careers/ai-engineer ; https://datarobot.wd1.myworkdayjobs.com/DataRobot_External_Careers/job/Boston-Massachusetts-US/Agentic-AI-Intern_R-102729. The sample is still convenience-selected and does not establish precision/recall or source permission.
+
+
+### Additional restricted-remote controls
+
+- Cohere Research Internship (Winter 2027) is explicitly remote but lists employment locations in Canada, Europe, the UK and US, not India, and has a PhD-level research requirement. It remains `unknown` for current status and is not treated as eligible for an India-based undergraduate.
+- Zolve's official 2026 program page explicitly says applications are closed and eligibility requires a Bachelor's or Master's program in the US. Since it aggregates multiple roles, it is recorded as `not_a_listing` and excluded from vacancy counts.
+
+References: https://jobs.ashbyhq.com/cohere/73bd3e2b-6597-4124-b64b-1e5dbc32e785 ; https://zolve.com/internship.
