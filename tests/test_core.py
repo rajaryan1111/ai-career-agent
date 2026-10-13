@@ -26,7 +26,7 @@ def sample_job(**overrides):
         allowed_degree_disciplines=("ECE", "Computer Science"),
         allowed_study_statuses=("undergraduate",), allowed_graduation_years=(2027, 2028),
         minimum_experience_years=0, required_skills=frozenset({"Python", "LangChain"}),
-        work_mode="remote", role_type="internship",
+        work_mode="remote", role_type="internship", provenance_note="Manual test fixture: checked official listing today.",
     )
     values.update(overrides)
     return JobListing(**values)
@@ -63,6 +63,11 @@ class EligibilityTests(unittest.TestCase):
     def test_unknown_availability_stays_unknown(self):
         report = evaluate_eligibility(sample_profile(), sample_job(availability_status=Availability.UNKNOWN))
         self.assertEqual(report.decision, Decision.UNKNOWN)
+
+    def test_open_status_without_evidence_note_stays_unknown(self):
+        report = evaluate_eligibility(sample_profile(), sample_job(provenance_note=None))
+        self.assertEqual(report.decision, Decision.UNKNOWN)
+        self.assertIn("availability", {r.requirement for r in report.unknown_requirements})
 
     def test_experience_minimum_enforced(self):
         report = evaluate_eligibility(sample_profile(experience_years=0), sample_job(minimum_experience_years=1))
