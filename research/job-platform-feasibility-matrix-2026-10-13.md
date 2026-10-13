@@ -336,3 +336,7 @@ The audit CSV remains a mixed research/control set with 60 data rows and 27 colu
 A follow-up direct retrieval pass again could not retrieve the three filtered Himalayas JSON URLs or a documented AI Dev Jobs India/junior query through the current web retrieval interface. No status, body or headers were returned; do not infer zero matches or provider downtime. Live target coverage remains unmeasured.
 
 The Himalayas API landing page describes cursor pagination for the browse endpoint, while the provider's public OpenAPI file describes limit/offset. Both specify a 20-record maximum. Treat this as an unresolved API-contract discrepancy: do not implement full-feed pagination until a live response or provider clarification confirms the contract. See the retrieval attempt report.
+
+### 2026-10-13 addendum — Himalayas pagination documentation freshness
+
+Correction to the previous addendum: the current Himalayas API landing page explicitly states that offset is deprecated and recommends cursor pagination via nextCursor for /jobs/api; the filtered search endpoint uses page-based pagination. The GitHub OpenAPI artifact and Python example still show offset, so the most reasonable interpretation is stale/out-of-sync examples, not an unresolved API contract. Follow the current landing-page guidance if implementation is later authorized. This does not resolve the separate live retrieval limitation: filtered result quality/coverage remains unmeasured. See the retrieval report.
