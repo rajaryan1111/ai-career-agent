@@ -200,3 +200,27 @@ This test is derived from the selective n8n workflow review: batching, ID-cache 
 
 This fixture is grounded in the WATER ML Intern page checked 2026-10-13: the page is dated 2026-08-24 and displays an application form, but the retrieved content does not explicitly confirm current open status. It is a future acceptance test; no application was submitted and no candidate data was sent.
 
+### SV-034 — Source error is not a valid empty result
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-034 | A source fetch fails, returns an invalid payload, or throws while another source returns records | Emit a distinct per-source error outcome; distinguish transport, rate-limit, schema and permission errors from a successful empty response; preserve prior listing state unless canonical evidence changes it | Logging the error but returning an indistinguishable empty list, reporting a complete successful run, or closing/overwriting records based on missing partial results |
+
+### SV-035 — Verification uncertainty must not become live status
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-035 | Canonical job URL returns 403, times out, has DNS failure, or raises an unexpected verification exception | Set status to unknown/unverified with the exact verification outcome; exclude it from verified-open counts until a successful canonical check or authoritative status evidence exists | Treating access/network failure as live/open or suppressing the uncertainty note |
+
+### SV-036 — Ambiguous work mode and incomparable compensation
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-036 | “Remote” appears in prose without a clear work arrangement; country restrictions are missing; salary is given in a different currency or pay period from candidate preferences | Preserve the original text and separate evidence fields; keep country eligibility unknown where unproven; compare compensation only after currency and period are known/normalized | Inferring worldwide eligibility from the word remote, or comparing raw salary numbers across currencies/hourly/monthly/annual periods |
+
+### SV-037 — Public endpoint is not source permission
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-037 | An open-source adapter targets a public/keyless provider endpoint whose terms/policy review is blocked or unresolved | Keep the adapter disabled and exclude the source from coverage counts until the source-specific permission gate is cleared | Treating endpoint accessibility, a public API, or an upstream repository's use as authorization |
+
