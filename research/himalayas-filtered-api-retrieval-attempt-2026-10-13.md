@@ -61,3 +61,17 @@ Sources checked 2026-10-13:
 - Filtered results for both providers remain not measured.
 - No implementation, dependencies, credentials, or candidate data transfer.
 - Next valid step is a normal HTTPS GET from a network-enabled environment, capturing status, headers, response shape, query parameters, and a minimal sample; if the pagination discrepancy persists, ask the provider before implementing full-feed sync.
+
+## Documentation discrepancy resolved by current first-party reference check — 2026-10-13
+
+**Correction to the preceding note:** the pagination discrepancy is now substantially resolved by the current official API landing page. It explicitly says the browse endpoint uses cursor pagination, that offset is deprecated and will be removed, and that nextCursor should be passed back as cursor. The public GitHub OpenAPI file and its Python example still describe offset pagination, so those artifacts appear stale or not yet synchronized with the current landing-page instructions. Do not describe this as an unresolved provider ambiguity anymore; describe it as a documentation freshness mismatch with an explicit current recommended path.
+
+Recommended interpretation:
+- Browse /jobs/api: use limit up to 20 and cursor/nextCursor according to the current landing page.
+- Filtered /jobs/api/search: use its documented 1-based page parameter.
+- Do not implement or poll a full-feed sync just to prove feasibility; the bounded filtered pilot remains the lower-cost test.
+- Continue to respect the daily refresh, rate limits, visible Himalayas attribution and original listing links.
+
+Evidence: current API landing page https://himalayas.app/api explicitly calls offset deprecated and cursor preferred; current OpenAPI artifact https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json and example https://github.com/Himalayas-App/remote-jobs-api/blob/main/examples/python.py still show offset. Sources checked 2026-10-13.
+
+This resolves the pagination-choice question, but **does not** resolve the separate live retrieval limitation: the four filtered/read-only URLs still returned no status/body through this research interface, so target coverage remains unmeasured.
