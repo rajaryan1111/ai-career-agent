@@ -1,6 +1,6 @@
 # Architecture Notes
 
-**Status:** Research hypothesis — architecture is not approved  
+**Status:** Provisional implementation baseline for offline domain core; full desktop architecture remains open  
 **Last updated:** 2026-10-13
 
 ## 1. Architectural direction
@@ -20,6 +20,10 @@ Default local data: original resumes, parsed candidate profile, job preferences/
 External transfer must be explicit and limited to the minimum necessary data. Before using an external LLM, job-data provider, or company research source, disclose what is sent and allow the user to opt in.
 
 ## 4. Technology options to research (not decisions)
+
+### Bounded implementation choice — 2026-10-14
+The first domain layer is implemented in Python using only the standard library. This is a reversible implementation choice for deterministic rules and tests, not a final decision on the desktop shell, database, packaging, or source-adapter runtime. UI framework, persistence, resume parsing, scheduler, and live integrations remain undecided or gated.
+
 
 - Desktop shell: Tauri vs Electron vs other viable options.
 - UI: React, Vite, and TypeScript.
