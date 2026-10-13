@@ -308,3 +308,8 @@ Crucial negative controls: Semark's canonical page explicitly says its AI Engine
 ### Dataset integrity follow-up — 2026-10-13
 
 After adding six official-employer records, a strict CSV parse revealed six pre-existing malformed rows: four review notes had unquoted commas and two rows had an extra `unknown` placeholder before the application URL. Repaired all six, then validated the full audit file: 49 data rows, 27-column header, and every data row exactly 27 columns. The repair is documented in [official employer freshness audit](official-employer-freshness-audit-2026-10-13.md). Treat strict parse validation as a required step after every CSV edit.
+
+
+## 2026-10-13 addendum — official employer freshness audit round 2
+
+Added five candidate leads and one expired negative control to the CSV. Unisys AI Engineering Intern (Bangalore; AI pipelines/agents), Concentric AI Machine Learning Intern (Bengaluru; six months; ML/RAG), Needl.ai AI Engineering Intern (Bengaluru hybrid; email application), Bruker Graduate Apprenticeship Trainee AI/ML, and AtkinsRéalis Robotics & AI Engineering Intern are leads requiring status/eligibility checks. GE Aerospace Data Science Intern is an expired negative control: official Workday result lists application end date 2026-09-24, already past. See [official employer freshness audit round 2](official-employer-freshness-audit-round2-2026-10-13.md). CSV now has 55 data rows; this is a mixed set of leads and controls, not 55 open vacancies.
