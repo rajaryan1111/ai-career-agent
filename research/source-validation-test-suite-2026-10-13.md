@@ -12,16 +12,16 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 67 |
+| Non-empty data rows | 69 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 12 |
-| Status = unknown | 45 |
+| Status = unknown | 46 |
 | Status = expired | 3 |
 | Status = closed | 2 |
-| Status = not_a_listing | 1 |
+| Status = not_a_listing | 2 |
 | Status = source_review | 4 |
-| Distinct canonical URL values | 58 |
+| Distinct canonical URL values | 60 |
 | Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
 These are mixed listing/source/control records. **They are not confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
@@ -262,3 +262,12 @@ Add the following records to the next human-labelled source-quality evaluation:
 - **INT-025 DataRobot:** official Workday result lists Remote Canada-Ontario and US offices; direct page retrieval was unreadable. Preserve unknown status and treat geography as a negative control.
 
 These three rows extend the international remote comparison but do not close the 25-listing segment or the overall source-quality gate. A public employer page, an active form, and permission to automate remain three separate questions.
+
+
+### SV-040 — Remote label with a restricted employment-country list
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-040 | A role is labelled remote but the employer lists a finite set of employment locations that excludes the candidate's country, or requires work authorization in the country of employment | Preserve `remote` as work mode while independently recording the explicit country/location whitelist and work-authorization rule; classify the candidate as ineligible or eligibility-unconfirmed based on evidence. Do not infer global eligibility from remote work. | Treating remote as worldwide, ignoring a listed-country restriction, or recommending the role to a candidate outside the supported locations without an explicit exception. |
+
+Grounded in the Cohere Research Internship (Winter 2027) page (remote; Canada/Europe/UK/US locations; PhD-level research eligibility and work authorization required) and Zolve's 2026 program page (US-based degree eligibility; applications closed). This is an acceptance test only; no implementation is authorized.
