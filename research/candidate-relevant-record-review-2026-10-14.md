@@ -58,3 +58,42 @@ The status count is not the count of suitable vacancies. This review reconfirmed
 ## Next step
 
 Review the remaining high-confidence India-focused records and any explicitly worldwide records with the same evidence fields. Then compute the strict unique, candidate-relevant, currently available count after duplicate and negative-control exclusion. Keep source permission as a hard gate. Do not implement connectors or application automation until every acceptance criterion passes.
+
+
+## Second bounded India-focused review — 2026-10-14
+
+Official employer pages and current search-indexed canonical content were checked for the next India-focused batch. This remains a manual research sample, not a source-permission approval or representative vacancy census.
+
+| Record(s) | Current official evidence | Decision and limits |
+|---|---|---|
+| IN-020 / IN-028 — ATRISI ML / AI Intern | [ATRISI careers index](https://atrisi.org/careers) explicitly labels the role **Open**; [role page](https://atrisi.org/collaborate/ml-ai-intern) says Remote / Hybrid, Bengaluru and provides form, LinkedIn and email routes. | Updated both observations to `open` because the employer index explicitly says Open. IN-028 is a duplicate observation of IN-020, not another vacancy. Responsibilities, duration, stipend, intake deadline and privacy terms remain incomplete; source/product permission remains unknown. |
+| IN-016 — Zyora Labs AI/ML Research Intern | [Official careers page](https://www.zyoralabs.com/careers) says “Open internships”; student eligibility says any year/stream and basic Python, Remote / Nagercoil. [Onboarding page](https://zyoralabs.com/internship) presents a broad confidentiality agreement and says work created belongs to Zyora Labs. | Updated to `open` for an explicitly advertised track, but do not count as a unique confirmed requisition until the shared-page tracks are distinguished. Compensation, duration, intake end date and data privacy/retention are unspecified. The candidate should review the NDA/IP terms before agreeing. Permission to integrate or collect listings remains unknown. |
+| IN-017 — Zyora Labs AI/ML Project Intern | Same official page labels the section “Open internships”; role says students welcome, basic Python, no prior experience required. Same general application route as IN-016. | Updated to `open` as an advertised track, not proof of a separately funded/active requisition. Keep shared-page relationship explicit; do not double-count before employer confirms distinction. NDA/IP, compensation, duration and privacy remain review items. |
+| IN-019 — Hajana Technologies AI/ML Intern | [Official role page](https://hajanatechnologies.com/careers/ai-ml-intern) says remote, 9 PM–6 AM IST; eligibility is CSE/AI/ML degree and 2025/2026 pass-outs only. Careers index shows View & Apply but not an explicit current-open label. | Remains `unknown`; the cohort restriction may not fit a currently enrolled student and must not be inferred away. Application form asks for Father/Husband Name; no autofill or submission without explicit candidate review. |
+| IN-013 / INT-014 — CertifyOS AI Intern | [Canonical Ashby content](https://jobs.ashbyhq.com/certifyos/4bcdec99-9f2e-416c-8e26-498c94c5898a/) describes Pune, remote, six-month ML engineering contract and production Python/testing/evaluation/GCP. Retrieved content is stale-indexed and has Apply but no explicit current-open wording. | Remains `unknown`; INT-014 is the same requisition/source-comparison control, not another vacancy. Need current employer confirmation and full eligibility. |
+| IN-021 — Onelogica | [Official careers page](https://www.onelogica.com/careers/) says six current opportunities and separately lists an “Internship AI Engineer - Intern” (0–1 years, Delhi/NCR, in-office) and “Full Time Data & AI Engineer – GenAI Platforms” (0–1 years, Delhi/NCR, in-office). | Remains `unknown`: the CSV title “Internship Data & AI Engineer — GenAI Platforms” does not cleanly match either displayed role. Do not conflate the internship and full-time listings until the exact requisition/detail URL is established. |
+| IN-035 — Walmart Global Tech India Gen AIML Engineering Intern | [Official Workday result](https://walmart.wd504.myworkdayjobs.com/en-US/WalmartExternal/job/IN-KA-BANGALORE-Home-Office-PTPP1/XMLNAME--IND--Grad-Intern---No-Work-Experience_R-2607497) shows Bengaluru, full-time, posted 8 days ago, Apply, and a Gen AIML Engineering Intern summary. | Remains `unknown`: posting recency and Apply do not alone establish current vacancy status. Degree/year eligibility, work mode, duration, compensation and deadline require further canonical review. |
+| NC Bruker Graduate Apprenticeship Trainee — AI/ML | [Official iCIMS page](https://internationalcareers-bruker.icims.com/jobs/19820/graduate-apprenticeship-trainee---ai-ml/job?in_iframe=1) says Bengaluru, Intern/Apprentice, posted 2026-09-10, and recent bachelor's graduates in CS/allied courses. | Remains `unknown`: no explicit current-open statement was confirmed in this pass; whether ECE qualifies as “allied” and the intake deadline/terms need confirmation. |
+
+### Updated audit integrity after second batch
+
+| Check | Result |
+|---|---:|
+| Records / columns | 82 / 27 |
+| Malformed-width rows | 0 |
+| Duplicate listing IDs | 0 |
+| Distinct canonical URL values | 73 |
+| Repeated canonical URL groups | 8 |
+| `open` | 13 |
+| `unknown` | 58 |
+| `expired` | 3 |
+| `closed` | 2 |
+| `not_a_listing` | 2 |
+| `source_review` | 4 |
+| Permission field = `unknown` | 77 |
+
+These are **status labels across mixed audit rows**, not 13 unique suitable vacancies. At least one open-status row is a duplicate ATRISI observation; the two Zyora tracks share one careers page and are not counted as two distinct requisitions without confirmation. No source permissions were upgraded.
+
+### Gate decision
+
+**NOT PASSED — research only.** This pass produced stronger current evidence for explicitly advertised India-focused internship tracks, but did not establish the required 20 unique, relevant, currently available listings; a measured ≥90% direct-link validity rate; a complete worldwide-eligibility audit; or resolved source terms. No source API was queried and no code, connector, dependency, candidate-data transfer, autofill or application submission was performed.
