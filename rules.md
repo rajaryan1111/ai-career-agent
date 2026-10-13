@@ -73,7 +73,14 @@
 - Persist run state and errors.
 - Do not claim the app runs while powered off unless a separate, verified service provides that behavior.
 
-## 9. Change management
+## 9. Development workflow
+
+- Use `development-workflow.md` as the project-specific engineering process once implementation is authorized: frame the problem, specify observable behavior, plan small tasks, test high-consequence deterministic rules first, debug root causes, review against requirements and risks, and verify before claiming completion.
+- The workflow ideas reviewed from gstack and Superpowers are guidance, not dependencies. Do not install/copy their toolchains wholesale or allow agent instructions to override product rules.
+- The research/product decision gate remains in force. A development workflow document does not authorize implementation, paid services, external data transmission, deployment, or application submission.
+- Model/agent reviews are not independent evidence; critical claims require source evidence, reproducible checks, or human review.
+
+## 10. Change management
 
 - Update `memory.md` whenever a meaningful decision, evidence item, unresolved question, or rejected assumption emerges.
 - Update the relevant canonical document (`prd.md`, `architecture.md`, `rules.md`, `phases.md`, or `design.md`) when a decision changes.
