@@ -7,21 +7,21 @@
 
 ## 1. Current baseline (observed, not a pass)
 
-A strict CSV parser was run over the current seed file on 2026-10-13.
+A strict CSV parser was rerun over the current seed file on 2026-10-14 after expanding the research sample. This replaces the original 2026-10-13 baseline.
 
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 69 |
+| Non-empty data rows | 82 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
-| Status = open | 12 |
-| Status = unknown | 46 |
+| Status = open | 15 |
+| Status = unknown | 56 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 2 |
 | Status = source_review | 4 |
-| Distinct canonical URL values | 60 |
+| Distinct canonical URL values | 73 |
 | Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
 These are mixed listing/source/control records. **They are not confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
@@ -297,3 +297,8 @@ Grounded in the Open Jobs repository, whose README says the live service stopped
 | SV-043 | A future authorized API adapter paginates with cursors; a cursor repeats/expires, a record has an invalid/non-canonical source URL, or a page request fails mid-export | Bound page sizes; preserve filters across pages; detect repeated/expired cursors; validate source URLs against the provider's documented canonical URL pattern; deduplicate by provider ID without losing source sightings; surface a failed/partial run explicitly and never present it as a complete snapshot. A new traversal is required after cursor expiry. | Infinite/repeated-page loops, accepting arbitrary or malformed links as canonical, silently returning partial results as complete, deleting provenance during deduplication, or treating missing records as closed |
 
 Grounded in the Jobicy API examples repository (https://github.com/Jobicy/jobicy-api-examples), whose Python client documents provider-ID deduplication, Jobicy URL validation, repeated-cursor rejection, cursor expiry, and stopping exports on HTTP failures. This is a future acceptance test only; no adapter, dependency, or live endpoint call is authorized.
+
+
+## 2026-10-14 baseline refresh note
+
+The source-audit CSV now contains 82 records. The 25-record international-remote explicit-geography comparison target is met for research purposes, with one additional Yotta Labs record retained as a contradictory-geography control and excluded from that target count. This does not establish 25 current open vacancies, candidate eligibility from India, or permission to automate any source. The source-quality gate remains unpassed; the next gate work is record-level freshness/status/eligibility review, source permission confirmation, and measured acceptance metrics.
