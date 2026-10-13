@@ -4,7 +4,9 @@ AI Career Agent is being built as a local-first desktop assistant for job discov
 
 ## Current implementation
 
-The first dependency-free Python domain core is in `career_agent/`. It currently provides:
+The project now includes a small offline desktop alpha launched with `python -m career_agent`. It uses Python's standard-library Tkinter UI and local SQLite. It is not yet packaged for end users, and GUI smoke testing is still required on supported operating systems.
+
+The dependency-free Python domain core in `career_agent/` provides:
 
 - Three-valued hard eligibility checks: `pass`, `fail`, and `unknown`.
 - Explicit country/work eligibility handling; worldwide eligibility passes only when explicitly recorded.
@@ -15,7 +17,17 @@ The first dependency-free Python domain core is in `career_agent/`. It currently
 - Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
-This is the domain layer only, not a complete desktop application. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine, local JSON export, and explicit delete controls. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+
+## Run the desktop app
+
+Python 3.10+ with Tkinter available:
+
+```bash
+python -m career_agent
+```
+
+Candidate data is stored in the operating system's per-user application-data directory, not inside the repository. To use the core tests in a headless environment, no display is required.
 
 ## Run tests
 
@@ -34,7 +46,7 @@ python -m unittest discover -s tests -v
 - Do not fabricate candidate facts or screening answers.
 - Do not bypass source restrictions or add unapproved connectors.
 - A relevance score is not a hiring probability.
-- Candidate-controlled submission remains the rule until a particular permitted workflow is separately validated.
+- The current alpha does not submit applications. Future automated actions require source/employer permission, reliability evidence, and a scoped, revocable policy; no blanket permission is implied.
 
 ## Project status
 
