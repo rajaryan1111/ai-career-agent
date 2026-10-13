@@ -77,3 +77,8 @@ Official pages checked 2026-10-13: https://www.mailermen.com/jobs/machine-learni
 - Zolve's official 2026 program page explicitly says applications are closed and eligibility requires a Bachelor's or Master's program in the US. Since it aggregates multiple roles, it is recorded as `not_a_listing` and excluded from vacancy counts.
 
 References: https://jobs.ashbyhq.com/cohere/73bd3e2b-6597-4124-b64b-1e5dbc32e785 ; https://zolve.com/internship.
+
+
+### Segmentation refresh after restricted-remote controls
+
+Recalculated after adding INT-026 and the Zolve program control: 54 unique role-like canonical URLs; 39 India-focused records including negative controls; 12 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 13 distinct records to review. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
