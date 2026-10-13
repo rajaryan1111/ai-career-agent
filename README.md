@@ -62,4 +62,4 @@ python -m unittest discover -s tests -v
 
 ## Project status
 
-Implementation has started with safe, offline domain logic while source research continues in parallel. This does **not** mean the source-quality gate has passed or that live discovery/application workflows are ready.
+The local-only desktop alpha is implemented and source research continues in parallel. It is not yet a packaged production release; follow the manual GUI smoke-test checklist before claiming desktop acceptance. This does **not** mean the source-quality gate has passed or that live discovery/application workflows are ready. See [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md) and [the current source-quality gate assessment](research/source-quality-gate-assessment-2026-10-14.md).
