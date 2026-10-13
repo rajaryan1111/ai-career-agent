@@ -183,3 +183,11 @@ Add a documentation-freshness fixture:
 References: https://himalayas.app/api ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/examples/python.py
 
 The pagination choice is now sufficiently documented for a later bounded implementation proof, but live filtered result retrieval and source-quality gates remain unverified.
+
+### SV-032 — Partial source failure and safe resume
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-032 | A scheduled run has one source return valid records while another source times out, is rate-limited, or fails schema validation; some previously seen listings are absent from the partial result | Record each source outcome separately; retain prior listing state unless a fresh canonical check proves a status change; retry only within source limits; resume idempotently without duplicate records or notifications | Partial results are treated as a complete snapshot, omitted listings are marked closed, an error is reported as a valid empty result, or a retry duplicates records/side effects |
+
+This test is derived from the selective n8n workflow review: batching, ID-cache and error-handler patterns are useful concepts, but the product must not let a partial run corrupt vacancy state. It is a future acceptance test only; no implementation is authorized.
