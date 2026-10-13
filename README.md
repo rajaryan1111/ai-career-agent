@@ -9,6 +9,8 @@ The project now includes a small offline desktop alpha launched with `python -m 
 The dependency-free Python domain core in `career_agent/` provides:
 
 - Three-valued hard eligibility checks: `pass`, `fail`, and `unknown`.
+- Separate country eligibility from optional exact-match work-authorization requirements.
+- An `open` status without a recorded availability evidence/note remains `unknown` for eligibility.
 - Explicit country/work eligibility handling; worldwide eligibility passes only when explicitly recorded.
 - Transparent skill overlap and missing-skill explanations, separate from eligibility.
 - Conservative URL/requisition deduplication.
@@ -28,6 +30,16 @@ python -m career_agent
 ```
 
 Candidate data is stored in the operating system's per-user application-data directory, not inside the repository. To use the core tests in a headless environment, no display is required.
+
+## Audit research data
+
+To regenerate a reproducible CSV integrity summary (including input SHA-256, row/column counts, duplicate IDs, canonical URL groups, status and permission counts):
+
+```bash
+python scripts/audit_job_source_csv.py
+```
+
+The tool intentionally does not invent a direct-link validity percentage; the existing route observations do not provide a defensible uniform denominator.
 
 ## Run tests
 
