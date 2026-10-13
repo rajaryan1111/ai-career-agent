@@ -12,11 +12,11 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 60 |
+| Non-empty data rows | 61 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 8 |
-| Status = unknown | 42 |
+| Status = unknown | 43 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
