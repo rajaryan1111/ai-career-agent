@@ -131,3 +131,14 @@ The Drivetrain employer board also currently lists its India-based remote GenAI 
 ### Count reconciliation after CSV re-fetch — 2026-10-14
 
 The just-re-fetched CSV confirms **19 open-labelled records**, not 18: the earlier baseline was 17 and IN-002 plus IN-022 were subsequently updated to open. Current status counts are open 19, unknown 52, expired 3, closed 2, not_a_listing 2, source_review 4. CSV remains 82 rows × 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, and 77 rows with unknown permission. This is a correction to the count above; it does not change the NOT PASSED / research-only decision.
+
+
+## 12. Sixth candidate-focused recheck — 2026-10-14
+
+The current official Needl.ai careers index lists AI Engineering Intern under open positions. The role is Bengaluru hybrid (three days/week in office), mentions a monthly stipend without an amount, and targets recent graduates with B.Tech/M.Tech or equivalent in CSE/EE/related or candidates with 1–2 years of experience. Existing IN-031 remains `open`; the current BTech ECE student's cohort/degree eligibility is not confirmed. No email was sent.
+
+Threxil's current official careers page states “2 roles open”, “Fully remote”, “Work from anywhere”, and lists AI Intern and Frontend + AI Intern; the page welcomes freshers/self-taught candidates. Existing INT-021/INT-022 remain `open`. The phrase “work from anywhere” is not conclusive evidence of legal hiring, payroll, tax or work-authorization eligibility in every country. Applicant-data privacy and source/product permissions remain unresolved.
+
+For candidate triage, Threxil AI Intern and Sprinto AI Implementation Intern merit careful manual review; HCF is a potential India-remote paid internship lead but exact stipend and eligibility remain unclear. Drivetrain and Needl.ai require explicit confirmation of ECE/current-student eligibility. EduRankAI remains materially unattractive as a paid opportunity (listed ₹0/month, full-time, three months) and still requires legitimacy/workload checks. These judgments are lead-prioritization only, not eligibility determinations.
+
+**Gate remains NOT PASSED / research-only.** 77 records still have permission unknown; current page availability does not authorize crawling, caching, republication or automation. No candidate data was sent and no applications were submitted.
