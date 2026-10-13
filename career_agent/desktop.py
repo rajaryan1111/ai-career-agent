@@ -1,35 +1,24 @@
 """Offline-first Tkinter desktop workflow for AI Career Agent.
 
 Launch with python -m career_agent. No network calls or external service dependencies.
+Domain rules, validation, and form mapping live in ``core.py``, ``store.py``,
+``validation.py``, and ``desktop_logic.py``; this module only wires them to widgets.
 """
 from __future__ import annotations
 import json
-import os
-import platform
-import re
+import sqlite3
 import uuid
 from dataclasses import asdict
 from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
-from .core import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing, evaluate_eligibility, score_relevance
+from .core import ApplicationStatus, ApplicationTracker, Availability, Decision, evaluate_eligibility, score_relevance
+from .desktop_logic import (
+    JobSaveMode, build_candidate_profile, default_database_path, form_values,
+    job_form_values, plan_job_save, profile_form_values,
+)
 from .store import CareerStore
-from .validation import optional_float, optional_int, split_values
-
-
-def default_database_path() -> Path:
-    """Choose a per-user app-data directory; never put candidate data in the repository."""
-    system = platform.system()
-    if system == "Darwin":
-        root = Path.home() / "Library" / "Application Support"
-    elif system == "Windows":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    folder = root / ("AI Career Agent" if system in {"Darwin", "Windows"} else "ai-career-agent")
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / "career_agent.sqlite3"
 
 
 class CareerAgentApp:
@@ -42,6 +31,8 @@ class CareerAgentApp:
         self.db_path = Path(database_path) if database_path else default_database_path()
         self.store = CareerStore(self.db_path)
         self.selected_job_id = None
+        self.job_save_mode = JobSaveMode.NEW
+        self.job_edit_baseline = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         header = ttk.Frame(root, padding=12)
         header.pack(fill=X)
@@ -116,9 +107,12 @@ class CareerAgentApp:
         actions.grid(row=8, column=0, columnspan=6, sticky=W, pady=6)
         for text, callback in [
             ("Save job", self._save_job), ("Evaluate selected", self._evaluate),
-            ("Shortlist if eligible", self._shortlist), ("Delete selected", self._delete_job), ("Clear form", self._clear_form),
+            ("Shortlist if eligible", self._shortlist), ("Delete selected", self._delete_job), ("New job", self._begin_new_job),
         ]:
             ttk.Button(actions, text=text, command=callback).pack(side="left", padx=(0, 6))
+        self.job_mode = tk.StringVar()
+        ttk.Label(self.jobs_tab, textvariable=self.job_mode).grid(row=11, column=0, columnspan=6, sticky=W, pady=(4, 0))
+        self._set_job_mode_display()
         self.jobs_tree = ttk.Treeview(self.jobs_tab, columns=("employer", "role", "availability", "status", "source"), show="headings", height=9)
         for col, label, width in [("employer", "Employer", 140), ("role", "Role", 170), ("availability", "Availability", 100), ("status", "Tracker status", 150), ("source", "Source", 190)]:
             self.jobs_tree.heading(col, text=label)
@@ -148,99 +142,112 @@ class CareerAgentApp:
         profile = self.store.get_profile()
         if not profile:
             return
-        values = {
-            "country": profile.candidate_country or "", "degree": profile.degree_discipline or "",
-            "study_status": profile.study_status or "", "graduation_year": str(profile.graduation_year or ""),
-            "experience": "" if profile.experience_years is None else str(profile.experience_years),
-            "work_authorization": profile.work_authorization or "", "skills": ", ".join(sorted(profile.skills)),
-            "locations": ", ".join(sorted(profile.preferred_locations)), "work_modes": ", ".join(sorted(profile.preferred_work_modes)),
-            "role_types": ", ".join(sorted(profile.preferred_role_types)),
-        }
-        for key, value in values.items():
+        for key, value in profile_form_values(profile).items():
             self.profile_vars[key].set(value)
 
     def _save_profile(self):
         try:
-            v = self.profile_vars
-            self.store.save_profile(CandidateProfile(
-                candidate_country=v["country"].get().strip() or None,
-                degree_discipline=v["degree"].get().strip() or None,
-                study_status=v["study_status"].get().strip() or None,
-                graduation_year=optional_int(v["graduation_year"].get(), "Graduation year"),
-                experience_years=optional_float(v["experience"].get(), "Experience"),
-                work_authorization=v["work_authorization"].get().strip() or None,
-                skills=frozenset(split_values(v["skills"].get())),
-                preferred_locations=frozenset(split_values(v["locations"].get())),
-                preferred_work_modes=frozenset(split_values(v["work_modes"].get())),
-                preferred_role_types=frozenset(split_values(v["role_types"].get())),
-            ))
-            self.status.set("Candidate profile saved locally.")
+            self.store.save_profile(build_candidate_profile(form_values(self.profile_vars)))
         except ValueError as exc:
             messagebox.showerror("Invalid profile", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Profile not saved",
+                "The profile could not be written to the local database. Nothing was changed; "
+                f"your previously saved profile is unchanged.\n\n{exc}",
+                parent=self.root,
+            )
+            self.status.set("Profile not saved (local database error).")
+            return
+        self.status.set("Candidate profile saved locally.")
 
     def _delete_profile(self):
         if not messagebox.askyesno("Delete profile", "Permanently delete the saved profile on this device?", parent=self.root):
             return
-        self.store.delete_profile()
+        try:
+            deleted = self.store.delete_profile()
+        except sqlite3.Error as exc:
+            messagebox.showerror("Profile not deleted", f"The saved profile could not be deleted.\n\n{exc}", parent=self.root)
+            self.status.set("Profile not deleted (local database error).")
+            return
+        if not deleted:
+            self.status.set("No saved profile was found; nothing was deleted.")
+            return
         for variable in self.profile_vars.values():
             variable.set("")
         self.status.set("Saved profile deleted.")
 
     def _job_from_form(self):
-        v = self.job_vars
-        employer, title, url = (v[key].get().strip() for key in ("employer", "title", "source_url"))
-        if not employer or not title or not url:
-            raise ValueError("Employer, role title, and source listing URL are required.")
-        if not re.match(r"^https?://", url, re.I):
-            raise ValueError("Source listing URL must start with http:// or https://.")
-        apply_url = v["apply_url"].get().strip() or None
-        if apply_url and not re.match(r"^https?://", apply_url, re.I):
-            raise ValueError("Employer apply URL must start with http:// or https://.")
-        def items(key):
-            values = split_values(v[key].get())
-            return values or None
-        years = tuple(int(item) for item in split_values(v["graduation_years"].get()))
-        minimum, maximum = optional_float(v["min_exp"].get(), "Minimum experience"), optional_float(v["max_exp"].get(), "Maximum experience")
-        if minimum is not None and maximum is not None and minimum > maximum:
-            raise ValueError("Minimum experience cannot exceed maximum experience.")
-        return JobListing(
-            listing_id=self.selected_job_id or str(uuid.uuid4()), source_id="manual",
-            source_name=v["source_name"].get().strip() or "Manual entry", source_listing_url=url,
-            employer_name=employer, role_title=title, availability_status=Availability(v["availability"].get() or "unknown"),
-            employer_apply_url=apply_url, canonical_requisition_id=v["requisition"].get().strip() or None,
-            location_text=v["location"].get().strip() or None, work_mode=v["work_mode"].get().strip() or None,
-            role_type=v["role_type"].get().strip() or None, eligibility_scope=v["scope"].get() or "unknown",
-            eligible_countries=split_values(v["countries"].get()), allowed_work_authorizations=items("allowed_work_authorizations"), allowed_degree_disciplines=items("degrees"),
-            allowed_study_statuses=items("study_statuses"), allowed_graduation_years=years or None,
-            minimum_experience_years=minimum, maximum_experience_years=maximum,
-            required_skills=frozenset(split_values(v["required_skills"].get())),
-            provenance_note=v["provenance_note"].get().strip() or None,
+        """Map the current form to the listing to save and the explicit save plan.
+
+        In ``NEW`` mode a fresh listing id is always used, so an unsaved form can never
+        overwrite the selected listing. In ``EDIT`` mode the selected listing keeps its
+        identity and the plan reports which eligibility-relevant fields changed.
+        """
+        return plan_job_save(
+            form_values(self.job_vars),
+            mode=self.job_save_mode,
+            selected_job_id=self.selected_job_id,
+            baseline=self.job_edit_baseline,
+            new_listing_id=str(uuid.uuid4()),
         )
+
+    def _set_job_mode_display(self):
+        if not hasattr(self, "job_mode"):
+            return
+        if self.job_save_mode is JobSaveMode.EDIT and self.selected_job_id:
+            self.job_mode.set("Editing the selected saved listing: saving updates it in place and preserves its identity.")
+        else:
+            self.job_mode.set("New listing: saving creates a separate record and never overwrites a saved listing.")
+
+    def _begin_new_job(self):
+        self.selected_job_id = None
+        self.job_save_mode = JobSaveMode.NEW
+        self.job_edit_baseline = None
+        for key, var in self.job_vars.items():
+            var.set("unknown" if key in {"availability", "scope"} else "")
+        self.jobs_tree.selection_remove(self.jobs_tree.selection())
+        self._set_job_mode_display()
 
     def _save_job(self):
         try:
-            job = self._job_from_form()
-            existed = self.store.get_job(job.listing_id) is not None
-            if not existed:
-                duplicates = tuple(item for item in self.store.find_duplicate_group(job) if item.listing_id != job.listing_id)
+            job, plan = self._job_from_form()
+            if plan.needs_update_confirmation and not messagebox.askyesno(
+                "Update saved listing", plan.update_confirmation_message(), parent=self.root
+            ):
+                return
+            if not plan.is_edit:
+                duplicates = tuple(
+                    item for item in self.store.find_duplicate_group(job)
+                    if item.listing_id != job.listing_id
+                )
                 if duplicates:
                     summary = "\n".join(f"- {item.employer_name}: {item.role_title} ({item.source_name})" for item in duplicates[:5])
                     if not messagebox.askyesno("Possible duplicate", "This job matches an existing canonical URL/requisition. Existing source observations are kept separately. Save another observation anyway?\n\n" + summary, parent=self.root):
                         return
             self.store.save_job(job)
-            if not existed or self.store.get_tracker(job.listing_id) is None:
+            # Only create the initial tracker row; an existing row keeps its status.
+            if self.store.get_tracker(job.listing_id) is None:
                 self.store.save_tracker(ApplicationTracker(job.listing_id))
-            self.selected_job_id = job.listing_id
-            self._refresh_jobs()
-            self.status.set(f"Saved {job.role_title} locally. Nothing was submitted.")
-        except (ValueError, TypeError) as exc:
+        except ValueError as exc:
             messagebox.showerror("Cannot save job", str(exc), parent=self.root)
-
-    def _clear_form(self):
-        self.selected_job_id = None
-        for key, var in self.job_vars.items():
-            var.set("unknown" if key in {"availability", "scope"} else "")
-        self.jobs_tree.selection_remove(self.jobs_tree.selection())
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Job not saved",
+                "The job could not be written to the local database. Nothing was changed; "
+                f"previously saved listings are unchanged.\n\n{exc}",
+                parent=self.root,
+            )
+            self.status.set("Job not saved (local database error).")
+            return
+        self.selected_job_id = job.listing_id
+        self.job_save_mode = JobSaveMode.EDIT
+        self.job_edit_baseline = job_form_values(job)
+        self._set_job_mode_display()
+        self._refresh_jobs()
+        self.status.set(f"Saved {job.role_title} locally. Nothing was submitted.")
 
     def _refresh_jobs(self):
         if not hasattr(self, "jobs_tree"):
@@ -263,22 +270,11 @@ class CareerAgentApp:
         if not job:
             return
         self.selected_job_id = job.listing_id
-        values = {
-            "employer": job.employer_name, "title": job.role_title, "source_name": job.source_name,
-            "source_url": job.source_listing_url, "apply_url": job.employer_apply_url or "",
-            "requisition": job.canonical_requisition_id or "", "availability": job.availability_status.value,
-            "scope": job.eligibility_scope, "work_mode": job.work_mode or "", "role_type": job.role_type or "",
-            "location": job.location_text or "", "countries": ", ".join(job.eligible_countries),
-            "degrees": ", ".join(job.allowed_degree_disciplines or []),
-            "allowed_work_authorizations": ", ".join(job.allowed_work_authorizations or []),
-            "study_statuses": ", ".join(job.allowed_study_statuses or []),
-            "graduation_years": ", ".join(map(str, job.allowed_graduation_years or [])),
-            "min_exp": "" if job.minimum_experience_years is None else str(job.minimum_experience_years),
-            "max_exp": "" if job.maximum_experience_years is None else str(job.maximum_experience_years),
-            "required_skills": ", ".join(sorted(job.required_skills)), "provenance_note": job.provenance_note or "",
-        }
-        for key, value in values.items():
+        self.job_save_mode = JobSaveMode.EDIT
+        self.job_edit_baseline = job_form_values(job)
+        for key, value in self.job_edit_baseline.items():
             self.job_vars[key].set(value)
+        self._set_job_mode_display()
         self._report(f"Selected {job.role_title} at {job.employer_name}\nSource listing: {job.source_listing_url}\nEmployer application URL: {job.employer_apply_url or 'Not verified / not supplied'}\nAvailability evidence: {job.provenance_note or 'Not supplied'}")
 
     def _evaluate(self):
@@ -318,22 +314,47 @@ class CareerAgentApp:
         try:
             tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
             self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
-            self._refresh_jobs()
-            self.status.set("Job shortlisted locally. No external action was taken.")
         except ValueError as exc:
             messagebox.showerror("Cannot shortlist", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Shortlist not saved",
+                "The tracker could not be updated in the local database. Nothing was changed.\n\n"
+                f"{exc}",
+                parent=self.root,
+            )
+            self.status.set("Shortlist not saved (local database error).")
+            return
+        self._refresh_jobs()
+        self.status.set("Job shortlisted locally. No external action was taken.")
 
     def _delete_job(self):
         listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
         if not listing_id:
             messagebox.showinfo("Select a job", "Select a job to delete.", parent=self.root)
             return
-        if messagebox.askyesno("Delete job", "Permanently delete this job and its tracker history?", parent=self.root):
-            self.store.delete_job(listing_id)
-            self.selected_job_id = None
-            self._clear_form()
-            self._refresh_jobs()
+        if not messagebox.askyesno("Delete job", "Permanently delete this job and its tracker history?", parent=self.root):
+            return
+        try:
+            deleted = self.store.delete_job(listing_id)
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Job not deleted",
+                f"The saved job could not be deleted from the local database.\n\n{exc}",
+                parent=self.root,
+            )
+            self.status.set("Job not deleted (local database error).")
+            return
+        self.selected_job_id = None
+        self._begin_new_job()
+        self._refresh_jobs()
+        if deleted:
+            self.status.set("Job and associated tracker record deleted locally.")
             self._report("Job and associated tracker record deleted locally.")
+        else:
+            self.status.set("No matching saved job was found; nothing was deleted.")
+            self._report("No matching saved job was found; nothing was deleted.")
 
     def _refresh_tracker(self):
         if not hasattr(self, "tracker_tree"):
@@ -372,14 +393,42 @@ class CareerAgentApp:
         ttk.Entry(dialog, textvariable=evidence_var, width=48).pack(fill=X, padx=12, pady=4)
         def apply():
             try:
-                new_status = ApplicationStatus(status_var.get())
-                updated = tracker.transition(new_status, evidence=evidence_var.get().strip() or None, candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None)
+                try:
+                    new_status = ApplicationStatus(status_var.get())
+                except ValueError as exc:
+                    raise ValueError("Select the status you want to apply.") from exc
+                updated = tracker.transition(
+                    new_status,
+                    evidence=evidence_var.get().strip() or None,
+                    candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None,
+                )
+                if updated == tracker:
+                    dialog.destroy()
+                    self.status.set(f"No change: the application is already {tracker.status.value}. Nothing was saved.")
+                    messagebox.showinfo(
+                        "No change",
+                        f"This application is already {tracker.status.value}. Nothing was saved; "
+                        "supplied notes are not stored on a no-op.\n\nTo revise the evidence, move the "
+                        "status forward with a meaningful note, or keep the existing record as it is.",
+                        parent=self.root,
+                    )
+                    return
                 self.store.save_tracker(updated)
-                dialog.destroy()
-                self._refresh_jobs()
-                self.status.set(f"Application status updated to {new_status.value}.")
-            except (ValueError, KeyError) as exc:
+            except ValueError as exc:
                 messagebox.showerror("Invalid status change", str(exc), parent=dialog)
+                return
+            except sqlite3.Error as exc:
+                messagebox.showerror(
+                    "Status not saved",
+                    "The status change could not be written to the local database. The saved status is "
+                    f"unchanged.\n\n{exc}",
+                    parent=dialog,
+                )
+                self.status.set("Status not saved (local database error).")
+                return
+            dialog.destroy()
+            self._refresh_jobs()
+            self.status.set(f"Application status updated to {new_status.value}.")
         ttk.Button(dialog, text="Save status", command=apply).pack(anchor="e", padx=12, pady=12)
 
     def _export(self):
