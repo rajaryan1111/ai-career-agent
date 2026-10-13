@@ -255,3 +255,10 @@ All sources below checked on 2026-10-13:
 - Indeed India jobseeker guidelines: https://support.indeed.com/hc/en-in/articles/360028540531-Indeed-Jobseeker-Guidelines
 - Wellfound terms: https://wellfound.com/terms
 - Workday online terms: https://www.workday.com/en-us/legal/site-terms.html
+
+
+## 2026-10-13 addendum — Target-audience search-index probe
+
+A bounded search-index probe surfaced AI Dev Jobs company pages with India-location roles and junior/internship-labelled examples, but the visible results also included non-eligible cases (for example, an AI/ML intern marked Remote (US), and an on-site San Francisco internship). Crawl dates vary, and canonical employer status/apply links were not validated in this probe. This is evidence of potentially useful fields and important false-positive cases, not measured India-fresher coverage. Remote OK's live feed remains broad-function and requires an in-app/web link-back plus original job links wherever its data is shown.
+
+See [Target-Audience Search Probe](target-audience-source-search-probe-2026-10-13.md). **Decision unchanged:** neither source is production-approved; the bounded canonical 50-listing audit and permission gates remain incomplete. Do not count search snippets or company-page totals as unique, current eligible vacancies, precision, or recall.
