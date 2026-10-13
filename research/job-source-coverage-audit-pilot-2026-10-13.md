@@ -243,3 +243,32 @@ The seed was expanded with five further source records from current search resul
 - Formstack — AI Intern: the index points to a remote-US internship page last crawled more than a year ago. Keep it only as a stale-index negative control until current status is established.
 
 No new source record is counted as a verified open, India-eligible vacancy solely from a search excerpt. The CSV still contains mixed vacancy and source-audit records plus duplicates; report it as a lead/evidence dataset, not a clean denominator for precision or coverage.
+
+
+## Sixth pass — India-first career pages and application-quality signals (2026-10-13)
+
+### New official employer-page leads
+
+| Employer / role | Canonical evidence observed | Audit use and unresolved points |
+|---|---|---|
+| RadialBrain — AI Engineering Intern | https://www.radialbrain.com/interns/ says remote across India, current students in engineering/CS/IT/AI/data science; work includes AI agents, automation, prompt evaluation and product engineering. | Promising student role; application is a Google Form. Duration, stipend, active intake, form data handling and any automated-use permission are not established. |
+| Zyora Labs — AI/ML Research Intern | https://zyoralabs.com/careers says current students in any year/stream can apply with basic Python. | Useful low-experience candidate; no duration or compensation stated. The page uses one shared form for multiple tracks. Verify current intake and terms. |
+| Zyora Labs — AI/ML Project Intern | Same careers page describes practical mini-projects and no prior experience required. | Separate advertised track but same application endpoint; retain track relationship and avoid duplicate application actions. |
+| Inferova Technologies — AI/ML Engineer Intern | https://inferova.com/careers-ai-ml says Remote (India), 3–6 months, competitive stipend, and asks for Python, one ML framework, core ML concepts and Git. | Strong technical fit signal. Amount of stipend, current intake, privacy terms and independent employer verification still need review. |
+| Hajana Technologies — AI/ML Intern | https://hajanatechnologies.com/careers/ai-ml-intern says remote, 9 PM–6 AM IST, and limits eligibility to 2025/2026 pass-outs in specified degree tracks. | The graduation window needs clarification for candidates in late 2026. The form asks for “Father/Husband Name”; treat this as a sensitive/unnecessary-field review case and do not auto-fill it without explicit user review. |
+| ATRISI — ML / AI Intern | https://atrisi.org/collaborate/ml-ai-intern says Remote/Hybrid, Bengaluru and allows form, LinkedIn or email applications. | Role details and eligibility are sparse in the page excerpt; verify tasks, duration, compensation, current status and privacy terms before scoring. |
+| Onelogica / Factorial AI Private Limited — Data & AI Engineer, GenAI Platforms Intern | https://www.onelogica.com/careers/ lists a Delhi/NCR in-office role and 0–1 years experience. | AI-adjacent/data-engineering rather than pure ML research; inspect the role-specific detail page and status before recommendation. |
+
+### Product implications
+
+1. **Application forms are not interchangeable.** A Google Form, a company-hosted form, email, and a third-party ATS each have different evidence and interaction boundaries. Discovery may be automated where permitted; application interaction needs its own policy decision.
+2. **Collect only necessary candidate data.** A form asking for a parent's name or other data unrelated to initial qualification should trigger a review/ask-user boundary, not a default candidate-profile autofill.
+3. **Remote location is not enough.** Record timezone, schedule, student/graduate cohort, required degree and eligibility dates. Hajana's overnight IST schedule and 2025/2026 graduation limit are concrete examples.
+4. **Role family should be normalized, not guessed from the word “AI.”** Onelogica's GenAI platform internship emphasizes data engineering; it may suit some candidates but should not be mislabeled as model-research work.
+5. **Employer page presence is not proof of legitimacy or vacancy freshness.** These entries are leads. The dataset intentionally leaves status, stipend and permission unknown where evidence is missing.
+
+### Dataset status
+
+The CSV now has 39 data rows. This is still a mixed evidence set: some entries are duplicate/source comparisons, some are negative controls, and some are current-looking leads whose status is not fully confirmed. It is not a clean sample of 39 unique open jobs and not the target 50-unique-listing audit. Do not calculate source precision, recall or coverage from the row count.
+
+No implementation started.
