@@ -12,16 +12,16 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 61 |
+| Non-empty data rows | 62 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 8 |
-| Status = unknown | 43 |
+| Status = unknown | 44 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
 | Status = source_review | 4 |
-| Distinct canonical URL values | 52 |
+| Distinct canonical URL values | 53 |
 | Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
 These are mixed listing/source/control records. **They are not 61 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
@@ -235,3 +235,12 @@ This fixture is grounded in the WATER ML Intern page checked 2026-10-13: the pag
 | SV-038 | Multiple discovery records from employer boards/aggregators share an exact canonical requisition URL; a separate case has two role tracks sharing only a general careers page | Collapse exact same-requisition observations to one vacancy for counts and ranking, retain each source observation and provenance for source-agreement/quality metrics, and avoid merging different requisitions merely because they share a general careers URL. If distinctness cannot be established, keep the vacancy count unresolved and surface the ambiguity. | Counting exact canonical duplicates as separate vacancies; deleting provenance/control rows; merging distinct role tracks solely because they share a careers page; or promoting unknown status because one duplicate record says open |
   
 This fixture is grounded in the 2026-10-13 CSV audit: seven groups share the same role/requisition URL (Ema, Atlys, CertifyOS, RIVR, Barnes & Thornburg, Formstack, and ATRISI), while two Zyora Labs role-track records share a general careers page and cannot safely be classified as one or two active vacancies from URL equality alone. It is an acceptance requirement only; no implementation is authorized.
+
+
+### SV-039 — Recent search snippet with unreadable canonical page
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-039 | Official-employer search result shows a recent posting and Apply link, but opening the canonical page through the available retrieval interface yields no readable content | Store the snippet as provisional discovery evidence; retain `unknown` status and unresolved eligibility fields until canonical evidence is available. Keep the exact URL, observation date and retrieval limitation. | Promoting to verified-open/eligible based only on the search snippet, inventing missing requirements, or treating a tool retrieval limitation as proof the employer page is unavailable/closed |
+
+This case is grounded in the Walmart and Unisys Workday recheck on 2026-10-13. It is a source-evidence quality test, not proof that either employer page is actually broken. See [independent employer sample pilot](independent-employer-sample-pilot-2026-10-13.md).
