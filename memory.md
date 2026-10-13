@@ -6,7 +6,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
-- Current stage: safe offline-core implementation plus parallel source/competitor research.
+- Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the desktop UI and remote worker are still pending.
 - Last updated: 2026-10-14.
 
 ## Confirmed user decisions
@@ -22,7 +22,11 @@ This file is the durable record of meaningful decisions, research findings, assu
 9. Application policy: strict eligibility and match criteria.
 10. Submission confirmation: ask only for missing information, sensitive declarations, unsupported steps, or uncertainty.
 11. Default search schedule: 00:00 and 12:00 Asia/Kolkata.
-12. Superseded on 2026-10-14: the strict research-only constraint applied to all code. The user has now directed that development must proceed. Implement the safe, offline, dependency-free domain core in parallel with research; live source connectors, candidate-data transfer, resume parsing/upload, autofill, and application submission remain gated by evidence and explicit scope review.
+12. Superseded on 2026-10-14: the strict research-only constraint applied to all code. The user directed that the software must be built; safe local product implementation proceeds in parallel with research, while live integrations remain evidence-gated.
+13. Product commitment reaffirmed on 2026-10-14: treat AI Career Agent as a real-world, production-oriented product, not a prototype-only deliverable. The long-term audience spans all job profiles and industries; use an industry-agnostic core plus extensible occupation-specific intelligence.
+14. Product outcome: help real candidates discover relevant jobs, prepare truthful applications, apply through permitted and validated workflows, track employer responses, and improve their process. Never guarantee hiring or selection.
+15. Background operation: default discovery runs are 00:00 and 12:00 Asia/Kolkata. Operation while the laptop is powered off requires a separately deployed and verified always-on worker; desktop-only scheduling is insufficient.
+16. Standing authorization: routine applications may proceed without per-job prompts only when the candidate has configured a scoped, revocable policy and the provider/employer permits the workflow. Uncertain facts, sensitive declarations, assessments, CAPTCHA/OTP, prohibited automation, and ambiguous submissions remain exceptions.
 
 ## GitHub documentation workflow
 
@@ -31,7 +35,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Keep the six core documents aligned: `prd.md`, `architecture.md`, `rules.md`, `phases.md`, `design.md`, and `memory.md`. Add another file only when it gives the project a clear benefit.
 - Add research sources and the date checked; distinguish verified facts from hypotheses, proposals, and unresolved questions.
 - Prefer small, focused commits with descriptive messages. Do not silently overwrite or remove meaningful prior decisions; record material changes in the change log.
-- Preserve the research-first constraint: documentation and research may be pushed, but do not start implementation/code until the agreed decision gate is reached.
+- Implementation is authorized for the real product roadmap. Continue local UI/workflow and reliability work while source research proceeds; do not enable a specific live source, remote data transfer, paid service, email action, or application submission until its own permission/privacy/quality gates pass.
 - If an idea conflicts with a confirmed decision, creates a significant cost/privacy/compliance risk, or is ambiguous enough that it could change the product direction, record it as an open question or proposal rather than treating it as approved.
 - This workflow applies when we are actively working on this project in ChatGPT. It is not a background service: it cannot monitor unrelated conversations or push changes while no project work is happening.
 
@@ -687,3 +691,12 @@ These are proposed targets. Do not report them as measured results.
 - Kept project-specific constraints authoritative. In particular, these principles do not re-close development after the user's decision to build the offline core; nor do they waive source permission, privacy, candidate truth, eligibility, cost, or application-integrity requirements.
 - Did not copy the upstream entire EXAMPLES.md, Claude plugin manifests, or Cursor plugin rule into the product repository. They are environment-specific or duplicative; our existing workflow now carries the relevant concepts without installing a toolchain or adding dependencies.
 - Upstream README identifies MIT license. This pass adapted principles in original wording rather than copying substantial source text or adding upstream code. No software dependencies, source connectors, or product runtime files were added in this reference-review pass.
+
+
+### 2026-10-14 — Production product and cross-industry scope confirmed
+- User explicitly confirmed the product must be usable for real job and internship applications, not stop at a prototype or hackathon demo. Treat this as a production-oriented software project with real installation, reliability, privacy, security, recovery, and maintenance requirements.
+- Long-term product scope is all professions and job profiles, including but not limited to graphic design/creative, VLSI and embedded systems, mechanical, civil, software/data, business, finance, marketing, sales, operations, and research. Architecture must use a shared industry-agnostic core plus extensible occupation-specific knowledge; these examples are not a claim that every occupation is supported in the first release.
+- Intended default search schedule is 00:00 and 12:00 Asia/Kolkata. Laptop-off operation requires a real always-on worker and must be tested; do not infer this capability from local scheduling or free-tier marketing.
+- User wants maximum autonomy after setup. Use scoped, revocable standing authorization for routine permitted actions rather than prompting for every job; keep platform terms, employer instructions, truthful answers, sensitive declarations, unsupported steps, and ambiguous submissions as hard boundaries.
+- Product success is real-world usefulness and improved job-search outcomes, not application volume alone. Selection cannot be guaranteed. Require evidence-backed capabilities, representative cross-industry evaluation, integration/pilot tests, and honest release claims.
+- Updated the six canonical documents (`prd.md`, `architecture.md`, `rules.md`, `phases.md`, `design.md`, `memory.md`) to align the production product commitment, cross-industry scope, remote-worker requirement, and evidence-gated automation. Existing source-quality gate remains NOT PASSED; this documentation change does not authorize a live source adapter or submission workflow.
