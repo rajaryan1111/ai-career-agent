@@ -136,6 +136,7 @@ class CareerAgentApp:
             ("Role type", "role_type", 4, 0, None), ("Location", "location", 4, 1, None), ("Allowed countries", "countries", 4, 2, None),
             ("Allowed disciplines", "degrees", 5, 0, None), ("Allowed study statuses", "study_statuses", 5, 1, None), ("Allowed graduation years", "graduation_years", 5, 2, None),
             ("Allowed work-authorization values (exact)", "allowed_work_authorizations", 7, 0, None),
+            ("Availability evidence / note", "provenance_note", 7, 1, None),
             ("Minimum experience", "min_exp", 6, 0, None), ("Maximum experience", "max_exp", 6, 1, None), ("Required skills", "required_skills", 6, 2, None),
         ]
         for label, key, row, col, choices in fields:
@@ -244,6 +245,7 @@ class CareerAgentApp:
             allowed_study_statuses=items("study_statuses"), allowed_graduation_years=years or None,
             minimum_experience_years=minimum, maximum_experience_years=maximum,
             required_skills=frozenset(split_values(v["required_skills"].get())),
+            provenance_note=v["provenance_note"].get().strip() or None,
         )
 
     def _save_job(self):
@@ -298,11 +300,11 @@ class CareerAgentApp:
             "graduation_years": ", ".join(map(str, job.allowed_graduation_years or [])),
             "min_exp": "" if job.minimum_experience_years is None else str(job.minimum_experience_years),
             "max_exp": "" if job.maximum_experience_years is None else str(job.maximum_experience_years),
-            "required_skills": ", ".join(sorted(job.required_skills)),
+            "required_skills": ", ".join(sorted(job.required_skills)), "provenance_note": job.provenance_note or "",
         }
         for key, value in values.items():
             self.job_vars[key].set(value)
-        self._report(f"Selected {job.role_title} at {job.employer_name}\nSource listing: {job.source_listing_url}\nEmployer application URL: {job.employer_apply_url or 'Not verified / not supplied'}")
+        self._report(f"Selected {job.role_title} at {job.employer_name}\nSource listing: {job.source_listing_url}\nEmployer application URL: {job.employer_apply_url or 'Not verified / not supplied'}\nAvailability evidence: {job.provenance_note or 'Not supplied'}")
 
     def _evaluate(self):
         listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
