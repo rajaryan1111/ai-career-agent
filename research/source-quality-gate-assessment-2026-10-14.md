@@ -179,6 +179,6 @@ A 2026-10-14 browser probe was attempted for each of the 50 canonical URLs. Thre
 
 Probe results are not a valid direct-employer application-link success rate. They do not establish that each Apply action works, and some sampled URLs are careers indexes rather than role-deep-links. The ≥90% direct-link target remains **unmeasured** until each actual application destination receives a documented success/failure/unknown outcome and a denominator fixed before calculation.
 
-CSV after re-fetch: 83 records × 27 columns, 0 malformed rows, 0 duplicate IDs, 74 distinct canonical URLs, 8 repeated URL groups; statuses 19 open, 52 unknown, 3 expired, 3 closed, 2 not_a_listing, 4 source_review; 78 rows still have unknown permission. The 50-row roster does not prove 20 unique relevant currently available vacancies, and no source permission has been inferred from a reachable page.
+CSV after re-fetch: 83 records × 27 columns, 0 malformed rows, 0 duplicate IDs, 74 distinct canonical URLs, 8 repeated URL groups; statuses 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, 4 source_review; 78 rows still have unknown permission. The 50-row roster does not prove 20 unique relevant currently available vacancies, and no source permission has been inferred from a reachable page.
 
 No source API was queried, no production code/dependency/connector was added, no candidate data was transferred, and no autofill/application submission occurred. **Decision remains NOT PASSED — research-only.**
