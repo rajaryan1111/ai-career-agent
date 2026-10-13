@@ -1,6 +1,6 @@
 # Product Design Notes
 
-**Status:** Product UX specification; UI implementation pending  
+**Status:** Product UX specification; Tkinter local alpha implemented, GUI/cross-platform smoke testing outstanding  
 **Last updated:** 2026-10-14
 
 ## 1. Design objective
@@ -101,6 +101,8 @@ Use clear language, keyboard-accessible workflows, readable status text that doe
 - **Source not enabled:** say manual entry only; do not imply a search ran or that a listing is current.
 - **Apply URL absent/unverified:** show the source listing URL separately and label the employer application URL as unknown.
 - **Invalid status transition:** reject the update and explain the allowed next step; confirmation requires evidence.
-- **Database/export failure:** show an actionable error and never claim that a save/export succeeded before the operation returns successfully.
+- **No status change requested:** say that nothing changed and that nothing was saved; never report a no-op as an update. Evidence is revised by moving the status forward with a meaningful note, not by re-saving the same status.
+- **New versus edit:** a new job entry always creates a separate record and can never overwrite the selected listing; editing the selected listing preserves its identity and asks for confirmation when an eligibility-relevant field changes, so a stale PASS is not silently reused.
+- **Database/export failure:** show an actionable error and never claim that a save/export succeeded before the operation returns successfully. Confirm the previous data is unchanged when a write fails.
 - **Laptop asleep/off:** local UI and local scheduler cannot execute; a remote worker is a separate future capability with explicit data-transfer consent.
 - **Remote worker/source unavailable:** future UI must distinguish disabled, permission-blocked, transient error, partial results, and a valid empty result.
