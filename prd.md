@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 
 **Project:** AI Career Agent  
-**Status:** Research / discovery — not approved for implementation  
+**Status:** Research plus safe offline-core implementation; live integrations remain gated  
 **Last updated:** 2026-10-13
 
 ## 1. Product vision
