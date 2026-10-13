@@ -65,6 +65,12 @@ class CareerStoreTests(unittest.TestCase):
         self.assertTrue(self.store.delete_job("j1"))
         self.assertIsNone(self.store.get_tracker("j1"))
 
+    def test_confirmation_evidence_and_flag_persist(self):
+        self.store.save_job(self.job)
+        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer confirmation email", True)
+        self.store.save_tracker(tracker)
+        self.assertEqual(self.store.get_tracker("j1"), tracker)
+
     def test_duplicate_group_uses_conservative_key(self):
         self.store.save_job(self.job)
         duplicate = JobListing(**{**self.job.__dict__, "listing_id": "j2", "source_id": "s2", "source_listing_url": "https://jobs.example/role/1?utm_source=feed"})
