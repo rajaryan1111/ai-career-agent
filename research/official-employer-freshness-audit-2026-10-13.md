@@ -64,3 +64,8 @@ Added rows `IN-025`–`IN-028` and negative controls `NC-001`–`NC-002` to `job
 ## Decision
 
 The best new lead for further verification is Airbus GenAI Intern, while GM requires a fresh canonical status check. vINe AI and ATRISI remain low confidence until eligibility/privacy checks are complete. Semark and BNP Paribas are explicitly closed/filled and must be excluded from recommendations. No source integration or application automation is approved; no candidate data was submitted.
+
+
+## Dataset integrity check (after append)
+
+A strict CSV parser found six pre-existing row-alignment defects in older entries: four unquoted commas split trailing review notes, and two rows had a stray `unknown` placeholder before the application URL. These have now been repaired without changing the intended evidence, and the entire file was re-parsed. The CSV has 49 data rows; header and every data row now have exactly 27 columns. Follow-up edits must keep CSV fields quoted correctly and rerun this validation.
