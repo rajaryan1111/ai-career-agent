@@ -29,7 +29,7 @@ The intended audience is cross-industry and cross-experience: students, interns,
 
 **Delivery strategy:** design extensible, occupation-aware capabilities from the start, then validate an initial representative set of professions and expand based on measured quality. Do not hardcode one candidate's degree, resume, location, or job titles as global assumptions.
 
-## 5. Core user journey (hypothesis)
+## 5. First local alpha workflow and planned product journey
 
 1. Install/open the local desktop app and manually enter or review candidate facts.
 2. Configure role targets and preferences without assuming an industry or candidate stage.
