@@ -656,3 +656,13 @@ These are proposed targets. Do not report them as measured results.
 - Added SV-052 for stale requisitions, HTTP 410, and generic-search redirects. A browser page rendering or shell is not proof the Apply action works; a research-browser fetch error without status is not proof of closure.
 - Roster construction is complete, but full validation is not: the ≥90% direct-employer application-link metric remains unmeasured with a defensible denominator; ≥20 unique relevant currently available vacancies remain unproven; source permissions remain unresolved for most records. Gate stays **NOT PASSED / research-only**.
 - No source API endpoint queried; no production code, dependency or connector added; no candidate data transferred; no autofill or application submitted.
+
+
+## 2026-10-14 — Application-route spot-check update
+
+- Re-fetched the current validation roster, audit CSV, validation test suite, candidate review, gate assessment, and memory before edits.
+- Tested ten application paths from official employer pages. Four matching Lever application forms rendered (Drivetrain, Trackmind, Sprinto, CertiK); HCF reached a sign-in gate; Zyora displayed an embedded form; Needl.ai published an email route not tested; RadialBrain, Valura.AI, and MailerMen remained unknown due to browser/tool limitations.
+- Added three audit columns: apply_route_outcome, apply_route_checked_at, and apply_route_evidence; updated apply_url where an actual destination was observed. Canonical listing URLs remain separate.
+- This was a focused convenience sample, not representative validation. No link-validity percentage is claimed; the 50-record ≥90% direct-employer-link gate remains unproven.
+- No forms submitted, resume uploaded, candidate data entered/transmitted, or email sent. No source permission inferred from a reachable page.
+- Source-quality gate remains NOT PASSED / research-only. No production implementation or dependencies added.
