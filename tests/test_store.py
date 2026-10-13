@@ -12,7 +12,7 @@ class CareerStoreTests(unittest.TestCase):
             source_listing_url="https://jobs.example/role/1", employer_name="Example",
             role_title="AI Intern", availability_status=Availability.OPEN,
             employer_apply_url="https://employer.example/apply/1", eligibility_scope="restricted",
-            eligible_countries=("India",), allowed_degree_disciplines=("ECE",),
+            eligible_countries=("India",), allowed_work_authorizations=("authorized_without_sponsorship",), allowed_degree_disciplines=("ECE",),
             allowed_study_statuses=("undergraduate",), allowed_graduation_years=(2027,),
             required_skills=frozenset({"Python", "RAG"}),
         )
