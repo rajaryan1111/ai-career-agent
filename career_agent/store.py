@@ -167,7 +167,7 @@ class CareerStore:
         values = json.loads(payload)
         values["availability_status"] = Availability(values["availability_status"])
         values["eligible_countries"] = tuple(values.get("eligible_countries") or [])
-        for key in ("allowed_degree_disciplines", "allowed_study_statuses", "allowed_graduation_years"):
+        for key in ("allowed_work_authorizations", "allowed_degree_disciplines", "allowed_study_statuses", "allowed_graduation_years"):
             if values.get(key) is not None:
                 values[key] = tuple(values[key])
         values["required_skills"] = frozenset(values.get("required_skills") or [])
