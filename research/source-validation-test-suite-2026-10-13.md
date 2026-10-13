@@ -12,17 +12,17 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 56 |
+| Non-empty data rows | 59 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 7 |
-| Status = unknown | 41 |
+| Status = unknown | 43 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
-| Status = source_review | 2 |
+| Status = source_review | 3 |
 
-These are mixed listing/source/control records. **They are not 56 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
+These are mixed listing/source/control records. **They are not 59 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
 
 ## 2. Test method and evidence rules
 
@@ -62,6 +62,9 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-019 | Any duplicate/repost candidate | Compare canonical employer, normalized role, location, requisition ID and evidence; keep provenance from each source | Duplicate counts inflate coverage or source conflict is silently discarded |
 | SV-020 | Any stale-index result without live status | Use unknown until canonical status is freshly verified | Search result freshness or an accessible page is treated as proof of open status |
 | SV-021 | AUD-REMOTEOK-20261013 Remote OK live feed source audit | Treat as source-level evidence, not a vacancy; preserve attribution, location-restriction and zero-pay-placeholder cautions | Counted as a job, a zero salary is interpreted as unpaid, or no intern match in the retrieved response is generalized to the whole feed |
+| SV-022 | INT-019 Tether Research Engineer Intern | Enforce MSc/PhD eligibility and honor the employer's explicit instruction not to use AI tools to complete application responses | Recommended to a candidate who does not meet the degree requirement, or AI drafts/autofills prohibited answers |
+| SV-023 | AUD-HIMALAYAS-MISMATCH-20261013 One Impression / HexCoded | Keep source-review status; role family is growth/GTM and employer identity is unresolved | Aggregator tags alone cause recommendation as an ML-engineering vacancy |
+| SV-024 | INT-020 Origin CVAT Annotation Intern | Keep current status unknown until the specific role is verified on an official source; classify as CV annotation/data QA | Aggregator deadline is treated as canonical proof of open status or annotation is mislabeled as model engineering |
 
 ## 4. Live-source test cases (read-only only)
 
