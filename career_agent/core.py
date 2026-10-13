@@ -132,7 +132,7 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     results: list[RequirementResult] = []
 
     if job.availability_status is Availability.OPEN:
-        results.append(RequirementResult("availability", Decision.PASS, "Current source evidence labels this listing open."))
+        results.append(RequirementResult("availability", Decision.PASS, "The recorded listing status is open; recheck the original listing before acting."))
     elif job.availability_status in {Availability.CLOSED, Availability.EXPIRED, Availability.NOT_A_LISTING, Availability.SOURCE_REVIEW}:
         results.append(RequirementResult("availability", Decision.FAIL, f"Listing status is {job.availability_status.value}; it must not be recommended as an open vacancy."))
     else:
