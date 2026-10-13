@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .core import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    JobListing, duplicate_key,
+    JobListing, duplicate_key, is_allowed_tracker_transition,
 )
 
 _SCHEMA_VERSION = 1
@@ -126,6 +126,27 @@ class CareerStore:
         return tuple(self._decode_job(row["payload"]) for row in rows)
 
     def save_tracker(self, tracker: ApplicationTracker) -> None:
+        """Persist tracker state, enforcing the domain invariants at the storage boundary.
+
+        A confirmed record must carry evidence, and a status change must be one the
+        domain state machine permits (re-applying the current status stays an
+        idempotent no-op). The desktop app already moves through
+        ``ApplicationTracker.transition`` before saving, so valid sequential use is
+        unaffected; a stale or externally edited record is refused instead of being
+        written. No schema change is required and existing rows are never rewritten.
+        """
+        if tracker.status is ApplicationStatus.CONFIRMED and not (
+            tracker.status_evidence and tracker.status_evidence.strip()
+        ):
+            raise ValueError(
+                "A confirmed application requires evidence; a click or attempted submission is not proof."
+            )
+        stored = self.get_tracker(tracker.listing_id)
+        if stored is not None and not is_allowed_tracker_transition(stored.status, tracker.status):
+            raise ValueError(
+                f"Invalid application transition: {stored.status.value} -> {tracker.status.value}. "
+                "Update the status through ApplicationTracker.transition."
+            )
         timestamp = _now()
         try:
             with self._connection:

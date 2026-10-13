@@ -3,8 +3,13 @@ import unittest
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, JobListing, canonicalize_url, deduplicate_listings,
-    evaluate_eligibility, score_relevance, job_to_public_dict,
+    evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
 )
+
+
+def requirement(report, name):
+    """Return the single requirement result called ``name``."""
+    return next(result for result in report.requirements if result.requirement == name)
 
 
 def sample_profile(**overrides):
@@ -91,6 +96,67 @@ class EligibilityTests(unittest.TestCase):
         self.assertEqual(mismatch.decision, Decision.FAIL)
 
 
+class RequirementNormalizationTests(unittest.TestCase):
+    """Formatting differences must not change a hard requirement's decision."""
+
+    def test_degree_discipline_ignores_case_and_surrounding_whitespace(self):
+        report = evaluate_eligibility(
+            sample_profile(degree_discipline="  ece "), sample_job(allowed_degree_disciplines=("ECE",))
+        )
+        self.assertEqual(requirement(report, "degree_discipline").decision, Decision.PASS)
+
+    def test_study_status_ignores_case(self):
+        report = evaluate_eligibility(
+            sample_profile(study_status="Undergraduate"), sample_job(allowed_study_statuses=("undergraduate",))
+        )
+        self.assertEqual(requirement(report, "study_status").decision, Decision.PASS)
+
+    def test_work_authorization_ignores_case_and_word_separators(self):
+        job = sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))
+        for candidate_value in ("authorized_without_sponsorship", "Authorized Without Sponsorship", " AUTHORIZED_Without_Sponsorship "):
+            with self.subTest(candidate_value=candidate_value):
+                report = evaluate_eligibility(sample_profile(work_authorization=candidate_value), job)
+                self.assertEqual(requirement(report, "work_authorization").decision, Decision.PASS)
+
+    def test_genuinely_different_values_still_fail(self):
+        cases = [
+            ("degree_discipline", sample_profile(degree_discipline="Mechanical Engineering"),
+             sample_job(allowed_degree_disciplines=("ECE", "Computer Science"))),
+            ("study_status", sample_profile(study_status="graduate"),
+             sample_job(allowed_study_statuses=("undergraduate",))),
+            ("work_authorization", sample_profile(work_authorization="sponsorship_required"),
+             sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))),
+            ("graduation_year", sample_profile(graduation_year=2026),
+             sample_job(allowed_graduation_years=(2027, 2028))),
+        ]
+        for name, profile, job in cases:
+            with self.subTest(requirement=name):
+                report = evaluate_eligibility(profile, job)
+                self.assertEqual(requirement(report, name).decision, Decision.FAIL)
+                self.assertEqual(report.decision, Decision.FAIL)
+
+    def test_missing_values_stay_unknown_after_normalization(self):
+        blank_report = evaluate_eligibility(
+            sample_profile(degree_discipline="   "), sample_job(allowed_degree_disciplines=("ECE",))
+        )
+        self.assertEqual(requirement(blank_report, "degree_discipline").decision, Decision.UNKNOWN)
+
+        missing_report = evaluate_eligibility(
+            sample_profile(study_status=None), sample_job(allowed_study_statuses=("undergraduate",))
+        )
+        self.assertEqual(requirement(missing_report, "study_status").decision, Decision.UNKNOWN)
+
+        no_listing_requirement = evaluate_eligibility(sample_profile(), sample_job(allowed_study_statuses=None))
+        self.assertEqual(requirement(no_listing_requirement, "study_status").decision, Decision.UNKNOWN)
+
+    def test_normalization_never_produces_a_pass_from_an_unlisted_requirement(self):
+        report = evaluate_eligibility(
+            sample_profile(degree_discipline="ECE"), sample_job(allowed_degree_disciplines=None)
+        )
+        self.assertNotEqual(report.decision, Decision.PASS)
+        self.assertEqual(requirement(report, "degree_discipline").decision, Decision.UNKNOWN)
+
+
 class MatchingAndDedupTests(unittest.TestCase):
     def test_relevance_is_explainable_and_not_probability(self):
         result = score_relevance(sample_profile(), sample_job())
@@ -151,6 +217,27 @@ class ApplicationTrackerTests(unittest.TestCase):
         tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
         with self.assertRaises(ValueError):
             tracker.transition(ApplicationStatus.CONFIRMED, evidence="confirmation")
+
+    def test_no_op_transition_returns_the_tracker_unchanged(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "original evidence", True)
+        unchanged = tracker.transition(ApplicationStatus.CONFIRMED, evidence="replacement evidence")
+        self.assertIs(unchanged, tracker)
+        self.assertEqual(unchanged.status_evidence, "original evidence")
+
+    def test_transition_carries_the_new_status_and_evidence(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED, "attempt recorded", False)
+        updated = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page", candidate_confirmed=True)
+        self.assertEqual(updated.status, ApplicationStatus.CONFIRMED)
+        self.assertEqual(updated.status_evidence, "Employer confirmation page")
+        self.assertTrue(updated.candidate_confirmed)
+
+    def test_is_allowed_tracker_transition_matches_the_state_machine(self):
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.SHORTLISTED))
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.FAILED, ApplicationStatus.AWAITING_USER))
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.CONFIRMED, ApplicationStatus.CONFIRMED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.CONFIRMED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, ApplicationStatus.SHORTLISTED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.INTERVIEW, ApplicationStatus.DISCOVERED))
 
 
 if __name__ == "__main__":

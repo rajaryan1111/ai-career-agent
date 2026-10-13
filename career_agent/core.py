@@ -123,6 +123,26 @@ def _country_norm(value: str) -> str:
     return " ".join(value.strip().casefold().replace(".", "").split())
 
 
+def _label_norm(value: str) -> str:
+    """Collapse case and whitespace for label-like values (discipline, study status).
+
+    This normalizes formatting only. It never maps one distinct label onto another,
+    so a related discipline or an approximate cohort still fails the check.
+    """
+    return " ".join(str(value).strip().casefold().split())
+
+
+def _membership_key(value: str, *, fold_separators: bool = False) -> str:
+    """Normalized comparison key for an explicitly listed requirement value.
+
+    ``fold_separators`` additionally treats underscores as spaces, which is the same
+    tolerance the project uses for comma/newline-separated lists; it does not make
+    different values equivalent.
+    """
+    folded = _label_norm(value)
+    return folded.replace("_", " ") if fold_separators else folded
+
+
 def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> EligibilityReport:
     """Evaluate only explicit hard requirements; missing evidence remains unknown.
 
@@ -158,9 +178,10 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     if job.allowed_work_authorizations is not None:
         _check_membership(
             results, "work_authorization", profile.work_authorization, job.allowed_work_authorizations,
-            "Candidate work-authorization value exactly matches an explicitly allowed value.",
+            "Candidate work-authorization value matches an explicitly allowed value.",
             "Candidate work-authorization value does not match the explicitly allowed values.",
             "Work-authorization requirement or candidate work-authorization value is missing.",
+            fold_separators=True,
         )
 
     _check_membership(results, "degree_discipline", profile.degree_discipline, job.allowed_degree_disciplines,
@@ -192,15 +213,25 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
 
 
 def _check_membership(
-    results: list[RequirementResult], name: str, actual: Any, allowed: Sequence[Any] | None,
-    pass_message: str, fail_message: str, unknown_message: str,
+    results: list[RequirementResult], name: str, actual: str | None, allowed: Sequence[str] | None,
+    pass_message: str, fail_message: str, unknown_message: str, *, fold_separators: bool = False,
 ) -> None:
-    if allowed is None or actual is None or actual == "":
+    """Record a PASS/FAIL/UNKNOWN membership check for one explicitly listed requirement.
+
+    Formatting is normalized on both sides (case and surrounding whitespace; work
+    authorization additionally treats underscores like spaces) so that the same
+    declared value written differently still matches. Genuinely different values
+    still fail, missing values stay unknown, and no fuzzy or semantic matching is
+    applied: a related discipline or an approximate cohort must be reviewed by hand.
+    """
+    if allowed is None or actual is None or not str(actual).strip():
         results.append(RequirementResult(name, Decision.UNKNOWN, unknown_message))
-    elif actual in allowed:
+        return
+    normalized = _membership_key(str(actual), fold_separators=fold_separators)
+    allowed_keys = {_membership_key(str(item), fold_separators=fold_separators) for item in allowed}
+    if normalized in allowed_keys:
         results.append(RequirementResult(name, Decision.PASS, pass_message, str(actual)))
     else:
-        # No fuzzy inference: a related discipline or approximate cohort needs review.
         results.append(RequirementResult(name, Decision.FAIL, fail_message, str(actual)))
 
 
@@ -221,6 +252,16 @@ _TRACKER_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
 }
 
 
+def is_allowed_tracker_transition(current: ApplicationStatus, new_status: ApplicationStatus) -> bool:
+    """True when the domain state machine permits this status change.
+
+    Re-applying the current status is treated as an idempotent no-op rather than an
+    invalid jump, so a repeated save of unchanged state is not an error. Every other
+    change must be listed in ``_TRACKER_TRANSITIONS``.
+    """
+    return new_status == current or new_status in _TRACKER_TRANSITIONS[current]
+
+
 @dataclass(frozen=True)
 class ApplicationTracker:
     listing_id: str
@@ -232,6 +273,13 @@ class ApplicationTracker:
         self, new_status: ApplicationStatus, *, evidence: str | None = None,
         candidate_confirmed: bool | None = None,
     ) -> "ApplicationTracker":
+        """Return the tracker moved to ``new_status``, or ``self`` for a no-op.
+
+        Requesting the status the tracker already holds is not an update: the tracker
+        is returned unchanged, so newly supplied evidence is neither recorded nor
+        silently discarded. Evidence is revised by moving the status forward with
+        ``evidence=...``; a confirmed status always requires evidence text.
+        """
         if new_status == self.status:
             return self
         if new_status not in _TRACKER_TRANSITIONS[self.status]:

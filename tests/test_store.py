@@ -1,4 +1,7 @@
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.store import CareerStore
@@ -87,6 +90,125 @@ class CareerStoreTests(unittest.TestCase):
         duplicate = JobListing(**{**self.job.__dict__, "listing_id": "j2", "source_id": "s2", "source_listing_url": "https://jobs.example/role/1?utm_source=feed"})
         self.store.save_job(duplicate)
         self.assertEqual({j.listing_id for j in self.store.find_duplicate_group(self.job)}, {"j1", "j2"})
+
+
+class TrackerInvariantTests(unittest.TestCase):
+    """The store must not persist states the domain state machine would reject."""
+
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.job = JobListing(
+            listing_id="j1", source_id="s1", source_name="test",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+        )
+        self.store.save_job(self.job)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_confirmation_without_evidence_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "requires evidence"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED))
+        with self.assertRaisesRegex(ValueError, "requires evidence"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "   "))
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+    def test_confirmation_with_evidence_is_accepted(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer confirmation email", True)
+        self.store.save_tracker(tracker)
+        self.assertEqual(self.store.get_tracker("j1"), tracker)
+
+    def test_status_jump_is_refused_and_the_stored_row_is_unchanged(self):
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+        with self.assertRaisesRegex(ValueError, "Invalid application transition: discovered -> interview"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.INTERVIEW, "unconfirmed invite"))
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.DISCOVERED)
+
+    def test_permitted_transitions_and_idempotent_resaves_are_accepted(self):
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.SHORTLISTED))
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.SHORTLISTED))
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.PREPARED))
+        saved = self.store.get_tracker("j1")
+        self.assertEqual(saved.status, ApplicationStatus.PREPARED)
+
+    def test_backwards_state_change_is_refused(self):
+        self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer email", True))
+        with self.assertRaisesRegex(ValueError, "Invalid application transition"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+
+
+class DurabilityTests(unittest.TestCase):
+    """File-backed persistence and error surfaces (the shipped alpha uses a real file, not :memory:)."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "career_agent.sqlite3"
+
+    def _job(self):
+        return JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            employer_apply_url="https://employer.example/apply/1", eligibility_scope="restricted",
+            eligible_countries=("India",), provenance_note="Checked the official listing.",
+        )
+
+    def test_state_survives_close_and_reopen(self):
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                                  graduation_year=2027, skills=frozenset({"Python"}))
+        store = CareerStore(self.path)
+        store.save_profile(profile)
+        store.save_job(self._job())
+        store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "Employer email", True))
+        store.close()
+
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.get_profile(), profile)
+        self.assertEqual(reopened.get_job("j1"), self._job())
+        tracker = reopened.get_tracker("j1")
+        self.assertEqual(tracker.status, ApplicationStatus.CONFIRMED)
+        self.assertEqual(tracker.status_evidence, "Employer email")
+        self.assertTrue(tracker.candidate_confirmed)
+        version = reopened._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(version, 1)
+
+    def test_deletion_survives_close_and_reopen(self):
+        store = CareerStore(self.path)
+        store.save_job(self._job())
+        store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
+        store.delete_job("j1")
+        store.close()
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertIsNone(reopened.get_job("j1"))
+        self.assertIsNone(reopened.get_tracker("j1"))
+
+    def test_reopening_an_existing_database_does_not_reset_it(self):
+        store = CareerStore(self.path)
+        store.save_job(self._job())
+        store.close()
+        for _ in range(2):
+            reopened = CareerStore(self.path)
+            self.assertEqual(len(reopened.list_jobs()), 1)
+            self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            reopened.close()
+
+    def test_newer_schema_is_refused_instead_of_overwritten(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute("PRAGMA user_version = 99")
+        connection.commit()
+        connection.close()
+        with self.assertRaises(RuntimeError):
+            CareerStore(self.path)
+
+    def test_unopenable_path_raises_a_sqlite_error(self):
+        missing_parent = Path(self._directory.name) / "absent-directory" / "career_agent.sqlite3"
+        with self.assertRaises(sqlite3.Error):
+            CareerStore(missing_parent)
 
 
 if __name__ == "__main__":
