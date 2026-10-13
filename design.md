@@ -60,13 +60,15 @@ Clearly indicate local vs external processing; ask consent before sending resume
 
 Desktop-first, clean, information-dense but readable. Use restrained status colors, consistent labels, accessible contrast, and plain-language explanations. Avoid gamification that rewards raw application volume.
 
-## 10. Open design questions
+## 10. Current alpha and open design questions
 
-- Which desktop framework gives the best installation/update experience?
+The initial UI is Python/Tkinter over the Python domain core and local SQLite. This is a reversible low-dependency choice, not a production packaging decision. Validate installation/update experience on macOS, Windows, and Linux before release.
+
 - Should company reports be generated on demand or after shortlisting?
 - How should source failures and unavailable integrations be displayed?
 - How should users set match thresholds without needing ML expertise?
 - What is the clearest distinction between submitted and confirmed applications?
+- Which local PDF/DOCX parser offers sufficient extraction quality without external uploads?
 
 
 ## 11. Cross-industry onboarding and role setup
@@ -90,3 +92,15 @@ If background execution requires a remote worker, show a separate consent and da
 ## 14. Accessibility and internationalization
 
 Use clear language, keyboard-accessible workflows, readable status text that does not rely on color alone, timezone-aware scheduling, locale-aware dates and compensation units, and extensible country/work-authorization fields. Avoid treating English-language resumes or one country's education terminology as universal.
+
+
+## 15. Local alpha operational states
+
+- **No profile saved:** ask the user to enter/review facts; do not infer missing fields.
+- **Eligibility unknown:** explain each missing mandatory field and block shortlisting until all required checks explicitly pass.
+- **Source not enabled:** say manual entry only; do not imply a search ran or that a listing is current.
+- **Apply URL absent/unverified:** show the source listing URL separately and label the employer application URL as unknown.
+- **Invalid status transition:** reject the update and explain the allowed next step; confirmation requires evidence.
+- **Database/export failure:** show an actionable error and never claim that a save/export succeeded before the operation returns successfully.
+- **Laptop asleep/off:** local UI and local scheduler cannot execute; a remote worker is a separate future capability with explicit data-transfer consent.
+- **Remote worker/source unavailable:** future UI must distinguish disabled, permission-blocked, transient error, partial results, and a valid empty result.
