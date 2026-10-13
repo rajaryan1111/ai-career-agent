@@ -398,7 +398,7 @@ class CareerAgentApp:
         def apply():
             try:
                 new_status = ApplicationStatus(status_var.get())
-                updated = tracker.transition(new_status, evidence=evidence_var.get().strip() or None, candidate_confirmed=(new_status is ApplicationStatus.CONFIRMED))
+                updated = tracker.transition(new_status, evidence=evidence_var.get().strip() or None, candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None)
                 self.store.save_tracker(updated)
                 dialog.destroy()
                 self._refresh_jobs()
