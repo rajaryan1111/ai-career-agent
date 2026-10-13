@@ -170,3 +170,31 @@ Use the following fields for each row in the eventual 50-listing dataset:
 - apply_url, duplicate_group, official_page_agreement, permission_status, confidence, review_notes
 
 Do not force unknown values into false certainty. Keep source coverage, candidate eligibility, job quality and automation permission as separate dimensions. The next step is to populate a real CSV/Markdown table with actual checked rows and then calculate metrics; do not claim a 50-job result until all 50 have been inspected.
+
+
+## Fourth pass: live-status correction and new negative controls (13 October 2026)
+
+A fresh search of official pages produced three more audit rows and one correction to an earlier row. The structured CSV now contains **19 seed rows**; this remains a convenience sample and is not the 50-listing audit.
+
+| Listing | Current official-source evidence | Audit consequence |
+|---|---|---|
+| **Kinaxis — Intern AI/ML Researcher** | The official page says Canada remote, requires the candidate to be in the Eastern time zone, describes an 8- or 12-month full-time placement starting January 2027, and says applications are accepted through 18 October 2026. Eligibility text allows current full-time students or recent/upcoming graduates within 12 months of the placement end. | Updated the CSV from unknown status to open with an 18 Oct deadline. Removed the unsupported assumption that a Master's/PhD is explicitly required: the reviewed page excerpt does not state that degree level. For an India-based user, the Canada/Eastern time-zone restriction is a strong exclusion. |
+| **Apple — PhD Intern, Machine Learning: MSI, Product Operations Team** | Apple India search results show a Bengaluru listing dated 17 September 2026 and a 40-hour workweek. | Added as a role-level eligibility test. The role detail page should be opened before scoring; a PhD internship must not be recommended to an undergraduate as a standard internship. |
+| **Apple — Applied Machine Learning Engineer, Apple Intelligence** | Apple India careers page shows a Bengaluru role posted 7 September 2026, with 40 weekly hours. | Added as a negative control for employment type/seniority: AI/ML relevance does not make a full-time engineering role an internship. |
+| **Workiva — Summer 2027 Intern, Machine Learning Engineering** | Official Workday page says USA-remote and $40/hour, but its stated engineering posting close date was 2 October 2026. The audit date is 13 October 2026. | Added as expired in the seed dataset; don't surface it as currently actionable merely because the URL remains reachable. |
+
+### Fresh official sources
+
+- Apple — Applied ML Intern: https://jobs.apple.com/en-in/details/200686019-0321/applied-ml-intern-wireless-technologies-ecosystems
+- Apple India search results — PhD ML internship and related ML roles: https://jobs.apple.com/en-in/search?location=karnataka-state1205&page=2
+- Apple — Applied Machine Learning Engineer, Apple Intelligence: https://jobs.apple.com/en-in/details/200682189-0321/applied-machine-learning-engineer-apple-intelligence
+- Kinaxis — Intern AI/ML Researcher: https://careers-kinaxis.icims.com/jobs/35465/job?mobile=true&needsRedirect=false
+- Workiva — Summer 2027 Intern, Machine Learning Engineering: https://workiva.wd503.myworkdayjobs.com/en-US/careers/job/Summer-2027-Intern---Machine-Learning-Engineering_R12194-1
+
+### Quality correction
+
+The purpose of this audit is not to maximize the number of links. It is to measure how often a discovery source returns roles that are still open, truly in the requested role family, and eligible for a candidate in a particular country and education stage. Therefore:
+- Expired and ineligible rows should remain in the sample as negative controls; don't silently remove them.
+- The CSV's `permission_status=unknown` means access permission for the product's intended use has not been verified; it is not a claim that access is forbidden or allowed.
+- An official careers page can support the facts displayed there, but it does not by itself establish permission for bulk crawling or automated application submission.
+- Current status must be timestamped and rechecked close to the time of recommendation.
