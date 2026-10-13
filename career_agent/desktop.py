@@ -81,7 +81,7 @@ class CareerAgentApp:
             ("Country", "country", 1, 0, None), ("Degree / discipline", "degree", 1, 1, None),
             ("Study status", "study_status", 2, 0, ["undergraduate", "graduate", "postgraduate", "doctoral", "graduated", "other"]),
             ("Graduation year", "graduation_year", 2, 1, None), ("Experience years", "experience", 3, 0, None),
-            ("Work authorization notes", "work_authorization", 3, 1, None), ("Skills (comma-separated)", "skills", 4, 0, None),
+            ("Work authorization value (exact when required)", "work_authorization", 3, 1, None), ("Skills (comma-separated)", "skills", 4, 0, None),
             ("Preferred locations", "locations", 4, 1, None), ("Preferred work modes", "work_modes", 5, 0, None),
             ("Preferred role types", "role_types", 5, 1, None),
         ]
