@@ -81,7 +81,7 @@ References: https://jobs.ashbyhq.com/cohere/73bd3e2b-6597-4124-b64b-1e5dbc32e785
 
 ### Segmentation refresh after restricted-remote controls
 
-Recalculated after adding INT-031–INT-034: 62 unique role-like canonical URLs; 38 India-focused records including negative controls; 21 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 4 distinct records to review. The 25-record segment is a source-quality comparison, not 25 India-eligible vacancies; geographic and degree-restricted roles are intentionally retained as negative controls. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
+Recalculated after adding three distinct records INT-032–INT-034 and refreshing the existing Azul record INT-006: 61 unique role-like canonical URLs; 38 India-focused records including negative controls; 20 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 5 distinct records to review. The 25-record segment is a source-quality comparison, not 25 India-eligible vacancies; geographic and degree-restricted roles are intentionally retained as negative controls. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
 
 
 **Classification note:** Cohere Research Internship is counted in the non-India remote comparison because the employer's location whitelist explicitly lists Canada, Europe, the UK and US and does not list India. The phrase “India not listed” in its eligibility field is a documented restriction, not evidence that the role is India-focused. This is a sampling classification only; it does not imply eligibility.
@@ -103,17 +103,15 @@ Official employer pages checked 2026-10-14:
 These records are not proof of eligibility for an India-based candidate. In particular, “remote” is constrained to the named country/region, and role level/degree requirements are separate filters. No API endpoints were queried, no source integration or candidate-data transfer was performed, and the source-quality/implementation gate remains closed.
 
 
-### 2026-10-14 continuation — four additional remote eligibility controls
+### 2026-10-14 continuation — three new remote eligibility controls and one refreshed duplicate
 
-- **INT-031 — Azul Systems, Marketing AI Intern:** official Lever page describes a four-month, full-time US-remote role building AI agents and marketing automations, with $20–$25/hour compensation. The application form asks whether the candidate is authorized to work in the US without restrictions. The page has an Apply route but no explicit open/closed label or deadline captured; status remains unknown.
 - **INT-032 — Azul Systems, IT Intern, AI and Operations:** official Lever page describes an 8–12-week, 40-hour/week internship at Sunnyvale or Remote, US, paying $25/hour. Requires current undergraduate enrollment in a listed major and GPA of at least 3.4. Current status remains unknown because no explicit open/closed wording or deadline was captured.
 - **INT-033 — CertiK, Blockchain Security Expert Intern — AI Track:** official Lever page says applications are accepted on an ongoing basis, so status is open. It requires current/recent PhD-level study and deep LLM/model-training experience; the page also requires US work-eligibility verification at hire. Remote does not establish permission to work from India, and the degree requirement makes it a negative control for undergraduate matching.
 - **INT-034 — Binance Accelerator Program, Applied AI Agent Engineer (Tech Seeds 2026):** official Lever page targets current students/recent graduates, expected graduation in 2026/2027, and at least six months full-time commitment. Listed locations are Taiwan, Hong Kong, Australia and New Zealand; work-from-home varies by team and local law applies. India is not listed, so eligibility from India remains unproven; status stays unknown without an explicit current open/closed label.
 
 Official pages checked 2026-10-14:
-- Azul Marketing AI Intern: https://jobs.lever.co/azul/f94d4087-2dee-4d69-8596-883ff17efde2
 - Azul IT Intern, AI and Operations: https://jobs.lever.co/azul/8f41ceaf-8835-4fc7-ba57-9384487d59db
 - CertiK AI Track Intern: https://jobs.lever.co/certik/1f446b66-1fae-4c31-9352-cde86e254754
 - Binance Applied AI Agent Engineer: https://jobs.lever.co/binance/303def79-701c-4b29-aceb-e07877a22d1d
 
-These are eligibility and geography controls, not claims that an India-based undergraduate can apply. No API endpoints were queried, no source integration or candidate-data transfer was performed, and the source-quality/implementation gate remains closed.
+The existing INT-006 Azul Marketing AI Intern record was refreshed rather than duplicated: the new observation shares its canonical requisition URL and is not counted as a distinct role. The new distinct records are INT-032–INT-034. These are eligibility and geography controls, not claims that an India-based undergraduate can apply. No API endpoints were queried, no source integration or candidate-data transfer was performed, and the source-quality/implementation gate remains closed.
