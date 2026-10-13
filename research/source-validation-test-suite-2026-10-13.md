@@ -12,7 +12,7 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 55 |
+| Non-empty data rows | 56 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 7 |
@@ -20,9 +20,9 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
-| Status = source_review | 1 |
+| Status = source_review | 2 |
 
-These are mixed listing/source/control records. **They are not 55 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
+These are mixed listing/source/control records. **They are not 56 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
 
 ## 2. Test method and evidence rules
 
@@ -61,6 +61,7 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-018 | Any row with permission_status=unknown | Source integration remains unapproved pending policy/permission review | Unknown permission silently becomes allowed |
 | SV-019 | Any duplicate/repost candidate | Compare canonical employer, normalized role, location, requisition ID and evidence; keep provenance from each source | Duplicate counts inflate coverage or source conflict is silently discarded |
 | SV-020 | Any stale-index result without live status | Use unknown until canonical status is freshly verified | Search result freshness or an accessible page is treated as proof of open status |
+| SV-021 | INT-017 Remote OK live feed source audit | Treat as source-level evidence, not a vacancy; preserve attribution, location-restriction and zero-pay-placeholder cautions | Counted as a job, a zero salary is interpreted as unpaid, or no intern match in the retrieved response is generalized to the whole feed |
 
 ## 4. Live-source test cases (read-only only)
 
