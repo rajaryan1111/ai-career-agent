@@ -14,42 +14,49 @@ Do not automatically integrate everything marked “No auth” or “free”. Th
 
 ## Most relevant candidates from its Jobs category
 
-### 1. AI Dev Jobs — test first for AI/ML role discovery
+### 1. AI Dev Jobs — highest-priority coverage-test candidate
 
-Catalogue entry: https://aidevboard.com/openapi.yaml  
-Official API docs: https://aidevboard.com/docs  
-Terms: https://aidevboard.com/terms
+Official docs: https://aidevboard.com/docs  
+Terms (updated 2026-04-16): https://aidevboard.com/terms  
+Privacy policy: https://aidevboard.com/privacy
 
-The current docs describe an anonymous public read API with hourly abuse throttling and endpoints to search/filter active jobs, retrieve job details, inspect companies/tags, compare similar jobs, view salary trends, and request candidate-profile matching. Filters include keyword, tags, level, location, workplace, and an explicit worldwide-remote flag. Its published terms say API data may be used in applications but must not be resold as a standalone dataset; listing accuracy/completeness is not guaranteed.
+The official API docs describe anonymous public read endpoints for search and job details, including filters for role level, location, workplace and explicit worldwide remote scope. Its terms say public reads are free and throttled hourly, prohibit scraping beyond API limits, permit API data to be used in applications, and prohibit reselling it as a standalone dataset. The provider disclaims listing accuracy, completeness and availability; job-listing content belongs to the respective companies.
 
-**Why it may help**
-- A fast experiment for AI/ML engineering roles without scraping job boards.
-- A machine-readable API and MCP interface could let us test discovery and candidate-fit output before writing our own source connector.
-- Company and salary endpoints could support shortlist-level company research.
+**Why it is worth testing first**
+- Clearer documented API-use language than sources with no public integration route.
+- Search filters can support a focused AI/ML discovery experiment without building a scraper.
+- Its explicit `global_remote` / remote-scope fields may help avoid falsely treating region-limited remote roles as worldwide.
 
 **Limitations / caveats**
-- It is focused on AI developer jobs, not all professions, and its India fresher/internship coverage has not been measured.
-- Its own match score is a feature of that provider, not ground truth; we must independently apply our hard eligibility gates and explainable local matching.
-- Free public access is throttled and the provider disclaims listing completeness/accuracy.
-- Check terms and current endpoints again immediately before any integration; no production dependency should be approved based on a directory entry alone.
+- Coverage of Indian internships, fresher roles and entry-level hiring is **not measured**. Documentation is not a coverage guarantee.
+- The API is focused on AI developer roles, not all industries.
+- Public-read hourly throttles and anti-abuse controls apply. Never exceed them or use alternate identities to evade them.
+- The provider's own matching score is not ground truth; independently enforce hard eligibility and evidence-backed ranking.
+- Its candidate-application endpoints belong to its own application flow and are not a generic way to submit applications to other employers.
+- Minimize cached listing content and preserve source/original apply links; confirm any remaining retention/display details before production.
 
-**Status:** High-priority candidate for a small coverage/quality audit; not approved as a production dependency.
+**Status:** First candidate for a small, human-reviewed coverage test; not yet approved as a production dependency.
 
-### 2. Remote OK — possible remote-role source, subject to data-use constraints
+### 2. Remote OK — possible remote-role source, with explicit attribution requirements
 
-API/feed listed: https://remoteok.com/api  
+Official API/feed: https://remoteok.com/api  
 RSS: https://remoteok.com/remote-jobs.rss  
 FAQ: https://remoteok.com/faq  
-Terms: https://remoteok.com/legal
+Terms (updated 2026-07-20): https://remoteok.com/legal
 
-Remote OK's own FAQ describes its JSON and RSS job feeds as free and unauthenticated. It asks job aggregators or sites republishing the data to credit Remote OK and link to the original job post. This makes it worth investigating as a remote-only discovery candidate.
+Remote OK's FAQ describes its JSON and RSS feeds as free and unauthenticated. It asks job aggregators to credit Remote OK and link to every original job post. Its current terms also require a web or in-app hyperlink back to Remote OK on the page or app screen where API/site data is used.
+
+**Why it may help**
+- A low-cost remote-job discovery source with official feed URLs.
+- Original-job links and a visible Remote OK attribution can be built into the product experience.
 
 **Caveats**
-- Remote does not necessarily mean worldwide eligibility. The agent must separate global-remote roles from location-restricted remote roles.
-- The platform's terms can change; check current terms for the intended desktop application and use case, retention, display, refresh frequency, and attribution.
-- Listing accuracy/freshness and Indian candidate relevance need measurement.
+- “Remote” is not the same as worldwide eligibility. Country restrictions must be captured separately.
+- India fresher/internship coverage, stale-listing rate, duplicate rate, current rate expectations and caching/retention requirements have not been measured.
+- The relevant app screen must visibly link back to Remote OK, and every role must link to its original job post.
+- Re-check terms before production use.
 
-**Status:** Candidate for validation; not yet approved for integration.
+**Status:** Candidate for a small coverage test after documenting attribution and retention behavior; not yet approved for integration.
 
 ### 3. Arbeitnow — regionally focused candidate, not a global source assumption
 
@@ -126,9 +133,11 @@ Success is not “we can fetch JSON”; success is finding relevant, eligible jo
 - Public APIs directory: https://github.com/public-apis/public-apis
 - Current README / Jobs category: https://github.com/public-apis/public-apis/blob/master/README.md
 - AI Dev Jobs API docs: https://aidevboard.com/docs
+- AI Dev Jobs terms (updated 2026-04-16): https://aidevboard.com/terms
+- AI Dev Jobs privacy policy: https://aidevboard.com/privacy
 - AI Dev Jobs terms: https://aidevboard.com/terms
 - Remote OK API and RSS FAQ: https://remoteok.com/faq
-- Remote OK terms: https://remoteok.com/legal
+- Remote OK terms (updated 2026-07-20): https://remoteok.com/legal
 - Arbeitnow terms: https://www.arbeitnow.com/terms
 - Adzuna official API docs: https://developer.adzuna.com/overview
 - SmartRecruiters official Posting API: https://developers.smartrecruiters.com/docs/posting-api
