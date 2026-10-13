@@ -1,0 +1,82 @@
+# Product and Research Rules
+
+**Status:** Baseline rules — amend only with a documented reason  
+**Last updated:** 2026-10-13
+
+## 1. Research before implementation
+
+- Do not start coding until the core feasibility questions have evidence-backed answers.
+- Separate verified facts, assumptions, hypotheses, and decisions.
+- Cite sources for platform policies, API capabilities, pricing, and competitor features.
+- Prefer official documentation and current terms over blogs or marketing claims.
+- Record the date each platform rule was checked.
+- If a claim cannot be verified, mark it **Unknown**; do not fill gaps with assumptions.
+
+## 2. Candidate truthfulness
+
+- Never invent skills, employment history, degrees, certifications, dates, compensation, work authorization, or achievements.
+- Resume parsing is a draft profile, not ground truth; users must review critical fields.
+- Never guess answers to screening questions.
+- Ask for missing information when it affects eligibility or a declaration.
+- Generated resume/cover-letter text must remain faithful to verified candidate facts.
+
+## 3. Job quality
+
+- Apply hard eligibility rules before ranking.
+- A high semantic similarity score must never override a mandatory eligibility failure.
+- Preserve an explanation for each match and exclusion.
+- Deduplicate before ranking and applying.
+- Flag stale, suspicious, or incomplete listings; do not present unverified claims as facts.
+- Optimize for relevant opportunities and outcomes, not raw application count.
+
+## 4. Platform compliance
+
+- Verify current terms, API documentation, and access requirements for every source.
+- Discovery access and application submission are separate capabilities and must be assessed separately.
+- Do not bypass CAPTCHA, OTP, anti-bot protections, rate limits, or access controls.
+- Do not use unauthorized scraping or submission automation.
+- Stop or request user intervention when a workflow is unsupported or uncertain.
+- Never describe a source as fully supported until the workflow has been tested and its permission basis documented.
+
+## 5. Application integrity
+
+- A form filled out is not proof of submission.
+- An attempted submission is not a confirmed application.
+- Record status evidence, timestamps, source URL, and errors.
+- Do not retry an ambiguous submission until checking whether it may already have succeeded.
+- Prevent duplicates across sources and repeated scheduled runs.
+- Ask about sensitive declarations, unfamiliar questions, assessments, or missing information.
+- Default: auto-submit only supported cases that meet strict eligibility and quality rules; pause on exceptions.
+
+## 6. Privacy and security
+
+- Keep resumes, candidate profiles, and application records local by default.
+- External processing requires clear disclosure and explicit consent.
+- Send the minimum necessary data to external services.
+- Never store passwords in plaintext or commit secrets to Git.
+- Keep sensitive content out of logs where possible.
+- Support deletion and export of user data.
+- Do not use real candidate data in public test fixtures or screenshots without explicit permission.
+
+## 7. Cost discipline
+
+- Core product usefulness must not require a paid AI API or hosted backend.
+- Mark optional paid services and recurring costs clearly.
+- Validate pricing and free-tier limits before relying on them.
+- Do not promise unlimited free job data or AI inference.
+
+## 8. Scheduling
+
+- Default schedule: 00:00 and 12:00 Asia/Kolkata.
+- A local scheduler must clearly report when the machine was offline.
+- Support catch-up behavior without duplicate processing.
+- Persist run state and errors.
+- Do not claim the app runs while powered off unless a separate, verified service provides that behavior.
+
+## 9. Change management
+
+- Update `memory.md` whenever a meaningful decision, evidence item, unresolved question, or rejected assumption emerges.
+- Update the relevant canonical document (`prd.md`, `architecture.md`, `rules.md`, `phases.md`, or `design.md`) when a decision changes.
+- Record material decisions with date, rationale, evidence, and consequences.
+- Avoid duplicating the same long explanation across files; link to the canonical section.
+- Never overwrite an important decision silently; mark it superseded and explain why.
