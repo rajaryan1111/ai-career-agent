@@ -66,15 +66,20 @@ Catalogue entry: https://developer.adzuna.com/overview
 
 Adzuna requires an API key. The directory does not answer whether the exact distributed desktop-product use case is permitted, whether quotas cover our refresh schedule, or whether India coverage is adequate. Continue using the separate official terms/quota review rather than treating inclusion here as endorsement.
 
-### 5. SmartRecruiters — new candidate for official-source validation
+### 5. SmartRecruiters — blocked pending explicit authorization
 
-Technical endpoint behavior and field pitfalls surfaced in a third-party measured reference: https://github.com/GregoryBolshakov/ats-job-boards-reference. Its 2026-08-29 snapshot covers a limited set of company boards and reports a paginated postings endpoint plus additional per-posting details for compensation and job-ad sections. It also documents edge cases around empty responses, pagination, and missing fields.
+The official [Posting API overview](https://developers.smartrecruiters.com/docs/posting-api) and [endpoint guide](https://developers.smartrecruiters.com/docs/endpoints) document listing and retrieving postings for a named company board. That establishes technical endpoints, not permission for our product.
 
-**Important boundary:** this is not official permission evidence. The current review has not verified SmartRecruiters' official terms, permitted use for a distributed desktop app, quotas, retention, or attribution requirements. Do not implement it yet.
+The SmartRecruiters API platform page says API use is governed by the [SAP API Policy](https://help.sap.com/doc/sap-api-policy/latest/en-US/API_Policy_latest.pdf). The linked **SAP API Policy v.4.2026a** restricts API use for (semi-)autonomous or generative-AI systems that plan, select, or execute sequences of API calls, and for systematic/large-scale extraction, unless an expressly identified SAP-endorsed architecture, data service, service-specific pathway, or authorization applies. That restriction is directly relevant to this AI-agent concept. SmartRecruiters documentation also warns that credentials with `internal_postings_read` can access internal postings.
 
-**Status:** research candidate only. First verify current official API docs/terms, then test several target boards for India/internship coverage and pagination.
+**Status: not approved for integration or broad coverage testing.** Do not add credentials, crawl employer boards, or rely on an assumed exception. Revisit only after written clarification identifies an allowed pathway for a downloadable desktop app and its AI-agent workflow. See [the dedicated policy review](smartrecruiters-api-policy-review-2026-10-13.md).
 
-See [ATS API field-coverage review](ats-board-api-field-coverage-review-2026-10-13.md) for specific test cases and why the dated dataset was not copied.
+Sources checked 2026-10-13:
+- https://developers.smartrecruiters.com/docs/posting-api
+- https://developers.smartrecruiters.com/docs/endpoints
+- https://developers.smartrecruiters.com/docs/the-smartrecruiters-platform
+- https://help.sap.com/doc/sap-api-policy/latest/en-US/API_Policy_latest.pdf
+- https://developers.smartrecruiters.com/docs/permission-reference
 
 ### 6. Other job APIs in the list — do not assume they are free or suitable
 
@@ -126,6 +131,9 @@ Success is not “we can fetch JSON”; success is finding relevant, eligible jo
 - Remote OK terms: https://remoteok.com/legal
 - Arbeitnow terms: https://www.arbeitnow.com/terms
 - Adzuna official API docs: https://developer.adzuna.com/overview
+- SmartRecruiters official Posting API: https://developers.smartrecruiters.com/docs/posting-api
+- SmartRecruiters API policy pointer: https://developers.smartrecruiters.com/docs/the-smartrecruiters-platform
+- SAP API Policy v.4.2026a: https://help.sap.com/doc/sap-api-policy/latest/en-US/API_Policy_latest.pdf
 - SmartRecruiters technical reference (secondary only): https://github.com/GregoryBolshakov/ats-job-boards-reference
 - ATS API example code (secondary only): https://github.com/strongboxr/ats-jobs-api-examples
 - Open Skills API overview: https://github.com/workforce-data-initiative/skills-api/wiki/API-Overview
