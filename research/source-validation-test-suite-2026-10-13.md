@@ -372,3 +372,12 @@ Applied 2026-10-14: Sprinto AI Implementation Intern is listed on the current em
 | SV-050 | Employer careers page says “fully remote” / “work from anywhere” but does not list hiring-country, payroll, tax or work-authorization rules | Preserve the employer's exact remote wording, but keep applicant-country/legal eligibility unknown until independently established. Source permission remains a separate field. | Translating remote marketing copy into “worldwide eligible,” “can hire in India,” or permission to collect/cache/re-publish the listing. |
 
 Applied 2026-10-14: Threxil's official page states fully remote/work from anywhere and lists two open roles. This supports `open` and remote wording, but does not resolve legal hiring-country eligibility or source/product permission. No candidate data submitted.
+
+
+### SV-051 — Separate source listing URL from employer application URL
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-051 | A permitted discovery API returns its own listing page, while an optional paid tier may provide the original employer ATS URL | Store and label `source_listing_url` and `employer_apply_url` separately. A source-page link may satisfy source attribution but must not be counted as a verified direct employer application link. Paid direct-link access must remain disabled unless separately approved. | Treating a source listing URL as an employer apply URL; hiding an optional per-listing fee; claiming the ≥90% direct-link gate passed without checking employer destinations. |
+
+Applied 2026-10-14: Jobicy's public API returns a Jobicy listing URL; the optional commercial API can return original ATS links and may charge $0.01 per eligible job. The initial candidate adapter must use the public endpoint only, preserve attribution/canonical URL, and leave direct employer URL unverified until independently established. No endpoint was queried. Gate remains NOT PASSED.
