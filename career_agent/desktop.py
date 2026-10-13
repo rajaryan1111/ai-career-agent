@@ -221,6 +221,12 @@ class CareerAgentApp:
         try:
             job = self._job_from_form()
             existed = self.store.get_job(job.listing_id) is not None
+            if not existed:
+                duplicates = tuple(item for item in self.store.find_duplicate_group(job) if item.listing_id != job.listing_id)
+                if duplicates:
+                    summary = "\n".join(f"- {item.employer_name}: {item.role_title} ({item.source_name})" for item in duplicates[:5])
+                    if not messagebox.askyesno("Possible duplicate", "This job matches an existing canonical URL/requisition. Existing source observations are kept separately. Save another observation anyway?\n\n" + summary, parent=self.root):
+                        return
             self.store.save_job(job)
             if not existed:
                 self.store.save_tracker(ApplicationTracker(job.listing_id))
