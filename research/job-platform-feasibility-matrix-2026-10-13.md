@@ -360,3 +360,9 @@ Correction to the previous addendum: the current Himalayas API landing page expl
 
 Added WATER's ML Intern Application as IN-034 and documented it in [official employer freshness audit round 3](official-employer-freshness-audit-round3-2026-10-13.md). The official page describes a six-month, full-time, on-site Hyderabad ML research internship and a B.Tech/M.Tech/MS profile in CS/EE/Maths or related fields. Its application form currently renders, but the page is dated 2026-08-24 and does not explicitly confirm the vacancy remains open; status stays unknown. Added SV-033 so a visible form cannot alone promote a role to open. This is a research lead, not source approval; no candidate data was sent or application submitted.
 
+### 2026-10-13 addendum — QaliAI AI Job Agent code review
+
+Reviewed the public MIT-licensed [QaliAI/ai-job-agent](https://github.com/QaliAI/ai-job-agent) repository and selected source files without running or importing code. The local-first architecture, deterministic ledger, explainable scoring and candidate-grounded QA are useful design references, but the implementation is not a drop-in foundation. Direct inspection found that `verify_postings.py` treats 403/network failures as live, ATS fetch failures often collapse into empty lists, and the dispatcher does not return structured per-source outcomes. Its work-mode inference and salary filtering also lack sufficiently separate country eligibility and currency/pay-period normalization. The repo includes a SmartRecruiters adapter, but our project must continue to block that source pending the existing policy/authorization gate. See [the detailed review](open-source-ai-job-agent-review-2026-10-13.md).
+
+Added SV-034–SV-037 to the validation suite. No upstream code, registry, dependencies, credentials or candidate data were copied; no source endpoints were queried and no applications were submitted. Implementation remains blocked by the source feasibility/permission gate.
+
