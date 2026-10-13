@@ -35,7 +35,7 @@ The official API docs describe anonymous public read endpoints for search and jo
 - Its candidate-application endpoints belong to its own application flow and are not a generic way to submit applications to other employers.
 - Minimize cached listing content and preserve source/original apply links; confirm any remaining retention/display details before production.
 
-**Status:** First candidate for a small, human-reviewed coverage test; not yet approved as a production dependency.
+**Status:** First candidate for a small, human-reviewed coverage test; not yet approved as a production dependency. A limited live smoke test confirmed useful structured fields, but the first visible records were senior roles and the documented job-type enum does not include internship. India fresher/internship coverage remains unmeasured. See [live smoke test](live-source-smoke-test-2026-10-13.md).
 
 ### 2. Remote OK — possible remote-role source, with explicit attribution requirements
 
@@ -56,7 +56,7 @@ Remote OK's FAQ describes its JSON and RSS feeds as free and unauthenticated. It
 - The relevant app screen must visibly link back to Remote OK, and every role must link to its original job post.
 - Re-check terms before production use.
 
-**Status:** Candidate for a small coverage test after documenting attribution and retention behavior; not yet approved for integration.
+**Status:** Candidate for a small coverage test after documenting attribution and retention behavior; not yet approved for integration. A limited live smoke test confirmed structured feed data and mandatory attribution language; visible entries included non-target functions. India fresher relevance remains unmeasured. See [live smoke test](live-source-smoke-test-2026-10-13.md).
 
 ### 3. Arbeitnow — regionally focused candidate, not a global source assumption
 
