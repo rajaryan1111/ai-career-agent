@@ -46,9 +46,9 @@ A second direct retrieval pass attempted the same three Himalayas filters and on
 
 The web retrieval interface again returned “URL is not accessible via this tool” for all four URLs. It returned no HTTP status, response body, result count, or rate-limit headers. This remains a retrieval-tool limitation; it is not evidence of provider outage, zero matches, or API failure. No coverage metric was added.
 
-### Official documentation discrepancy to resolve before implementing pagination
+### Earlier pagination note (superseded by the follow-up below)
 
-The current Himalayas API landing page says the browse endpoint uses cursor pagination and recommends echoing nextCursor into the next request. The provider's public remote-jobs-api GitHub OpenAPI document describes limit plus offset pagination instead, and its sample uses offset. Both sources describe a 20-record maximum; the official docs also describe daily refresh and rate limiting. Because these are inconsistent instructions for the same browse endpoint, do not hard-code pagination from one source until the live response and/or provider documentation is clarified. Prefer the filtered search endpoint for the bounded pilot, while still treating its payload as unverified in this environment.
+The current Himalayas API landing page says the browse endpoint uses cursor pagination and recommends echoing nextCursor into the next request. The provider's public remote-jobs-api GitHub OpenAPI document describes limit plus offset pagination instead, and its sample uses offset. Both sources describe a 20-record maximum; the official docs also describe daily refresh and rate limiting. At the time of this note, the current landing page and GitHub artifacts appeared inconsistent. The later first-party documentation check below resolves the implementation choice: follow the current landing page's cursor guidance; treat offset examples as stale. Live filtered payloads remain unverified.
 
 Sources checked 2026-10-13:
 - https://himalayas.app/api
@@ -60,7 +60,7 @@ Sources checked 2026-10-13:
 
 - Filtered results for both providers remain not measured.
 - No implementation, dependencies, credentials, or candidate data transfer.
-- Next valid step is a normal HTTPS GET from a network-enabled environment, capturing status, headers, response shape, query parameters, and a minimal sample; if the pagination discrepancy persists, ask the provider before implementing full-feed sync.
+- Next valid step is a normal HTTPS GET from a network-enabled environment, capturing status, headers, response shape, query parameters, and a minimal sample; use the current landing-page cursor guidance if a future sync is authorized; do not implement a full-feed sync just to prove feasibility.
 
 ## Documentation discrepancy resolved by current first-party reference check — 2026-10-13
 
