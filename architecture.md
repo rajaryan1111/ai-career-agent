@@ -5,7 +5,7 @@
 
 ## 1. Architectural direction
 
-Investigate a local-first desktop application with clear boundaries between desktop UI/settings, candidate storage, resume parsing, job-source adapters, normalization/deduplication, eligibility and matching, company research, application preparation/submission, scheduling/retries, and audit history.
+Use a local-first desktop application with clear boundaries between desktop UI/settings, candidate storage, resume parsing, job-source adapters, normalization/deduplication, eligibility and matching, company research, application preparation/submission, scheduling/retries, and audit history.
 
 Do not split into microservices for the initial product. A modular monolith or desktop application with local services is likely easier to build and maintain, but must be evaluated during research.
 
