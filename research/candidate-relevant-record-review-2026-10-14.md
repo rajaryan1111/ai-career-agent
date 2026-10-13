@@ -192,3 +192,20 @@ Additional controls:
 - Jobicy's [official API documentation](https://jobicy.com/jobs-rss-feed) allows normal product integrations subject to attribution and preservation of its canonical listing URL. Its public feed does not guarantee an employer ATS URL; absence from the last-seven-days feed is not proof of closure. No API endpoint was queried in this pass.
 
 After adding IN-036, the CSV has 83 records, 27 columns, 0 malformed-width rows, 0 duplicate IDs, 74 distinct canonical URLs and 8 repeated-URL groups. Status labels: 19 open, 53 unknown, 3 expired, 2 closed, 2 not_a_listing and 4 source_review; permission is unknown for 78 records. These are mixed audit records, not unique candidate-ready vacancies. The 50-record sample and the overall source-quality gate remain **NOT PASSED / research-only**.
+
+
+## Eighth candidate-focused validation pass — 2026-10-14
+
+Opened 50 canonical URLs for a fixed QA roster (25 India-focused and 25 international-remote), with one canonical URL per sample row and negative controls intentionally retained. The roster is documented in [50-Record Candidate-Validation Roster](50-record-candidate-validation-roster-2026-10-14.md). It is not 50 open jobs or a candidate-ready shortlist.
+
+New direct destination findings:
+- Apple IN-001: canonical page explicitly says the role does not exist or is no longer available; status changed from unknown to closed.
+- Matrice AI IN-007: canonical page renders 404 / Job Not Found; existing expired status retained because its recorded deadline had already passed.
+- Bruker IN-033: research browser returned HTTP 410 Gone for the canonical iCIMS URL; status changed from unknown to closed at this URL. Any replacement requisition must be verified independently.
+- AtkinsRéalis IN-030: stored role URL redirects to the generic careers search page rather than the specific role; status remains unknown and the role-deep-link check fails.
+- Azul INT-032: research browser returned a fetch error without HTTP status; this remains unknown, not a dead-link finding.
+- Several Ashby/Workday pages returned a page title or JavaScript shell but no readable role body. This is a research-renderer limitation, not evidence the role is closed.
+
+The roster includes the GM role once: IN-006 and IN-026 are locale/parameter variants for the same requisition, so IN-026 is excluded. The sample has 50 records and 50 unique canonical URL values. Direct-employer link validity is still **not measured**: page retrieval does not prove that the Apply action works, and careers-index links are not necessarily role-deep-links.
+
+CSV baseline after status corrections: 83 records, 27 columns, 0 malformed rows, 0 duplicate listing IDs, 74 distinct canonical URLs, 8 repeated URL groups. Status counts are 19 open, 52 unknown, 3 expired, 3 closed, 2 not_a_listing, and 4 source_review; permission remains unknown for 78 rows. These are mixed audit records, not unique eligible vacancies. Gate remains **NOT PASSED / research-only**.
