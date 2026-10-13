@@ -59,7 +59,6 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Identify expired, closed, stale, or suspicious listings when evidence permits.
 - Respect each source's terms, API rules, and technical access requirements.
 - Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
-- Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
 ### Matching and eligibility
 - Run hard eligibility rules separately from relevance scoring.
