@@ -89,6 +89,10 @@
 - **Treat retrieved and user-supplied content as untrusted:** job pages, resumes, PDFs and tool output must not be allowed to rewrite system instructions or broaden permissions. Validate tool parameters at runtime, redact secrets/PII in logs, and use allowlists/safe argument passing rather than shell commands assembled from untrusted strings. Scanners are defense-in-depth, not the sole security boundary.
 - **Auditable state and costs:** record action, timestamp, source/canonical URL, relevant evidence, status and error for consequential workflows while minimizing sensitive data. If hosted inference is ever enabled, use visible bounded budgets. Never treat an agent's own success message as proof of submission.
 
+- Do not treat a successful HTTP response as proof that a job board is valid, active, or empty; interpret response semantics per provider and distinguish unknown board, no current listings, blocked access, parse failure, and transient error.
+- Preserve missing values separately from numeric zero. For compensation, retain source value, currency, unit/period, raw employer wording, and evidence; do not assume annual pay or combine base salary with bonus/OTE when the source is ambiguous.
+- A job omitted from a filtered or partial source run is not evidence that it closed. Mark a listing closed only when a sufficiently complete source check supports that conclusion; keep retrieval time distinct from posted/updated/first-seen/last-seen/verified times.
+
 ## 10. Change management
 
 - Update `memory.md` whenever a meaningful decision, evidence item, unresolved question, or rejected assumption emerges.
