@@ -1,0 +1,53 @@
+{
+  "report_schema_version": 1,
+  "generated_at_utc": "2026-10-13T20:35:19+00:00",
+  "input_path": "research/job-source-audit-seed-2026-10-13.csv",
+  "input_sha256": "0356b093ded3917c0fa9ba3aa9f12a682caaf81df7c49a6b042950d66a08f414",
+  "header_columns": 30,
+  "record_count": 83,
+  "malformed_width_rows_excluded": 0,
+  "duplicate_listing_id_count": 0,
+  "duplicate_listing_ids": {},
+  "distinct_canonical_employer_urls": 74,
+  "repeated_canonical_url_group_count": 8,
+  "repeated_canonical_url_groups": {
+    "https://atrisi.org/collaborate/ml-ai-intern": 2,
+    "https://jobs.ashbyhq.com/atlys/1a34deb8-3d14-4b7b-b1eb-cd302ce97223": 3,
+    "https://jobs.ashbyhq.com/barnes/af9258a6-b6e6-4714-92dc-a9952c0590a7": 2,
+    "https://jobs.ashbyhq.com/certifyos/4bcdec99-9f2e-416c-8e26-498c94c5898a/": 2,
+    "https://jobs.ashbyhq.com/ema/e0511c0c-998f-4079-b62c-d2f164bf2c86": 2,
+    "https://jobs.lever.co/formstack/4c2cbe26-5948-4686-95a4-8f7145d7d2a8": 2,
+    "https://jobs.lever.co/rivr/661e87dc-6ce0-4600-b74f-96b011109c28": 2,
+    "https://zyoralabs.com/careers": 2
+  },
+  "status_counts": {
+    "closed": 4,
+    "expired": 3,
+    "not_a_listing": 2,
+    "open": 19,
+    "source_review": 4,
+    "unknown": 51
+  },
+  "permission_status_counts": {
+    "documented public feed; product approval unresolved": 1,
+    "documented_public_read": 1,
+    "public API documented; product use still subject to attribution and terms review": 1,
+    "third-party discovery only; production approval unresolved": 2,
+    "unknown": 78
+  },
+  "permission_unknown_count": 78,
+  "apply_route_outcome_counts": {
+    "(not checked)": 73,
+    "email_route_published_not_tested": 1,
+    "embedded_form_visible_not_submitted": 1,
+    "login_gate_reached": 1,
+    "reachable_application_form": 4,
+    "unknown_button_destination_not_exposed": 1,
+    "unknown_fetch_error": 1,
+    "unknown_fetch_restricted": 1
+  },
+  "apply_route_observed_record_count": 10,
+  "direct_link_validity_percentage": null,
+  "direct_link_validity_note": "Not calculated: existing apply-route labels are not a complete, uniform HTTP/application-route validity measurement with a defensible denominator.",
+  "interpretation": "Audit observations are not unique eligible vacancies. A status label of open, a readable page, or a visible Apply control is not by itself proof of current availability, candidate eligibility, or permission for automated collection."
+}
