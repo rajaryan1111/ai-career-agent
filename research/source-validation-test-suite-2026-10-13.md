@@ -191,3 +191,12 @@ The pagination choice is now sufficiently documented for a later bounded impleme
 | SV-032 | A scheduled run has one source return valid records while another source times out, is rate-limited, or fails schema validation; some previously seen listings are absent from the partial result | Record each source outcome separately; retain prior listing state unless a fresh canonical check proves a status change; retry only within source limits; resume idempotently without duplicate records or notifications | Partial results are treated as a complete snapshot, omitted listings are marked closed, an error is reported as a valid empty result, or a retry duplicates records/side effects |
 
 This test is derived from the selective n8n workflow review: batching, ID-cache and error-handler patterns are useful concepts, but the product must not let a partial run corrupt vacancy state. It is a future acceptance test only; no implementation is authorized.
+
+### SV-033 — Current application form does not prove vacancy is open
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-033 | Official employer listing has a current-looking application form but only an older posting date and no explicit current-open statement or deadline | Preserve status as unknown; record the page timestamp, route evidence and unresolved fields separately. A visible form can support “application route observed,” not “vacancy confirmed open.” | Promoting the listing to open solely because the page or form still renders, or fabricating a deadline, compensation, eligibility or permission status |
+
+This fixture is grounded in the WATER ML Intern page checked 2026-10-13: the page is dated 2026-08-24 and displays an application form, but the retrieved content does not explicitly confirm current open status. It is a future acceptance test; no application was submitted and no candidate data was sent.
+
