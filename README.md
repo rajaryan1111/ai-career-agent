@@ -12,6 +12,7 @@ The first dependency-free Python domain core is in `career_agent/`. It currently
 - Conservative URL/requisition deduplication.
 - Separate source-listing and employer-application URLs.
 - Guarded application status transitions; confirmation requires evidence.
+- Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
 This is the domain layer only, not a complete desktop application. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
