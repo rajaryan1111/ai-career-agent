@@ -15,8 +15,8 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Non-empty data rows | 59 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
-| Status = open | 7 |
-| Status = unknown | 43 |
+| Status = open | 8 |
+| Status = unknown | 42 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
@@ -65,6 +65,7 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-022 | INT-019 Tether Research Engineer Intern | Enforce MSc/PhD eligibility and honor the employer's explicit instruction not to use AI tools to complete application responses | Recommended to a candidate who does not meet the degree requirement, or AI drafts/autofills prohibited answers |
 | SV-023 | AUD-HIMALAYAS-MISMATCH-20261013 One Impression / HexCoded | Keep source-review status; role family is growth/GTM and employer identity is unresolved | Aggregator tags alone cause recommendation as an ML-engineering vacancy |
 | SV-024 | INT-020 Origin CVAT Annotation Intern | Keep current status unknown until the specific role is verified on an official source; classify as CV annotation/data QA | Aggregator deadline is treated as canonical proof of open status or annotation is mislabeled as model engineering |
+| SV-025 | IN-022 Sprinto AI Implementation Intern | Current canonical Lever page has Apply, remote/Bengaluru location and student eligibility; classify as AI implementation/applied engineering | It remains unknown despite current direct apply evidence, or it is promoted to ML research without evidence |
 
 ## 4. Live-source test cases (read-only only)
 
