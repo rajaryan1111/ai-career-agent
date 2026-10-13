@@ -35,7 +35,7 @@
 ## What this pilot establishes—and what it does not
 
 **Established for this bounded check:**
-- Three official employer pages surfaced relevant AI/ML internship leads in India.
+- The initial India-focused subset surfaced three official employer-page leads (Airbus, Unisys, Walmart); the follow-up added two Threxil role pages and three additional international-remote records (MailerMen, QovaTech, DataRobot).
 - Airbus's current result had relatively detailed role requirements and a recent posting signal.
 - Unisys and Walmart surfaced current-looking postings, but the direct page retrieval path was incomplete; their vacancy state and missing fields remain unresolved.
 - A role can be relevant while still being expired, as demonstrated by the GE Aerospace control.
@@ -52,7 +52,7 @@
 - Added `INT-021` and `INT-022` for Threxil Systems' AI Intern and Frontend + AI Intern. The official careers page explicitly labels two roles open and says remote/work from anywhere; individual role pages welcome freshers and show direct forms. Recorded status as `open` on that explicit statement, while keeping country-specific legal eligibility, compensation, duration, employer-legitimacy review and automated-source permission unresolved.
 - Appended the fresh Unisys evidence to `IN-029` without promoting its status.
 - Preserved the existing expired GE Aerospace control and did not change status based on search indexing.
-- Next: continue the independently assembled employer sample in bounded batches, verify full canonical requirements where retrieval is possible, retain unknown when it is not, and deduplicate at the requisition level before measuring precision. Keep permission review separate and the implementation gate closed.
+- Next: continue the independently assembled employer sample in bounded batches, prioritizing the international-remote segment. A rough internal segmentation currently finds 53 distinct role-like canonical URLs after excluding source-review/category rows and deduplicating exact canonical URLs; 38 are India-focused (including negative controls) and 12 are non-India remote (including geography/freshness controls), with 3 other location/work-mode cases. These labels are for sampling only, not eligibility or quality passes. The target is 25 international-remote listings, so at least 13 more distinct records need review before that segment is complete. Verify canonical requirements where possible, retain unknown where not, and keep source permission separate.
 
 
 ### Follow-up scope note
