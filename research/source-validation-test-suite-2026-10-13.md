@@ -153,3 +153,12 @@ These are proposed internal gates, not results. Report precision among sampled s
 - Several useful negative controls already exist for closed, expired, duplicate, non-listing, role-family and geography cases.
 - The live source coverage gate is **not passed**: the existing API smoke test is not a fixed filtered sample, the target-relevant unique count is not established, and permissions/attribution remain unresolved for candidate feeds.
 - **No implementation code, dependencies, credentials, candidate data transfer, or application submissions are authorized by this document.**
+
+
+### Follow-up retrieval attempt and API contract discrepancy — 2026-10-13
+
+A second direct retrieval pass attempted the three documented Himalayas filtered searches (India+AI+Entry-level+Intern; India+machine learning+Entry-level+Intern; worldwide+AI+Entry-level+Intern) and a documented AI Dev Jobs read-only search (q=intern, location=India, level=junior, limit=10, page=1). All four URLs were inaccessible through the current web retrieval interface; no HTTP status/body/headers were returned. The sample remains not measured, not empty and not evidence of provider downtime.
+
+A documentation discrepancy was also identified: the Himalayas API landing page describes cursor pagination for /jobs/api, while the provider's public OpenAPI file describes limit/offset pagination. Both specify a maximum of 20 records. Do not implement full-feed pagination until the actual response contract or provider guidance resolves this discrepancy. The bounded pilot should use the filtered endpoint if a normal HTTPS client can retrieve it, and still capture request/response metadata.
+
+References: https://himalayas.app/api ; https://himalayas.app/docs/remote-jobs-api ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json ; https://aidevboard.com/docs
