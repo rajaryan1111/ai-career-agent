@@ -363,3 +363,12 @@ Applied 2026-10-14: Humans Care Foundation describes a paid one-month initial in
 | SV-049 | Employer board currently lists a role as open, but the role requires a degree/year/experience profile not established for the candidate | Keep listing status and candidate-fit/eligibility as separate fields. A vacancy can be open while candidate fit is unknown or poor. State the exact requirement and do not imply eligibility. | Marking a role suitable because it is open, interpreting “related field” as automatically including ECE, or hiding a restrictive degree requirement. |
 
 Applied 2026-10-14: Sprinto AI Implementation Intern is listed on the current employer board and its requirements include a current degree in CS, Engineering, Data Science or a related technical field; global eligibility is not established. Unisys AI Engineering Intern explicitly asks for a current/recent M.Tech in CS, AI/ML or related, so it is not a direct fit for a BTech ECE undergraduate absent further evidence. Concentric AI and AtkinsRéalis keep their internship/full-time or degree-specific contradictions unresolved. Gate remains NOT PASSED.
+
+
+### SV-050 — “Work from anywhere” is not a legal eligibility guarantee
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-050 | Employer careers page says “fully remote” / “work from anywhere” but does not list hiring-country, payroll, tax or work-authorization rules | Preserve the employer's exact remote wording, but keep applicant-country/legal eligibility unknown until independently established. Source permission remains a separate field. | Translating remote marketing copy into “worldwide eligible,” “can hire in India,” or permission to collect/cache/re-publish the listing. |
+
+Applied 2026-10-14: Threxil's official page states fully remote/work from anywhere and lists two open roles. This supports `open` and remote wording, but does not resolve legal hiring-country eligibility or source/product permission. No candidate data submitted.
