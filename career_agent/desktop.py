@@ -396,6 +396,7 @@ class CareerAgentApp:
         ttk.Label(dialog, text="Evidence / note (required to confirm)").pack(anchor=W, padx=12, pady=(8, 0))
         ttk.Entry(dialog, textvariable=evidence_var, width=48).pack(fill=X, padx=12, pady=4)
         def apply():
+            message = ""
             try:
                 try:
                     new_status = ApplicationStatus(status_var.get())
@@ -403,9 +404,8 @@ class CareerAgentApp:
                     raise ValueError("Select the status you want to apply.") from exc
                 stored = self.store.get_tracker(listing_id)
                 current = stored if stored is not None else ApplicationTracker(listing_id)
-                if stored is None and new_status is not ApplicationStatus.DISCOVERED:
-                    # A tracker record only ever starts at the permitted initial status.
-                    self.store.save_tracker(current)
+                # Validate the requested action before any persistent write, so a refused
+                # change cannot create or modify a tracker record.
                 updated = current.transition(
                     new_status,
                     evidence=evidence_var.get().strip() or None,
@@ -422,7 +422,16 @@ class CareerAgentApp:
                         parent=self.root,
                     )
                     return
-                self.store.save_tracker(updated)
+                if stored is None:
+                    # The action is valid, so create the record at the permitted initial status.
+                    self.store.save_tracker(current)
+                if updated != current:
+                    self.store.save_tracker(updated)
+                message = (
+                    f"Application record created at {current.status.value}."
+                    if updated == current
+                    else f"Application status updated to {new_status.value}."
+                )
             except ValueError as exc:
                 messagebox.showerror("Invalid status change", str(exc), parent=dialog)
                 return
@@ -437,7 +446,7 @@ class CareerAgentApp:
                 return
             dialog.destroy()
             self._refresh_jobs()
-            self.status.set(f"Application status updated to {new_status.value}.")
+            self.status.set(message)
         ttk.Button(dialog, text="Save status", command=apply).pack(anchor="e", padx=12, pady=12)
 
     def _export(self):

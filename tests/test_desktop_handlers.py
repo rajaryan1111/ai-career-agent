@@ -520,7 +520,7 @@ class DatabaseErrorTests(HandlerTestCase):
 
 
 class MissingTrackerRowTests(HandlerTestCase):
-    """A job saved without a tracker row must still start at the permitted initial status."""
+    """A job without a tracker row: a refused change must not create one, a valid one must."""
 
     def test_shortlist_creates_the_initial_record_first(self):
         self.store.save_job(sample_job())
@@ -534,25 +534,117 @@ class MissingTrackerRowTests(HandlerTestCase):
         self.assertFalse(stored.candidate_confirmed)
         self.assertNotIn("Not eligible to shortlist", MESSAGES.titles())
 
-    def test_status_update_creates_the_initial_record_first(self):
+    def test_valid_initial_state_creates_the_record_at_discovered(self):
+        self.store.save_job(sample_job())
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("discovered")
+        apply()
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.DISCOVERED)
+        self.assertIsNone(stored.status_evidence)
+        self.assertFalse(stored.candidate_confirmed)
+        self.assertNotIn("Invalid status change", MESSAGES.titles())
+        self.assertIn("record created at discovered", app.status.get())
+
+    def test_valid_transition_from_a_new_record_is_created_then_advanced(self):
         self.store.save_job(sample_job())
         app, status_var, evidence_var, apply = self.open_status_dialog()
         status_var.set("shortlisted")
         apply()
         stored = self.store.get_tracker("j1")
         self.assertEqual(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertFalse(stored.candidate_confirmed)
+        self.assertNotIn("Invalid status change", MESSAGES.titles())
         self.assertIn("updated to shortlisted", app.status.get())
 
-    def test_status_update_cannot_create_a_record_before_discovery(self):
+    def test_invalid_initial_jump_creates_no_record(self):
+        self.store.save_job(sample_job())
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("interview")
+        evidence_var.set("pretend invite")
+        apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1"))
+        self.assertNotIn("updated", app.status.get())
+
+    def test_invalid_initial_confirmed_creates_no_record(self):
         self.store.save_job(sample_job())
         app, status_var, evidence_var, apply = self.open_status_dialog()
         status_var.set("confirmed")
         evidence_var.set("fabricated confirmation")
         apply()
         self.assertIn("Invalid status change", MESSAGES.titles())
-        stored = self.store.get_tracker("j1")
-        self.assertEqual(stored.status, ApplicationStatus.DISCOVERED)
-        self.assertFalse(stored.candidate_confirmed)
+        self.assertIsNone(self.store.get_tracker("j1"))
+        self.assertNotIn("updated", app.status.get())
+
+    def test_other_invalid_initial_states_create_no_record(self):
+        # From the permitted initial status only "shortlisted" and "withdrawn" are allowed,
+        # so these targets must be refused without creating a row.
+        for status in ("prepared", "awaiting_user", "submission_attempted", "submitted_unverified",
+                       "response_received", "failed"):
+            with self.subTest(status=status):
+                directory = tempfile.TemporaryDirectory()
+                self.addCleanup(directory.cleanup)
+                store = CareerStore(str(Path(directory.name) / f"{status}.sqlite3"))
+                self.addCleanup(store.close)
+                store.save_job(sample_job())
+                self.store = store
+                MESSAGES.reset()
+                app, status_var, evidence_var, apply = self.open_status_dialog()
+                status_var.set(status)
+                apply()
+                self.assertIn("Invalid status change", MESSAGES.titles())
+                self.assertIsNone(store.get_tracker("j1"))
+
+    def test_refused_change_leaves_the_file_backed_database_without_a_row(self):
+        """Re-read the database from disk: a refused change must not persist anything."""
+        self.store.close()
+        reopened = CareerStore(self.store.database_path)
+        self.addCleanup(reopened.close)
+        reopened.save_job(sample_job())
+        self.store = reopened
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("interview")
+        apply()
+        from_disk = CareerStore(self.store.database_path)
+        self.addCleanup(from_disk.close)
+        self.assertIsNone(from_disk.get_tracker("j1"))
+
+
+
+
+
+    def test_partial_write_after_a_valid_action_is_reported_and_leaves_a_truthful_row(self):
+        """Documented behavior: creating and advancing a new record is two writes, not one transaction.
+
+        The first write creates the record at the permitted initial status and the second applies
+        the transition. If the second fails, the handler reports failure and no success message,
+        and the database holds the truthful ``discovered`` row rather than a fabricated status.
+        This test demonstrates that behavior; it does not claim atomicity for the pair.
+        """
+        self.store.save_job(sample_job())
+        real_save = self.store.save_tracker
+        calls = []
+
+        def failing_second_write(tracker):
+            calls.append(tracker.status)
+            if len(calls) == 2:
+                raise sqlite3.OperationalError("database is locked")
+            return real_save(tracker)
+
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        with mock.patch.object(self.store, "save_tracker", side_effect=failing_second_write):
+            status_var.set("shortlisted")
+            apply()
+        self.assertEqual(calls, [ApplicationStatus.DISCOVERED, ApplicationStatus.SHORTLISTED])
+        self.assertIn("Status not saved", MESSAGES.titles())
+        self.assertNotIn("updated", app.status.get())
+        from_disk = CareerStore(self.store.database_path)
+        self.addCleanup(from_disk.close)
+        persisted = from_disk.get_tracker("j1")
+        self.assertIsNotNone(persisted, "the first (truthful) write should be present")
+        self.assertEqual(persisted.status, ApplicationStatus.DISCOVERED)
+        self.assertIsNone(persisted.status_evidence)
 
 
 class TrackerUpdateTests(HandlerTestCase):
@@ -623,7 +715,24 @@ class TrackerUpdateTests(HandlerTestCase):
         evidence_var.set("pretend invite")
         apply()
         self.assertIn("Invalid status change", MESSAGES.titles())
-        self.assertEqual(self.store.get_tracker("j2").status, ApplicationStatus.DISCOVERED)
+        stored = self.store.get_tracker("j2")
+        self.assertEqual(stored.status, ApplicationStatus.DISCOVERED)
+        self.assertIsNone(stored.status_evidence)
+        self.assertFalse(stored.candidate_confirmed)
+        self.assertNotIn("updated", app.status.get())
+
+    def test_invalid_jump_leaves_an_advanced_record_untouched(self):
+        """A refused change must not modify status, evidence, or the confirmation flag."""
+        before = self.store.get_tracker("j1")
+        self.assertEqual(before.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        app, status_var, evidence_var, apply = self.open_status_dialog()
+        status_var.set("interview")
+        evidence_var.set("pretend invite")
+        apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        after = self.store.get_tracker("j1")
+        self.assertEqual(after, before)
+        self.assertNotIn("updated", app.status.get())
 
     def test_database_error_is_reported_without_claiming_success(self):
         app, status_var, evidence_var, apply = self.open_status_dialog()
