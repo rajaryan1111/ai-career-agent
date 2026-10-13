@@ -119,6 +119,8 @@ class MatchingAndDedupTests(unittest.TestCase):
         payload = job_to_public_dict(job)
         self.assertEqual(payload["source_listing_url"], "https://jobs.example/role/1")
         self.assertEqual(payload["employer_apply_url"], "https://employer.example/apply/1")
+        self.assertEqual(payload["allowed_work_authorizations"], None)
+        self.assertEqual(payload["provenance_note"], "Manual test fixture: checked official listing today.")
 
 
 class ApplicationTrackerTests(unittest.TestCase):
