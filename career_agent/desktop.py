@@ -228,7 +228,7 @@ class CareerAgentApp:
                     if not messagebox.askyesno("Possible duplicate", "This job matches an existing canonical URL/requisition. Existing source observations are kept separately. Save another observation anyway?\n\n" + summary, parent=self.root):
                         return
             self.store.save_job(job)
-            if not existed:
+            if not existed or self.store.get_tracker(job.listing_id) is None:
                 self.store.save_tracker(ApplicationTracker(job.listing_id))
             self.selected_job_id = job.listing_id
             self._refresh_jobs()
