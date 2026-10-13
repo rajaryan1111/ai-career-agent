@@ -54,6 +54,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Rules-based eligibility checks plus explainable scoring should precede advanced AI ranking.
 - A source-by-source adapter design may make platform limitations easier to isolate.
 - Company intelligence is most cost-effective when generated for shortlisted jobs.
+- A trust-first workflow may differentiate the product better than maximizing automated application volume.
 
 ## Research claims to verify and keep current
 
@@ -62,6 +63,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Current competitor capabilities, limitations, and pricing.
 - Whether at least three useful discovery sources can be supported at zero mandatory recurring cost.
 - Whether a permitted application workflow can be validated for the MVP.
+- Whether proposed features materially save users time in interviews or usability tests.
 
 Record each finding with: claim, source URL, date checked, confidence, implication, and follow-up action.
 
@@ -76,7 +78,8 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 7. Which desktop framework and local storage approach best meet privacy and maintenance goals?
 8. What evidence is sufficient to mark an application as confirmed?
 9. How can company research be sourced, timestamped, and kept affordable?
-10. What feature promises should be excluded until verified?
+10. Which features produce the greatest measurable time savings?
+11. Which competitor workflows should be tested hands-on before setting product scope?
 
 ## Proposed validation thresholds (not achieved)
 
@@ -91,6 +94,11 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 These are proposed targets. Do not report them as measured results.
 
 ## Change log
+
+### 2026-10-13 — Initial competitor and feature scan
+- Added `research/competitor-landscape-and-feature-opportunities.md` with a preliminary competitor comparison, initial platform compliance signals, feature opportunities, and validation experiments.
+- Recorded the need to distinguish vendor marketing claims from tested behavior and proposals from confirmed product requirements.
+- No implementation started.
 
 ### 2026-10-13 — Documentation workflow added
 - Recorded the standing instruction to document and push meaningful project research, ideas, decisions, and feasibility findings to GitHub during active project work.
