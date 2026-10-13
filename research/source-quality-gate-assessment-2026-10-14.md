@@ -169,3 +169,16 @@ Re-fetched CSV baseline after adding IN-036: 83 records, 27 columns, 0 malformed
 Jobicy's official API documentation continues to support a possible limited read-only integration with source attribution and canonical Jobicy URL preservation. It does not guarantee a direct employer ATS URL; the feed's last-seven-days scope means absence is not proof of closure, and the optional commercial direct-link API can incur per-job cost. **No source API endpoint was queried**, no production code/dependency/connector was added, and no candidate data was transferred.
 
 The 50-record sample (25 India-focused + 25 international remote) remains incomplete; direct-link validity is not measured with a valid response-outcome denominator; the ≥20 unique relevant currently available vacancy threshold is not demonstrated; and the full eligibility/permission audits remain open. Decision: **NOT PASSED — research-only; do not begin production integration.**
+
+
+## 16. Fixed 50-record QA roster and direct-link probes — 2026-10-14
+
+Added [50-Record Candidate-Validation Roster](50-record-candidate-validation-roster-2026-10-14.md): 25 India-focused plus 25 international-remote rows, one per canonical URL and with explicit negative controls retained. The same GM requisition appears in IN-006/IN-026 locale/parameter variants; only IN-006 is sampled. This completes roster construction, not full validation.
+
+A 2026-10-14 browser probe was attempted for each of the 50 canonical URLs. Three unavailable destinations were observed: Apple IN-001 explicitly says the role does not exist/no longer available; Matrice AI IN-007 returns 404 / Job Not Found (already expired); Bruker IN-033 returned HTTP 410 Gone. IN-030 AtkinsRéalis redirects to the generic jobs search page rather than the stored role. Azul INT-032 returned a browser fetch error without HTTP status and therefore remains unknown. Several JS-rendered Ashby/Workday pages produced a shell/title or no readable body; do not classify these as dead. Apple and Bruker statuses were changed to closed; Matrice remains expired; AtkinsRéalis and Azul remain unknown.
+
+Probe results are not a valid direct-employer application-link success rate. They do not establish that each Apply action works, and some sampled URLs are careers indexes rather than role-deep-links. The ≥90% direct-link target remains **unmeasured** until each actual application destination receives a documented success/failure/unknown outcome and a denominator fixed before calculation.
+
+CSV after re-fetch: 83 records × 27 columns, 0 malformed rows, 0 duplicate IDs, 74 distinct canonical URLs, 8 repeated URL groups; statuses 19 open, 52 unknown, 3 expired, 3 closed, 2 not_a_listing, 4 source_review; 78 rows still have unknown permission. The 50-row roster does not prove 20 unique relevant currently available vacancies, and no source permission has been inferred from a reachable page.
+
+No source API was queried, no production code/dependency/connector was added, no candidate data was transferred, and no autofill/application submission occurred. **Decision remains NOT PASSED — research-only.**
