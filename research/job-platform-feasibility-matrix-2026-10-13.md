@@ -320,3 +320,12 @@ Added five candidate leads and one expired negative control to the CSV. Unisys A
 ## 2026-10-13 addendum — filtered API retrieval limitation
 
 Three direct read-only Himalayas search API URLs (India+AI+Entry-level+Intern, India+machine-learning+Entry-level+Intern, and worldwide+AI+Entry-level+Intern) were not accessible through the current web retrieval interface. No HTTP status or response body was obtained; this does not establish provider downtime or zero results. See [filtered API retrieval attempt](himalayas-filtered-api-retrieval-attempt-2026-10-13.md). The audit CSV now contains 60 mixed records, with the API-level source audit explicitly separated from vacancy records.
+
+
+## 2026-10-13 addendum — candidate eligibility and CAPTCHA boundary
+
+The Apple Applied ML Intern listing in Bengaluru is a concrete hard-negative for undergraduate profiles: its official minimum qualification requires a PhD student in year 2 or beyond. The word “intern” and an India location must not override degree requirements. The audit row records the requirement while keeping current vacancy status unknown until independently verified.
+
+Sprinto's official AI Implementation Intern page describes AI infrastructure, model evaluation pipelines, document parsing/search and LLM integration. Its application page presents hCaptcha; this is a human-intervention boundary, not an automation challenge. Do not solve or bypass it, and do not infer submission authorization from the existence of a public Apply link.
+
+The audit CSV remains a mixed research/control set with 60 data rows and 27 columns; strict parse validation after these edits found no malformed rows or duplicate IDs. See the official-employer freshness audit and source validation suite.
