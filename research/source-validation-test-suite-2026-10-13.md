@@ -390,3 +390,14 @@ Applied 2026-10-14: Jobicy's public API returns a Jobicy listing URL; the option
 | SV-052 | A canonical job URL renders an explicit role-does-not-exist/no-longer-available message, a 404/Job Not Found page, HTTP 410 Gone, or redirects to generic careers search rather than the exact requisition | Record destination outcome and observation date. Mark explicit gone/closed evidence conservatively; retain expired if an explicit deadline already passed. A generic search redirect fails role-deep-link validation. A research-browser fetch error without HTTP status remains unknown. Re-check replacement requisitions before recommending. | Treating a stale URL as valid because the employer domain loads; treating a generic jobs index as a direct application URL; inferring closure from renderer error; counting a redirect or careers index as a verified employer apply link. |
 
 Applied 2026-10-14: Apple IN-001 canonical page says the role does not exist or is no longer available; Matrice AI IN-007 returns 404 / Job Not Found and remains expired; Bruker IN-033 returned HTTP 410 Gone; AtkinsRéalis IN-030 redirected to generic jobs search; Azul INT-032 produced a research-browser fetch error without HTTP status and remains unknown. See [50-Record Candidate-Validation Roster](50-record-candidate-validation-roster-2026-10-14.md). These observations do not establish source reuse permission. Overall gate remains NOT PASSED / research-only.
+
+
+## 2026-10-14 application-route instrumentation addition
+
+The audit CSV schema now has 30 columns (the original 27 plus apply_route_outcome, apply_route_checked_at, apply_route_evidence). Re-parse the full file; do not treat blank outcomes as success or failure.
+
+- SV-053 — Listing vs application destination: canonical_employer_url remains the canonical listing/evidence URL. apply_url must point to the observed application destination when one is exposed; never silently substitute the listing URL and label it tested.
+- SV-054 — Outcome vocabulary: route outcomes are explicit and evidence-backed: reachable_application_form, login_gate_reached, embedded_form_visible_not_submitted, email_route_published_not_tested, unknown_fetch_error, unknown_fetch_restricted, unknown_button_destination_not_exposed. New outcomes require documented definitions. Blank means not checked.
+- SV-055 — Safe test boundary: do not submit forms, upload a resume, send email, or provide candidate data during link testing. Reaching a form is not proof that an application can be successfully submitted.
+- SV-056 — Denominator integrity: define sample and denominator before testing; report success/failure/unknown separately; do not drop inaccessible/unknown destinations to inflate a pass rate. A focused convenience sample cannot satisfy the 50-record acceptance gate.
+- SV-057 — Re-parse and verify the CSV after edits; the dataset is a mixed research audit, not a count of eligible vacancies.
