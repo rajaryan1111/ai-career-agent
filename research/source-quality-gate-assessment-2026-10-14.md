@@ -108,3 +108,12 @@ See [Candidate-Relevant Record Review](candidate-relevant-record-review-2026-10-
 Latest CSV integrity: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URL values, 8 repeated-URL groups. Statuses: 15 open, 56 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review. Permission field remains unknown for 77 rows. These are mixed audit observations, not unique candidate-ready jobs.
 
 **Decision: NOT PASSED / research-only.** The ≥20 unique, relevant, currently available vacancy threshold remains unproven; ≥90% direct-link validity is unmeasured with a valid response-outcome denominator; full applicant-country/worldwide eligibility audit and source permission remain unresolved. No source API was queried and no code, dependencies, connectors, candidate-data transfer, autofill or application submission was performed.
+
+
+## 10. Fourth candidate-focused status check — 2026-10-14
+
+The current official Humans Care Foundation careers index says it is accepting applications for five open roles, including J01 AI / Machine Learning Engineer; the role page describes a paid, one-month initial internship remote anywhere in India. The employer separately describes a ₹500 two-week traineeship as training rather than a job, so those offers must remain distinct. The official AICTE portal still lists EduRankAI Deep Learning Engineering Intern with an apply-by date of 2027-03-02, three-month duration and ₹0/month stipend. CSV records IN-008 and IN-009 were updated to open based on explicit current evidence; eligibility, compensation details, privacy and source permission remain unresolved.
+
+Latest CSV baseline: 82 rows, 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, 8 repeated-URL groups. Statuses: 17 open, 54 unknown, 3 expired, 2 closed, 2 not_a_listing, 4 source_review. Permission remains unknown for 77 rows. These are mixed audit observations, not unique candidate-ready jobs.
+
+**Decision remains NOT PASSED / research-only.** The 20 unique relevant current-vacancy threshold, measured direct-link validity, full applicant-country audit and source terms remain unresolved. No source API was queried and no production integration was added.
