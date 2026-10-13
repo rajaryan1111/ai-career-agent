@@ -1,0 +1,49 @@
+# Independent Official-Employer Recheck — Bounded Pilot 1
+
+**Check date:** 2026-10-13  
+**Purpose:** Start the independent official-employer comparison set required by the source feasibility gate. This is a small, manually reviewed pilot—not a representative sample, not a coverage estimate, and not permission to implement source connectors.
+
+## Method and boundaries
+
+- Used official employer career-board result pages surfaced in web research, then attempted to open the canonical pages through the research interface.
+- Captured only role/source metadata needed for evaluation. No resume, candidate profile, credentials, or application data was sent.
+- Did not submit applications or automate browser actions.
+- Where the search result described a fresh posting but the direct page returned no readable content, status remains `unknown`. Search snippets are evidence leads, not a substitute for full canonical verification.
+- Source permission remains a separate gate. A public official page does not by itself authorize automated extraction, caching, autofill, or submission.
+
+## Sample observations
+
+| Sample ID | Employer / role | Canonical evidence observed | Eligibility / relevance notes | Status decision |
+|---|---|---|---|---|
+| IN-025 | Airbus — Internship, India Innovation Team, GenAI Intern | Official Workday result displayed Apply, Bangalore Area, “Posted 2 Days Ago”, six-month duration, and student/internship metadata. Role description includes RAG, language-model capability research, fine-tuning data preparation, quantization and model deployment. | High role-family relevance. Strong Python, transformers, embeddings, ML framework and RAG requirements are stated. Exact degree/year eligibility, pay, exact onsite/hybrid arrangement and work authorization remain unknown. | Existing `open` label retained based on fresh official result evidence; recheck full canonical page before recommending or submitting. |
+| IN-029 | Unisys — AI Engineering Intern | Official Workday search result showed Apply, Bangalore, “Posted 4 Days Ago”, and hands-on AI pipelines, agents, prototypes and test harnesses. Direct page opening returned no readable lines in this research interface. | High role-family relevance. Degree/year requirements, duration, compensation and exact work arrangement remain unknown. | Keep `unknown`; do not promote from a snippet while full canonical verification is unavailable. CSV review notes updated. |
+| IN-035 | Walmart Global Tech India — (IND) Grad Intern - No Work Experience | Official Workday result showed Apply, Bengaluru, “Posted 8 Days Ago”, and described a GenAI/ML engineering internship with no work experience. Direct page opening returned no readable lines in this research interface. | High relevance and a useful zero-experience control. Exact degree/year rules, work arrangement, duration, compensation and work authorization remain unknown. Added as a new CSV record. | Keep `unknown`; current-looking result is not enough to assert all details or eligibility. |
+| NC-003 | GE Aerospace — Data Science Intern | Official Workday result still describes the role and remains indexed, but the listing's application end date is **2026-09-24**, which is before this audit date. | Useful hard-negative freshness control. An indexed page and relevant AI/ML description must not override an elapsed application deadline. | Retain `expired` unless a new requisition or authoritative extension is evidenced. No reopening based on page presence. |
+
+## Official source links
+
+- Airbus: https://ag.wd3.myworkdayjobs.com/en-US/Airbus/job/Internship---India-Innovation-Team---GenAI-Intern_JR10446597
+- Unisys: https://unisys.wd5.myworkdayjobs.com/en-US/External/job/AI-Engineering-Intern_REQ574280
+- Walmart: https://walmart.wd504.myworkdayjobs.com/en-US/WalmartExternal/job/IN-KA-BANGALORE-Home-Office-PTPP1/XMLNAME--IND--Grad-Intern---No-Work-Experience_R-2607497
+- GE Aerospace negative control: https://geaerospace.wd5.myworkdayjobs.com/en-US/GE_ExternalSite/job/Data-Science-Intern_R5040035-1
+
+## What this pilot establishes—and what it does not
+
+**Established for this bounded check:**
+- Three official employer pages surfaced relevant AI/ML internship leads in India.
+- Airbus's current result had relatively detailed role requirements and a recent posting signal.
+- Unisys and Walmart surfaced current-looking postings, but the direct page retrieval path was incomplete; their vacancy state and missing fields remain unresolved.
+- A role can be relevant while still being expired, as demonstrated by the GE Aerospace control.
+
+**Not established:**
+- That all three positive leads are definitely open and eligible for a particular candidate.
+- That a source has adequate precision or recall; the sample is too small and was not randomly drawn.
+- That a public board is approved for automated discovery, caching, autofill or submission.
+- That the project meets the proposed gate of 20 unique, currently valid target-relevant vacancies, 90% valid application routes, zero false eligibility claims, and cleared permission/attribution.
+
+## Data changes and next step
+
+- Added `IN-035` for the Walmart lead with status `unknown`; preserved the full canonical URL and the evidence/retrieval limitation.
+- Appended the fresh Unisys evidence to `IN-029` without promoting its status.
+- Preserved the existing expired GE Aerospace control and did not change status based on search indexing.
+- Next: continue the independently assembled employer sample in bounded batches, verify full canonical requirements where retrieval is possible, retain unknown when it is not, and deduplicate at the requisition level before measuring precision. Keep permission review separate and the implementation gate closed.
