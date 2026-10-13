@@ -56,6 +56,7 @@ The long-term audience includes students seeking internships and placements, fre
 ### Job discovery
 - Support multiple independently verified sources.
 - Store source name, original URL, discovery time, posting date when available, last checked time, and source-specific identifiers.
+- Discovery runs must expose source-level outcomes and counts, distinguish valid empty results from blocked/transient/parse errors, and avoid treating listings omitted from a partial run as closed. See the [n8n workflow pattern review](research/n8n-workflows-repository-review-2026-10-13.md).
 - Detect duplicates across sources.
 - Identify expired, closed, stale, or suspicious listings when evidence permits.
 - Respect each source's terms, API rules, and technical access requirements.
