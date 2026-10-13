@@ -24,6 +24,17 @@ This file is the durable record of meaningful decisions, research findings, assu
 11. Default search schedule: 00:00 and 12:00 Asia/Kolkata.
 12. Research-only constraint: do not write code or begin implementation until the product and feasibility research reaches a meaningful decision point.
 
+## GitHub documentation workflow
+
+- Repository of record: https://github.com/rajaryan1111/ai-career-agent, default branch `main`.
+- When meaningful AI Career Agent research, a product idea, a decision, a risk, or a feasibility finding is developed in our conversations, update the relevant project Markdown file(s) and commit/push the change to this repository as part of that project work, without requiring a separate reminder each time.
+- Keep the six core documents aligned: `prd.md`, `architecture.md`, `rules.md`, `phases.md`, `design.md`, and `memory.md`. Add another file only when it gives the project a clear benefit.
+- Add research sources and the date checked; distinguish verified facts from hypotheses, proposals, and unresolved questions.
+- Prefer small, focused commits with descriptive messages. Do not silently overwrite or remove meaningful prior decisions; record material changes in the change log.
+- Preserve the research-first constraint: documentation and research may be pushed, but do not start implementation/code until the agreed decision gate is reached.
+- If an idea conflicts with a confirmed decision, creates a significant cost/privacy/compliance risk, or is ambiguous enough that it could change the product direction, record it as an open question or proposal rather than treating it as approved.
+- This workflow applies when we are actively working on this project in ChatGPT. It is not a background service: it cannot monitor unrelated conversations or push changes while no project work is happening.
+
 ## Product principles
 
 - Relevant and eligible applications matter more than raw volume.
@@ -80,6 +91,10 @@ Record each finding with: claim, source URL, date checked, confidence, implicati
 These are proposed targets. Do not report them as measured results.
 
 ## Change log
+
+### 2026-10-13 — Documentation workflow added
+- Recorded the standing instruction to document and push meaningful project research, ideas, decisions, and feasibility findings to GitHub during active project work.
+- Clarified that this is not a background process and does not authorize starting implementation.
 
 ### 2026-10-13 — Initial product baseline
 - Established desktop-first, local-first, zero-mandatory-cost direction.
