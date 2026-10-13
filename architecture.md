@@ -53,6 +53,9 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
 - Crash-safe writes and database migrations.
 - Local backups and export/import.
 - Safe handling of source schema or page changes.
+- Provider-specific response semantics: a successful response with zero records is not always proof that a board is valid and empty; migrations can leave old and new boards both responding; filtered runs must not mark omitted records closed.
+- Field-level uncertainty: preserve missing vs. zero, raw pay ranges, currency, unit/period, source wording and evidence. Do not normalize ambiguous compensation to annual salary.
+- Contract fixtures per source for pagination, timestamp units, empty/error responses, missing fields, challenge pages, dedup/reposts, and malformed payloads. Keep live smoke tests separate from deterministic offline tests.
 
 ## 8. Scheduling limitation
 
@@ -72,3 +75,10 @@ Use OS credential storage where feasible. Never store platform passwords in plai
 - Initial job-source adapters.
 - Permitted submission workflows.
 - Packaging and update strategy for macOS, Windows, and Linux.
+
+
+## 11. Existing repository assets to evaluate later (not implementation approval)
+
+The 2026-10-13 repository audit found reusable patterns in the user's existing repositories: `graphone-intelligence-pipeline` for ingestion/retries/freshness/provenance/schema validation, `ai-orbit-tools-ingestion` for source registries/official-site verification/checkpoints/deduplication, `AI_resume_review` for candidate/JD analysis UX, and `indian-standards-procurement-ai` for retrieval/reranking/evidence explanations. See [the complete repository audit](research/github-repository-audit-2026-10-13.md). Reuse should mean selecting and reviewing small modules and tests only after the decision gate, not copying entire applications or databases.
+
+The ATS field-coverage study at [research/ats-board-api-field-coverage-review-2026-10-13.md](research/ats-board-api-field-coverage-review-2026-10-13.md) is a test-case reference, not proof of current provider behavior or permission. No source, dataset, framework, or dependency was approved by this audit.
