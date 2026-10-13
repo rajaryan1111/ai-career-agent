@@ -65,3 +65,6 @@ Pilot with consenting users, measure matching quality/time saved/failure rates/a
 ## Current phase status
 
 Safe offline-core implementation has started; source-permission and job-quality research continues in parallel. The source-quality gate remains NOT PASSED, so no live source integration or application automation is authorized.
+
+### Phase 6 progress — 2026-10-14
+Completed first offline-core increment: domain models and hard eligibility evaluation; transparent skill overlap; conservative duplicate keys; application-state transitions requiring evidence for confirmation; local SQLite persistence with explicit deletion; 25 unit tests; and a Python 3.10–3.12 CI workflow. Next implementation increment should build a minimal local-only interface/workflow on these primitives, while source permission and listing-quality research continues independently. Do not activate source integrations yet.
