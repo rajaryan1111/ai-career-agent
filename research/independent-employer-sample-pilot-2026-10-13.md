@@ -81,7 +81,23 @@ References: https://jobs.ashbyhq.com/cohere/73bd3e2b-6597-4124-b64b-1e5dbc32e785
 
 ### Segmentation refresh after restricted-remote controls
 
-Recalculated after adding INT-026 and the Zolve program control: 54 unique role-like canonical URLs; 38 India-focused records including negative controls; 13 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 12 distinct records to review. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
+Recalculated after adding INT-027–INT-030: 58 unique role-like canonical URLs; 38 India-focused records including negative controls; 17 non-India remote records including geographic/freshness controls; and 3 other location/work-mode cases. The international-remote segment target is 25, leaving 8 distinct records to review. The 25-record segment is a source-quality comparison, not 25 India-eligible vacancies; geographic and degree-restricted roles are intentionally retained as negative controls. The Zolve program page is excluded from vacancy counts as `not_a_listing`.
 
 
 **Classification note:** Cohere Research Internship is counted in the non-India remote comparison because the employer's location whitelist explicitly lists Canada, Europe, the UK and US and does not list India. The phrase “India not listed” in its eligibility field is a documented restriction, not evidence that the role is India-focused. This is a sampling classification only; it does not imply eligibility.
+
+
+### 2026-10-14 continuation — four country-scoped remote controls
+
+- **INT-027 — Khan Academy, Software Engineer Intern (Summer 2027):** the official Greenhouse page is marked New, has an Apply route, and states a deadline of October 16, 2026 at 5pm PDT. Remote is explicitly limited to the US and Canada; applicants must be able to work/live there, be bachelor's students graduating in 2028/2029, and have prior software internship experience. Count as open from the direct deadline/application evidence, but as a negative eligibility control for India.
+- **INT-028 — Datacor, Summer 2027 AI Engineer Intern:** official Greenhouse page says Remote, US and requires current master's or PhD enrollment. An Apply form is present, but there is no explicit deadline or open/closed label captured; keep status unknown. The role page does not prove worldwide applicant eligibility.
+- **INT-029 — Kinaxis, Intern AI&ML Researcher:** official iCIMS page explicitly states “Vacancy Status: This is an existing job vacancy.” The position is for Canada Eastern time zone, with Ottawa/Toronto requiring three office days per week and other Eastern Canada locations remote. It requires master's/PhD-level study and starts January 2027, so it is a strong geography/degree negative control for an India-based undergraduate.
+- **INT-030 — Celestica, Student Intern, AI Project Coordinator:** official careers page states Remote - Canada, one vacancy, a May 2027 start, 16-month duration, and no formal experience required; it requires enrollment in a university internship/co-op program and completion of year three of a four-year program in a listed major. It is AI program coordination/workflow automation rather than a core ML engineering role. Although Apply now is shown, no deadline or explicit open/closed statement was captured, so status remains unknown.
+
+Official employer pages checked 2026-10-14:
+- Khan Academy: https://job-boards.greenhouse.io/khanacademy/jobs/8250259
+- Datacor: https://job-boards.greenhouse.io/datacor/jobs/5242412007
+- Kinaxis: https://careers-kinaxis.icims.com/jobs/35465/job
+- Celestica: https://careers.celestica.com/job/Remote-Employee-Canada-Student-Intern%2C-AI-Project-Coordinator-ON/1441161033/
+
+These records are not proof of eligibility for an India-based candidate. In particular, “remote” is constrained to the named country/region, and role level/degree requirements are separate filters. No API endpoints were queried, no source integration or candidate-data transfer was performed, and the source-quality/implementation gate remains closed.
