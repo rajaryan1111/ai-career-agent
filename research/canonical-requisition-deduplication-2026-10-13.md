@@ -9,9 +9,9 @@
 The CSV contains 61 records with 27 columns and unique listing IDs. Canonical URL grouping identifies:
 
 - **7 exact requisition/page groups** where multiple records point to the same role URL: Ema, Atlys, CertifyOS, RIVR, Barnes & Thornburg, Formstack, and ATRISI.
-- Those groups contain **17 records representing 9 canonical-role observations?** No: they contain **17 records across 7 groups**, which means **10 records beyond one representative per group** remain in these groups for provenance/control purposes. For unique-URL counting, this is 10 excess records across the seven groups.
+- The seven exact-requisition groups contain **15 records across 7 groups**, so **8 rows are duplicate observations beyond one representative per group**. Including the two Zyora rows, the eight repeated-URL groups contain 17 records in total.
 - **One additional shared-page ambiguity:** Zyora Labs has two advertised role tracks using the same general careers page. URL equality alone cannot establish whether the tracks are separate requisitions or one intake path.
-- The dataset has **53 distinct canonical URL values**. This is a URL-bucket count, **not a count of confirmed-open or distinct eligible vacancies**. Some rows are source-review/control records or general feeds, and Zyora's two tracks remain unresolved.
+- The dataset has **52 distinct canonical URL values** (61 rows minus 9 excess rows across all repeated-URL groups). This is a URL-bucket count, **not a count of confirmed-open or distinct eligible vacancies**. Some rows are source-review/control records or general feeds, and Zyora's two tracks remain unresolved.
 - The eight rows labeled `open` collapse to **seven distinct canonical URL buckets**, because Ema's aggregator observation INT-008 duplicates the Ema Ashby requisition IN-003. That does not mean seven jobs are verified open, suitable, or permitted for automation.
 
 ## Reconciliation decisions
