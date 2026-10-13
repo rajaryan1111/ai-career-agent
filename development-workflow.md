@@ -158,3 +158,58 @@ Relevant inspiration: brainstorming before coding, explicit specs and plans, tes
 ## When to revisit
 
 Reassess this workflow at the product decision gate, then after the first real implementation slice. Keep only practices that improve correctness, auditability or delivery without adding unnecessary ceremony. Any tooling adoption requires a separate compatibility, permissions, maintenance, security and cost review.
+
+
+
+## Karpathy-inspired coding principles — adapted 2026-10-14
+
+Reference reviewed: [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills), especially its [README](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/README.md), [skill definition](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/skills/karpathy-guidelines/SKILL.md), and [examples](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/EXAMPLES.md). The source distills four ideas: think before coding, simplicity first, surgical changes, and goal-driven execution.
+
+These principles are adapted here to our project rather than copied as vendor-specific instructions:
+
+### 1. Surface assumptions and uncertainty before consequential work
+- State the assumptions that materially affect implementation, especially data ownership, permission, eligibility, external side effects, and compatibility.
+- When two interpretations would lead to meaningfully different behavior, do not silently choose a risky interpretation; surface the alternatives or use the safer reversible option.
+- Push back on unnecessary complexity or an approach that conflicts with the PRD, user authority, evidence, or product safety.
+- Do not interrupt work for trivial ambiguities that can be resolved conservatively and reversed cheaply. Keep momentum while making consequential uncertainty visible.
+
+### 2. Choose the smallest complete solution
+- Implement only what is needed for the stated user outcome and acceptance criteria.
+- Do not add frameworks, dependencies, layers, configuration knobs, caching, abstractions, network services, or generality without a demonstrated need.
+- Prefer existing standard-library and repository capabilities when adequate.
+- Error handling should cover realistic failures at trust boundaries; do not bury core behavior under speculative defensive code.
+- If a short implementation is equally clear, correct, and testable, prefer it over a much larger one.
+
+### 3. Keep diffs surgical
+- Inspect current files and their callers before editing; preserve unrelated code, comments, formatting, and decisions.
+- Every changed file must have a direct reason tied to the user request or required verification.
+- Do not bundle drive-by refactors or clean up unrelated code. Remove only dead code introduced by the change.
+- Preserve meaningful history; never silently delete or replace project decisions.
+- For each meaningful change, inspect the final diff and re-fetch relevant files before reporting completion.
+
+### 4. Define observable success and verify it
+- Turn vague tasks into concrete acceptance criteria before coding.
+- For deterministic logic, write a focused regression test first where practical, reproduce the failure, implement the smallest fix, and rerun the test.
+- Verify with the focused tests, then the complete available suite; run compilation, lint, type-check, or build checks when applicable.
+- Report exact checks actually run, failures, and untested areas. A test pass proves only the behavior that test exercises.
+- Do not equate a pushed workflow with a completed CI run, a parsed page with a verified open role, or a clicked Submit button with a confirmed application.
+
+### Lightweight pre-change and post-change checklist
+1. Goal and acceptance criteria are explicit.
+2. Current implementation and relevant call sites were inspected.
+3. Assumptions, alternatives, and risky unknowns are surfaced.
+4. Chosen approach is the smallest complete and reversible one.
+5. Tests cover expected behavior and important negative/unknown cases.
+6. Diff contains only task-relevant changes.
+7. Test/check results and residual uncertainty are accurately reported.
+
+This checklist is deliberately short; it is not a mandatory ceremony for trivial edits.
+
+### Precedence and project-specific boundaries
+These guidelines improve engineering execution but do not grant new capabilities or permissions. Existing project rules remain higher priority for source access, candidate privacy, truthful profile facts, tool permissions, costs, network access, and application submission. In particular:
+- Research and offline-core coding may proceed in parallel.
+- Live job-source integrations remain gated by source-specific terms, quality, and attribution review.
+- Candidate data stays local by default and is not sent to a provider without explicit disclosure and consent.
+- Unknown eligibility never becomes pass; relevance never overrides hard eligibility.
+- No CAPTCHA/OTP/access-control/rate-limit bypass, fabricated candidate facts, unapproved external write, or unverified submission claim.
+- Never add a third-party skill/toolchain only because the reference repository packages one for Claude Code or Cursor.
