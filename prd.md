@@ -31,26 +31,24 @@ The intended audience is cross-industry and cross-experience: students, interns,
 
 ## 5. Core user journey (hypothesis)
 
-1. Install and open the desktop app.
-2. Upload a PDF or DOCX resume.
-3. Extract a candidate profile and let the user review/correct it.
-4. Configure job titles, locations, work modes, employment types, compensation, exclusions, and eligibility rules.
-5. Discover jobs from verified sources.
-6. Deduplicate, validate freshness, and assess eligibility.
-7. Rank eligible jobs with explainable match reasons.
-8. Research companies for shortlisted jobs.
-9. Prepare application materials using verified profile facts.
-10. Submit through supported, permitted workflows or request user intervention.
-11. Record application evidence and status.
-12. Review results, employer responses, and useful analytics.
+1. Install/open the local desktop app and manually enter or review candidate facts.
+2. Configure role targets and preferences without assuming an industry or candidate stage.
+3. Add a job manually in the first local alpha; source discovery remains disabled until source-specific gates pass.
+4. Keep source listing URL and verified employer application URL separate.
+5. Evaluate hard eligibility using pass/fail/unknown and show evidence/explanations.
+6. Show explainable skill overlap separately from eligibility.
+7. Shortlist only when every mandatory eligibility check explicitly passes.
+8. Track application state and evidence; export/delete local data.
+9. Add local PDF/DOCX import as the next increment after the manual workflow is stable.
+10. Add approved discovery, company research, application preparation, and permitted submission only behind their own quality, privacy, and permission gates.
 
 ## 6. Functional requirements
 
 ### Candidate profile and resume
-- Import PDF and DOCX resumes.
-- Extract education, skills, experience, projects, certifications, and contact fields when available.
-- Mark uncertain, missing, or conflicting fields for review.
-- Allow manual correction and multiple resume versions.
+- First local alpha: manual candidate-profile entry and correction, with missing facts left unknown.
+- Follow-on increment: import PDF/DOCX locally; extract education, skills, experience, projects, certifications, and contact fields when available.
+- Mark uncertain, missing, or conflicting extracted fields for review before they affect eligibility or generated material.
+- Allow manual correction and multiple resume versions. Resume parsing is not claimed as implemented in the current alpha.
 - Never fabricate experience, skills, qualifications, or work authorization.
 
 ### Job discovery
