@@ -162,3 +162,16 @@ A second direct retrieval pass attempted the three documented Himalayas filtered
 A documentation discrepancy was also identified: the Himalayas API landing page describes cursor pagination for /jobs/api, while the provider's public OpenAPI file describes limit/offset pagination. Both specify a maximum of 20 records. Do not implement full-feed pagination until the actual response contract or provider guidance resolves this discrepancy. The bounded pilot should use the filtered endpoint if a normal HTTPS client can retrieve it, and still capture request/response metadata.
 
 References: https://himalayas.app/api ; https://himalayas.app/docs/remote-jobs-api ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json ; https://aidevboard.com/docs
+
+### Documentation freshness correction — Himalayas pagination
+
+The current official API landing page explicitly marks offset as deprecated and recommends cursor pagination (nextCursor returned by /jobs/api passed back as cursor). The public OpenAPI artifact and Python example still use offset, so treat them as stale/not synchronized with the current landing-page guidance rather than as an equally current unresolved contract. For the future pilot, browse pagination should follow the current landing page; filtered search uses the documented 1-based page parameter.
+
+Add a documentation-freshness fixture:
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-030 | Himalayas current landing page vs older OpenAPI/example pagination guidance | Prefer current explicit guidance: cursor for browse; page for filtered search. Record older offset examples as documentation drift and do not start a full-feed sync merely to test feasibility | Implementing deprecated offset pagination based only on the stale example, or claiming the API is broken because docs disagree |
+
+References: https://himalayas.app/api ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json ; https://github.com/Himalayas-App/remote-jobs-api/blob/main/examples/python.py
+
+The pagination choice is now sufficiently documented for a later bounded implementation proof, but live filtered result retrieval and source-quality gates remain unverified.
