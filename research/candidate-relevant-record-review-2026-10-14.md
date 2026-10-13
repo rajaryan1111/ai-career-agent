@@ -1,6 +1,6 @@
 # Candidate-Relevant Record Review — 2026-10-14
 
-**Purpose:** Continue the source-quality gate by rechecking a small, prioritized set of India-focused and explicitly worldwide records against current official employer pages. This is a bounded manual sample, not a comprehensive validation of the 82-row audit.
+**Purpose:** Continue the source-quality gate by rechecking a small, prioritized set of India-focused and explicitly worldwide records against current official employer pages. This is a bounded manual sample, not a comprehensive validation of the 83-row audit.
 
 ## Method and boundaries
 
@@ -216,3 +216,8 @@ CSV baseline after status corrections: 83 records, 27 columns, 0 malformed rows,
 A focused browser spot check tested ten employer application paths. Confirmed rendered forms: Drivetrain, Trackmind, Sprinto, and CertiK. HCF redirected to a sign-in gate; Zyora displayed an embedded form but no distinct role-specific route; Needl.ai publishes an email route (not tested); RadialBrain's Google Forms click returned an internal fetch error without HTTP status; Valura.AI's visible button did not expose a destination; MailerMen's resolved /apply route was blocked by the research browser. These last three remain unknown, not broken.
 
 This is not a representative 50-record test. Trackmind has contradictory employment-type/experience text, and CertiK's PhD/U.S.-work-eligibility requirements make it a negative control rather than an India-undergraduate lead. No application was submitted, no candidate data was entered or transmitted, and no source permission was inferred from page accessibility.
+
+
+### Latest audit baseline after application-route instrumentation — 2026-10-14
+
+Re-fetched and parsed the current CSV after adding application-route fields: 83 data rows, 30 columns, zero malformed rows, zero duplicate listing IDs, 74 distinct canonical URLs, 8 repeated-URL groups. Status labels: 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, 4 source_review. Permission remains unknown for 78 rows. Ten route outcomes are recorded; 73 rows are blank/not checked. The convenience sample is not a representative link-validity estimate, and the source-quality gate remains NOT PASSED / research-only.
