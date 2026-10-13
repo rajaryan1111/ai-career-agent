@@ -33,3 +33,31 @@ All three returned “URL is not accessible via this tool.” No HTTP status, JS
 ## Related listing-level caution
 
 The current Tether application form renders a country selector beginning with United Kingdom and “75 more” options. The inspected response did not independently establish that India is eligible for that specific role, so the dataset now records India-specific eligibility as unverified rather than treating broad remote language as proof.
+
+
+## Follow-up retrieval attempt and documentation consistency check — 2026-10-13
+
+A second direct retrieval pass attempted the same three Himalayas filters and one documented AI Dev Jobs search URL:
+
+- Himalayas India + AI + Entry-level + Intern, sorted recent.
+- Himalayas India + machine learning + Entry-level + Intern, sorted recent.
+- Himalayas worldwide + AI + Entry-level + Intern, sorted recent.
+- AI Dev Jobs GET /api/v1/jobs with q=intern, location=India, level=junior, limit=10, page=1.
+
+The web retrieval interface again returned “URL is not accessible via this tool” for all four URLs. It returned no HTTP status, response body, result count, or rate-limit headers. This remains a retrieval-tool limitation; it is not evidence of provider outage, zero matches, or API failure. No coverage metric was added.
+
+### Official documentation discrepancy to resolve before implementing pagination
+
+The current Himalayas API landing page says the browse endpoint uses cursor pagination and recommends echoing nextCursor into the next request. The provider's public remote-jobs-api GitHub OpenAPI document describes limit plus offset pagination instead, and its sample uses offset. Both sources describe a 20-record maximum; the official docs also describe daily refresh and rate limiting. Because these are inconsistent instructions for the same browse endpoint, do not hard-code pagination from one source until the live response and/or provider documentation is clarified. Prefer the filtered search endpoint for the bounded pilot, while still treating its payload as unverified in this environment.
+
+Sources checked 2026-10-13:
+- https://himalayas.app/api
+- https://himalayas.app/docs/remote-jobs-api
+- https://github.com/Himalayas-App/remote-jobs-api/blob/main/openapi.json
+- https://aidevboard.com/docs
+
+### Decision
+
+- Filtered results for both providers remain not measured.
+- No implementation, dependencies, credentials, or candidate data transfer.
+- Next valid step is a normal HTTPS GET from a network-enabled environment, capturing status, headers, response shape, query parameters, and a minimal sample; if the pagination discrepancy persists, ask the provider before implementing full-feed sync.
