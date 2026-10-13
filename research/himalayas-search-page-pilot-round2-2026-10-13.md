@@ -46,6 +46,14 @@ Aggregator listing: https://himalayas.app/companies/one-impression/jobs/ai-gener
 - The responsibilities focus on growth/GTM, funnel metrics, user calls and product testing; the description says an engineer is not required, despite broad AI/ML and AI-engineering category tags.
 - The listing says final-year student or 2026 graduate, India-only, with an aggregator-reported 2026-12-12 deadline. Do not promote this as an ML-engineering role until employer identity and role details are confirmed.
 
+### Sprinto — AI Implementation Intern (positive canonical-page control)
+
+Official Lever page: https://jobs.lever.co/Sprinto/6dfd5f41-57b6-40e8-9eab-ba4083c1a7c4
+
+- The official Lever page was retrievable on 2026-10-13 and displayed an active apply link. It lists Bengaluru and Remote.
+- The role supports AI infrastructure, model training/evaluation pipelines, document parsing, search tools and LLM integration.
+- Minimum qualifications say the candidate is currently pursuing a degree in Computer Science, Engineering, Data Science or a related technical field, plus Python and basic ML/data-processing knowledge.
+- This is a useful positive canonical-page example for student eligibility and source agreement. Classify it as AI implementation/applied engineering rather than automatically labeling it ML research. Deadline, stipend and additional work-authorization details remain unknown.
 ## What this pilot proves — and does not prove
 
 **Supported:**
