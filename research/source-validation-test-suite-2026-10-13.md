@@ -288,3 +288,12 @@ Grounded in the Remotive Remote Jobs API repository, checked 2026-10-14. Its REA
 | SV-042 | A public repository offers a job dataset/snapshot with a repository-level license, but the collection method, upstream source permissions, timestamps, or currentness are incomplete | Keep the dataset out of the production/seed corpus until license, provenance, collection permissions, timestamps, and intended use are reviewed. Historical snapshots may be used only as clearly labeled research fixtures after review; never count them as currently open jobs | Assuming a public repository or CC0/MIT label resolves upstream source rights; treating a stale snapshot as live; or adding unreviewed records to vacancy/coverage counts |
 
 Grounded in the Open Jobs repository, whose README says the live service stopped on 2026-10-10 and its last snapshot was built on 2026-10-05. Its freshness categories are useful research ideas, but this audit did not import or query its dataset. This is an acceptance requirement only; no dataset or implementation is authorized.
+
+
+### SV-043 — Cursor traversal, canonical URL validation, and partial export integrity
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-043 | A future authorized API adapter paginates with cursors; a cursor repeats/expires, a record has an invalid/non-canonical source URL, or a page request fails mid-export | Bound page sizes; preserve filters across pages; detect repeated/expired cursors; validate source URLs against the provider's documented canonical URL pattern; deduplicate by provider ID without losing source sightings; surface a failed/partial run explicitly and never present it as a complete snapshot. A new traversal is required after cursor expiry. | Infinite/repeated-page loops, accepting arbitrary or malformed links as canonical, silently returning partial results as complete, deleting provenance during deduplication, or treating missing records as closed |
+
+Grounded in the Jobicy API examples repository (https://github.com/Jobicy/jobicy-api-examples), whose Python client documents provider-ID deduplication, Jobicy URL validation, repeated-cursor rejection, cursor expiry, and stopping exports on HTTP failures. This is a future acceptance test only; no adapter, dependency, or live endpoint call is authorized.
