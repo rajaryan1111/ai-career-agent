@@ -2,7 +2,7 @@
 
 ## Status
 
-Pre-implementation design only. This document defines the smallest useful candidate-facing workflow and data contract. It does not authorize production code, live API queries, source ingestion, candidate-data transfer, autofill or application submission. The overall source-quality gate remains NOT PASSED until the documented evidence requirements are met.
+Design baseline for a bounded MVP. Offline, dependency-free domain logic and deterministic tests are now authorized and have started. This does not authorize live API queries, production source ingestion, candidate-data transfer, resume upload/parsing, autofill, or application submission. The source-quality gate remains NOT PASSED until the documented evidence requirements are met.
 
 ## Product objective
 
