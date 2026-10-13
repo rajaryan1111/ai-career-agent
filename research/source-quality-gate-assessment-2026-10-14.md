@@ -194,3 +194,12 @@ The CSV now records the observed route separately from the canonical listing. No
 ## Latest structural baseline after route instrumentation — 2026-10-14
 
 The re-fetched audit CSV now has **83 rows × 30 columns**, zero malformed-width rows, zero duplicate listing IDs, 74 distinct canonical URL values, and 8 repeated-URL groups. Current status labels are 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, and 4 source_review; source permission remains unknown for 78 rows. Route outcomes exist for 10 rows, with 73 blank/not checked. This corrects the 27-column snapshots in older dated notes; those lines are historical snapshots, not the current schema. The link-validity percentage is still unmeasured because this was a focused convenience sample, not the fixed 50-record test with a predefined denominator. Gate remains **NOT PASSED — research-only**.
+
+
+## 13. Snapshot reconciliation and current implementation boundary — 2026-10-14
+
+The status/count tables above are dated historical snapshots from separate rechecks; their differing totals must not be combined or quoted as one current aggregate. The checked-in CSV header currently contains additional apply-route evidence columns compared with earlier report snapshots, so a reproducible audit is required before publishing a single current count.
+
+A standard-library audit utility now exists at [`scripts/audit_job_source_csv.py`](../scripts/audit_job_source_csv.py). Run `python scripts/audit_job_source_csv.py` from the repository root to produce a JSON integrity summary containing the exact input SHA-256, row/column counts, malformed-width rows, duplicate IDs, canonical URL groups, status counts, permission counts and apply-route outcome counts. It deliberately does **not** calculate a direct-link validity percentage because the recorded outcome labels are not a uniform HTTP/application-route measurement with a defensible denominator. The audit script's output, not a stale paragraph above, should be used for the current CSV snapshot.
+
+The product now has a local-only Tkinter/SQLite alpha. This does not reopen the source integration gate. No live source adapter should be enabled until permission, relevant unique-vacancy, eligibility, freshness and direct-link acceptance evidence passes. The gate remains **NOT PASSED**.
