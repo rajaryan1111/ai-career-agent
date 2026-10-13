@@ -1,70 +1,91 @@
 # Research and Delivery Phases
 
-**Status:** Research and safe-core implementation in parallel  
-**Last updated:** 2026-10-13
+**Status:** Production-oriented implementation and evidence-gated source research in parallel  
+**Last updated:** 2026-10-14
 
-## Phase 0 — Product framing (current)
+## Product north star
 
-**Goal:** Establish the problem, user promise, boundaries, and decision criteria.
+Deliver a downloadable, maintainable career-automation product that real candidates can use—not a demo-only prototype. It should serve candidates across industries and experience levels through a shared core plus extensible occupation-specific intelligence. It should search on a configurable schedule (default 00:00 and 12:00 Asia/Kolkata), and laptop-independent operation requires a separately verified always-on worker. Selection is an employer decision and is never guaranteed.
 
-Tasks: maintain product vision/open questions; confirm local-first, quality-first, hybrid automation and zero mandatory recurring cost; separate discovery from submission; define confirmed application; identify initial validation segments.
+## Phase 0 — Product contract and risk controls
 
-Exit criteria: product principles agreed, critical assumptions ranked, and no unresolved ambiguity about truthful applications or platform compliance.
+**Goal:** Keep the product promise, user control, safety boundaries, and measurable quality criteria consistent across all six canonical documents.
 
-## Phase 1 — Competitor and market research
+Tasks: maintain the cross-industry scope; distinguish implemented, gated, experimental, and production-supported capabilities; preserve candidate truth, privacy, source permission, and evidence-backed application state.
 
-**Goal:** Understand existing products and identify a real gap.
+Exit criteria: PRD, architecture, rules, design, and memory agree; no stale statement says implementation is unauthorized or that the product is research-only.
 
-Tasks: research job aggregators, application autofill/auto-apply products, resume tools, and trackers; verify features, limitations, pricing, and user feedback; identify unmet needs; record sources and research dates.
+## Phase 1 — Usable local desktop workflow
 
-Exit criteria: sourced competitor matrix and specific gaps identified—or evidence-based conclusion that differentiation is weak.
+**Goal:** Turn the existing offline core into a usable end-to-end local application.
 
-## Phase 2 — Job-source and platform feasibility
+Tasks: select the smallest maintainable desktop UI approach; implement candidate profile editing and local PDF/DOCX resume import with review of uncertain fields; job entry/import; eligibility and explainable matching; shortlist; notes; application ledger; persistent storage; export/delete; and clear unsupported-source states.
 
-**Goal:** Establish realistic discovery and submission coverage.
+Exit criteria: a user can configure a profile, add and evaluate a job, shortlist it, track an application, restart the app, and find all saved state intact without a network connection or paid API. Tests cover critical workflows and errors. This is an internal milestone, not the final product.
 
-Tasks: audit LinkedIn, Internshala, Naukri, Indeed, Wellfound, and company career pages; verify official APIs, permitted feeds, terms, rate limits and submission workflows; assess discovery and submission separately; identify at least three useful discovery sources with documented permitted access and at least one legitimate, testable application workflow; explicitly mark unsupported/unknown paths.
+## Phase 2 — Product reliability and security foundation
 
-Exit criteria: evidence-backed source capability matrix, no required workflow depends on bypassing restrictions, and practical zero-cost baseline identified or rejected with evidence.
+**Goal:** Make the application recoverable, maintainable, and safe before external actions are enabled.
 
-## Phase 3 — Quality and privacy validation plan
+Tasks: schema migrations; backup/restore; secure secret storage; redacted logs; data export/deletion; packaging/install/update strategy; threat model; test fixtures; crash recovery; adapter capability/status UI; and regression tests.
 
-**Goal:** Define objective tests before building.
+Exit criteria: repeatable installation and recovery tests pass; privacy/security boundaries are documented and enforced; no secrets or real candidate data enter source control or test fixtures.
 
-Tasks: design representative resume and human-reviewed job matching sets; define hard eligibility and false-positive metrics; define duplicate detection and application status integrity tests; define local data and external-processing threat model.
+## Phase 3 — Source permission and job-quality validation
 
-Proposed initial thresholds (not achieved):
+**Goal:** Prove that source integrations are permitted and useful, not merely technically reachable.
+
+Tasks: finish the 50-record validation sample; measure direct employer application-link outcomes using a defined denominator; validate source terms and attribution/caching/rate limits; prove source-level error semantics; and identify a minimum set of useful permitted sources. Keep discovery and submission permissions separate.
+
+Exit criteria: documented evidence for each enabled source; quality thresholds met or explicitly revised with rationale; unresolved providers remain disabled. The current source-quality gate remains NOT PASSED until the research record says otherwise.
+
+## Phase 4 — Cross-industry matching validation
+
+**Goal:** Ensure the product is not effectively an AI/ML-only tool.
+
+Tasks: create privacy-safe, human-reviewed resume/job-description test sets across representative domains (for example design, VLSI/embedded, mechanical, civil, software/data, and business); define occupation-aware skill and credential schemas; evaluate extraction and top-ranked relevance separately from hard eligibility.
+
+Proposed initial thresholds (not yet achieved):
 - At least 95% exact extraction accuracy on selected critical fields for parseable resumes.
 - At least 80% precision in the top 10 recommendations against a predefined human-reviewed relevance standard.
-- Zero known hard-eligibility violations among recommended jobs.
+- Zero known hard-eligibility violations among recommendations marked eligible.
 - No duplicate submissions caused by retries.
 - No confirmed status without reliable evidence.
 
-Exit criteria: repeatable test protocol and documented thresholds.
+Exit criteria: reproducible evaluation results and explicit coverage gaps by occupation group.
 
-## Phase 4 — Product requirements and UX specification
+## Phase 5 — Background execution and scheduled discovery
 
-Finalize the user journey, application states, profile/preferences, source status, application history, company research reports/citations, exception UX, offline scheduling/recovery, and data export/deletion/privacy disclosures.
+**Goal:** Deliver reliable 00:00/12:00 IST runs, including when the user's laptop is off.
 
-Exit criteria: PRD/design reviewed and MVP scope excludes unsupported/unverified capabilities.
+Tasks: design a durable queue and worker boundary; compare free/low-cost always-on deployment options; implement health status, missed-run catch-up, idempotent processing, bounded retries, rate limits, and per-source outcome reporting; clearly disclose any remote data transfer and provider limits.
 
-## Phase 5 — Architecture and implementation decision gate
+Exit criteria: observed scheduled runs, laptop-off behavior, restart recovery, duplicate prevention, and outage reporting are tested in the chosen deployment. Do not claim this capability until verified.
 
-Compare desktop frameworks and local storage, decide local parsing/matching, packaging/update strategy, and realistic maintenance cost. Create implementation plan only after the gate passes.
+## Phase 6 — Permitted platform adapters and application automation
 
-Exit criteria: architecture justified by evidence; budget/platform scope explicit; go/no-go decision recorded.
+**Goal:** Expand from manual/local workflow to real, validated application flows.
 
-## Phase 6 — MVP implementation (safe offline core started)
+Tasks: begin with read-only discovery adapters only after each source's permission gate passes; validate listing freshness and direct application routes; implement platform-specific preparation/submission adapters only when permitted; configure standing user policies; record all actions and evidence; pause only the affected workflow on uncertainty and continue independent safe work.
 
-Implementation is authorized for dependency-free, offline domain logic and tests while research continues. The first increment covers eligibility, transparent relevance indicators, conservative deduplication, URL/provenance separation, and guarded application-state transitions. Do not add live source connectors, resume ingestion, candidate-data transfer, autofill, or submission until their specific gates pass.
+Exit criteria: each advertised source/workflow has current permission evidence, deterministic fixtures, integration tests, failure recovery, duplicate protection, and real-world pilot validation. CAPTCHA/OTP, access-control, anti-bot, and employer restrictions are never bypassed.
 
-## Phase 7 — Controlled pilot and expansion (future)
+## Phase 7 — Email, interview lifecycle, and career intelligence
 
-Pilot with consenting users, measure matching quality/time saved/failure rates/application integrity, expand candidate segments and source coverage only after quality targets are met, and re-check platform policies regularly.
+**Goal:** Support the journey beyond initial application without expanding permissions silently.
 
-## Current phase status
+Tasks: optional least-privilege email integration; confirmation and interview detection; follow-up drafts/reminders; job-specific truthful resume/cover-letter versions; company research with evidence; and career analytics that separate activity metrics from outcomes.
 
-Safe offline-core implementation has started; source-permission and job-quality research continues in parallel. The source-quality gate remains NOT PASSED, so no live source integration or application automation is authorized.
+Exit criteria: integrations are revocable, external data boundaries are explicit, and all generated claims are traceable to verified candidate facts or cited sources.
 
-### Phase 6 progress — 2026-10-14
-Completed first offline-core increment: domain models and hard eligibility evaluation; transparent skill overlap; conservative duplicate keys; application-state transitions requiring evidence for confirmation; local SQLite persistence with explicit deletion; 25 unit tests; and a Python 3.10–3.12 CI workflow. Next implementation increment should build a minimal local-only interface/workflow on these primitives, while source permission and listing-quality research continues independently. Do not activate source integrations yet.
+## Phase 8 — Pilot, release, and continuous maintenance
+
+**Goal:** Prove the product useful in real life and keep it working as sources change.
+
+Tasks: pilot with consenting users from more than one occupation group; measure time saved, matching quality, form/adapter failure rates, application integrity, user trust, and response/interview outcomes without promising selection; establish release notes, versioning, support/error reporting, and periodic platform-policy reviews.
+
+Exit criteria: installation, upgrades, recovery, privacy/security checks, and pilot acceptance criteria pass; release claims match tested coverage; unsupported roles/sources are labeled honestly.
+
+## Current implementation status
+
+The offline domain core and SQLite persistence layer exist, with 25 tests previously reported passing and a Python 3.10–3.12 CI workflow added. A complete desktop UI, local resume parser, remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.
