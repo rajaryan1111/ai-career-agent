@@ -83,6 +83,8 @@ Sources:
 - https://aidevboard.com/terms
 - https://aidevboard.com/privacy
 
+**Live smoke-test update (2026-10-13):** The official endpoint returned structured job records and pagination metadata, but the first visible records were senior roles. The documented job-type enum does not include internship. This does not prove India/junior queries are empty; target coverage remains unmeasured. See [live smoke test](live-source-smoke-test-2026-10-13.md).
+
 ### Remote OK
 
 Remote OK's official FAQ says its JSON and RSS feeds are free and unauthenticated, and specifically asks aggregators to credit Remote OK and link to each original job post. Its current terms (updated 2026-07-20) additionally require a web or in-app hyperlink back to Remote OK on the screen/page where API/site data is used.
@@ -94,6 +96,8 @@ Sources:
 - https://remoteok.com/remote-jobs.rss
 - https://remoteok.com/faq
 - https://remoteok.com/legal
+
+**Live smoke-test update (2026-10-13):** The feed returned structured JSON with a legal/attribution record and job records. Visible entries included non-target functions, and a remote India listing was not an entry-level AI example. This is only a few visible records; relevance and India fresher coverage remain unmeasured. See [live smoke test](live-source-smoke-test-2026-10-13.md).
 
 ### Ashby
 
