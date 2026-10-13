@@ -329,3 +329,10 @@ The Apple Applied ML Intern listing in Bengaluru is a concrete hard-negative for
 Sprinto's official AI Implementation Intern page describes AI infrastructure, model evaluation pipelines, document parsing/search and LLM integration. Its application page presents hCaptcha; this is a human-intervention boundary, not an automation challenge. Do not solve or bypass it, and do not infer submission authorization from the existence of a public Apply link.
 
 The audit CSV remains a mixed research/control set with 60 data rows and 27 columns; strict parse validation after these edits found no malformed rows or duplicate IDs. See the official-employer freshness audit and source validation suite.
+
+
+### 2026-10-13 addendum — repeat API retrieval attempt and pagination discrepancy
+
+A follow-up direct retrieval pass again could not retrieve the three filtered Himalayas JSON URLs or a documented AI Dev Jobs India/junior query through the current web retrieval interface. No status, body or headers were returned; do not infer zero matches or provider downtime. Live target coverage remains unmeasured.
+
+The Himalayas API landing page describes cursor pagination for the browse endpoint, while the provider's public OpenAPI file describes limit/offset. Both specify a 20-record maximum. Treat this as an unresolved API-contract discrepancy: do not implement full-feed pagination until a live response or provider clarification confirms the contract. See the retrieval attempt report.
