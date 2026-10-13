@@ -230,3 +230,16 @@ The CSV now has **22 records/rows including header-excluded seed entries and sou
 - The next dataset milestone remains 50 unique, individually checked listings: 25 India/India-eligible internship/fresher roles and 25 international-remote roles, with negative controls retained separately from unique eligible vacancies.
 - No source is marked integration-approved solely because it has an API or publicly reachable feed.
 - No implementation started.
+
+
+### Fifth-pass lead checks (continued)
+
+The seed was expanded with five further source records from current search results. Treat these as leads, not all as verified open vacancies:
+
+- CertifyOS — AI Intern: its Ashby page surfaced as Pune, India and remote, with ML-engineering tasks and a six-month contract. The live page itself rendered only a JavaScript shell in this verification path, so active status and full eligibility remain unconfirmed.
+- Atlys — AI Intern: its official Ashby result identifies Delhi HQ and on-site work, with conversational AI/voice-agent responsibilities. The current page likewise rendered only a JavaScript shell during direct open; maintain status as unknown. This remains a useful remote-eligibility negative control.
+- RIVR — AI Intern, Vision-Language-Action & Data: official Lever page identifies Zürich, on-site and internship, and explicitly limits applicants to Schengen-area citizens except ETHZ/EPFL students needing compulsory internships. This is a strong geography/work-authorization hard-filter test for candidates based in India.
+- Barnes & Thornburg — 2027 BT RISE IT AI Intern: Ashby search excerpt identifies an Indianapolis on-site internship for students entering sophomore/junior/senior year in Fall 2027, but current open status and international work eligibility are unconfirmed. It is an AI-adjacent/US-geography control, not presumed India-eligible.
+- Formstack — AI Intern: the index points to a remote-US internship page last crawled more than a year ago. Keep it only as a stale-index negative control until current status is established.
+
+No new source record is counted as a verified open, India-eligible vacancy solely from a search excerpt. The CSV still contains mixed vacancy and source-audit records plus duplicates; report it as a lead/evidence dataset, not a clean denominator for precision or coverage.
