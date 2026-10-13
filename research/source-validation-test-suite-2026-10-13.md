@@ -12,19 +12,19 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 62 |
+| Non-empty data rows | 64 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
-| Status = open | 8 |
+| Status = open | 10 |
 | Status = unknown | 44 |
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
 | Status = source_review | 4 |
-| Distinct canonical URL values | 53 |
+| Distinct canonical URL values | 55 |
 | Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
-These are mixed listing/source/control records. **They are not 61 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
+These are mixed listing/source/control records. **They are not confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
 
 ## 2. Test method and evidence rules
 
@@ -244,3 +244,10 @@ This fixture is grounded in the 2026-10-13 CSV audit: seven groups share the sam
 | SV-039 | Official-employer search result shows a recent posting and Apply link, but opening the canonical page through the available retrieval interface yields no readable content | Store the snippet as provisional discovery evidence; retain `unknown` status and unresolved eligibility fields until canonical evidence is available. Keep the exact URL, observation date and retrieval limitation. | Promoting to verified-open/eligible based only on the search snippet, inventing missing requirements, or treating a tool retrieval limitation as proof the employer page is unavailable/closed |
 
 This case is grounded in the Walmart and Unisys Workday recheck on 2026-10-13. It is a source-evidence quality test, not proof that either employer page is actually broken. See [independent employer sample pilot](independent-employer-sample-pilot-2026-10-13.md).
+
+
+### SV-039 follow-up — explicit global-remote language still does not clear permission
+
+The Threxil Systems pages checked on 2026-10-13 explicitly state “work from anywhere,” identify two open roles, and welcome freshers/self-taught developers on the individual role pages. That is stronger work-location and role-status evidence than a bare “remote” label or a form alone. It still does not establish every jurisdiction's legal/work-authorization eligibility, compensation/duration, employer legitimacy, or permission for automated collection, caching, autofill, or submission. Keep those dimensions independent; retain human review and do not infer source permission from public visibility.
+
+References: https://www.threxil.com/careers ; https://www.threxil.com/careers/apply/ai-intern ; https://www.threxil.com/careers/apply/frontend-ai-intern
