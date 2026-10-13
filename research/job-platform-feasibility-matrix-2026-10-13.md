@@ -296,3 +296,10 @@ Important: the current browser retrieval interface could not access filtered JSO
 ## 2026-10-13 addendum — Remote OK API comparison
 
 Remote OK documents a free public JSON feed and RSS feed with tag filtering; its official FAQ requires crediting Remote OK and linking each original job post. The reviewed docs do not establish structured filters equivalent to Himalayas' explicit internship, entry-level, country, worldwide and timezone filters. This is a documentation-based comparison only; no live Remote OK payload or quality metric was obtained. Keep it as a secondary remote-source comparison, not an authoritative eligibility source. See [Remote OK API feasibility review](remote-ok-api-feasibility-review-2026-10-13.md).
+
+
+## 2026-10-13 addendum — official employer freshness audit
+
+Added four candidate leads and two hard-negative controls to the CSV. Airbus' official Workday page lists a six-month GenAI internship with RAG/LLM and fine-tuning-data work; it is the best new lead but still needs full eligibility/live apply verification. GM's official Workday result indicates an on-site Bengaluru six-month AI/ML student internship (45 hours/week), but freshness indicators are inconsistent, so status remains unknown. vINe AI lists a remote ML Engineer Intern role through a Google Form; ATRISI lists a remote/hybrid Bengaluru ML/AI internship with limited detail. Both remain low-confidence pending eligibility, employer/form privacy and terms review.
+
+Crucial negative controls: Semark's canonical page explicitly says its AI Engineer Intern hiring finished 2026-10-11; BNP Paribas' canonical Data Science Intern page explicitly says the position is already filled (last update 2026-10-12). Both pages remain accessible, showing why page existence/search recency cannot establish vacancy status. See [official employer freshness audit](official-employer-freshness-audit-2026-10-13.md). CSV now has 49 data rows and remains a mixed research set, not 49 open jobs.
