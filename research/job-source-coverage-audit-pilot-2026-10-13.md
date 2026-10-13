@@ -126,3 +126,47 @@ These are additional leads found during a follow-up search. They expand the cand
 This second pass adds more useful positive and negative examples, but the audit remains **qualitative and incomplete**. Search-indexed pages can be stale, and a page being visible does not establish current availability, employer legitimacy, data-use permission, or permission to automate the application process.
 
 Next deliverable should be a structured listing-level dataset for the full 50-job sample, with a fixed schema and explicit values for unknown/not verified. Do not mark a role “eligible” when country, work authorization, cohort date, or degree constraints are unresolved.
+
+
+## Third-pass discoveries: additional source and eligibility cases
+
+**Research date:** 13 October 2026. Search snippets below are leads, not a guarantee that a role is still open. Recheck canonical pages before surfacing any role as actionable.
+
+| Listing | Evidence from source | What the agent must do | Current audit label |
+|---|---|---|---|
+| **General Motors — AI/ML Student Intern, Body Digitization & AI** | Workday page lists Bengaluru, full-time, on-site, 6 months, 45 hours/week; says GM does not provide immigration-related sponsorship for the role. | Extract work arrangement, weekly commitment, duration and sponsorship restrictions; don't rely on a generic location tag. | Strong India role lead; verify education criteria and current status. |
+| **Atlys — AI Intern** | Ashby page lists Delhi HQ, on-site, Engineering; work is on AI agents and customer conversations. | Classify the role as applied AI/agent engineering, but filter out users requiring remote work. | Relevant on-site role; eligibility details need full review. |
+| **Atlan — People Ops Internship** | Ashby page says India-based remote, preferably Delhi/Bengaluru, 6 months, ₹20,000/month, and an intended July 2026 start. | Detect role-family mismatch: an AI-native company doesn't make a People Ops job an AI/ML job. Also detect a past intended start date. | Exclude from AI/ML role search; useful semantic/staleness negative test. |
+| **Amgen — Undergrad Intern, Machine Learning Engineer (Summer 2027)** | Employer careers page says United States — Remote and posted 11 Sep 2026. | Enforce country eligibility even where the role is undergraduate and remote. | Strong international remote geography negative test for an India-based candidate. |
+| **Kinaxis — Intern AI/ML Researcher** | Employer page says Canada-remote, Eastern time-zone constraint, 8- or 12-month term starting Jan 2027, and Master's/PhD-level eligibility with research experience. | Parse degree level, timezone, term duration and start date as hard constraints. | Not a general undergraduate internship; likely ineligible for many candidates. |
+| **Matrice AI — ML Engineer (CV/LLM Internship)** | Careers page lists India-remote, posted 1 Jul 2026, apply-by 31 Aug 2026. | Detect expired application deadlines even when a page remains indexed. | Treat as expired unless the employer page explicitly reopens it. |
+| **Humans Care Foundation — AI/ML Engineer** | Page says remote anywhere in India; application tracks include a paid one-month internship and a two-week traineeship with a ₹500 amount. It describes production AI/model work and requests Python, PyTorch/TensorFlow and backend understanding. | Separate internship from traineeship, capture the short duration and stipend/fee wording precisely, and perform employer/role legitimacy checks before recommending. | Potential India-remote lead; verify track terms, duration, status and organization details. |
+| **Wadhwani AI — Machine Learning Intern** | Organization's careers page currently shows a remote ML internship among several ML roles. | Follow the actual “Apply” destination and capture role-specific criteria; don't infer them from a careers listing card. | Candidate source; role-level detail not yet audited. |
+| **AICTE portal — Deep Learning Engineering Intern** | Search-indexed listing describes 3 months, 8 hours/day, 6 days/week, and a zero monthly stipend. | Surface workload and compensation together; a relevant technical description doesn't prove value or legitimacy. | Candidate source; independently verify employer and listing before recommending. |
+| **Adobe — 2026 AI/ML Intern, Machine Learning Engineer** | Workday search result describes degree enrollment and an expected graduation window of Dec 2026–Jun 2027, with full-time availability May–September. The indexed cohort is 2026. | Cohort year, graduation window and application status must be checked; don't recycle an expired internship because the description is relevant. | Staleness/eligibility test; current availability unverified. |
+
+### Third-pass source references
+
+- General Motors — AI/ML Student Intern: https://generalmotors.wd5.myworkdayjobs.com/en-US/Careers_GM/job/AI-ML-Student-Intern--Body-Digitization---AI_JR-202613434
+- Atlys — AI Intern: https://jobs.ashbyhq.com/atlys/1a34deb8-3d14-4b7b-b1eb-cd302ce97223
+- Atlan — People Ops Internship: https://jobs.ashbyhq.com/atlan/0b543ef7-92e6-4400-8480-20fbb9069323
+- Amgen — Undergrad Intern, Machine Learning Engineer (Summer 2027): https://careers.amgen.com/en/job/washington-d-c/undergrad-intern-machine-learning-engineer-technology-ai-and-data-summer-2027/87/100494061120
+- Kinaxis — Intern AI/ML Researcher: https://careers-kinaxis.icims.com/jobs/35465/job?mobile=true&needsRedirect=false
+- Matrice AI — ML Engineer (CV/LLM Internship): https://matrice.ai/careers/job?id=4
+- Humans Care Foundation — AI/ML Engineer: https://www.thehcf.in/careers/ai-ml-engineer
+- Wadhwani AI careers: https://www.wadhwaniai.org/careers/
+- AICTE / EduRankAI — Deep Learning Engineering Intern: https://internship.aicte-india.org/internship-details.php?uid=SU5URVJOU0hJUF8xNzg4MzQzNTgxNmE5N2Y1MWRjMWYyYQ%3D%3D
+- Adobe — 2026 AI/ML Intern: https://adobe.wd5.myworkdayjobs.com/en-US/external_experienced/job/XMLNAME-2026-AI-ML-Intern---Machine-Learning-Engineer_R160428
+
+## Audit methodology refinement
+
+Use the following fields for each row in the eventual 50-listing dataset:
+
+- listing_id, title, employer, source_type, discovery_url, canonical_employer_url
+- first_seen_at, last_checked_at, posted_at, application_deadline, status (open, closed, expired, unknown)
+- country_eligibility, location, work_mode, work_authorization, timezone_constraint
+- role_family, seniority, degree_requirement, graduation_window, experience_requirement, duration, hours_per_week, start_date
+- compensation_amount, compensation_currency, compensation_period, compensation_notes
+- apply_url, duplicate_group, official_page_agreement, permission_status, confidence, review_notes
+
+Do not force unknown values into false certainty. Keep source coverage, candidate eligibility, job quality and automation permission as separate dimensions. The next step is to populate a real CSV/Markdown table with actual checked rows and then calculate metrics; do not claim a 50-job result until all 50 have been inspected.
