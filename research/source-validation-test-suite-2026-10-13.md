@@ -21,8 +21,10 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
 | Status = source_review | 4 |
+| Distinct canonical URL values | 52 |
+| Repeated canonical-URL groups | 8 (7 exact requisition groups + 1 shared general-careers-page ambiguity) |
 
-These are mixed listing/source/control records. **They are not 60 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
+These are mixed listing/source/control records. **They are not 61 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
 
 ## 2. Test method and evidence rules
 
