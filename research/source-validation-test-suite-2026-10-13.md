@@ -11,14 +11,14 @@ A strict CSV parser was rerun over the current seed file on 2026-10-14 after exp
 
 | Check | Observed result |
 |---|---:|
-| Header columns | 27 |
-| Non-empty data rows | 82 |
+| Header columns | 30 |
+| Non-empty data rows | 83 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
-| Status = open | 15 |
-| Status = unknown | 56 |
+| Status = open | 19 |
+| Status = unknown | 51 |
 | Status = expired | 3 |
-| Status = closed | 2 |
+| Status = closed | 4 |
 | Status = not_a_listing | 2 |
 | Status = source_review | 4 |
 | Distinct canonical URL values | 73 |
@@ -43,7 +43,7 @@ These tests can be evaluated against existing seed records before any live conne
 
 | Test ID | Fixture | Expected result | Failure condition |
 |---|---|---|---|
-| SV-001 | Entire CSV | Every non-empty row has exactly 27 columns; IDs are unique | Any malformed row, missing header field, or duplicate ID |
+| SV-001 | Entire CSV | Every non-empty row has exactly 30 columns; IDs are unique | Any malformed row, missing header field, or duplicate ID |
 | SV-002 | NC-001 Semark | Preserve closed status; suppress from open recommendations | Shown as open because page still exists |
 | SV-003 | NC-002 BNP Paribas | Preserve filled/closed status; suppress from open recommendations | Shown as open because the canonical page remains reachable |
 | SV-004 | NC-003 GE Aerospace | Past 2026-09-24 deadline is an expiry blocker unless a new requisition is evidenced | Recommended as open based only on an indexed page |
@@ -401,3 +401,8 @@ The audit CSV schema now has 30 columns (the original 27 plus apply_route_outcom
 - SV-055 — Safe test boundary: do not submit forms, upload a resume, send email, or provide candidate data during link testing. Reaching a form is not proof that an application can be successfully submitted.
 - SV-056 — Denominator integrity: define sample and denominator before testing; report success/failure/unknown separately; do not drop inaccessible/unknown destinations to inflate a pass rate. A focused convenience sample cannot satisfy the 50-record acceptance gate.
 - SV-057 — Re-parse and verify the CSV after edits; the dataset is a mixed research audit, not a count of eligible vacancies.
+
+
+### Current baseline correction after application-route instrumentation — 2026-10-14
+
+The latest re-fetch supersedes older historical snapshots in this file: **83 data rows, 30 columns, 0 malformed-width rows, 0 duplicate listing IDs**. Current status labels are open 19, unknown 51, expired 3, closed 4, not_a_listing 2, source_review 4. Permission remains unknown for 78 rows. Application-route outcomes are recorded for 10 rows: 4 reachable_application_form, 1 login_gate_reached, 1 embedded_form_visible_not_submitted, 1 email_route_published_not_tested, 1 unknown_fetch_error, 1 unknown_fetch_restricted, and 1 unknown_button_destination_not_exposed; 73 rows remain blank/not checked. These are mixed audit rows, not eligible-vacancy counts. Gate remains NOT PASSED.
