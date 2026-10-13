@@ -1,8 +1,8 @@
 # Product Requirements Document (PRD)
 
 **Project:** AI Career Agent  
-**Status:** Research plus safe offline-core implementation; live integrations remain gated  
-**Last updated:** 2026-10-13
+**Status:** Production-oriented product definition; safe offline-core implementation underway, live integrations gated by source-specific evidence  
+**Last updated:** 2026-10-14
 
 ## 1. Product vision
 
@@ -25,9 +25,9 @@ Job seekers spend significant time searching across portals, evaluating role fit
 
 ## 4. Target users
 
-The long-term audience includes students seeking internships and placements, fresh graduates, experienced professionals, career switchers, and candidates seeking remote or international roles.
+The intended audience is cross-industry and cross-experience: students, interns, placement candidates, fresh graduates, experienced professionals, and career switchers across engineering, design, creative work, business, finance, marketing, sales, operations, research, and other professions. Examples include graphic design, VLSI/embedded systems, mechanical, civil, software/data, and non-technical roles. This is a product-wide requirement, not a claim that every occupation or source is supported at launch.
 
-**Initial validation scope:** not finalized. Broad product architecture is desired, but testing should begin with a manageable candidate segment and expand only after evidence.
+**Delivery strategy:** design extensible, occupation-aware capabilities from the start, then validate an initial representative set of professions and expand based on measured quality. Do not hardcode one candidate's degree, resume, location, or job titles as global assumptions.
 
 ## 5. Core user journey (hypothesis)
 
@@ -97,7 +97,7 @@ The long-term audience includes students seeking internships and placements, fre
 - Default discovery schedule: 00:00 and 12:00 Asia/Kolkata.
 - Let users configure schedules.
 - Clearly report missed runs, offline periods, partial failures, and retries.
-- Local-only scheduling cannot run while a computer is powered off or asleep; this limitation must be explicit.
+- The desktop scheduler must report sleep/offline periods accurately. To meet the laptop-independent requirement, the product needs an optional or separately deployed always-on worker/scheduler; desktop-only execution cannot run while the computer is powered off or asleep. Any hosted/remote component must disclose cost, uptime limits, and what candidate data leaves the device.
 
 ## 7. Non-functional requirements
 
@@ -122,22 +122,25 @@ The long-term audience includes students seeking internships and placements, fre
 - Response and interview conversion rates, measured separately from application volume.
 - Zero unauthorized automation methods in supported workflows.
 
-## 9. Out of scope for the research phase
+## 9. Release boundaries and explicit non-goals
 
-- Building application code.
-- Promising support for every portal.
-- Guaranteeing interviews or employment.
-- Bypassing CAPTCHA, OTP, anti-bot protections, or platform restrictions.
-- Mass-applying without eligibility and quality checks.
-- Monetization decisions before core feasibility is established.
+- Do not promise support for every portal at launch; publish a source-by-source capability matrix and expand only after validation.
+- Do not guarantee interviews, selection, or employment. Optimize and report measurable process/outcome indicators without presenting correlation as a guarantee.
+- Never bypass CAPTCHA, OTP, anti-bot protections, access controls, platform rules, or employer restrictions on AI assistance.
+- Do not optimize for raw application volume or submit when mandatory eligibility, candidate facts, permission, or submission state is uncertain.
+- Do not require a paid AI API or paid hosted backend for the core product. Clearly label optional services and costs.
+- Do not label a demo, mock form, or simulated submission as a real integration or successful application.
 
-## 10. Open questions
+## 10. Open questions and evidence gates
 
-- Which job sources provide useful, permitted discovery access?
-- Which sources permit or support application submission?
-- Can three or more useful discovery sources be validated without paid services?
-- Which local parsing and matching methods meet quality targets?
-- What is the minimum viable supported application workflow?
-- How should offline scheduling and missed-run recovery work?
-- What privacy boundary is required for optional AI/company research services?
-- Which candidate segment should be used for initial validation?
+- Which job sources provide useful, permitted discovery access, and which separately permit application automation?
+- Which desktop framework and packaging/update path best support reliable installation on target operating systems?
+- What always-on worker option meets the zero-budget goal while making uptime and privacy limitations explicit?
+- Which local resume parsing/matching methods meet quality targets across varied formats and professions?
+- Which first profession/source cohort gives a useful pilot without narrowing the product architecture?
+- What privacy and consent boundary is required for each optional external AI, email, or company-research service?
+- Which real-world pilot metrics and sample sizes are sufficient before enabling unattended submission for a workflow?
+
+## 11. Production definition of done
+
+A release is not production-ready merely because its UI renders or unit tests pass. For each advertised capability, provide repeatable tests, truthful support status, failure recovery, privacy/security review, and user-facing error handling. Before general release, validate installation and upgrade/uninstall paths; persistence and backup/restore; source freshness and direct application destinations; critical resume-field extraction; hard-eligibility false positives; duplicate protection; evidence-backed submission status; scheduler missed-run recovery; and a representative pilot across more than one profession. Keep unvalidated integrations disabled and label them clearly.
