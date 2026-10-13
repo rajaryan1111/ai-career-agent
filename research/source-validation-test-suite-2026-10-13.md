@@ -318,3 +318,12 @@ Assessment record: [Source-Quality Gate Assessment — 2026-10-14](source-qualit
 Rechecked five records against canonical URLs: Drivetrain (IN-002), Ema (IN-003), Ema aggregator comparison (INT-008), Sprinto (IN-022), and Airbus (IN-025). Drivetrain and Sprinto returned readable job descriptions and Apply routes but no explicit current-open wording; Ema returned only a JavaScript shell; Airbus returned no readable lines. Because an Apply route or a search snippet alone is not proof of current availability, all five records were changed to `unknown` and their `last_checked_at` dates updated to 2026-10-14. INT-008 remains a duplicate/source-comparison observation for IN-003, not a second vacancy.
 
 Post-correction baseline: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs; `open` 10, `unknown` 61, `expired` 3, `closed` 2, `not_a_listing` 2, `source_review` 4. The source-quality gate remains NOT PASSED.
+
+
+### SV-045 — Current status and applicant geography must be explicit evidence fields
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-045 | A canonical employer page is readable and has an Apply form, but no explicit current availability wording; or a page says “remote-friendly/serving clients worldwide” without an explicit applicant-country policy | Keep availability `unknown` unless the employer explicitly lists the role as open/actively hiring or gives equivalent current evidence. Keep applicant-country eligibility `unknown` unless the employer explicitly states eligible countries/regions or worldwide applicants. Keep legal/work authorization separate from work mode. | Treating an Apply button as proof of open status, or “remote”, “remote-friendly”, “work from anywhere” without jurisdictional context, or “serving clients worldwide” as proof of legal applicant eligibility in every country. |
+
+Applied in the 2026-10-14 follow-up review: Trackmind was downgraded to unknown due to contradictory employment-type/experience text; RadialBrain, Inferova and WATER remain unknown despite visible application forms; Threxil has explicit open-role evidence; MailerMen explicitly states actively hiring and worldwide applicants; QovaTech says “Open internship” but does not establish applicant-country eligibility. See [Candidate-Relevant Record Review](candidate-relevant-record-review-2026-10-14.md). This is a research acceptance requirement only; no implementation is authorized.
