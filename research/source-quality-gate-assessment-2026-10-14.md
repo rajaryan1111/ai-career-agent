@@ -189,3 +189,8 @@ No source API was queried, no production code/dependency/connector was added, no
 The application-route check is partial and non-representative. Ten routes were examined: four rendered application forms (Drivetrain, Trackmind, Sprinto, CertiK); HCF reached a sign-in gate; Zyora showed an embedded form; Needl.ai published an email route that was not tested; RadialBrain, Valura.AI, and MailerMen remain unknown due to browser/tool limitations. This is not a 50-record success/failure/unknown audit, so no direct-employer-link percentage is reported and the ≥90% criterion remains unproven.
 
 The CSV now records the observed route separately from the canonical listing. No candidate data was entered, no form was submitted, and no email was sent. Source permission remains independent and unresolved for the candidate source set. **Decision remains NOT PASSED — research-only.**
+
+
+## Latest structural baseline after route instrumentation — 2026-10-14
+
+The re-fetched audit CSV now has **83 rows × 30 columns**, zero malformed-width rows, zero duplicate listing IDs, 74 distinct canonical URL values, and 8 repeated-URL groups. Current status labels are 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, and 4 source_review; source permission remains unknown for 78 rows. Route outcomes exist for 10 rows, with 73 blank/not checked. This corrects the 27-column snapshots in older dated notes; those lines are historical snapshots, not the current schema. The link-validity percentage is still unmeasured because this was a focused convenience sample, not the fixed 50-record test with a predefined denominator. Gate remains **NOT PASSED — research-only**.
