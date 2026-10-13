@@ -66,7 +66,17 @@ Catalogue entry: https://developer.adzuna.com/overview
 
 Adzuna requires an API key. The directory does not answer whether the exact distributed desktop-product use case is permitted, whether quotas cover our refresh schedule, or whether India coverage is adequate. Continue using the separate official terms/quota review rather than treating inclusion here as endorsement.
 
-### 5. Other job APIs in the list — do not assume they are free or suitable
+### 5. SmartRecruiters — new candidate for official-source validation
+
+Technical endpoint behavior and field pitfalls surfaced in a third-party measured reference: https://github.com/GregoryBolshakov/ats-job-boards-reference. Its 2026-08-29 snapshot covers a limited set of company boards and reports a paginated postings endpoint plus additional per-posting details for compensation and job-ad sections. It also documents edge cases around empty responses, pagination, and missing fields.
+
+**Important boundary:** this is not official permission evidence. The current review has not verified SmartRecruiters' official terms, permitted use for a distributed desktop app, quotas, retention, or attribution requirements. Do not implement it yet.
+
+**Status:** research candidate only. First verify current official API docs/terms, then test several target boards for India/internship coverage and pagination.
+
+See [ATS API field-coverage review](ats-board-api-field-coverage-review-2026-10-13.md) for specific test cases and why the dated dataset was not copied.
+
+### 6. Other job APIs in the list — do not assume they are free or suitable
 
 The catalogue also lists providers such as JobsPipe, JobDataLake, Jooble, Findwork, The Muse, Careerjet, Reed, ZipRecruiter and others. Many require API keys; the catalogue's table does not prove their pricing, permissions, geographic coverage, or suitability for redistribution.
 
@@ -116,4 +126,6 @@ Success is not “we can fetch JSON”; success is finding relevant, eligible jo
 - Remote OK terms: https://remoteok.com/legal
 - Arbeitnow terms: https://www.arbeitnow.com/terms
 - Adzuna official API docs: https://developer.adzuna.com/overview
+- SmartRecruiters technical reference (secondary only): https://github.com/GregoryBolshakov/ats-job-boards-reference
+- ATS API example code (secondary only): https://github.com/strongboxr/ats-jobs-api-examples
 - Open Skills API overview: https://github.com/workforce-data-initiative/skills-api/wiki/API-Overview
