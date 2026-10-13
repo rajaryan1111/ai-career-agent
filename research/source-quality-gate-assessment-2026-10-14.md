@@ -78,7 +78,7 @@ This meets the planned comparison-sample target only. It does **not** establish 
 3. Measure direct-link validity using an explicit denominator and actual response outcomes; keep browser readability as a separate field.
 4. Resolve source terms for the intended product use before any live feed/API query, cache, connector, or automated collection.
 5. Recompute unique, candidate-relevant records after exact-requisition deduplication. Keep comparison controls outside the eligible-job numerator.
-6. Reassess all gate criteria with evidence and dated results. Do not implement until every hard gate passes.
+6. Reassess all source-integration gate criteria with evidence and dated results. Keep the local-only product implementation moving; do not enable source adapters until every source-specific hard gate passes.
 
 ## 6. Safety and implementation boundary
 
