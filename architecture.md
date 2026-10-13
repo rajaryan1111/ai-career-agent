@@ -11,7 +11,7 @@ Do not split into microservices for the initial product. A modular monolith or d
 
 ## 2. Conceptual data flow
 
-Resume import → local parsing into a candidate profile → user verifies critical fields → configurable occupation/role taxonomy and preferences → permitted source adapters discover listings → normalize/deduplicate and check freshness → hard eligibility filters → explainable, occupation-aware relevance scoring → shortlist/company research → truthful application preparation → policy-gated permitted submission or exception handling → evidence-backed status and outcome analytics. A durable queue/scheduler coordinates work; a desktop UI and optional always-on worker share explicit contracts, not hidden shared state.
+Manual profile setup (local resume parsing is a later, separately tested increment) → user verifies critical candidate facts → configurable occupation/role taxonomy and preferences → permitted source adapters discover listings only after source gates pass → normalize/deduplicate and check freshness → hard eligibility filters → explainable, occupation-aware relevance scoring → shortlist/company research → truthful application preparation → policy-gated permitted submission or exception handling → evidence-backed status and outcome analytics. A durable queue/scheduler coordinates work; a desktop UI and optional always-on worker share explicit contracts, not hidden shared state.
 
 ## 3. Local-first boundary
 
@@ -19,17 +19,17 @@ Default local data: original resumes, parsed candidate profile, job preferences/
 
 External transfer must be explicit and limited to the minimum necessary data. Before using an external LLM, job-data provider, or company research source, disclose what is sent and allow the user to opt in.
 
-## 4. Technology options to research (not decisions)
+## 4. Technology decision record
 
-### Bounded implementation choice — 2026-10-14
-The first domain layer is implemented in Python using only the standard library. This is a reversible implementation choice for deterministic rules and tests, not a final decision on the desktop shell, database, packaging, or source-adapter runtime. UI framework, persistence, resume parsing, scheduler, and live integrations remain undecided or gated.
+### Initial desktop shell — 2026-10-14
+The first usable desktop slice uses Python's standard-library Tkinter UI, the existing Python domain core, and SQLite. This minimizes dependencies and avoids a separate frontend/backend bridge while the product is offline-only. The UI is a functional local alpha, not yet a packaged production release. Keep the domain layer independent of Tkinter so a future shell can replace the UI without rewriting eligibility or persistence rules.
 
+The decision is reversible. Validate Tk availability, accessibility, native look-and-feel, packaging, update strategy, and Windows/macOS/Linux smoke tests before release. If those checks fail, compare Tauri/React or another shell using measured packaging and maintenance evidence.
 
-- Desktop shell: Tauri vs Electron vs other viable options.
-- UI: React, Vite, and TypeScript.
-- Core logic: Python service vs TypeScript/Node vs a hybrid.
-- Local database: SQLite as a candidate; assess encryption, migrations, backup, and portability.
-- Resume parsing: local PDF/DOCX extraction with OCR as an optional path for scanned documents.
+- UI/runtime: Python + Tkinter; launch with `python -m career_agent`.
+- Core logic: Python standard library.
+- Local database: SQLite; migrations, encryption-at-rest, backup, and portability remain Phase 2 work.
+- Resume parsing: deferred from the first usable slice; later local PDF/DOCX extraction must include field-level confidence/review and must not upload candidate data.
 - Matching: deterministic eligibility rules plus transparent scoring; evaluate embeddings/LLMs only where they measurably improve results.
 - Scheduling: OS scheduler vs in-app scheduler; document behavior while sleeping/offline.
 - Browser automation: consider only for workflows that are explicitly authorized and technically appropriate.
