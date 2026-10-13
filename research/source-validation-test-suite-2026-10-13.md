@@ -345,3 +345,12 @@ Applied 2026-10-14: ATRISI's index explicitly marks ML / AI Intern Open, while I
 | SV-047 | Canonical employer page title includes “Intern” but Employment Type / Job Type says “Full time”; or eligibility fields omit the candidate's degree discipline | Preserve the exact contradiction, keep current status unknown unless there is explicit current-open evidence, and do not infer degree equivalence or internship terms. Ask employer for clarification before recommendation when the mismatch affects eligibility or candidate expectations. | Automatically treating “Intern” in the title as an internship contract, or treating an Apply button as evidence that the vacancy is currently open. |
 
 Applied 2026-10-14: Meraki Labs AI Engineer Intern and AtkinsRéalis Robotics & AI Engineering Intern both display Full time employment metadata despite internship titles; Concentric AI lists an ML Intern role but labels Job Type Full-time. GM's listed eligible degree fields do not explicitly name ECE and its page states no immigration-related sponsorship for the role. Needl.ai and vINe AI have explicit employer careers-page open-position evidence; neither has product/source permission approval. Latest CSV baseline: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs; statuses open 15, unknown 56, expired 3, closed 2, not_a_listing 2, source_review 4; permission unknown 77. Gate remains NOT PASSED / research-only.
+
+
+### SV-048 — Keep paid internships separate from candidate-paid training
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-048 | An employer offers both a paid internship and a separate candidate-paid training programme on the same careers site | Preserve separate programme identity, compensation direction, duration and classification. A candidate-paid training programme must not be represented as employment or merged into a paid internship. | Omitting the candidate fee, counting training as a job, or transferring terms between programmes. |
+
+Applied 2026-10-14: Humans Care Foundation describes a paid one-month initial internship and a separate ₹500 two-week traineeship explicitly described as training, not a job. AICTE's EduRankAI internship listing explicitly states ₹0/month stipend and apply-by date 2027-03-02; zero compensation must remain visible in candidate-facing output. CSV baseline: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs; statuses open 17, unknown 54, expired 3, closed 2, not_a_listing 2, source_review 4; permission unknown 77. Gate remains NOT PASSED.
