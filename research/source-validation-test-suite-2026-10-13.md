@@ -12,7 +12,7 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Check | Observed result |
 |---|---:|
 | Header columns | 27 |
-| Non-empty data rows | 59 |
+| Non-empty data rows | 60 |
 | Rows with a column count other than 27 | 0 |
 | Duplicate listing IDs | 0 |
 | Status = open | 8 |
@@ -20,9 +20,9 @@ A strict CSV parser was run over the current seed file on 2026-10-13.
 | Status = expired | 3 |
 | Status = closed | 2 |
 | Status = not_a_listing | 1 |
-| Status = source_review | 3 |
+| Status = source_review | 4 |
 
-These are mixed listing/source/control records. **They are not 59 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
+These are mixed listing/source/control records. **They are not 60 confirmed-open unique vacancies.** The open label in this seed is an audit observation and must not be promoted to a current recommendation without a fresh canonical-page check.
 
 ## 2. Test method and evidence rules
 
@@ -66,6 +66,8 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-023 | AUD-HIMALAYAS-MISMATCH-20261013 One Impression / HexCoded | Keep source-review status; role family is growth/GTM and employer identity is unresolved | Aggregator tags alone cause recommendation as an ML-engineering vacancy |
 | SV-024 | INT-020 Origin CVAT Annotation Intern | Keep current status unknown until the specific role is verified on an official source; classify as CV annotation/data QA | Aggregator deadline is treated as canonical proof of open status or annotation is mislabeled as model engineering |
 | SV-025 | IN-022 Sprinto AI Implementation Intern | Current canonical Lever page has Apply, remote/Bengaluru location and student eligibility; classify as AI implementation/applied engineering | It remains unknown despite current direct apply evidence, or it is promoted to ML research without evidence |
+| SV-026 | AUD-HIMALAYAS-API-20261013 | Record direct filtered API retrieval as inaccessible through the web interface; keep coverage unmeasured and do not infer zero results/provider downtime | Failed retrieval is reported as no jobs or provider outage, or guessed counts are entered |
+| SV-027 | INT-019 Tether country selector | Keep India-specific eligibility unknown until the accepted-country list is verified; enforce the explicit no-AI-answers instruction | Remote wording or a long country selector is treated as proof of India eligibility, or prohibited answers are AI-generated |
 
 ## 4. Live-source test cases (read-only only)
 
