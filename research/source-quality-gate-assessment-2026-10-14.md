@@ -182,3 +182,10 @@ Probe results are not a valid direct-employer application-link success rate. The
 CSV after re-fetch: 83 records × 27 columns, 0 malformed rows, 0 duplicate IDs, 74 distinct canonical URLs, 8 repeated URL groups; statuses 19 open, 51 unknown, 3 expired, 4 closed, 2 not_a_listing, 4 source_review; 78 rows still have unknown permission. The 50-row roster does not prove 20 unique relevant currently available vacancies, and no source permission has been inferred from a reachable page.
 
 No source API was queried, no production code/dependency/connector was added, no candidate data was transferred, and no autofill/application submission occurred. **Decision remains NOT PASSED — research-only.**
+
+
+## 2026-10-14 focused application-route spot check
+
+The application-route check is partial and non-representative. Ten routes were examined: four rendered application forms (Drivetrain, Trackmind, Sprinto, CertiK); HCF reached a sign-in gate; Zyora showed an embedded form; Needl.ai published an email route that was not tested; RadialBrain, Valura.AI, and MailerMen remain unknown due to browser/tool limitations. This is not a 50-record success/failure/unknown audit, so no direct-employer-link percentage is reported and the ≥90% criterion remains unproven.
+
+The CSV now records the observed route separately from the canonical listing. No candidate data was entered, no form was submitted, and no email was sent. Source permission remains independent and unresolved for the candidate source set. **Decision remains NOT PASSED — research-only.**
