@@ -142,3 +142,34 @@ A second, narrower pass searched for Arbeitnow, Jobicy, Himalayas, The Muse, job
 - Decision: retain only as possible future research leads, not as accepted datasets or source integrations. No third-party snapshot was imported.
 
 This second pass does not change the project gate. The only additional action is documenting Jobicy as a promising conditional source-test candidate; no source was queried, and no code, data, dependency, or credential was added.
+
+
+## Third pass — client reliability and job-matching project candidates (2026-10-14)
+
+This pass inspected additional public repositories discovered by searches for job-search agents, resume matching, multilingual matching, and API client examples. The goal was to distinguish reusable engineering patterns from unrelated or insufficiently licensed projects.
+
+### Jobicy API examples — client patterns worth carrying forward, no code import
+
+- Repository: https://github.com/Jobicy/jobicy-api-examples
+- Reviewed: top-level README, MIT LICENSE, Python-client README, MCP-agent README.
+- Relevant client patterns: typed job records with optional fields, deduplication by provider ID, canonical URL validation, bounded page size, cursor-loop/repeated-cursor protection, explicit handling of cursor expiry, and failing an export rather than silently returning partial results after an HTTP error. The MCP example discovers available tools and schemas before invoking them instead of assuming unsupported tool names/arguments.
+- Attribution/data rules are still separate from the MIT license for code examples. Preserve Jobicy canonical links and attribution, respect its published polling guidance, and do not equate feed absence with closure.
+- Decision: **retain these as future adapter acceptance/design ideas only**. Do not copy the client, install dependencies, or call the endpoint during this pass. The existing source gate and Jobicy conditional status remain unchanged.
+
+### Multilingual matching prototype — useful research direction, not a reusable dataset
+
+- Repository: https://github.com/utkarsht123/AI-Enabled-Cross-Lingual-Job-Matching-for-Veterans-
+- Reviewed: README and evaluation_results.json. No repository-level LICENSE file was found at the expected path.
+- The project describes a two-stage multilingual retrieval pipeline (LaBSE + FAISS, then cross-encoder reranking), synthetic military-service profiles in English/Hindi/Tamil, mock job postings, and comparisons against TF-IDF and single-stage SBERT. Its reported scores are the author's own results on that project-specific synthetic corpus, not evidence of performance on our target candidates or real vacancies.
+- Decision: **do not import code or data**. Retain only the research idea that any future multilingual matching evaluation should compare a simple lexical baseline with semantic retrieval and reranking, and should report relevance and latency separately. Candidate-data privacy and our source-quality gate remain unchanged.
+
+### Generic job-search and RAG matching repos — not accepted for code/data reuse
+
+- https://github.com/yashshah2511/agentic-ai-job-search-assistant — README lists a broad FastAPI/React/LangGraph/Playwright/Chroma stack but supplies too little evidence in the inspected README to establish source permissions, validation quality, or safe implementation details; no expected-path LICENSE file was found.
+- https://github.com/ah0890/ai-job-application-agent — short README describes human-in-the-loop approval but offers insufficient inspectable evidence for correctness, licensing, source permission, or evaluation; no expected-path LICENSE file was found.
+- https://github.com/devarintakmashido/RAGbasedProfileMatching — useful educational pattern for hybrid semantic/keyword ranking, hard must-have filtering, and precision-at-k/latency evaluation; README describes a small synthetic/sample corpus, and no expected-path LICENSE file was found.
+- Decision: **no code, sample resumes, mock jobs, dependencies, or credentials imported**. The matching repositories are examples, not validated sources for live job discovery; the inspected evidence does not justify copying their implementation or claiming their reported metrics generalize.
+
+### Third-pass outcome
+
+No new production source was approved. Jobicy remains a conditional source-quality-test candidate; Himalayas remains blocked pending written clarification; the source-quality/implementation gate remains closed. No live job API was queried and no job listings, datasets, candidate documents, credentials, workflows, or application actions were added/performed.
