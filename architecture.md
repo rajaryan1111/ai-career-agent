@@ -1,6 +1,6 @@
 # Architecture Notes
 
-**Status:** Production-oriented modular architecture direction; desktop/runtime choices remain open and source integrations remain gated  
+**Status:** Production-oriented architecture; Tkinter/SQLite local alpha implemented, source integrations remain gated  
 **Last updated:** 2026-10-14
 
 ## 1. Architectural direction
@@ -71,13 +71,11 @@ Use OS credential storage where feasible. Never store platform passwords in plai
 
 ## 10. Remaining architecture decisions
 
-- Packaging, installation/update/uninstall, and supported OS matrix for the Tkinter alpha.
+- Packaging, install/update/uninstall, and supported OS matrix for the Tkinter alpha.
 - Local database migrations, encryption-at-rest, backup and restore strategy.
-- Local inference vs optional external AI.
-- Scheduler behavior while offline.
-- Initial job-source adapters.
-- Permitted submission workflows.
-- Packaging and update strategy for macOS, Windows, and Linux.
+- Optional local inference versus external AI processing and its consent/cost boundary.
+- Scheduler behavior while offline and an optional remote-worker deployment.
+- Initial job-source adapters and separately permitted submission workflows.
 
 
 ## 11. Existing repository assets to evaluate later (not implementation approval)
