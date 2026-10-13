@@ -1,11 +1,13 @@
 # Product and Research Rules
 
-**Status:** Baseline rules — amend only with a documented reason  
-**Last updated:** 2026-10-13
+**Status:** Product engineering guardrails for production-oriented development  
+**Last updated:** 2026-10-14
 
 ## 1. Research alongside bounded implementation
 
-- Do not enable live source integrations, candidate-data transfer, resume parsing/upload, form automation, or application submission until the relevant feasibility, permission, privacy, and quality gates have evidence-backed answers. The safe offline domain core may be implemented in parallel with research, provided it makes no network calls and does not handle real candidate data.
+- Product implementation is authorized. Build the usable local product and offline capabilities in parallel with research; do not freeze the project at documentation or a prototype.
+- Local resume parsing and candidate-profile editing may be implemented with clear review/uncertainty handling. Uploading candidate data to external services, live source integrations, autofill, email actions, and application submission remain gated by their own permission, privacy, and quality evidence.
+- Keep research findings, implementation status, and production-readiness claims separate. A feature may be coded but still experimental or disabled until its release gates pass.
 - Separate verified facts, assumptions, hypotheses, and decisions.
 - Cite sources for platform policies, API capabilities, pricing, and competitor features.
 - Prefer official documentation and current terms over blogs or marketing claims.
@@ -49,7 +51,9 @@
 - Prevent duplicates across sources and repeated scheduled runs.
 - Ask about sensitive declarations, unfamiliar questions, assessments, or missing information.
 - Respect explicit role-specific application instructions. If an employer prohibits AI assistance for application answers, do not draft, generate, autofill, or submit the prohibited responses; clearly surface the restriction and leave those answers to the candidate.
-- Default: auto-submit only supported cases that meet strict eligibility and quality rules; pause on exceptions.
+- After the user configures a standing automation policy, do not ask for per-job approval for every routine action that falls inside that policy and is explicitly permitted by the platform/employer. Auto-submit only for supported workflows that pass source permission, eligibility, truthfulness, duplicate, and reliability gates.
+- Pause only the affected application when mandatory facts are missing/conflicting, a sensitive or legally significant declaration needs judgment, an assessment/custom response is restricted, CAPTCHA/OTP or a prohibited/unsupported step appears, or the result is ambiguous. Continue independent safe tasks.
+- Treat standing authorization as scoped and revocable; it does not override platform rules, employer instructions, privacy consent, or the need to avoid false statements.
 
 ## 6. Privacy and security
 
@@ -80,7 +84,7 @@
 
 - Use `development-workflow.md` as the project-specific engineering process once implementation is authorized: frame the problem, specify observable behavior, plan small tasks, test high-consequence deterministic rules first, debug root causes, review against requirements and risks, and verify before claiming completion.
 - The workflow ideas reviewed from gstack and Superpowers are guidance, not dependencies. Do not install/copy their toolchains wholesale or allow agent instructions to override product rules.
-- The research/product decision gate remains in force. A development workflow document does not authorize implementation, paid services, external data transmission, deployment, or application submission.
+- The user has explicitly authorized building this as a real, production-oriented, cross-industry product. Continue implementation against the agreed roadmap. This does not authorize paid services, external candidate-data transmission, deployment, or specific live integrations without their separate consent and evidence gates.
 - Model/agent reviews are not independent evidence; critical claims require source evidence, reproducible checks, or human review.
 
 
@@ -103,3 +107,14 @@
 - Record material decisions with date, rationale, evidence, and consequences.
 - Avoid duplicating the same long explanation across files; link to the canonical section.
 - Never overwrite an important decision silently; mark it superseded and explain why.
+
+
+## 11. Production and cross-industry delivery rules
+
+- Treat AI Career Agent as a real product, not a demo-only deliverable. Every milestone should deliver working behavior or measurable verification, not documentation alone.
+- Design shared capabilities for many professions. Do not hardcode one resume, degree, geography, career stage, or AI/ML skill vocabulary as the universal candidate model. Use extensible occupation-specific configuration with evidence-backed matching.
+- Report capability status honestly: planned, implemented, experimental, permission-gated, pilot-validated, or production-supported. Never call a mock a live integration.
+- Define acceptance criteria before implementation; include failure cases, recovery, data migration, privacy, security, and accessibility as appropriate. Run tests and inspect the final repository state before claiming completion.
+- The intended discovery cadence is 00:00 and 12:00 Asia/Kolkata. Laptop-off operation requires a verified always-on worker; do not claim it based only on desktop scheduling or an untested free tier.
+- Measure quality, not volume alone: extraction correctness on critical fields, top-ranked job relevance, eligibility false positives, duplicate prevention, direct application-route validity, evidence-backed status, scheduler recovery, and user outcomes. Do not promise selection.
+- A source's public availability, API endpoint, or rendered form is not proof of permission. Discovery and submission are reviewed separately for each provider and workflow.
