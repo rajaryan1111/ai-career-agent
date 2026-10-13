@@ -19,14 +19,14 @@ Re-parsed `research/job-source-audit-seed-2026-10-13.csv` on 2026-10-14.
 | Duplicate listing IDs | 0 | Pass |
 | Distinct canonical URL values | 73 | Informational |
 | Repeated canonical-URL groups | 8 | Needs record-level handling |
-| Status: `open` | 15 | Not equivalent to confirmed-open unique jobs |
-| Status: `unknown` | 56 | Must remain unknown until evidence resolves it |
+| Status: `open` | 10 | Not equivalent to confirmed-open unique jobs |
+| Status: `unknown` | 61 | Must remain unknown until evidence resolves it |
 | Status: `expired` | 3 | Suppress unless new requisition/status evidence appears |
 | Status: `closed` | 2 | Suppress |
 | Status: `not_a_listing` | 2 | Exclude from vacancy counts |
 | Status: `source_review` | 4 | Exclude from vacancy counts |
 
-The 8 repeated URL groups consist of 7 exact-requisition/source-observation groups and one shared general-careers-page ambiguity. Preserve source provenance; do not count exact duplicate observations as additional vacancies. Do not merge the two Zyora Labs tracks solely because they share a general careers URL. These URL counts are not a current-open vacancy count.
+The five status changes described in the follow-up review were made because current canonical inspection showed only an Apply route, a JavaScript shell, or no readable page—not explicit current-availability evidence. The 8 repeated URL groups consist of 7 exact-requisition/source-observation groups and one shared general-careers-page ambiguity. Preserve source provenance; do not count exact duplicate observations as additional vacancies. Do not merge the two Zyora Labs tracks solely because they share a general careers URL. These URL counts are not a current-open vacancy count.
 
 ## 2. Required acceptance gates
 
