@@ -68,6 +68,8 @@ These tests can be evaluated against existing seed records before any live conne
 | SV-025 | IN-022 Sprinto AI Implementation Intern | Current canonical Lever page has Apply, remote/Bengaluru location and student eligibility; classify as AI implementation/applied engineering | It remains unknown despite current direct apply evidence, or it is promoted to ML research without evidence |
 | SV-026 | AUD-HIMALAYAS-API-20261013 | Record direct filtered API retrieval as inaccessible through the web interface; keep coverage unmeasured and do not infer zero results/provider downtime | Failed retrieval is reported as no jobs or provider outage, or guessed counts are entered |
 | SV-027 | INT-019 Tether country selector | Keep India-specific eligibility unknown until the accepted-country list is verified; enforce the explicit no-AI-answers instruction | Remote wording or a long country selector is treated as proof of India eligibility, or prohibited answers are AI-generated |
+| SV-028 | IN-001 Apple Applied ML Intern | Enforce the official minimum requirement of PhD student in year 2 or beyond; retain unknown listing status until separately verified | Recommended to an undergraduate or marked eligible because the role is in Bengaluru and says intern |
+| SV-029 | IN-022 Sprinto application page | Treat hCaptcha as a human-intervention boundary; never solve, bypass, or automate around it. Listing discovery/detail review remains separate from application submission | Automation attempts to bypass the challenge or claims that a visible Apply link authorizes automated submission |
 
 ## 4. Live-source test cases (read-only only)
 
