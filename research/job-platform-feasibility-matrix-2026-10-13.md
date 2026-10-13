@@ -6,7 +6,9 @@
 
 ## Executive decision
 
-**Do not build a universal scraper or auto-apply bot.** The currently verified path is a set of source-specific connectors to public employer job boards, plus a user-provided job URL workflow. These are separate capabilities and must be evaluated independently:
+**Do not build a universal scraper or auto-apply bot.**
+
+The reproducible pre-implementation acceptance checks are now specified in [Source Validation Test Suite](source-validation-test-suite-2026-10-13.md). The current seed CSV passes its structural check (55 mixed records, 27 columns per row, unique IDs), but the live-source coverage gate has not passed. The currently verified path is a set of source-specific connectors to public employer job boards, plus a user-provided job URL workflow. These are separate capabilities and must be evaluated independently:
 
 1. Discover a listing.
 2. Retrieve details and the description.
