@@ -85,3 +85,44 @@ No source in this pilot has yet earned a claim of comprehensive coverage, guaran
 - Preference Model — ML Engineer, RL Environments Internship: https://jobs.ashbyhq.com/Preference-Model/8dccedf5-f144-46af-950c-ec2bfc91cc3c/
 - Tesla — Internship, AI Engineer, Tesla AI (Fall 2026/Winter 2027): https://www.tesla.com/careers/search/job/internship-si-engineer-tesla-si-fall-2026-winter-2027-275331
 - AICTE National Internship Portal: https://internship.aicte-india.org/
+
+
+## Second-pass discoveries (13 October 2026)
+
+These are additional leads found during a follow-up search. They expand the candidate set; they do **not** turn the pilot into a completed 50-listing audit. Listing status, eligibility and geography should be rechecked at the canonical detail page immediately before a user sees a recommendation.
+
+| Listing lead | Evidence visible in search / employer page | Product lesson | Disposition |
+|---|---|---|---|
+| **Apple — Applied ML Intern, Wireless Technologies & Ecosystems** | Apple Careers page lists Bengaluru, India; page reports posted 27 Sep 2026. | Major-company careers pages need to be included in discovery tests; not all sources are ATS boards with uniform schemas. | Strong discovery lead; inspect eligibility and current status in the full detail page. |
+| **Hibilter — AI / ML Engineering Intern** | Company careers page advertises Remote · India Internship. | Smaller company pages may be outside the handful of standard ATS sources; direct URL submission by the user should remain a fallback. | Validate role detail, company legitimacy signals, eligibility and application route. |
+| **ATRISI — ML / AI Intern** | Careers page labels it Open and says Remote / Hybrid · Bengaluru, India; it also promotes a separate fellowship. | Separate paid employment, internships, fellowships and training cohorts; do not merge them into one category. | Validate role terms, requirements and official application route. |
+| **Wadhwani AI — Machine Learning Intern** | Careers page lists a remote Machine Learning Intern alongside scientist roles. | Institution/company career pages may surface relevant roles that general keyword searches miss. | Check the exact linked job detail and whether “remote” is India-eligible. |
+| **Zyora Labs — AI/ML Research Intern** | Careers page describes a remote/Nagercoil student internship, with basic Python and interest as stated requirements. | Preserve the stated minimum requirements, but do not infer pay, duration, legitimacy, or job quality from the headline. | Verify role details, stipend, dates, company information and application route. |
+| **Trackmind — Junior AI Engineer** | Official Lever listing says Hyderabad, on-site, internship, and 6 months to 2 years of experience. | “Junior” and “internship” do not guarantee a fresher-friendly or remote role. | Good negative test; exclude for remote-only candidates and flag experience requirement. |
+| **AICTE portal — Deep Learning Engineering Intern (EduRankAI)** | Listing gives a 3-month full-time term, Pan India, ₹0/month stipend, and 2 Mar 2027 application deadline. | Compensation, dates and listing provenance must be explicit; a relevant title can still be a poor match. | Validate employer and terms independently; do not equate portal presence with verified quality. |
+| **Cohere — Machine Learning Intern/Co-op (Fall 2026)** | Employer Ashby page lists Canada, Europe, UK and US as locations; remote; requires current post-secondary enrollment and a full-time 3–6 month term. | “Remote” remains bounded by listed countries; advanced ML roles may have a high technical bar. | Strong negative geography test for a candidate based in India. |
+| **Great Question — AI Engineer Intern** | Ashby result describes a remote-friendly, three-month summer role (mid-June to mid-September 2026). | A role whose stated work period has already passed must be treated as stale/closed unless the employer page confirms a new cohort. | Staleness test; do not recommend based on an old indexed description. |
+| **Parspec — Applied AI Engineer Intern** | Ashby page describes a hybrid San Mateo role and requires enrollment in a US-based degree program. | Eligibility may depend on the candidate's educational institution and immigration/work context, not merely location. | Exclude for candidates who cannot meet the US-program requirement. |
+| **Persona AI — Machine Learning Internship, Manipulation** | Ashby page lists Houston, on-site, with Fall 2026, Spring 2027 and Summer 2027 cohorts. | Cohort dates and onsite location are first-class eligibility fields; one requisition may refer to multiple future cohorts. | Candidate only if the user can relocate and meet the cohort dates. |
+| **Azul — Marketing AI Intern** | Lever page says United States remote, $20–$25/hour; responsibilities focus on marketing workflows rather than ML engineering. | Semantic role classification matters: AI-enabled work is not necessarily an AI/ML engineering job. | Exclude from AI/ML engineering search unless the user includes AI automation/operations roles. |
+
+### Second-pass source references
+
+- Apple Careers — Applied ML Intern: https://jobs.apple.com/en-in/details/200686019-0321/applied-ml-intern-wireless-technologies-ecosystems
+- Hibilter Careers: https://www.hibilter.com/careers.html
+- ATRISI Careers: https://atrisi.org/careers
+- Wadhwani AI Careers: https://www.wadhwaniai.org/careers/
+- Zyora Labs Careers: https://zyoralabs.com/careers
+- Trackmind — Junior AI Engineer: https://jobs.lever.co/trackmind/ad66c0ec-1ae9-47cb-9d5d-83ae1cb6d200
+- AICTE / EduRankAI — Deep Learning Engineering Intern: https://internship.aicte-india.org/internship-details.php?uid=SU5URVJOU0hJUF8xNzg4MzQzNTgxNmE5N2Y1MWRjMWYyYQ%3D%3D
+- Cohere — Machine Learning Intern/Co-op (Fall 2026): https://jobs.ashbyhq.com/cohere/36d1f52f-8270-4652-adf5-5303a0ff341b?employmentType=Intern
+- Great Question — AI Engineer Intern: https://jobs.ashbyhq.com/greatquestion/c533196c-75d5-43b8-b1c8-dedf2437d544
+- Parspec — Applied AI Engineer Intern: https://jobs.ashbyhq.com/parspec/0a897c21-0df7-40ba-85f2-694bf6678504/
+- Persona AI — Machine Learning Internship, Manipulation: https://jobs.ashbyhq.com/persona.ai/ed9a7425-9798-471e-b46a-fefd59570630
+- Azul — Marketing AI Intern: https://jobs.lever.co/azul/f94d4087-2dee-4d69-8596-883ff17efde2
+
+## Updated audit status
+
+This second pass adds more useful positive and negative examples, but the audit remains **qualitative and incomplete**. Search-indexed pages can be stale, and a page being visible does not establish current availability, employer legitimacy, data-use permission, or permission to automate the application process.
+
+Next deliverable should be a structured listing-level dataset for the full 50-job sample, with a fixed schema and explicit values for unknown/not verified. Do not mark a role “eligible” when country, work authorization, cohort date, or degree constraints are unresolved.
