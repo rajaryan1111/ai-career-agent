@@ -95,3 +95,25 @@ This roster makes the next test repeatable and exposes failure modes rather than
 Do not compute a valid-direct-link percentage from the browser-probe counts above. The next link-quality pass must test the actual destination and record success/failure/unknown per direct-employer link, define the denominator in advance, and report source-listing URLs separately from employer apply URLs. Any unknown outcome remains unknown.
 
 The source-quality gate remains **NOT PASSED / research-only**. No source API was queried, no production integration was implemented, no candidate data was transferred, and no application was submitted.
+
+
+## Application-route spot check — 2026-10-14
+
+This is a focused, non-random spot check, not the required 50-record link-validity test. The audit CSV now records the observed application route separately from the canonical listing using apply_url, apply_route_outcome, apply_route_checked_at, and apply_route_evidence. Blank outcome means not yet checked; unknown outcomes remain unknown.
+
+| Audit ID | Employer | Observed outcome | Evidence / limitation |
+|---|---|---|---|
+| IN-002 | Drivetrain | reachable_application_form | Matching Lever /apply page rendered; no submission |
+| IN-004 | Trackmind | reachable_application_form | Matching Lever /apply form rendered; employment-type/experience contradictions remain |
+| IN-008 | Humans Care Foundation | login_gate_reached | Application URL redirects to portal sign-in; form not verified beyond gate |
+| IN-015 | RadialBrain | unknown_fetch_error | Google Forms click returned browser internal error without HTTP status |
+| IN-016 | Zyora Labs | embedded_form_visible_not_submitted | Careers page contains embedded form; no distinct role-specific destination exposed |
+| IN-022 | Sprinto | reachable_application_form | Matching Lever /apply page rendered; no submission |
+| IN-031 | Needl.ai | email_route_published_not_tested | Employer publishes email route; no email sent |
+| IN-036 | Valura.AI | unknown_button_destination_not_exposed | Apply button visible but destination not exposed |
+| INT-023 | MailerMen | unknown_fetch_restricted | /apply destination resolved, but browser blocked fetch without HTTP status |
+| INT-033 | CertiK | reachable_application_form | Matching Lever /apply form rendered; PhD/U.S. eligibility requirements make it a negative control |
+
+### Interpretation
+
+Four of these ten tested routes rendered an application form, one reached a sign-in gate, one exposed an embedded form, one published an email route that was not tested, and three remained unknown under the research-browser method (RadialBrain, Valura.AI, MailerMen). These outcomes are not a representative estimate of direct-link validity and must not be converted into a 90% metric. No forms were submitted and no candidate data was entered or sent. The source-quality gate remains NOT PASSED.
