@@ -126,3 +126,8 @@ The current official Sprinto Lever careers board lists AI Implementation Intern 
 The Drivetrain employer board also currently lists its India-based remote GenAI internship. IN-002 was updated to open. This brings the audit to 18 open-labelled rows. This is still not a candidate-ready count: candidate eligibility and role-level terms differ, duplicates remain, and permission is unknown for most rows. Unisys AI Engineering Intern explicitly targets current/recent M.Tech candidates, so it should not be treated as a direct fit for the BTech ECE target. Concentric AI and AtkinsRéalis both have title/employment-type or degree-eligibility ambiguities and remain unknown.
 
 **Gate remains NOT PASSED / research-only.** No source APIs queried, no production integration or dependency added, no candidate data sent, and no application submitted.
+
+
+### Count reconciliation after CSV re-fetch — 2026-10-14
+
+The just-re-fetched CSV confirms **19 open-labelled records**, not 18: the earlier baseline was 17 and IN-002 plus IN-022 were subsequently updated to open. Current status counts are open 19, unknown 52, expired 3, closed 2, not_a_listing 2, source_review 4. CSV remains 82 rows × 27 columns, 0 malformed rows, 0 duplicate IDs, 73 distinct canonical URLs, and 77 rows with unknown permission. This is a correction to the count above; it does not change the NOT PASSED / research-only decision.
