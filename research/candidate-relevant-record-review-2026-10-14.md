@@ -156,3 +156,21 @@ The current Drivetrain board still lists Engineering Intern – Gen AI for FP&A 
 
 ### Research controls
 Current web checks found a material contradiction on Concentric AI: its page describes a six-month intern role but the application metadata says Job Type “Full-time”. AtkinsRéalis likewise titles the role an intern while listing Job Type “Full time” and restricting degree examples to CSE/Data Science/AI-ML/Robotics/Mechatronics with AI/Robotics specialization. Keep both as **unknown** rather than interpreting “Intern” in the title as proof of internship employment type or ECE eligibility. [Concentric AI](https://concentric.greythr.com/hire/jobs/machine-learning-intern/) · [AtkinsRéalis](https://careers.atkinsrealis.com/en/jobs/intern-r-163438).
+
+
+## Sixth candidate-focused recheck — 2026-10-14
+
+### Needl.ai: confirm current listing and separate eligibility from fit
+The current official careers index lists **AI Engineering Intern** under open positions and says the Bengaluru team works hybrid, three days per week in the office; it also says interns receive a monthly stipend, without publishing the amount on the reviewed page. The role page says it targets recent graduates with B.Tech/M.Tech or equivalent in CSE/EE/related, or applicants with 1–2 years of relevant experience, and involves building agentic workflows, RAG, Python and customer-facing implementation. This corroborates the existing `open` label on IN-031 but does **not** establish that a currently enrolled BTech ECE student is eligible; degree-equivalence and cohort timing need confirmation. No email was sent. [Official careers index](https://needl.ai/careers) · [Role page](https://needl.ai/careers/ai-engineering-intern).
+
+### Threxil Systems: current open roles, not proof of worldwide legal eligibility
+The official careers page currently states “2 roles open”, “Fully remote”, and “Work from anywhere”, and lists AI Intern and Frontend + AI Intern. It explicitly welcomes freshers/self-taught candidates on the page; AI Intern work focuses on retrieval and evaluation layers. These records already have `open` status (INT-021 and INT-022); this pass reconfirms the evidence, not the source permission. “Work from anywhere” is employer marketing wording and is not a complete determination of hiring-country, tax, payroll or work-authorization rules. Candidate-data privacy/retention and source/product permission remain unverified. [Official careers page](https://www.threxil.com/careers) · [AI Intern](https://www.threxil.com/careers/apply/ai-intern) · [Frontend + AI Intern](https://www.threxil.com/careers/apply/frontend-ai-intern).
+
+### Candidate triage implication (BTech ECE, currently enrolled)
+- **Worth a careful manual first look:** Threxil AI Intern and Sprinto AI Implementation Intern. Threxil explicitly lists open roles and welcomes early-career candidates; Sprinto accepts currently pursuing an Engineering degree, though the exact interpretation of “related technical field” for ECE is not explicit.
+- **Potential lead with a key eligibility question:** HCF AI/ML Engineer internship. It is paid and remote anywhere in India according to the current careers page, but role-specific degree/selection criteria and exact stipend remain unclear. Keep the ₹500 traineeship separate; it is candidate-paid training, not the internship.
+- **Do not treat as automatic fit:** Drivetrain says Computer Science engineering interns and asks for CS or related degree; Needl.ai targets recent graduates or 1–2 years' experience and asks for CSE/EE/related; confirm ECE and current-student eligibility before investing time.
+- **Not a paid-job recommendation:** EduRankAI via AICTE is listed at ₹0/month and full-time for three months; its employer/requisition legitimacy and workload remain unresolved.
+
+### Evidence and integrity note
+This pass relied on current official employer pages for availability and role description. It did not verify applicant privacy terms, automated collection/republication rights, or all legal work-eligibility conditions. Do not submit resumes, contact employers, or automate applications as part of this audit. Gate remains **NOT PASSED / research-only**.
