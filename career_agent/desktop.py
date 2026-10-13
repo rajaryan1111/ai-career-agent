@@ -135,6 +135,7 @@ class CareerAgentApp:
             ("Work mode", "work_mode", 3, 2, ["", "remote", "hybrid", "on-site"]),
             ("Role type", "role_type", 4, 0, None), ("Location", "location", 4, 1, None), ("Allowed countries", "countries", 4, 2, None),
             ("Allowed disciplines", "degrees", 5, 0, None), ("Allowed study statuses", "study_statuses", 5, 1, None), ("Allowed graduation years", "graduation_years", 5, 2, None),
+            ("Allowed work-authorization values (exact)", "allowed_work_authorizations", 7, 0, None),
             ("Minimum experience", "min_exp", 6, 0, None), ("Maximum experience", "max_exp", 6, 1, None), ("Required skills", "required_skills", 6, 2, None),
         ]
         for label, key, row, col, choices in fields:
@@ -142,7 +143,7 @@ class CareerAgentApp:
         self.job_vars["availability"].set("unknown")
         self.job_vars["scope"].set("unknown")
         actions = ttk.Frame(self.jobs_tab)
-        actions.grid(row=7, column=0, columnspan=6, sticky=W, pady=6)
+        actions.grid(row=8, column=0, columnspan=6, sticky=W, pady=6)
         for text, callback in [
             ("Save job", self._save_job), ("Evaluate selected", self._evaluate),
             ("Shortlist if eligible", self._shortlist), ("Delete selected", self._delete_job), ("Clear form", self._clear_form),
@@ -152,11 +153,11 @@ class CareerAgentApp:
         for col, label, width in [("employer", "Employer", 140), ("role", "Role", 170), ("availability", "Availability", 100), ("status", "Tracker status", 150), ("source", "Source", 190)]:
             self.jobs_tree.heading(col, text=label)
             self.jobs_tree.column(col, width=width, anchor=W)
-        self.jobs_tree.grid(row=8, column=0, columnspan=6, sticky="nsew", pady=(6, 0))
-        self.jobs_tab.rowconfigure(8, weight=1)
+        self.jobs_tree.grid(row=9, column=0, columnspan=6, sticky="nsew", pady=(6, 0))
+        self.jobs_tab.rowconfigure(9, weight=1)
         self.jobs_tree.bind("<<TreeviewSelect>>", self._select_job)
         self.report = tk.Text(self.jobs_tab, height=7, wrap="word", state="disabled")
-        self.report.grid(row=9, column=0, columnspan=6, sticky="ew", pady=(8, 0))
+        self.report.grid(row=10, column=0, columnspan=6, sticky="ew", pady=(8, 0))
         self._report("Select a job and evaluate it. Only explicit PASS is eligible for shortlisting.")
 
     def _build_tracker(self):
@@ -239,7 +240,7 @@ class CareerAgentApp:
             employer_apply_url=apply_url, canonical_requisition_id=v["requisition"].get().strip() or None,
             location_text=v["location"].get().strip() or None, work_mode=v["work_mode"].get().strip() or None,
             role_type=v["role_type"].get().strip() or None, eligibility_scope=v["scope"].get() or "unknown",
-            eligible_countries=split_values(v["countries"].get()), allowed_degree_disciplines=items("degrees"),
+            eligible_countries=split_values(v["countries"].get()), allowed_work_authorizations=items("allowed_work_authorizations"), allowed_degree_disciplines=items("degrees"),
             allowed_study_statuses=items("study_statuses"), allowed_graduation_years=years or None,
             minimum_experience_years=minimum, maximum_experience_years=maximum,
             required_skills=frozenset(split_values(v["required_skills"].get())),
@@ -292,6 +293,7 @@ class CareerAgentApp:
             "scope": job.eligibility_scope, "work_mode": job.work_mode or "", "role_type": job.role_type or "",
             "location": job.location_text or "", "countries": ", ".join(job.eligible_countries),
             "degrees": ", ".join(job.allowed_degree_disciplines or []),
+            "allowed_work_authorizations": ", ".join(job.allowed_work_authorizations or []),
             "study_statuses": ", ".join(job.allowed_study_statuses or []),
             "graduation_years": ", ".join(map(str, job.allowed_graduation_years or [])),
             "min_exp": "" if job.minimum_experience_years is None else str(job.minimum_experience_years),
@@ -316,7 +318,7 @@ class CareerAgentApp:
         relevance = score_relevance(profile, job)
         lines = [f"ELIGIBILITY: {report.decision.value.upper()}", "Only explicit PASS is eligible. UNKNOWN is not eligible.", ""]
         lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.explanation}" for item in report.requirements]
-        lines += ["", f"Relevance score: {relevance.get('score', 'n/a')} (not a hiring probability)",
+        lines += ["", f"Skill overlap: {relevance.get('skill_overlap', 'n/a')} (not a hiring probability)",
                   "Matched skills: " + (", ".join(relevance.get("matched_skills", [])) or "None recorded"),
                   "Missing required skills: " + (", ".join(relevance.get("missing_required_skills", [])) or "None recorded")]
         self._report("\n".join(lines))
