@@ -104,22 +104,21 @@ A third repository, [mherzog4/job-boards](https://github.com/mherzog4/job-boards
 | `graphone-intelligence-pipeline` | High relevance for ingestion, retry/freshness, schema validation, provenance, dedup and test patterns. |
 | `ai-orbit-tools-ingestion` | High relevance for official-site verification, source registries, checkpoints and evidence-based promotion. |
 | `indian-standards-procurement-ai` | Medium-high relevance for retrieval/reranking/provider abstractions and evidence-backed explanations; domain logic is unrelated. |
+| `sih26108-is-copilot` | Overlapping IS Copilot project lineage; inspect the primary repository above rather than copying duplicate content. |
 | `jarvis-assistant` | Medium relevance for bounded tool loops, explicit confirmation, and credential/session boundaries; most functionality is unrelated. |
 | `fake-id-screening` | Low/indirect relevance only: upload validation, safe file handling and offline demo principles; identity screening logic is unrelated. |
 | `fibonacci-project` | No meaningful domain reuse found; generic asynchronous job status is too small/generic to justify importing. |
 | `deep-learning-am-fm-modulation` | No meaningful product-domain reuse found. |
 | `spendly` | No meaningful product-domain reuse found. |
 | `SIH-H2S-Dosimeter` | No meaningful product-domain reuse found. |
-| `indian-standards-procurement-ai` and `sih26108-is-copilot` | Same project lineage/overlapping product; the primary `indian-standards-procurement-ai` repository is the useful reference, no duplicate content copied. |
-| `ai-orbit-tools-ingestion` | Already covered above; source-verification and dedup patterns only. |
 | `apnacollege-demo` | Minimal introductory repository; no relevant material. |
 | `parallel-processing` | Empty repository at time of audit. |
 | `rajaryan1111` | Profile README only; no implementation artifact to import. |
 | `raj-aryan-portfolio` | Portfolio UI; no relevant Career Agent functionality. |
 | `sorry` | Personal 3D experience; no relevant domain logic. |
-| `tushita-birthday` | Personal birthday website/assets; no relevant domain logic. |
+| `tushita-birthday` | Personal 3D experience/assets; no relevant domain logic. |
 
-Note: the inventory table groups the two IS Copilot repositories as one lineage; the count remains 18 distinct account repositories. The root/README screen found no meaningful Career Agent material in the personal/college/portfolio/demo repositories beyond generic engineering lessons.
+This table lists all 18 distinct account repositories. The root/README screen found no meaningful Career Agent material in the personal/college/portfolio/demo repositories beyond generic engineering lessons.
 
 ## What we should add to the product design (not code yet)
 
