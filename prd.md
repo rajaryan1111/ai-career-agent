@@ -64,6 +64,7 @@ The long-term audience includes students seeking internships and placements, fre
 
 ### Matching and eligibility
 - Run hard eligibility rules separately from relevance scoring.
+- After research authorizes implementation, evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
 - Explain positive matches, missing requirements, and unresolved questions.
 - Exclude known hard-eligibility failures from auto-apply eligibility.
 - Allow users to configure preferences and thresholds.
