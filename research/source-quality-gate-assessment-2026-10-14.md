@@ -19,8 +19,8 @@ Re-parsed `research/job-source-audit-seed-2026-10-13.csv` on 2026-10-14.
 | Duplicate listing IDs | 0 | Pass |
 | Distinct canonical URL values | 73 | Informational |
 | Repeated canonical-URL groups | 8 | Needs record-level handling |
-| Status: `open` | 10 | Not equivalent to confirmed-open unique jobs |
-| Status: `unknown` | 61 | Must remain unknown until evidence resolves it |
+| Status: `open` | 9 | Not equivalent to confirmed-open unique jobs |
+| Status: `unknown` | 62 | Must remain unknown until evidence resolves it |
 | Status: `expired` | 3 | Suppress unless new requisition/status evidence appears |
 | Status: `closed` | 2 | Suppress |
 | Status: `not_a_listing` | 2 | Exclude from vacancy counts |
@@ -83,3 +83,10 @@ This meets the planned comparison-sample target only. It does **not** establish 
 ## 6. Safety and implementation boundary
 
 No source API endpoint was queried for this assessment. No code, dependencies, connector, workflow, credentials, dataset import, candidate-data transfer, autofill, or application submission was added or performed. The source-quality and implementation gates remain closed.
+
+
+## 7. Follow-up candidate-relevant record review — 2026-10-14
+
+See [Candidate-Relevant Record Review](candidate-relevant-record-review-2026-10-14.md). The current canonical pages were rechecked for India-focused Trackmind, RadialBrain, Inferova and WATER records, plus explicit-worldwide/remote controls Threxil (two roles), MailerMen and QovaTech. Trackmind was downgraded to `unknown` because its page contradicts itself (Internship heading vs Full-Time work details and a 6-month-to-2-year experience requirement). RadialBrain, Inferova and WATER remain `unknown`: their pages describe the internships and show application forms, but this check did not find explicit current-open wording. Threxil's careers page explicitly lists two roles open and work from anywhere; MailerMen explicitly says actively hiring and open to applicants anywhere; QovaTech explicitly says “Open internship” but does not establish applicant-country eligibility.
+
+Post-review CSV baseline: 82 records, 27 columns, 0 malformed rows, 0 duplicate IDs; `open` 9, `unknown` 62, `expired` 3, `closed` 2, `not_a_listing` 2, `source_review` 4. Permission field remains `unknown` for 77 rows. This bounded review does not close the ≥20 valid/relevant listings gate, the ≥90% direct-link validity metric, full worldwide-eligibility audit, or source-permission gate. Decision remains **NOT PASSED / research-only**.
