@@ -224,3 +224,12 @@ This fixture is grounded in the WATER ML Intern page checked 2026-10-13: the pag
 |---|---|---|---|
 | SV-037 | An open-source adapter targets a public/keyless provider endpoint whose terms/policy review is blocked or unresolved | Keep the adapter disabled and exclude the source from coverage counts until the source-specific permission gate is cleared | Treating endpoint accessibility, a public API, or an upstream repository's use as authorization |
 
+
+
+### SV-038 — Canonical requisition deduplication without losing provenance
+
+| Test ID | Fixture | Expected result | Failure condition |
+|---|---|---|---|
+| SV-038 | Multiple discovery records from employer boards/aggregators share an exact canonical requisition URL; a separate case has two role tracks sharing only a general careers page | Collapse exact same-requisition observations to one vacancy for counts and ranking, retain each source observation and provenance for source-agreement/quality metrics, and avoid merging different requisitions merely because they share a general careers URL. If distinctness cannot be established, keep the vacancy count unresolved and surface the ambiguity. | Counting exact canonical duplicates as separate vacancies; deleting provenance/control rows; merging distinct role tracks solely because they share a careers page; or promoting unknown status because one duplicate record says open |
+  
+This fixture is grounded in the 2026-10-13 CSV audit: seven groups share the same role/requisition URL (Ema, Atlys, CertifyOS, RIVR, Barnes & Thornburg, Formstack, and ATRISI), while two Zyora Labs role-track records share a general careers page and cannot safely be classified as one or two active vacancies from URL equality alone. It is an acceptance requirement only; no implementation is authorized.
