@@ -72,6 +72,19 @@ class EligibilityTests(unittest.TestCase):
         report = evaluate_eligibility(sample_profile(), sample_job(eligibility_scope="worldwide", eligible_countries=()))
         self.assertEqual(report.decision, Decision.PASS)
 
+    def test_work_authorization_unknown_is_not_a_pass(self):
+        job = sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))
+        report = evaluate_eligibility(sample_profile(work_authorization=None), job)
+        self.assertEqual(report.decision, Decision.UNKNOWN)
+        self.assertIn("work_authorization", {r.requirement for r in report.unknown_requirements})
+
+    def test_work_authorization_requires_exact_explicit_match(self):
+        job = sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))
+        matching = evaluate_eligibility(sample_profile(work_authorization="authorized_without_sponsorship"), job)
+        mismatch = evaluate_eligibility(sample_profile(work_authorization="sponsorship_required"), job)
+        self.assertEqual(matching.decision, Decision.PASS)
+        self.assertEqual(mismatch.decision, Decision.FAIL)
+
 
 class MatchingAndDedupTests(unittest.TestCase):
     def test_relevance_is_explainable_and_not_probability(self):
