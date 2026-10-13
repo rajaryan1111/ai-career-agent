@@ -29,6 +29,17 @@ class CareerStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.get_profile())
         self.assertFalse(self.store.delete_profile())
 
+    def test_legacy_job_payload_defaults_new_authorization_field(self):
+        import json
+        payload = json.dumps({
+            "listing_id": "legacy", "source_id": "manual", "source_name": "Manual",
+            "source_listing_url": "https://jobs.example/legacy", "employer_name": "Example",
+            "role_title": "Legacy role", "availability_status": "unknown",
+        })
+        loaded = self.store._decode_job(payload)
+        self.assertIsNone(loaded.allowed_work_authorizations)
+        self.assertEqual(loaded.eligible_countries, ())
+
     def test_job_round_trip_keeps_source_and_apply_urls_separate(self):
         self.store.save_job(self.job, observed_at="2026-10-14T00:00:00+00:00")
         loaded = self.store.get_job("j1")
