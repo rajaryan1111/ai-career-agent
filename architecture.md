@@ -35,7 +35,7 @@ External transfer must be explicit and limited to the minimum necessary data. Be
 
 Each source adapter should report source identity and documented access method; permission/terms review date and evidence; discovery capability separately from submission capability; listing URL and source identifier; retrieved/missing fields; retrieval timestamp/freshness; rate limits/restrictions/error categories; and support status (supported, experimental, unavailable, awaiting verification).
 
-Never infer that a source permits automation merely because it is publicly viewable.
+Never infer that a source permits automation merely because it is publicly viewable. Record provider-level restrictions on AI orchestration, systematic extraction, and data reuse as hard adapter gates. A technical public endpoint is not sufficient; if the provider's API policy restricts autonomous/generative-AI workflows and no applicable endorsed pathway is verified, mark the adapter unavailable pending authorization. SmartRecruiters is the current example; see [the policy review](research/smartrecruiters-api-policy-review-2026-10-13.md).
 
 ## 6. Application state model
 
