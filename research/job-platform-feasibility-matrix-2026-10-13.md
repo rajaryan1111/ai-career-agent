@@ -355,3 +355,8 @@ At the time, the current landing page and the public OpenAPI artifact appeared i
 ### 2026-10-13 addendum — Himalayas pagination documentation freshness
 
 Correction to the previous addendum: the current Himalayas API landing page explicitly states that offset is deprecated and recommends cursor pagination via nextCursor for /jobs/api; the filtered search endpoint uses page-based pagination. The GitHub OpenAPI artifact and Python example still show offset, so the most reasonable interpretation is stale/out-of-sync examples, not an unresolved API contract. Follow the current landing-page guidance if implementation is later authorized. This does not resolve the separate live retrieval limitation: filtered result quality/coverage remains unmeasured. See the retrieval report.
+
+### 2026-10-13 addendum — official employer freshness audit round 3
+
+Added WATER's ML Intern Application as IN-034 and documented it in [official employer freshness audit round 3](official-employer-freshness-audit-round3-2026-10-13.md). The official page describes a six-month, full-time, on-site Hyderabad ML research internship and a B.Tech/M.Tech/MS profile in CS/EE/Maths or related fields. Its application form currently renders, but the page is dated 2026-08-24 and does not explicitly confirm the vacancy remains open; status stays unknown. Added SV-033 so a visible form cannot alone promote a role to open. This is a research lead, not source approval; no candidate data was sent or application submitted.
+
