@@ -141,6 +141,13 @@ This checklist is intentionally separate from unit tests. It requires a real des
     `sqlite3` must show it byte-identical — a refused read must never repair, rewrite, or delete what is
     stored. Confirm the same holds after a restart, and that the app still starts and exits normally.
 
+41. [ ] Start the app with a database inside a folder that does not exist, for example
+    `python -m career_agent --database "$HOME/alpha-test/not-created-yet/db.sqlite3"`. The message must say the
+    folder does not exist and tell you to create it or choose another path. It must **not** say the database may
+    be damaged and must **not** tell you to rename, restore, or delete a file — nothing was created and nothing
+    is damaged. Then create the folder and start again: the app must open normally. (The automated tests cover
+    this message; this step confirms what the desktop window actually shows.)
+
 ## Record results
 
 For each operating system tested, record:

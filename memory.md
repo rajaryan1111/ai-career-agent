@@ -1366,6 +1366,20 @@ that can be done without a Mac.
   remaining window is the instant between releasing the guard and the swap. Two tests pin the two behaviours so
   neither can regress into the other: one asserts a competing write is *refused* where the guard is held, the
   other asserts the database is writable again inside the replacement where it is released first.
+- **A second genuine defect, from the same Mac report: the start-up message described the wrong problem.**
+  The person's first attempt to launch the window on a disposable database failed because the database's
+  parent folder did not exist. Reproduced here with the exact code path: SQLite reports "unable to open
+  database file", and ``describe_startup_failure`` answered "The local database could not be read ... it may be
+  damaged, or it may be a different kind of file" and advised restoring a verified backup or renaming the
+  unreadable file - a file that never existed, with advice that could not work. Nothing was damaged and the
+  remedy was to create the folder. ``_explain_database_open_failure`` now separates the three causes that can
+  be established from the location itself (the folder does not exist, the path is a folder, the folder is not
+  writable) from a file that is present but unreadable, and each message names a next step that can work
+  without disclosing any filesystem location. Only ``Path.is_dir`` and ``os.access`` are consulted: nothing is
+  created, renamed or tested destructively, and when no path was supplied the honest general message stays.
+  Four tests cover it, and the two behaviour tests fail when the branch is disabled (verified with the branch
+  short-circuited), so they are not decoration. The window and the terminal start-up both call this function,
+  so the improvement reaches the path the person actually sees; the window itself still needs a Mac.
 - **A documented risk that did not reproduce.** ``_remove_sidecars`` described a stale ``-wal`` being replayed
   onto a replaced database as silently discarding the restored data. The removal is necessary (the side files
   belong to the previous database) but its stated rationale is stronger than the code path demonstrates: with a
