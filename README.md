@@ -88,6 +88,11 @@ nothing to your profile. A review window then shows, for every proposed value:
 - what the document did **not** mention, and what it contained that the profile has no field for (a name,
   an email address or a phone number, for example — shown as information, never stored).
 
+The review window is resizable and its proposal list scrolls, while the header and the **Save selected
+values** / **Cancel** buttons stay where they are, so a long résumé cannot push the actions out of reach.
+Closing the window, pressing Escape and pressing **Cancel** all do the same thing: nothing is written and
+the status line says the profile was not changed.
+
 Tick or untick each value, then press **Save selected values** and confirm. A value you did not tick
 keeps the value already in the form (and in your saved profile), so an import cannot silently overwrite
 what you entered. Saving goes through exactly the same validation as the Save button, and the app
@@ -231,7 +236,10 @@ schema-version and permission failures, WAL and side-file handling, and the comm
 the desktop handlers exercised through widget stubs — including the résumé review screen: proposals shown
 with evidence before anything is saved, per-value accept and reject, cancellation and declined
 confirmation writing nothing, validation and database failures never reported as success, and no document
-text reaching a message, the status line or the database. The résumé fixtures are synthetic documents
+text reaching a message, the status line or the database. The stubs refuse the options real Tk refuses
+(a wrapping option on `ttk.Checkbutton` — which has none — crashed the review window on macOS while the
+suite stayed green), and the whole window with every tab is built against those stubs, so a widget
+option Tk would reject fails here instead of on someone's desktop. The résumé fixtures are synthetic documents
 built in the test process; no real candidate data and no network access are involved. It also checks the
 SQLite resource
 lifecycle: no test may leave a connection open (the whole suite is re-run in a child process that

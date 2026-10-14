@@ -382,63 +382,108 @@ class CareerAgentApp:
         self._review_resume(result)
 
     def _review_resume(self, result):
-        """Show what was found and let the person choose; writes nothing until they confirm."""
+        """Show what was found and let the person choose; writes nothing until they confirm.
+
+        The window is a fixed-size dialog: the header and the action buttons stay where they are while
+        the proposals scroll, so a long document cannot push Save or Cancel out of reach. Each proposal
+        is a plain ``ttk.Checkbutton`` — which takes ``-text``/``-variable`` and has no wrapping option
+        — beside ``ttk.Label`` widgets that carry the wrapping, the value and the evidence.
+        """
         dialog = tk.Toplevel(self.root)
         dialog.title("Review resume import (nothing saved yet)")
         dialog.transient(self.root)
+        dialog.geometry("900x640")
+        dialog.minsize(620, 400)
         dialog.grab_set()
+
+        # Packed before the scrolling body, so the actions always keep their place at the bottom.
+        footer = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        footer.pack(fill=X, side="bottom")
+
+        header = ttk.Frame(dialog, padding=(12, 12, 12, 6))
+        header.pack(fill=X)
         ttk.Label(
-            dialog,
+            header,
             text=f"{result.file_name} · {result.source_format.value} · {result.text_characters:,} characters read",
             font=("TkDefaultFont", 11, "bold"),
-        ).pack(anchor=W, padx=12, pady=(12, 4))
+        ).pack(anchor=W)
         ttk.Label(
-            dialog,
+            header,
             text=(
                 "Nothing has been saved. Select the values you want, then press Save selected values. "
                 "Unselected values, and anything this document did not mention, keep your current "
                 "profile. The resume text itself is not stored."
             ),
-            wraplength=760, justify=LEFT,
-        ).pack(anchor=W, padx=12, pady=(0, 8))
+            wraplength=820, justify=LEFT,
+        ).pack(anchor=W, pady=(4, 0))
+
+        body = ttk.Frame(dialog)
+        body.pack(fill=BOTH, expand=True, padx=12, pady=(0, 4))
+        canvas = tk.Canvas(body, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill=BOTH, expand=True)
+        scrolled = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=scrolled, anchor="nw")
+
+        def fit_scrollregion(_event=None):
+            """Let the canvas know how tall its content is; an empty canvas has no region."""
+            box = canvas.bbox("all")
+            if box:
+                canvas.configure(scrollregion=box)
+
+        def fit_width(event):
+            canvas.itemconfigure(canvas_window, width=event.width)
+
+        def scroll_units(event):
+            """Mouse wheel: one text line per event (macOS sends small deltas, Windows larger ones)."""
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+        scrolled.bind("<Configure>", fit_scrollregion)
+        canvas.bind("<Configure>", fit_width)
+        canvas.bind("<MouseWheel>", scroll_units)
+        scrolled.bind("<MouseWheel>", scroll_units)
 
         selections = {}
         for proposal in result.proposals:
-            row = ttk.Frame(dialog)
-            row.pack(fill=X, anchor=W, padx=12, pady=(4, 0))
+            row = ttk.Frame(scrolled)
+            row.pack(fill=X, anchor=W, pady=(4, 0))
             variable = tk.BooleanVar(value=proposal.confidence is resume.ProposalConfidence.CONFIDENT)
             selections[proposal.key] = variable
-            ttk.Checkbutton(
-                row, text=f"{proposal.label}: {proposal.value}", variable=variable, wraplength=720,
-                justify=LEFT,
-            ).pack(anchor=W)
+            # ttk.Checkbutton has no wrapping option; the wrapping lives on the labels beside it, which
+            # is where the value and the evidence belong anyway.
+            ttk.Checkbutton(row, text=proposal.label, variable=variable).pack(anchor=W)
             ttk.Label(
-                row, text=f"{proposal.confidence.value} · from: {proposal.evidence}", wraplength=720,
+                row, text=f"{proposal.label}: {proposal.value}", wraplength=820, justify=LEFT,
+            ).pack(anchor=W, padx=(20, 0))
+            ttk.Label(
+                row, text=f"{proposal.confidence.value} · from: {proposal.evidence}", wraplength=820,
                 justify=LEFT,
-            ).pack(anchor=W)
+            ).pack(anchor=W, padx=(20, 0))
         if not result.proposals:
-            ttk.Label(dialog, text="No supported profile value was found in this document.").pack(anchor=W, padx=12)
+            ttk.Label(scrolled, text="No supported profile value was found in this document.").pack(anchor=W)
 
         missing = resume.missing_field_labels(result.proposals)
         if missing:
             ttk.Label(
-                dialog,
+                scrolled,
                 text="Not found in this document (your saved values are kept): " + ", ".join(missing),
-                wraplength=760, justify=LEFT,
-            ).pack(anchor=W, padx=12, pady=(10, 0))
+                wraplength=820, justify=LEFT,
+            ).pack(anchor=W, pady=(10, 0))
         if result.unmapped:
             ttk.Label(
-                dialog,
+                scrolled,
                 text=(
                     "Present in the document but not stored (the profile has no field for it): "
                     + "; ".join(f"{item.label}: {item.value}" for item in result.unmapped)
                 ),
-                wraplength=760, justify=LEFT,
-            ).pack(anchor=W, padx=12, pady=(6, 0))
+                wraplength=820, justify=LEFT,
+            ).pack(anchor=W, pady=(6, 0))
         if result.notes:
             ttk.Label(
-                dialog, text="Notes: " + " ".join(result.notes), wraplength=760, justify=LEFT,
-            ).pack(anchor=W, padx=12, pady=(6, 0))
+                scrolled, text="Notes: " + " ".join(result.notes), wraplength=820, justify=LEFT,
+            ).pack(anchor=W, pady=(6, 0))
 
         def cancel():
             dialog.destroy()
@@ -488,11 +533,13 @@ class CareerAgentApp:
                 f"{len(skipped)} selected proposal(s) left unsaved."
             )
 
-        # Escape and Cancel must do exactly the same thing, including the status line they leave behind.
+        # The window close button, Escape and Cancel all leave the same state: nothing written, and a
+        # status line that says so. Return asks to save, and still needs the confirmation.
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
         dialog.bind("<Escape>", lambda _event: cancel())
-        ttk.Button(dialog, text="Cancel", command=cancel).pack(anchor="e", side="right", padx=12, pady=12)
         dialog.bind("<Return>", lambda _event: apply_selected())
-        ttk.Button(dialog, text="Save selected values", command=apply_selected).pack(anchor="e", side="right", pady=12)
+        ttk.Button(footer, text="Save selected values", command=apply_selected).pack(side="right")
+        ttk.Button(footer, text="Cancel", command=cancel).pack(side="right", padx=(0, 8))
 
     def _apply_accepted_profile_values(self, accepted):
         """Validate and save reviewed resume values, and confirm what the database actually holds.

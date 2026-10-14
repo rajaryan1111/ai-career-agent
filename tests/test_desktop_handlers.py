@@ -58,9 +58,64 @@ class BooleanVar:
         self.value = bool(value)
 
 
+#: Options real Tk accepts for each widget class this module stubs. A stub refuses anything else, the
+#: way Tk raises ``_tkinter.TclError: unknown option "-wraplength"``. Without this the stubs accepted
+#: any keyword and a real crash (a wrapping option on ``ttk.Checkbutton``, which has none) survived a
+#: green suite on every platform and only failed on macOS when the dialog was actually built.
+TTK_FRAME_OPTIONS = frozenset({
+    "borderwidth", "class", "cursor", "height", "padding", "relief", "style", "takefocus", "width",
+})
+TTK_LABEL_OPTIONS = frozenset({
+    "anchor", "background", "class", "compound", "cursor", "font", "foreground", "image", "justify",
+    "padding", "relief", "state", "style", "takefocus", "text", "textvariable", "underline", "width",
+    "wraplength",
+})
+TTK_BUTTON_OPTIONS = frozenset({
+    "class", "command", "compound", "cursor", "default", "image", "padding", "state", "style",
+    "takefocus", "text", "textvariable", "underline", "width",
+})
+TTK_CHECKBUTTON_OPTIONS = frozenset({
+    "class", "command", "compound", "cursor", "image", "offvalue", "onvalue", "padding", "state",
+    "style", "takefocus", "text", "textvariable", "underline", "variable", "width",
+})
+TTK_SCROLLBAR_OPTIONS = frozenset({"class", "command", "cursor", "orient", "style", "takefocus"})
+TTK_NOTEBOOK_OPTIONS = frozenset({"class", "cursor", "height", "padding", "style", "takefocus", "width"})
+TTK_COMBOBOX_OPTIONS = frozenset({
+    "class", "cursor", "exportselection", "font", "height", "invalidcommand", "justify", "postcommand",
+    "state", "style", "takefocus", "textvariable", "validate", "validatecommand", "values", "width",
+    "xscrollcommand",
+})
+TTK_ENTRY_OPTIONS = frozenset({
+    "class", "cursor", "exportselection", "font", "invalidcommand", "justify", "show", "state",
+    "style", "takefocus", "textvariable", "validate", "validatecommand", "width", "xscrollcommand",
+})
+TTK_TREEVIEW_OPTIONS = frozenset({
+    "class", "columns", "cursor", "displaycolumns", "height", "padding", "selectmode", "show", "style",
+    "takefocus", "xscrollcommand", "yscrollcommand",
+})
+CANVAS_OPTIONS = frozenset({
+    "background", "bd", "bg", "borderwidth", "closeenough", "confine", "cursor", "height",
+    "highlightbackground", "highlightcolor", "highlightthickness", "insertbackground", "relief",
+    "scrollregion", "takefocus", "width", "xscrollcommand", "xscrollincrement", "yscrollcommand",
+    "yscrollincrement",
+})
+TOPLEVEL_OPTIONS = frozenset({
+    "background", "bd", "bg", "borderwidth", "class", "cursor", "height", "highlightbackground",
+    "highlightcolor", "highlightthickness", "menu", "padx", "pady", "relief", "takefocus", "width",
+})
+
+
+class TclOptionError(Exception):
+    """Stands in for the ``_tkinter.TclError`` real Tk raises for an option a widget does not have."""
+
+
 class Widget:
     def __init__(self, *args, **kwargs):
         self.options = kwargs
+        # The first positional argument is the parent widget in every real Tk constructor, so tests can
+        # check where a widget was placed (inside the scrolling area, or in the fixed footer).
+        self.master = args[0] if args else kwargs.get("master")
+        self.destroyed = False
 
     def pack(self, *args, **kwargs):
         return self
@@ -92,15 +147,22 @@ class Widget:
         return self
 
     def title(self, *args, **kwargs):
+        self.title_text = args[0] if args else None
         return None
 
     def geometry(self, *args, **kwargs):
+        self.requested_geometry = args[0] if args else None
         return None
 
     def minsize(self, *args, **kwargs):
+        self.requested_minsize = args[:2]
         return None
 
-    def protocol(self, *args, **kwargs):
+    def protocol(self, handle=None, func=None, *args, **kwargs):
+        # Real Tk runs this handler when the window is closed; recording it lets a test do the same.
+        self.protocols = getattr(self, "protocols", {})
+        if handle:
+            self.protocols[handle] = func
         return None
 
     def add(self, *args, **kwargs):
@@ -122,7 +184,67 @@ class Widget:
         self.destroyed = True
 
 
-class Tree(Widget):
+class ValidatedWidget(Widget):
+    """A stub that refuses options its real widget does not have (see ``TclOptionError``)."""
+
+    allowed_options = frozenset()
+
+    def __init__(self, *args, **kwargs):
+        unknown = sorted(set(kwargs) - set(self.allowed_options) - {"master"})
+        if unknown:
+            listed = " ".join(f'-{name}' for name in unknown)
+            raise TclOptionError(f"unknown option \"{listed}\"")
+        super().__init__(*args, **kwargs)
+
+
+class Frame(ValidatedWidget):
+    allowed_options = TTK_FRAME_OPTIONS
+
+
+class Notebook(ValidatedWidget):
+    allowed_options = TTK_NOTEBOOK_OPTIONS
+
+
+class Canvas(ValidatedWidget):
+    """Canvas stand-in: keeps the scrolled child window and any scroll request a test caused."""
+
+    allowed_options = CANVAS_OPTIONS
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scrollregion = None
+        self.window_widget = None
+        self.window_anchor = None
+        self.scroll_calls = []
+        Canvas.created.append(self)
+
+    def create_window(self, *args, **kwargs):
+        self.window_widget = kwargs.get("window")
+        self.window_anchor = kwargs.get("anchor")
+        return "canvas-window-1"
+
+    def bbox(self, *args, **kwargs):
+        return (0, 0, 800, 1200)
+
+    def configure(self, *args, **kwargs):
+        if "scrollregion" in kwargs:
+            self.scrollregion = kwargs["scrollregion"]
+        return None
+
+    def itemconfigure(self, *args, **kwargs):
+        return None
+
+    def yview(self, *args, **kwargs):
+        return (0.0, 1.0)
+
+    def yview_scroll(self, number, what=None):
+        self.scroll_calls.append((number, what))
+
+
+class Tree(ValidatedWidget):
+    allowed_options = TTK_TREEVIEW_OPTIONS
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.rows = ()
@@ -189,22 +311,39 @@ class MessageRecorder:
 
 
 class ButtonRegistry:
-    """Remembers button commands: the most recent one, and one per button label."""
+    """Remembers button commands: the most recent one, one per label, and every button created."""
 
     def __init__(self):
         self.command = None
         self.by_text = {}
+        self.created = []
 
     def clear(self):
         self.command = None
         self.by_text = {}
+        self.created = []
 
     def button(self, *args, **kwargs):
         if kwargs.get("command"):
             self.command = kwargs["command"]
             if kwargs.get("text"):
                 self.by_text[kwargs["text"]] = kwargs["command"]
-        return Widget(**kwargs)
+        widget = ValidatedWidget.__new__(Button)
+        Button.__init__(widget, *args, **kwargs)
+        self.created.append(widget)
+        return widget
+
+
+class Button(ValidatedWidget):
+    allowed_options = TTK_BUTTON_OPTIONS
+
+    @property
+    def text(self):
+        return self.options.get("text", "")
+
+
+class Entry(ValidatedWidget):
+    allowed_options = TTK_ENTRY_OPTIONS
 
 
 class FileDialog:
@@ -222,9 +361,25 @@ class FileDialog:
         return self.path
 
 
-class RecordingCombobox(Widget):
+class RecordingScrollbar(ValidatedWidget):
+    """Scrollbar stand-in that records the thumb positions it was asked to show."""
+
+    allowed_options = TTK_SCROLLBAR_OPTIONS
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.positions = []
+        RecordingScrollbar.created.append(self)
+
+    def set(self, first, last):
+        self.positions.append((first, last))
+
+
+class RecordingCombobox(ValidatedWidget):
     """Combobox stand-in that keeps every instance, so a test can read the offered values."""
 
+    allowed_options = TTK_COMBOBOX_OPTIONS
     created = []
 
     def __init__(self, *args, **kwargs):
@@ -237,9 +392,10 @@ class RecordingCombobox(Widget):
         return list(self.options.get("values") or ())
 
 
-class RecordingCheckbutton(Widget):
-    """Checkbutton stand-in that keeps every instance, so a test can read or set its variable."""
+class RecordingCheckbutton(ValidatedWidget):
+    """Checkbutton stand-in; keeps every instance so a test can read or set its variable."""
 
+    allowed_options = TTK_CHECKBUTTON_OPTIONS
     created = []
 
     def __init__(self, *args, **kwargs):
@@ -255,9 +411,10 @@ class RecordingCheckbutton(Widget):
         return self.options.get("text", "")
 
 
-class RecordingLabel(Widget):
+class RecordingLabel(ValidatedWidget):
     """Label stand-in that keeps every instance, so a test can read what a dialog displayed."""
 
+    allowed_options = TTK_LABEL_OPTIONS
     created = []
 
     def __init__(self, *args, **kwargs):
@@ -269,9 +426,10 @@ class RecordingLabel(Widget):
         return self.options.get("text", "")
 
 
-class RecordingToplevel(Widget):
-    """Toplevel stand-in that keeps every dialog, so a test can read its event bindings."""
+class RecordingToplevel(ValidatedWidget):
+    """Toplevel stand-in that keeps every dialog, so a test can read its bindings and size."""
 
+    allowed_options = TOPLEVEL_OPTIONS
     created = []
 
     def __init__(self, *args, **kwargs):
@@ -287,7 +445,8 @@ FILEDIALOG = FileDialog()
 _tkinter = types.ModuleType("tkinter")
 _tkinter.Tk = Widget
 _tkinter.Toplevel = Widget
-_tkinter.Text = Widget
+_tkinter.Text = Widget  # a permissive stub: the text widget has a long option list of its own
+_tkinter.Canvas = Canvas
 _tkinter.StringVar = StringVar
 _tkinter.BooleanVar = BooleanVar
 _tkinter.BOTH = "both"
@@ -298,8 +457,9 @@ _tkinter.X = "x"
 _tkinter.filedialog = FILEDIALOG
 _tkinter.messagebox = MESSAGES
 _tkinter.ttk = types.SimpleNamespace(
-    Frame=Widget, Label=RecordingLabel, Notebook=Widget, Combobox=Widget, Entry=Widget, Treeview=Tree,
-    Checkbutton=RecordingCheckbutton, Button=BUTTONS.button,
+    Frame=Frame, Label=RecordingLabel, Notebook=Notebook, Combobox=RecordingCombobox, Entry=Entry,
+    Treeview=Tree, Checkbutton=RecordingCheckbutton, Scrollbar=RecordingScrollbar,
+    Button=BUTTONS.button,
 )
 
 _ORIGINAL_TKINTER = sys.modules.get("tkinter")
@@ -384,7 +544,9 @@ class HandlerTestCase(unittest.TestCase):
         RecordingCombobox.created = []
         RecordingCheckbutton.created = []
         RecordingLabel.created = []
+        RecordingScrollbar.created = []
         RecordingToplevel.created = []
+        Canvas.created = []
         FILEDIALOG.path = ""
         FILEDIALOG.opened = None
 
@@ -2234,14 +2396,18 @@ class ResumeImportHandlerTests(HandlerTestCase):
         return "\n".join(labels + buttons)
 
     def selection(self, key):
-        """The checkbutton variable for a proposal key, matched by the label the dialog displayed."""
+        """The checkbutton variable for a proposal key, matched by the label on the checkbox."""
         for proposal in self.parsed.proposals:
             if proposal.key != key:
                 continue
             for button in RecordingCheckbutton.created:
-                if button.text.startswith(f"{proposal.label}:"):
+                if button.text == proposal.label:
                     return button.variable
         raise AssertionError(f"no checkbutton was created for {key!r}")
+
+    def labels_with(self, prefix):
+        """Every dialog label whose text starts with ``prefix``."""
+        return [label for label in RecordingLabel.created if label.text.startswith(prefix)]
 
     def test_a_cancelled_chooser_changes_nothing(self):
         self.store.save_profile(PROFILE)
@@ -2329,7 +2495,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertEqual(set(stored.skills), set(PROFILE.skills), "an unselected value must keep the saved one")
         self.assertEqual(stored.candidate_country, PROFILE.candidate_country)
         self.assertEqual(stored.experience_years, PROFILE.experience_years)
-        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertTrue(dialog.destroyed)
         self.assertIn("Not saved (not selected): Skills", MESSAGES.text("showinfo"))
         self.assertIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertIn("saved", app.status.get().lower())
@@ -2343,7 +2509,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
 
         BUTTONS.by_text["Cancel"]()
 
-        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertTrue(dialog.destroyed)
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertEqual(app.profile_vars["skills"].get(), desktop.profile_form_values(PROFILE)["skills"])
         self.assertIn("cancelled", app.status.get())
@@ -2359,7 +2525,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
 
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertEqual(self.store.get_profile(), PROFILE)
-        self.assertFalse(getattr(dialog, "destroyed", False), "the review screen must stay open")
+        self.assertFalse(dialog.destroyed, "the review screen must stay open")
 
     def test_selecting_nothing_is_refused_without_saving(self):
         self.store.save_profile(PROFILE)
@@ -2373,7 +2539,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertIn("Nothing selected", MESSAGES.titles("showinfo"))
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertEqual(self.store.get_profile(), PROFILE)
-        self.assertFalse(getattr(dialog, "destroyed", False))
+        self.assertFalse(dialog.destroyed)
 
     def test_a_value_that_fails_validation_is_refused_without_writing(self):
         self.store.save_profile(PROFILE)
@@ -2396,7 +2562,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertEqual(self.store.get_profile(), PROFILE)
-        self.assertFalse(getattr(dialog, "destroyed", False))
+        self.assertFalse(dialog.destroyed)
 
     def test_a_database_failure_is_reported_and_the_previous_profile_survives(self):
         self.store.save_profile(PROFILE)
@@ -2413,7 +2579,7 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertIn("nothing was saved", app.status.get().lower())
         self.assertEqual(self.store.get_profile(), PROFILE)
-        self.assertFalse(getattr(dialog, "destroyed", False))
+        self.assertFalse(dialog.destroyed)
 
     def test_a_stored_profile_that_does_not_match_is_reported_as_failed(self):
         self.store.save_profile(PROFILE)
@@ -2513,6 +2679,96 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertEqual(self.store.get_profile(), PROFILE)
 
+    def test_a_wrapping_option_on_a_checkbutton_is_refused_like_real_tk(self):
+        """The macOS crash in one line: ttk.Checkbutton has no -wraplength, and Tk says so."""
+        with self.assertRaises(TclOptionError) as caught:
+            desktop.ttk.Checkbutton(Widget(), text="Skills", variable=desktop.tk.BooleanVar(), wraplength=720)
+
+        self.assertIn("wraplength", str(caught.exception))
+
+    def test_the_review_rows_pass_only_options_ttk_checkbutton_accepts(self):
+        self.store.save_profile(PROFILE)
+
+        _app, dialog = self.import_resume(self.write_docx())
+
+        self.assertIsNotNone(dialog)
+        self.assertTrue(RecordingCheckbutton.created, "the fixture must produce proposals")
+        self.assertEqual(len(RecordingCheckbutton.created), len(self.parsed.proposals))
+        for checkbox in RecordingCheckbutton.created:
+            self.assertEqual(set(checkbox.options), {"text", "variable"}, "no wrapping option belongs here")
+            self.assertLessEqual(set(checkbox.options), set(TTK_CHECKBUTTON_OPTIONS))
+
+    def test_the_wrapping_labels_carry_the_value_and_the_review_state(self):
+        self.store.save_profile(PROFILE)
+
+        _app, dialog = self.import_resume(self.write_docx())
+
+        self.assertIsNotNone(dialog)
+        for proposal in self.parsed.proposals:
+            value_labels = self.labels_with(f"{proposal.label}: ")
+            self.assertTrue(value_labels, f"{proposal.label} needs a label showing its value")
+            self.assertIn(proposal.value, value_labels[0].text)
+            self.assertIn("wraplength", value_labels[0].options, "the value label is where wrapping belongs")
+            self.assertLessEqual(set(value_labels[0].options), set(TTK_LABEL_OPTIONS))
+            state_labels = [
+                label for label in RecordingLabel.created
+                if label.text.startswith(f"{proposal.confidence.value} · from: ")
+                and proposal.evidence in label.text
+            ]
+            self.assertTrue(state_labels, f"{proposal.label} needs its evidence and confidence shown")
+            self.assertIn("wraplength", state_labels[0].options)
+
+    def test_the_review_dialog_scrolls_and_keeps_its_actions_out_of_the_scrolling_area(self):
+        self.store.save_profile(PROFILE)
+
+        _app, dialog = self.import_resume(self.write_docx())
+
+        self.assertIsNotNone(dialog)
+        self.assertEqual(len(Canvas.created), 1, "the proposals need exactly one scrollable area")
+        canvas = Canvas.created[0]
+        scrolled = canvas.window_widget
+        self.assertIsNotNone(scrolled, "the canvas must hold the frame the proposals are built in")
+        self.assertEqual(canvas.window_anchor, "nw")
+        self.assertEqual(len(RecordingScrollbar.created), 1, "the scrolling area needs a scrollbar")
+        self.assertIn("<Configure>", scrolled.bindings, "the scroll region must follow the content")
+        self.assertIn("<Configure>", canvas.bindings, "the canvas must fit its content width")
+        self.assertIn("<MouseWheel>", canvas.bindings, "the mouse wheel must scroll the proposals")
+        for checkbox in RecordingCheckbutton.created:
+            self.assertIs(checkbox.master.master, scrolled, "each proposal row lives in the scrolling area")
+
+        actions = {button.text: button for button in BUTTONS.created if button.text}
+        self.assertIn("Save selected values", actions)
+        self.assertIn("Cancel", actions)
+        self.assertIs(actions["Save selected values"].master, actions["Cancel"].master)
+        self.assertIsNot(actions["Save selected values"].master, scrolled, "the actions must not scroll away")
+
+    def test_the_review_dialog_opens_at_a_usable_size(self):
+        self.store.save_profile(PROFILE)
+
+        _app, dialog = self.import_resume(self.write_docx())
+
+        self.assertIsNotNone(dialog)
+        width, height = (int(part) for part in str(dialog.requested_geometry).split("x"))
+        self.assertGreaterEqual(width, 640, "the dialog must be wide enough for wrapping prose")
+        self.assertGreaterEqual(height, 480, "the dialog must be tall enough for several proposals")
+        minimum_width, minimum_height = (int(part) for part in dialog.requested_minsize)
+        self.assertLessEqual(minimum_width, width)
+        self.assertLessEqual(minimum_height, height)
+
+    def test_closing_the_review_window_changes_nothing(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        close_handler = dialog.protocols.get("WM_DELETE_WINDOW")
+        self.assertTrue(callable(close_handler), "the window close button must be handled, not ignored")
+
+        close_handler()
+
+        self.assertTrue(dialog.destroyed)
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertIn("cancelled", app.status.get())
+        self.assertEqual(MESSAGES.titles("showinfo"), [])
+
     def test_the_review_screen_offers_keyboard_cancel_and_confirm(self):
         self.store.save_profile(PROFILE)
         app, dialog = self.import_resume(self.write_docx())
@@ -2525,9 +2781,41 @@ class ResumeImportHandlerTests(HandlerTestCase):
 
         dialog.bindings["<Escape>"](None)
 
-        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertTrue(dialog.destroyed)
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertIn("cancelled", app.status.get(), "Escape must say what the Cancel button says")
+
+
+class WindowConstructionTests(HandlerTestCase):
+    """Every widget the real window builds must accept the options it is given.
+
+    The macOS crash this covers happened while a widget was being constructed: ``ttk.Checkbutton`` was
+    given ``-wraplength``, which Tk refuses at build time with ``unknown option "-wraplength"``. The
+    stubs here refuse the same options real Tk refuses, so building the whole interface — and the
+    review dialog, in the tests above — is a headless guard for that entire class of crash.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "window.sqlite3")
+        self.addCleanup(app.store.close)
+        return root, app
+
+    def test_the_whole_window_and_every_tab_can_be_built(self):
+        root, app = self.build_window()
+
+        self.assertEqual(root.title_text, "AI Career Agent — Local Workspace")
+        self.assertIn("WM_DELETE_WINDOW", root.protocols, "closing the window must be handled")
+        self.assertIs(app.root, root)
+        self.assertTrue(RecordingLabel.created, "the tabs must have been built")
+        self.assertTrue(RecordingCombobox.created or app.jobs_tree.options, "the job form must exist")
+
+    def test_building_the_window_offers_every_tab(self):
+        _root, app = self.build_window()
+
+        self.assertTrue(hasattr(app, "profile_tab") and hasattr(app, "jobs_tab"))
+        self.assertTrue(hasattr(app, "tracker_tab") and hasattr(app, "data_tab"))
+        self.assertEqual(app.profile_vars["skills"].get(), "", "a fresh window starts with an empty profile")
 
 
 if __name__ == "__main__":

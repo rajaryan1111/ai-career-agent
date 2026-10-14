@@ -1020,3 +1020,45 @@ the database — each was caught by the intended test(s) (the copy mutation by e
 extra file named in the failure). Automated tests do **not** cover GUI
 rendering (no display or `tkinter` in this sandbox), and CI installs nothing, so the 11 PDF tests skip with a
 reason there; they were run locally with `pypdf` 6.20.1 (BSD-3-Clause, no mandatory dependencies).
+
+## 2026-10-14 (later) — macOS crash in the résumé review window: `unknown option "-wraplength"`
+
+**Reported.** On macOS with Python 3.14 and pypdf 6.20.1, a PDF import extracted text and then
+`_review_resume()` died at `career_agent/desktop.py:411` with
+`_tkinter.TclError: unknown option "-wraplength"`.
+
+**Root cause.** The proposal row passed `wraplength=720, justify=LEFT` to `ttk.Checkbutton`. Those are
+`ttk.Label` options: real Tk raises while the widget is being constructed. The headless tests could not
+catch it because every stub widget accepted any keyword, so the same code that crashed on macOS passed
+here and in CI on all three Python versions.
+
+**Fix.** The row is now a plain `ttk.Checkbutton(row, text=proposal.label, variable=variable)` — the
+label alone, which is all a checkbox should carry — beside two wrapping `ttk.Label`s that hold the value
+(`<field>: <value>`) and the review state (`<confidence> · from: <evidence>`). The dialog was rebuilt
+around that: a fixed header, a scrolling `tk.Canvas` + `ttk.Scrollbar` body that holds the proposal rows
+(with `<Configure>` re-fitting the scroll region and the content width, and mouse-wheel scrolling), and a
+footer `ttk.Frame` packed before the body so **Save selected values** and **Cancel** cannot scroll away.
+The dialog now opens at 900x640 with a 620x400 minimum, and `WM_DELETE_WINDOW` is wired to the same
+`cancel()` as Escape and the Cancel button, which writes nothing and says so in the status line.
+
+**Regression tests (8).** The stubs now refuse options real Tk refuses: each stub widget class declares
+the option set its real counterpart accepts (`TTK_CHECKBUTTON_OPTIONS` and friends) and raises
+`TclOptionError` for anything else, so construction-time crashes of this class fail headlessly. New
+tests: a wrapping option on a checkbutton is refused like real Tk; every proposal row passes only
+`text`/`variable` and matches the row count; the wrapping labels carry the value and the
+confidence-plus-evidence; exactly one canvas and one scrollbar exist, every row is inside the scrolled
+frame, the buttons share a parent outside it, and the scroll-region and mouse-wheel bindings exist; the
+dialog opens at a usable size with a smaller minimum; closing the window writes nothing; and — in the new
+`WindowConstructionTests` — the whole window with every tab is built against those validating stubs.
+
+**Evidence.** Suite 475 → **483 tests, OK**, in the default interpreter (11 PDF tests skip without pypdf)
+and with pypdf 6.20.1 installed (**483 OK, no skips**); socket-blocked run 483 OK; `-W
+error::ResourceWarning` run 483 OK; `compileall` and `tabnanny` exit 0; CSV audit exit 0 with the
+unchanged SHA-256 `0356b093…f414` (83 records). Teeth: seven controlled mutations on a scratch copy —
+restoring the reported `-wraplength` line, dropping the scrollable area, packing the actions into the
+scrolling frame, removing the close-button handler, removing the geometry, letting the checkbox swallow
+the value, and disabling the stubs' option checking — were all caught (the last with the `-wraplength`
+bug restored as well, showing the option assertion catches it even without the validating stub); both
+scratch files were verified restored by SHA-256. Rendering itself is still not tested here (no display,
+no tkinter in the sandbox), and steps 24-31 of
+research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS retest for this fix.
