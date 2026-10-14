@@ -11,6 +11,7 @@ from pathlib import Path
 from .core import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
     CandidateProfile, JobListing, duplicate_key, is_allowed_tracker_transition,
+    require_confirmation_evidence,
 )
 
 _SCHEMA_VERSION = 1
@@ -186,12 +187,11 @@ class CareerStore:
         only for a record that already carried the flag or that is being confirmed now,
         so a later status can keep or drop a real confirmation but cannot invent one.
         """
-        if tracker.status is ApplicationStatus.CONFIRMED and not (
-            tracker.status_evidence and tracker.status_evidence.strip()
-        ):
-            raise ValueError(
-                "A confirmed application requires evidence; a click or attempted submission is not proof."
-            )
+        if tracker.status is ApplicationStatus.CONFIRMED:
+            # The same evidence floor the domain applies, enforced again here so a caller cannot
+            # bypass it by writing straight to storage. Storage can prove the field is filled with
+            # something substantive; only the candidate can assert that it is true.
+            require_confirmation_evidence(tracker.status_evidence)
         if stored is None:
             if tracker.status is not INITIAL_APPLICATION_STATUS:
                 raise ValueError(

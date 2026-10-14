@@ -404,6 +404,29 @@ class CareerAgentApp:
         ttk.Combobox(dialog, textvariable=status_var, values=[x.value for x in ApplicationStatus], state="readonly", width=30).pack(fill=X, padx=12, pady=4)
         ttk.Label(dialog, text="Evidence / note (required to confirm)").pack(anchor=W, padx=12, pady=(8, 0))
         ttk.Entry(dialog, textvariable=evidence_var, width=48).pack(fill=X, padx=12, pady=4)
+        ttk.Label(
+            dialog,
+            text="Describe what the employer actually showed you. Instruction text, placeholders, "
+                 "and \"test\" are not evidence.",
+            wraplength=420, justify=LEFT,
+        ).pack(anchor=W, padx=12)
+        # A confirmation is a claim about the employer, so the person must assert it. The dialog
+        # never sets candidate_confirmed on the candidate's behalf.
+        confirmed_assertion = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            dialog,
+            text="I am recording a real employer confirmation for a real application "
+                 "(not a test or a simulated submission)",
+            variable=confirmed_assertion,
+        ).pack(anchor=W, padx=12, pady=(8, 0))
+        if tracker.status is ApplicationStatus.CONFIRMED:
+            ttk.Label(
+                dialog,
+                text="This record is already confirmed. If that confirmation was a mistake or a test, "
+                     "the honest correction is 'withdrawn' with a note saying no application was "
+                     "submitted; confirmation cannot be undone backwards.",
+                wraplength=420, justify=LEFT,
+            ).pack(anchor=W, padx=12)
         def apply():
             message = ""
             try:
@@ -413,8 +436,22 @@ class CareerAgentApp:
                     raise ValueError("Select the status you want to apply.") from exc
                 stored = self.store.get_tracker(listing_id)
                 current = stored if stored is not None else ApplicationTracker(listing_id)
+                asserted = bool(confirmed_assertion.get())
+                if new_status is ApplicationStatus.CONFIRMED and not asserted:
+                    raise ValueError(
+                        "Recording a confirmation requires you to assert that it reflects a real "
+                        "employer confirmation. A test, a demo, or a simulated submission must stay "
+                        "unconfirmed. Nothing was saved."
+                    )
+                if new_status is not ApplicationStatus.CONFIRMED and asserted:
+                    raise ValueError(
+                        "The confirmation assertion applies only when the new status is "
+                        f"'{ApplicationStatus.CONFIRMED.value}'. An existing confirmation is kept "
+                        "automatically by later status changes, so leave it unticked. Nothing was saved."
+                    )
                 # Validate the requested action before any persistent write, so a refused
-                # change cannot create or modify a tracker record.
+                # change cannot create or modify a tracker record. The confirmation flag is set
+                # only from the explicit assertion above.
                 updated = current.transition(
                     new_status,
                     evidence=evidence_var.get().strip() or None,

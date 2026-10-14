@@ -259,6 +259,78 @@ _TRACKER_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
 INITIAL_APPLICATION_STATUS = ApplicationStatus.DISCOVERED
 
 
+#: Instruction text this application or its repository displays about tracker evidence. A
+#: confirmation claims that a real application was really confirmed, so guidance text must never
+#: be storable as the evidence for it: a tester following the smoke-test checklist (or a user
+#: copying a label) can paste instruction text into the evidence field, where it would then read
+#: as proof. Entries are the app's own sentences, normalized the same way evidence is, so they
+#: match pasted instructions without refusing ordinary notes that merely share a word.
+#: Each entry names the place it is displayed.
+_INSTRUCTIONAL_EVIDENCE_FRAGMENTS = (
+    "a confirmed application requires evidence",        # tracker tab label and store refusal message
+    "confirmation requires evidence",                   # refusal message when evidence is empty
+    "click or attempted submission is not proof",        # refusal message
+    "attempt or timeout is not proof",                   # tracker tab label
+    "evidence / note (required to confirm)",             # status dialog field label
+    "required to confirm",                               # status dialog field label
+    "meaningful evidence note",                          # local-alpha smoke-test checklist, tracker step
+    "move the status forward with a meaningful note",     # no-change dialog
+    "move the status forward",                           # no-change dialog
+    "keep the existing record as it is",                 # no-change dialog
+    "do not confirm a simulated",                        # confirmation guidance
+)
+
+#: Whole-value placeholders that are never a record of what an employer showed. Matched after
+#: normalization as the *complete* value rather than as a substring, so a real note that merely
+#: contains one of these words (for example "Portal shows no test results yet") is not refused.
+_PLACEHOLDER_EVIDENCE_VALUES = frozenset(
+    {
+        "", "-", "--", "...", "?", "n/a", "na", "none", "nil", "null", "todo", "tbd", "tbc",
+        "fixme", "placeholder", "evidence", "note", "notes", "text", "unknown", "asdf", "test",
+        "testing", "confirmed", "yes", "no",
+    }
+)
+
+
+def _normalize_evidence_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).casefold()
+
+
+def is_substantive_confirmation_evidence(text: str | None) -> bool:
+    """True when ``text`` could honestly be a record of what the employer showed.
+
+    This is a deliberately narrow *floor*, not authentication: it refuses empty or
+    whitespace-only text, this project's own instructional text, and bare placeholders
+    such as ``todo``, ``n/a``, or ``yes``. It cannot and does not decide whether a
+    confirmation genuinely happened. That decision always remains the candidate's explicit
+    assertion, which is why the desktop dialog asks for the assertion instead of inferring it
+    from the chosen status.
+    """
+    normalized = _normalize_evidence_text(text or "")
+    if not normalized or normalized in _PLACEHOLDER_EVIDENCE_VALUES:
+        return False
+    if normalized.startswith("<") and normalized.endswith(">"):
+        return False
+    return not any(fragment in normalized for fragment in _INSTRUCTIONAL_EVIDENCE_FRAGMENTS)
+
+
+def require_confirmation_evidence(text: str | None) -> str:
+    """Return the trimmed evidence text for a confirmation, or raise ``ValueError``.
+
+    The message is user-facing and describes what to enter instead, without claiming the
+    software can verify the claim itself.
+    """
+    if not (text or "").strip():
+        raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
+    if not is_substantive_confirmation_evidence(text):
+        raise ValueError(
+            "That text looks like an instruction or a placeholder rather than a record of what the "
+            "employer showed you. Describe what you actually observed, for example "
+            "\"Employer portal showed Application Received on 2026-10-14\". Nothing was saved."
+        )
+    return text.strip()
+
+
 def is_allowed_tracker_transition(current: ApplicationStatus, new_status: ApplicationStatus) -> bool:
     """True when the domain state machine permits this status change.
 
@@ -291,8 +363,8 @@ class ApplicationTracker:
             return self
         if new_status not in _TRACKER_TRANSITIONS[self.status]:
             raise ValueError(f"Invalid application transition: {self.status.value} -> {new_status.value}")
-        if new_status is ApplicationStatus.CONFIRMED and not (evidence and evidence.strip()):
-            raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
+        if new_status is ApplicationStatus.CONFIRMED:
+            require_confirmation_evidence(evidence)
         return ApplicationTracker(
             listing_id=self.listing_id,
             status=new_status,

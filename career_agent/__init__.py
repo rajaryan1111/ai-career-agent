@@ -5,6 +5,7 @@ from .core import (
     Decision, EligibilityReport, JobListing, RequirementResult,
     canonicalize_url, deduplicate_listings, duplicate_key,
     INITIAL_APPLICATION_STATUS, evaluate_eligibility, is_allowed_tracker_transition,
+    is_substantive_confirmation_evidence, require_confirmation_evidence,
     job_to_public_dict, score_relevance,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "Decision", "EligibilityReport", "JobListing", "RequirementResult",
     "canonicalize_url", "deduplicate_listings", "duplicate_key",
     "INITIAL_APPLICATION_STATUS", "evaluate_eligibility", "is_allowed_tracker_transition",
+    "is_substantive_confirmation_evidence", "require_confirmation_evidence",
     "job_to_public_dict", "score_relevance",
 ]

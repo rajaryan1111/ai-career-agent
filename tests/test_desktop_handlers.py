@@ -32,6 +32,19 @@ class StringVar:
         self.value = value
 
 
+class BooleanVar:
+    """Mirrors StringVar for the assertion checkbox; Tk is stubbed in headless CI."""
+
+    def __init__(self, value=False):
+        self.value = bool(value)
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = bool(value)
+
+
 class Widget:
     def __init__(self, *args, **kwargs):
         self.options = kwargs
@@ -177,6 +190,7 @@ _tkinter.Tk = Widget
 _tkinter.Toplevel = Widget
 _tkinter.Text = Widget
 _tkinter.StringVar = StringVar
+_tkinter.BooleanVar = BooleanVar
 _tkinter.BOTH = "both"
 _tkinter.END = "end"
 _tkinter.LEFT = "left"
@@ -186,7 +200,7 @@ _tkinter.filedialog = FILEDIALOG
 _tkinter.messagebox = MESSAGES
 _tkinter.ttk = types.SimpleNamespace(
     Frame=Widget, Label=Widget, Notebook=Widget, Combobox=Widget, Entry=Widget, Treeview=Tree,
-    Button=BUTTONS.button,
+    Checkbutton=Widget, Button=BUTTONS.button,
 )
 
 _ORIGINAL_TKINTER = sys.modules.get("tkinter")
@@ -298,21 +312,32 @@ class HandlerTestCase(unittest.TestCase):
             app.job_vars[key].set(value)
 
     def open_status_dialog(self, listing_id="j1"):
-        """Run the real handler and return the dialog's variables plus its save button command."""
+        """Run the real handler and return the dialog's variables plus its save button command.
+
+        Returns ``(app, status_var, evidence_var, confirmed_assertion, apply)``. The assertion
+        variable models the checkbox: it starts unchecked, so only tests that explicitly assert a
+        real confirmation can record one.
+        """
         app = self.make_app()
         app.tracker_tree.selected = (listing_id,)
         created = []
-        original = desktop.tk.StringVar
+        original_stringvar = desktop.tk.StringVar
+        original_booleanvar = desktop.tk.BooleanVar
 
-        def recording_stringvar(*args, **kwargs):
-            variable = original(*args, **kwargs)
-            created.append(variable)
-            return variable
+        def recording(variable_class):
+            def factory(*args, **kwargs):
+                variable = variable_class(*args, **kwargs)
+                created.append(variable)
+                return variable
 
-        desktop.tk.StringVar = recording_stringvar
-        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+            return factory
+
+        desktop.tk.StringVar = recording(original_stringvar)
+        desktop.tk.BooleanVar = recording(original_booleanvar)
+        self.addCleanup(setattr, desktop.tk, "StringVar", original_stringvar)
+        self.addCleanup(setattr, desktop.tk, "BooleanVar", original_booleanvar)
         app._update_status()
-        return app, created[0], created[1], BUTTONS.command
+        return app, created[0], created[1], created[2], BUTTONS.command
 
 
 class StartupPathTests(unittest.TestCase):
@@ -565,7 +590,7 @@ class MissingTrackerRowTests(HandlerTestCase):
 
     def test_valid_initial_state_creates_the_record_at_discovered(self):
         self.store.save_job(sample_job())
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("discovered")
         apply()
         stored = self.store.get_tracker("j1")
@@ -577,7 +602,7 @@ class MissingTrackerRowTests(HandlerTestCase):
 
     def test_valid_transition_from_a_new_record_is_created_then_advanced(self):
         self.store.save_job(sample_job())
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("shortlisted")
         apply()
         stored = self.store.get_tracker("j1")
@@ -588,7 +613,7 @@ class MissingTrackerRowTests(HandlerTestCase):
 
     def test_invalid_initial_jump_creates_no_record(self):
         self.store.save_job(sample_job())
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("interview")
         evidence_var.set("pretend invite")
         apply()
@@ -598,7 +623,7 @@ class MissingTrackerRowTests(HandlerTestCase):
 
     def test_invalid_initial_confirmed_creates_no_record(self):
         self.store.save_job(sample_job())
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
         evidence_var.set("fabricated confirmation")
         apply()
@@ -619,7 +644,7 @@ class MissingTrackerRowTests(HandlerTestCase):
                 store.save_job(sample_job())
                 self.store = store
                 MESSAGES.reset()
-                app, status_var, evidence_var, apply = self.open_status_dialog()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
                 status_var.set(status)
                 apply()
                 self.assertIn("Invalid status change", MESSAGES.titles())
@@ -632,7 +657,7 @@ class MissingTrackerRowTests(HandlerTestCase):
         self.addCleanup(reopened.close)
         reopened.save_job(sample_job())
         self.store = reopened
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("interview")
         apply()
         from_disk = CareerStore(self.store.database_path)
@@ -661,7 +686,7 @@ class MissingTrackerRowTests(HandlerTestCase):
                 raise sqlite3.OperationalError("database is locked")
             return real_save(tracker)
 
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         with mock.patch.object(self.store, "save_tracker", side_effect=failing_second_write):
             status_var.set("shortlisted")
             apply()
@@ -683,7 +708,7 @@ class TrackerUpdateTests(HandlerTestCase):
         reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
 
     def test_confirmation_still_requires_evidence(self):
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
         evidence_var.set("   ")
         apply()
@@ -691,23 +716,112 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.SUBMISSION_ATTEMPTED)
 
     def test_confirmation_with_evidence_is_saved(self):
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
-        evidence_var.set("Employer confirmation page shown")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        assertion.set(True)
         apply()
         stored = self.store.get_tracker("j1")
         self.assertEqual(stored.status, ApplicationStatus.CONFIRMED)
-        self.assertEqual(stored.status_evidence, "Employer confirmation page shown")
+        self.assertEqual(stored.status_evidence, "Employer portal shows Application Received (2026-10-14)")
+        self.assertTrue(stored.candidate_confirmed)
         self.assertIn("updated to confirmed", app.status.get())
+
+    def test_confirmation_without_the_explicit_assertion_is_refused_and_writes_nothing(self):
+        """The status dialog must never set candidate_confirmed on the candidate's behalf."""
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("confirmed")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        self.assertFalse(assertion.get(), "the assertion must start unticked")
+        apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        self.assertNotIn("updated", app.status.get())
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        self.assertIsNone(stored.status_evidence)
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_assertion_with_instruction_text_is_refused_and_writes_nothing(self):
+        """Regression for the smoke-test record: guidance text must not become proof of confirmation."""
+        for text in (
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Evidence / note (required to confirm)",
+            "Confirm with a meaningful evidence note, then move it to response_received or interview.",
+            "todo",
+            "   ",
+        ):
+            with self.subTest(text=text[:40]):
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set("confirmed")
+                evidence_var.set(text)
+                assertion.set(True)
+                apply()
+                self.assertIn("Invalid status change", MESSAGES.titles())
+                stored = self.store.get_tracker("j1")
+                self.assertIs(stored.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+                self.assertIsNone(stored.status_evidence)
+                self.assertFalse(stored.candidate_confirmed)
+                MESSAGES.reset()
+
+    def test_the_assertion_cannot_be_used_with_a_non_confirmation_status(self):
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("submitted_unverified")
+        evidence_var.set("Submitted through the employer portal")
+        assertion.set(True)
+        apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_unchecked_assertion_still_allows_the_ordinary_forward_path(self):
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("submitted_unverified")
+        evidence_var.set("Submitted through the employer portal")
+        apply()
+        self.assertIn("updated to submitted_unverified", app.status.get())
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.SUBMITTED_UNVERIFIED)
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_gui_can_withdraw_a_mistaken_confirmation_but_keeps_the_confirmation_flag(self):
+        """Documents why a separate, backed-up correction exists.
+
+        The supported forward path can stop pursuing a mistaken confirmation, and the evidence is
+        revised honestly, but the dialog deliberately never clears an existing confirmation flag on
+        its own. Correcting the flag itself is an explicit, backed-up action
+        (see ``scripts/correct_tracker_record.py``) so the change is auditable.
+        """
+        # Walk the real dialog path: submit unverified, then confirm with the assertion ticked.
+        _, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("submitted_unverified")
+        evidence_var.set("Submitted through the employer portal")
+        apply()
+        _, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("confirmed")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        assertion.set(True)
+        apply()
+        self.assertIs(self.store.get_tracker("j1").status, ApplicationStatus.CONFIRMED)
+
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("withdrawn")
+        evidence_var.set("Fictional smoke-test record: no application was ever submitted")
+        apply()
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.WITHDRAWN)
+        self.assertEqual(stored.status_evidence, "Fictional smoke-test record: no application was ever submitted")
+        self.assertTrue(stored.candidate_confirmed, "the dialog does not silently clear a stored flag")
 
     def test_no_op_transition_does_not_claim_success_and_keeps_the_old_evidence(self):
         advanced = self.store.get_tracker("j1").transition(
             ApplicationStatus.CONFIRMED, evidence="original evidence", candidate_confirmed=True
         )
         self.store.save_tracker(advanced)
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
         evidence_var.set("replacement evidence that must not be stored")
+        assertion.set(True)
         apply()
         self.assertIn("No change", MESSAGES.titles())
         self.assertNotIn("updated", app.status.get())
@@ -715,12 +829,13 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertEqual(self.store.get_tracker("j1").status_evidence, "original evidence")
 
     def test_evidence_can_be_revised_by_moving_the_status_forward(self):
-        _, status_var, evidence_var, apply = self.open_status_dialog()
+        _, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
-        evidence_var.set("Employer confirmation page shown")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        assertion.set(True)
         apply()
         MESSAGES.reset()
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("response_received")
         evidence_var.set("Employer replied with a screening request")
         apply()
@@ -730,7 +845,7 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertTrue(stored.candidate_confirmed)
 
     def test_invalid_status_selection_is_reported(self):
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("")
         apply()
         self.assertIn("Invalid status change", MESSAGES.titles())
@@ -739,7 +854,7 @@ class TrackerUpdateTests(HandlerTestCase):
     def test_invalid_jump_is_reported(self):
         self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
         self.store.save_tracker(ApplicationTracker("j2", ApplicationStatus.DISCOVERED))
-        app, status_var, evidence_var, apply = self.open_status_dialog("j2")
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
         status_var.set("interview")
         evidence_var.set("pretend invite")
         apply()
@@ -754,7 +869,7 @@ class TrackerUpdateTests(HandlerTestCase):
         """A refused change must not modify status, evidence, or the confirmation flag."""
         before = self.store.get_tracker("j1")
         self.assertEqual(before.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("interview")
         evidence_var.set("pretend invite")
         apply()
@@ -764,9 +879,10 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertNotIn("updated", app.status.get())
 
     def test_database_error_is_reported_without_claiming_success(self):
-        app, status_var, evidence_var, apply = self.open_status_dialog()
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
         status_var.set("confirmed")
-        evidence_var.set("Employer confirmation page shown")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        assertion.set(True)
         with mock.patch.object(self.store, "save_tracker", side_effect=sqlite3.OperationalError("database is locked")):
             apply()
         self.assertIn("Status not saved", MESSAGES.titles())

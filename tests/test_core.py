@@ -4,6 +4,7 @@ from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, JobListing, canonicalize_url, deduplicate_listings,
     evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
+    is_substantive_confirmation_evidence, require_confirmation_evidence,
 )
 
 
@@ -205,6 +206,66 @@ class ApplicationTrackerTests(unittest.TestCase):
         confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page shown")
         self.assertEqual(confirmed.status, ApplicationStatus.CONFIRMED)
         self.assertEqual(confirmed.status_evidence, "Employer confirmation page shown")
+
+    def test_confirmation_refuses_this_projects_own_instruction_text(self):
+        """The smoke-test failure mode: paste the app's guidance and it must not read as proof."""
+        guidance_texts = (
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Confirmation requires evidence; a click or attempted submission is not proof.",
+            "Evidence / note (required to confirm)",
+            "Confirm with a meaningful evidence note, then move it to response_received or interview.",
+            "To revise the evidence, move the status forward with a meaningful note, "
+            "or keep the existing record as it is.",
+        )
+        for text in guidance_texts:
+            with self.subTest(text=text[:40]):
+                tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+                with self.assertRaises(ValueError) as caught:
+                    tracker.transition(ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True)
+                self.assertIn("instruction or a placeholder", str(caught.exception))
+                self.assertIs(tracker.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+                self.assertIsNone(tracker.status_evidence)
+                self.assertFalse(tracker.candidate_confirmed)
+
+    def test_confirmation_refuses_whitespace_placeholders_and_template_markers(self):
+        for text in ("   ", "\t\n", "n/a", "TODO", "tbd", "yes", "placeholder", "<your evidence here>"):
+            with self.subTest(text=text):
+                tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+                with self.assertRaises(ValueError):
+                    tracker.transition(ApplicationStatus.CONFIRMED, evidence=text)
+
+    def test_realistic_confirmation_notes_are_not_refused(self):
+        """The evidence floor must stay narrow: ordinary observations must still be recordable."""
+        for text in (
+            "Employer portal shows Application Received on 2026-10-14",
+            "Recruiter email acknowledged the application (thread ref ABC-123)",
+            "Confirmation email received; saved a screenshot locally",
+            # contains the word "evidence" but is an observation, not a bare placeholder value
+            "Portal shows the posting requires evidence of degree completion when applying",
+            # contains "test" as a word but is not the bare placeholder
+            "Employer replied: no online test is required for this internship",
+        ):
+            with self.subTest(text=text[:40]):
+                confirmed = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED).transition(
+                    ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True
+                )
+                self.assertIs(confirmed.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(confirmed.status_evidence, text)
+
+    def test_evidence_floor_is_a_shared_helper_over_plain_values(self):
+        cases = (
+            ("Employer portal shows Application Received", True),
+            ("A confirmed application requires evidence.", False),
+            ("", False),
+            (None, False),
+            ("   ", False),
+            ("todo", False),
+            ("<placeholder>", False),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertIs(is_substantive_confirmation_evidence(text), expected)
+        self.assertEqual(require_confirmation_evidence("  Received  "), "Received")
 
     def test_confirmation_flag_survives_later_status_transitions(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)

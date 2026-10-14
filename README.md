@@ -15,7 +15,8 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Transparent skill overlap and missing-skill explanations, separate from eligibility.
 - Conservative URL/requisition deduplication.
 - Separate source-listing and employer-application URLs.
-- Guarded application status transitions; confirmation requires evidence.
+- Guarded application status transitions; confirmation requires a deliberate user assertion plus
+  substantive evidence (the app's own instruction text and bare placeholders are refused).
 - Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
 - Validation of manually entered links as public http(s) addresses only (no credentials, no
   localhost/private/internal targets) and display-time redaction of credentials in older rows.
@@ -34,7 +35,17 @@ Python 3.10+ with Tkinter available:
 python -m career_agent
 ```
 
-Candidate data is stored in the operating system's per-user application-data directory, not inside the repository. To use the core tests in a headless environment, no display is required.
+Candidate data is stored in the operating system's per-user application-data directory, not inside the repository.
+If a tracker record is wrong — for example a smoke-test record left `confirmed` when nothing was ever
+submitted — correct it with the backed-up, dry-run-by-default tool rather than editing SQL by hand:
+
+```bash
+python scripts/correct_tracker_record.py --database "<your database path>" --listing-id <id> \
+    --to withdrawn --reason "<what actually happened>" --clear-confirmation          # dry run
+```
+
+See [the smoke-test diagnosis](research/tracker-confirmation-smoke-test-diagnosis-2026-10-14.md) for
+the full explanation and the exact recovery steps. To use the core tests in a headless environment, no display is required.
 
 ## Audit research data
 

@@ -161,6 +161,105 @@ class TrackerInvariantTests(unittest.TestCase):
         self.assertEqual(self.store.get_tracker("j1"), confirmed)
         self.assertTrue(self.store.get_tracker("j1").candidate_confirmed)
 
+    def test_storage_boundary_refuses_instruction_text_even_when_core_is_bypassed(self):
+        """Writing straight to storage must not be able to store guidance as proof of confirmation."""
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        guidance = "A confirmed application requires evidence. An attempt or timeout is not proof."
+        with self.assertRaisesRegex(ValueError, "instruction or a placeholder"):
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, guidance, True))
+        for text in ("n/a", "   ", "<your evidence here>"):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED, text, True))
+        unchanged = self.store.get_tracker("j1")
+        self.assertEqual(unchanged.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        self.assertIsNone(unchanged.status_evidence)
+        self.assertFalse(unchanged.candidate_confirmed)
+
+    def test_a_smoke_test_shaped_record_stays_readable_and_correctable(self):
+        """A database written by an earlier build must remain readable, and be recoverable honestly.
+
+        Reproduces the reported smoke-test row: a fictional job confirmed with the app's own
+        instruction text and the confirmation flag set. Reading it must never fail, confirming it
+        again must stay a no-op, and the supported correction is withdrawing it with a truthful
+        note while dropping the unearned confirmation flag. The row is corrected, never deleted.
+        """
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        guidance = "Evidence / note (required to confirm)"
+        connection = self.store._connection
+        with connection:
+            connection.execute(
+                "UPDATE application_tracker SET status=?, status_evidence=?, candidate_confirmed=1 WHERE listing_id=?",
+                (ApplicationStatus.CONFIRMED.value, guidance, "j1"),
+            )
+        legacy = self.store.get_tracker("j1")
+        self.assertIs(legacy.status, ApplicationStatus.CONFIRMED)
+        self.assertEqual(legacy.status_evidence, guidance)
+        self.assertTrue(legacy.candidate_confirmed)
+
+        # Re-applying the stored status is still a no-op: the misleading evidence is not "edited" in place.
+        self.assertIs(legacy.transition(ApplicationStatus.CONFIRMED, evidence="replacement"), legacy)
+
+        corrected = legacy.transition(
+            ApplicationStatus.WITHDRAWN,
+            evidence="Fictional smoke-test record: no application was ever submitted; the earlier "
+                     "confirmed state was a testing error and is not evidence of an application.",
+            candidate_confirmed=False,
+        )
+        self.store.save_tracker(corrected)
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.WITHDRAWN)
+        self.assertFalse(stored.candidate_confirmed)
+        self.assertIn("no application was ever submitted", stored.status_evidence)
+        self.assertEqual(len(self.store.list_jobs()), 1, "correction must not delete the listing")
+        with self.assertRaisesRegex(ValueError, "Invalid application transition"):
+            stored.transition(ApplicationStatus.SUBMITTED_UNVERIFIED, evidence="undo")
+
+    def test_a_correction_can_keep_a_genuine_confirmation_flag(self):
+        """Dropping the flag is an explicit choice; a real confirmation is not erased by withdrawing."""
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = self.store.get_tracker("j1").transition(
+            ApplicationStatus.CONFIRMED, evidence=CONFIRMATION_EVIDENCE, candidate_confirmed=True
+        )
+        self.store.save_tracker(confirmed)
+        withdrawn = confirmed.transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew after confirming")
+        self.store.save_tracker(withdrawn)
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.WITHDRAWN)
+        self.assertTrue(stored.candidate_confirmed)
+
+    def test_correction_survives_close_and_reopen(self):
+        """The corrected row must be durable on disk, not only in the open connection.
+
+        This class uses an in-memory database, so the durability check builds its own
+        file-backed store rather than relying on ``self.store``.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "correction.sqlite3")
+            with CareerStore(path) as store:
+                store.save_job(self.job)
+                reach_status(store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+                # Seed the row an earlier build could have written (placeholder evidence, flag set)
+                # directly, because the current write path correctly refuses to create it.
+                with store._connection:
+                    store._connection.execute(
+                        "UPDATE application_tracker SET status=?, status_evidence=?, candidate_confirmed=1 "
+                        "WHERE listing_id=?",
+                        (ApplicationStatus.CONFIRMED.value, "TODO", "j1"),
+                    )
+                corrected = store.get_tracker("j1").transition(
+                    ApplicationStatus.WITHDRAWN,
+                    evidence="Fictional smoke-test record: nothing was submitted; the confirmation was a testing error.",
+                    candidate_confirmed=False,
+                )
+                store.save_tracker(corrected)
+            with CareerStore(path) as reopened:
+                stored = reopened.get_tracker("j1")
+                self.assertIs(stored.status, ApplicationStatus.WITHDRAWN)
+                self.assertFalse(stored.candidate_confirmed)
+                self.assertIn("nothing was submitted", stored.status_evidence)
+                self.assertEqual(len(reopened.list_jobs()), 1, "the listing must still be present")
+
     def test_initial_status_must_be_discovered(self):
         for status in (
             ApplicationStatus.SHORTLISTED,
