@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
 
-from .core import Availability, CandidateProfile, JobListing
+from .core import (
+    ActivityKind, ApplicationActivity, Availability, CandidateProfile, JobListing,
+)
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
 
@@ -196,6 +199,55 @@ def _require_http_url(value: str | None, label: str) -> None:
 def _split_or_none(value: str) -> tuple[str, ...] | None:
     values = split_values(value)
     return values or None
+
+
+#: The kinds offered in the activity dialog, in the order the domain declares them.
+ACTIVITY_KIND_CHOICES = tuple(kind.value for kind in ActivityKind)
+
+#: How an activity date is written by this module, and the shape a typed one must have. The shape is
+#: checked before parsing: ``date.fromisoformat`` also accepts basic-format and ISO week dates, and a
+#: field that promises ``YYYY-MM-DD`` should not quietly accept three other spellings.
+ACTIVITY_DATE_FORMAT = "%Y-%m-%d"
+ACTIVITY_DATE_HINT = "YYYY-MM-DD"
+ACTIVITY_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def activity_form_values(*, today: date) -> dict[str, str]:
+    """The starting values for a new activity entry: a neutral kind and today's date.
+
+    ``note`` is the default on purpose. A neutral label cannot be saved by accident as the claim that
+    an application was sent, which is the entry whose meaning matters most.
+    """
+    return {"kind": ActivityKind.NOTE.value, "occurred_on": today.strftime(ACTIVITY_DATE_FORMAT), "detail": ""}
+
+
+def build_activity(values: Mapping[str, str]) -> ApplicationActivity:
+    """Map the raw form strings to a validated activity entry; raise ``ValueError`` to show.
+
+    The date must be written exactly as ``YYYY-MM-DD``: a date a person typed is not guessed at, so a
+    value this cannot read is refused with the accepted form named rather than reinterpreted.
+    """
+    kind_text = (values.get("kind") or "").strip()
+    try:
+        kind = ActivityKind(kind_text)
+    except ValueError as exc:
+        raise ValueError(f"Choose what the entry records: {', '.join(ACTIVITY_KIND_CHOICES)}.") from exc
+    raw_date = (values.get("occurred_on") or "").strip()
+    if not raw_date:
+        raise ValueError(f"Give the entry a date as {ACTIVITY_DATE_HINT}, for example 2026-10-12.")
+    if ACTIVITY_DATE_PATTERN.fullmatch(raw_date) is None:
+        raise ValueError(
+            f"{raw_date!r} is not a date in the form this field expects. Write it as "
+            f"{ACTIVITY_DATE_HINT}, for example 2026-10-12."
+        )
+    try:
+        occurred_on = date.fromisoformat(raw_date)
+    except ValueError as exc:
+        raise ValueError(
+            f"{raw_date!r} is not a real calendar date. Write it as {ACTIVITY_DATE_HINT}, for example "
+            "2026-10-12."
+        ) from exc
+    return ApplicationActivity(kind=kind, occurred_on=occurred_on, detail=values.get("detail") or "")
 
 
 def build_job_listing(values: Mapping[str, str], *, listing_id: str) -> JobListing:

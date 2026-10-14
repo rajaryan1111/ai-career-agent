@@ -8,7 +8,7 @@ cannot drift apart.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Callable
 import errno
 import json
@@ -17,9 +17,10 @@ import sqlite3
 from pathlib import Path
 
 from .core import (
-    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
-    CandidateProfile, JobListing, duplicate_key, is_allowed_tracker_transition,
-    require_confirmation_evidence,
+    INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
+    ApplicationTracker, Availability, CandidateProfile, JobListing, duplicate_key,
+    is_allowed_tracker_transition, require_confirmation_evidence, validate_activity_detail,
+    validate_activity_date,
 )
 
 _SCHEMA_VERSION = 2
@@ -386,6 +387,13 @@ def _stored_object(payload: object, noun: str) -> dict:
     return values
 
 
+def _stored_text(value: object, noun: str, field: str) -> str:
+    """One stored string, reported as a named problem when it is not usable text."""
+    if not isinstance(value, str) or not value.strip():
+        raise StoredRecordError(noun, f"its {field} is {type(value).__name__} rather than text")
+    return value
+
+
 def _stored_text_values(value: object, noun: str, field: str) -> list:
     """A stored list of strings, or refuse. A bare string is refused rather than split into letters.
 
@@ -675,6 +683,89 @@ class CareerStore:
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("Save the job listing before its application tracker.") from exc
+
+    def add_activity(self, listing_id: str, activity: ApplicationActivity) -> int:
+        """Append one dated entry to a listing's history and return its ``activity_id``.
+
+        The log is append-only from the application's side: there is no update path, so an entry that
+        was written cannot be turned into a different claim later. The values are checked again here,
+        not only where they were typed, because the storage boundary is where the rule has to hold.
+
+        An entry is the person's own record of what happened. It never changes the tracker status,
+        never sets ``candidate_confirmed``, and is never accepted as confirmation evidence - the
+        requirements for that live in ``save_tracker`` and are untouched by anything here.
+        """
+        if not isinstance(activity, ApplicationActivity):
+            raise ValueError("An activity entry must be an ApplicationActivity.")
+        kind = activity.kind if isinstance(activity.kind, ActivityKind) else ActivityKind(activity.kind)
+        detail = validate_activity_detail(activity.detail)
+        occurred_on = validate_activity_date(activity.occurred_on)
+        try:
+            with self._connection:
+                cursor = self._connection.execute(
+                    """INSERT INTO application_activity(listing_id, occurred_on, recorded_at, kind, detail)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (listing_id, occurred_on.isoformat(), _now(), kind.value, detail),
+                )
+        except sqlite3.IntegrityError as exc:
+            # The listing has to exist before its history can: the foreign key refuses an entry that
+            # would belong to nothing, and the message says which record to save first.
+            raise ValueError(
+                f"No saved listing {listing_id!r} to attach this activity to. Save the job listing first."
+            ) from exc
+        return int(cursor.lastrowid)
+
+    def list_activity(self, listing_id: str) -> tuple[ApplicationActivity, ...]:
+        """One listing's entries, oldest first (the order they happened, then the order recorded)."""
+        rows = self._connection.execute(
+            """SELECT activity_id, occurred_on, recorded_at, kind, detail
+                 FROM application_activity WHERE listing_id = ?
+                ORDER BY occurred_on, activity_id""",
+            (listing_id,),
+        ).fetchall()
+        return tuple(self._decode_activity(row) for row in rows)
+
+    def list_activity_raw(self, listing_id: str) -> tuple[dict, ...]:
+        """The stored rows exactly as they are, for the export.
+
+        ``list_activity`` refuses a row this version cannot decode, which is right for a view that has
+        to render it and wrong for an export: the export exists so the person can get their own data
+        out, including a row a later version wrote. Same reasoning as ``get_tracker_raw``.
+        """
+        rows = self._connection.execute(
+            """SELECT activity_id, occurred_on, recorded_at, kind, detail
+                 FROM application_activity WHERE listing_id = ?
+                ORDER BY occurred_on, activity_id""",
+            (listing_id,),
+        ).fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def delete_activity(self, activity_id: int) -> bool:
+        """Remove one entry; return whether a row was deleted. Explicit, like the other deletions."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM application_activity WHERE activity_id = ?", (int(activity_id),)
+            )
+        return cursor.rowcount == 1
+
+    def _decode_activity(self, row: sqlite3.Row) -> ApplicationActivity:
+        noun = "activity entry"
+        try:
+            kind = ActivityKind(row["kind"])
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its kind {row['kind']!r} is not one this version recognises") from exc
+        raw_date = str(row["occurred_on"])
+        try:
+            occurred_on = date.fromisoformat(raw_date)
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its date {raw_date!r} is not a calendar date") from exc
+        try:
+            return ApplicationActivity(
+                kind=kind, occurred_on=occurred_on, detail=_stored_text(row["detail"], noun, "detail"),
+                activity_id=int(row["activity_id"]), recorded_at=str(row["recorded_at"]),
+            )
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its detail is not one this version can read ({exc})") from exc
 
     def _check_tracker_invariants(self, tracker: ApplicationTracker, stored: ApplicationTracker | None) -> None:
         """Refuse tracker writes that contradict the domain state machine.

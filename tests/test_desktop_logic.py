@@ -5,15 +5,75 @@ pure functions only; they do not verify widget rendering.
 """
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from career_agent import Availability, CandidateProfile, JobListing
+from career_agent.core import ActivityKind
 from career_agent.desktop_logic import (
-    DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED, JobSaveMode,
+    ACTIVITY_KIND_CHOICES, DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED,
+    JobSaveMode, activity_form_values, build_activity,
     build_candidate_profile, build_job_listing, career_agent_data_root, default_database_path,
     format_stored_timestamp, form_values, job_form_values, plan_job_save, profile_fields_not_matching,
     profile_form_values,
 )
+
+
+class ActivityFormTests(unittest.TestCase):
+    """Turning the dialog's strings into an entry, without guessing at anything the person typed."""
+
+    def test_the_defaults_are_a_neutral_kind_and_today(self):
+        values = activity_form_values(today=date(2026, 10, 15))
+
+        self.assertEqual(values["kind"], "note", "a neutral default cannot be saved as a claim by accident")
+        self.assertEqual(values["occurred_on"], "2026-10-15")
+        self.assertEqual(values["detail"], "")
+
+    def test_the_offered_kinds_are_the_domain_kinds_in_order(self):
+        self.assertEqual(ACTIVITY_KIND_CHOICES, ("applied", "response", "interview", "assessment",
+                                                 "follow-up", "note"))
+
+    def test_a_complete_form_becomes_an_entry_with_the_detail_trimmed(self):
+        entry = build_activity({"kind": "applied", "occurred_on": "2026-10-12",
+                                "detail": "  Sent through the employer portal.  "})
+
+        self.assertIs(entry.kind, ActivityKind.APPLIED)
+        self.assertEqual(entry.occurred_on, date(2026, 10, 12))
+        self.assertEqual(entry.detail, "Sent through the employer portal.")
+
+    def test_only_the_documented_date_shape_is_accepted(self):
+        """``date.fromisoformat`` also reads basic and ISO-week forms; this field promises one shape."""
+        for raw in ("20261012", "2026-W41-1", "12/10/2026", "2026-2-30", "2026-13-01"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError) as caught:
+                    build_activity({"kind": "note", "occurred_on": raw, "detail": "x"})
+                self.assertIn("YYYY-MM-DD", str(caught.exception))
+
+    def test_an_impossible_calendar_date_is_named_as_such(self):
+        with self.assertRaises(ValueError) as caught:
+            build_activity({"kind": "note", "occurred_on": "2026-02-30", "detail": "x"})
+
+        self.assertIn("not a real calendar date", str(caught.exception))
+
+    def test_a_missing_date_is_refused_rather_than_defaulted(self):
+        with self.assertRaises(ValueError) as caught:
+            build_activity({"kind": "note", "occurred_on": "  ", "detail": "x"})
+
+        self.assertIn("Give the entry a date", str(caught.exception))
+
+    def test_an_unknown_kind_lists_what_may_be_chosen(self):
+        with self.assertRaises(ValueError) as caught:
+            build_activity({"kind": "sent", "occurred_on": "2026-10-12", "detail": "x"})
+
+        message = str(caught.exception)
+        for choice in ACTIVITY_KIND_CHOICES:
+            self.assertIn(choice, message)
+
+    def test_a_blank_detail_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            build_activity({"kind": "note", "occurred_on": "2026-10-12", "detail": "   "})
+
+        self.assertIn("Write what happened", str(caught.exception))
 
 
 def job_form(**overrides):

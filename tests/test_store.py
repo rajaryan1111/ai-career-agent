@@ -7,7 +7,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from datetime import date
+
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
+from career_agent.core import ActivityKind, ApplicationActivity
 import career_agent.store as store_module
 from career_agent.core import duplicate_key
 from career_agent.store import (
@@ -659,6 +662,148 @@ class DurabilityTests(unittest.TestCase):
         missing_parent = Path(self._directory.name) / "absent-directory" / "career_agent.sqlite3"
         with self.assertRaises(sqlite3.Error):
             CareerStore(missing_parent)
+
+
+class ActivityLogTests(unittest.TestCase):
+    """The append-only history: stored as written, order preserved, and separate from the status."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "career_agent.sqlite3"
+        self.store = CareerStore(self.path)
+        self.addCleanup(self.store.close)
+        self.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+        ))
+
+    def entry(self, kind=ActivityKind.APPLIED, day=12, detail="Applied through the portal."):
+        return ApplicationActivity(kind, date(2026, 10, day), detail)
+
+    def test_an_entry_is_stored_and_read_back_with_both_dates(self):
+        activity_id = self.store.add_activity("j1", self.entry())
+
+        stored, = self.store.list_activity("j1")
+        self.assertEqual(stored.activity_id, activity_id)
+        self.assertIs(stored.kind, ActivityKind.APPLIED)
+        self.assertEqual(stored.occurred_on, date(2026, 10, 12))
+        self.assertEqual(stored.detail, "Applied through the portal.")
+        self.assertIsNotNone(stored.recorded_at, "when this app wrote the row is recorded separately")
+
+    def test_entries_are_returned_oldest_first_regardless_of_the_order_written(self):
+        later = self.store.add_activity("j1", self.entry(kind=ActivityKind.RESPONSE, day=20, detail="They replied."))
+        earlier = self.store.add_activity("j1", self.entry(day=12))
+
+        self.assertEqual([entry.activity_id for entry in self.store.list_activity("j1")], [earlier, later])
+        self.assertEqual([entry.occurred_on for entry in self.store.list_activity("j1")],
+                         [date(2026, 10, 12), date(2026, 10, 20)])
+
+    def test_logging_an_application_never_changes_the_tracker(self):
+        """The reason the log exists beside the tracker rather than inside it.
+
+        An entry saying an application was sent is the person's own note. It must not create a tracker
+        record, set a status, or count as the evidence a confirmation requires.
+        """
+        self.store.add_activity("j1", self.entry())
+
+        self.assertIsNone(self.store.get_tracker("j1"), "no tracker row may be created by an entry")
+        self.assertIsNone(self.store.get_tracker_raw("j1"))
+
+    def test_an_entry_is_not_evidence_for_a_confirmation(self):
+        """The log says what the person did; a confirmation is a claim about the employer.
+
+        An "I applied" entry is exactly the kind of note someone might expect to double as proof, so
+        the storage boundary is where it must be refused: confirmation still needs substantive,
+        deliberately supplied evidence and the person's own assertion.
+        """
+        self.store.add_activity("j1", self.entry(kind=ActivityKind.APPLIED, detail="Sent it through the portal."))
+        self.store.save_tracker(ApplicationTracker("j1"))
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.CONFIRMED))
+
+        self.assertIn("evidence", str(caught.exception))
+        stored = self.store.get_tracker("j1")
+        self.assertIs(stored.status, ApplicationStatus.DISCOVERED, "the log must not move the status")
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_an_entry_for_an_unsaved_listing_is_refused_and_writes_nothing(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_activity("not-saved", self.entry())
+
+        self.assertIn("Save the job listing first", str(caught.exception))
+        self.assertEqual(self.store.list_activity("not-saved"), ())
+
+    def test_the_storage_boundary_re_validates_what_it_is_given(self):
+        """The rule holds at the database, not only in the dialog that normally builds the value."""
+        with self.assertRaises(ValueError):
+            self.store.add_activity("j1", ApplicationActivity(
+                ActivityKind.NOTE, date(2026, 10, 12), "x" * 5000))
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_activity("j1", "not an entry")
+
+        self.assertIn("ApplicationActivity", str(caught.exception))
+        self.assertEqual(self.store.list_activity("j1"), ())
+
+    def test_entries_survive_a_close_and_reopen(self):
+        self.store.add_activity("j1", self.entry())
+        self.store.close()
+
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        stored, = reopened.list_activity("j1")
+        self.assertEqual(stored.detail, "Applied through the portal.")
+
+    def test_deleting_one_entry_leaves_the_others(self):
+        first = self.store.add_activity("j1", self.entry())
+        self.store.add_activity("j1", self.entry(kind=ActivityKind.NOTE, day=13, detail="Called them."))
+
+        self.assertTrue(self.store.delete_activity(first))
+
+        remaining, = self.store.list_activity("j1")
+        self.assertEqual(remaining.detail, "Called them.")
+
+    def test_deleting_an_entry_that_is_not_there_reports_false(self):
+        first = self.store.add_activity("j1", self.entry())
+        self.assertTrue(self.store.delete_activity(first))
+
+        self.assertFalse(self.store.delete_activity(first), "a no-op must not be reported as a deletion")
+        self.assertFalse(self.store.delete_activity(9999))
+
+    def test_deleting_the_listing_removes_its_history(self):
+        self.store.add_activity("j1", self.entry())
+
+        self.assertTrue(self.store.delete_job("j1"))
+
+        self.assertEqual(self.store.list_activity("j1"), ())
+        self.assertEqual(self.store._connection.execute(
+            "SELECT count(*) FROM application_activity").fetchone()[0], 0,
+            "the foreign key must cascade rather than leave orphaned history")
+
+    def test_a_row_this_version_cannot_read_is_refused_by_name_and_the_raw_read_still_works(self):
+        """A view must not crash on a value a later version wrote, and the export must still carry it."""
+        self.store.add_activity("j1", self.entry())
+        self.store._connection.execute("UPDATE application_activity SET kind = 'teleported'")
+        self.store._connection.commit()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.list_activity("j1")
+        self.assertIn("teleported", str(caught.exception))
+        raw, = self.store.list_activity_raw("j1")
+        self.assertEqual(raw["kind"], "teleported")
+        self.assertEqual(raw["detail"], "Applied through the portal.")
+
+    def test_a_stored_date_that_is_not_a_date_is_refused_by_name(self):
+        self.store.add_activity("j1", self.entry())
+        self.store._connection.execute("UPDATE application_activity SET occurred_on = 'last Tuesday'")
+        self.store._connection.commit()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.list_activity("j1")
+
+        self.assertIn("last Tuesday", str(caught.exception))
 
 
 class SchemaMigrationTests(unittest.TestCase):

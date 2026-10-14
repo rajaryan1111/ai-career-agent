@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 import tkinter as tk
@@ -18,12 +19,13 @@ from .backup import (
     validate_app_database,
 )
 from .core import (
-    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, Decision,
-    evaluate_eligibility, score_relevance, selectable_tracker_statuses,
+    INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationStatus, ApplicationTracker, Availability,
+    Decision, evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
 from .desktop_logic import (
-    JobSaveMode, build_candidate_profile, default_database_path, format_stored_timestamp,
-    form_values, job_form_values, plan_job_save, profile_fields_not_matching, profile_form_values,
+    ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
+    default_database_path, format_stored_timestamp, form_values, job_form_values, plan_job_save,
+    profile_fields_not_matching, profile_form_values,
 )
 from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
@@ -192,6 +194,31 @@ class CareerAgentApp:
             self.tracker_tree.column(col, width=width, anchor=W)
         self.tracker_tree.pack(fill=BOTH, expand=True)
         self.tracker_tree.bind("<<TreeviewSelect>>", self._select_tracker)
+        self._build_activity_panel()
+
+    def _build_activity_panel(self):
+        """The dated history of what actually happened, kept beside the status it does not change."""
+        ttk.Label(
+            self.tracker_tab,
+            text=(
+                "Activity history — your own record of what happened, with dates. An entry never "
+                "changes the status above and is never treated as proof that an employer replied."
+            ),
+            wraplength=900,
+        ).pack(anchor=W, pady=(10, 4))
+        actions = ttk.Frame(self.tracker_tab)
+        actions.pack(fill=X, pady=(0, 4))
+        ttk.Button(actions, text="Add entry", command=self._add_activity).pack(side="right")
+        ttk.Button(actions, text="Delete selected entry", command=self._delete_activity).pack(side="right", padx=8)
+        self.activity_tree = ttk.Treeview(
+            self.tracker_tab, columns=("occurred", "kind", "detail", "recorded"), show="headings", height=6,
+        )
+        for col, label, width in [("occurred", "Date", 110), ("kind", "What", 170),
+                                  ("detail", "What happened", 430),
+                                  ("recorded", "Recorded here (this app, UTC)", 210)]:
+            self.activity_tree.heading(col, text=label)
+            self.activity_tree.column(col, width=width, anchor=W)
+        self.activity_tree.pack(fill=BOTH, expand=False)
 
     def _build_data_safety(self):
         ttk.Label(
@@ -989,6 +1016,7 @@ class CareerAgentApp:
                 format_stored_timestamp((stored or {}).get("updated_at")),
                 (stored or {}).get("status_evidence") or "",
             ))
+        self._refresh_activity()
 
     def _select_tracker(self, _event=None):
         selection = self.tracker_tree.selection()
@@ -996,6 +1024,149 @@ class CareerAgentApp:
             self.selected_job_id = selection[0]
             if selection[0] in self.jobs_tree.get_children():
                 self.jobs_tree.selection_set(selection[0])
+            self._refresh_activity()
+
+    def _selected_application(self, dialog_title: str) -> str | None:
+        """The selected tracker row, or ``None`` after telling the person to select one.
+
+        The tree selection is the source of truth rather than a remembered id: a listing can be
+        deleted in another tab while its history is still on screen.
+        """
+        selection = self.tracker_tree.selection()
+        if not selection:
+            messagebox.showinfo(dialog_title, "Select an application row first.", parent=self.root)
+            return None
+        return selection[0]
+
+    def _refresh_activity(self):
+        """Show the selected application's history, oldest first, exactly as stored."""
+        if not hasattr(self, "activity_tree"):
+            return
+        for item in self.activity_tree.get_children():
+            self.activity_tree.delete(item)
+        selection = self.tracker_tree.selection()
+        if not selection:
+            return
+        try:
+            entries = self.store.list_activity(selection[0])
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        for entry in entries:
+            self.activity_tree.insert("", END, iid=str(entry.activity_id), values=(
+                entry.occurred_on.isoformat(), entry.label, entry.detail,
+                format_stored_timestamp(entry.recorded_at),
+            ))
+
+    def _add_activity(self):
+        listing_id = self._selected_application("Select application")
+        if listing_id is None:
+            return
+        # The listing is read first: an entry for a record that no longer exists must be refused
+        # before a dialog is opened, not after the person has typed something.
+        try:
+            job = self.store.get_job(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if job is None:
+            messagebox.showinfo(
+                "Application not saved",
+                "That listing is no longer saved, so there is nothing to attach the entry to. "
+                "Refresh the window.",
+                parent=self.root,
+            )
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add activity entry")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        ttk.Label(dialog, text=f"{job.employer_name} — {job.role_title}", wraplength=460).pack(
+            anchor=W, padx=12, pady=(12, 6))
+        defaults = activity_form_values(today=datetime.now(timezone.utc).date())
+        kind_var, date_var, detail_var = tk.StringVar(value=defaults["kind"]), \
+            tk.StringVar(value=defaults["occurred_on"]), tk.StringVar(value=defaults["detail"])
+        ttk.Label(dialog, text="What the entry records").pack(anchor=W, padx=12)
+        ttk.Combobox(dialog, textvariable=kind_var, values=list(ACTIVITY_KIND_CHOICES), state="readonly",
+                     width=30).pack(fill=X, padx=12, pady=4)
+        ttk.Label(dialog, text="Date it happened (YYYY-MM-DD)").pack(anchor=W, padx=12, pady=(8, 0))
+        ttk.Entry(dialog, textvariable=date_var, width=20).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="What happened").pack(anchor=W, padx=12, pady=(8, 0))
+        ttk.Entry(dialog, textvariable=detail_var, width=48).pack(fill=X, padx=12, pady=4)
+        ttk.Label(
+            dialog,
+            text=("Your own note, saved with this date. It does not change the application status and "
+                  "is not evidence that an employer did anything."),
+            wraplength=440, justify=LEFT,
+        ).pack(anchor=W, padx=12)
+
+        def apply():
+            try:
+                entry = build_activity({
+                    "kind": kind_var.get(), "occurred_on": date_var.get(), "detail": detail_var.get(),
+                })
+            except ValueError as exc:
+                messagebox.showerror("Activity entry not saved", str(exc), parent=dialog)
+                return
+            try:
+                self.store.add_activity(listing_id, entry)
+            except ValueError as exc:
+                messagebox.showerror("Activity entry not saved", str(exc), parent=dialog)
+                return
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
+            dialog.destroy()
+            self._refresh_activity()
+            self.status.set(f"Activity entry saved for {job.employer_name}: {entry.label} on "
+                            f"{entry.occurred_on.isoformat()}. The application status was not changed.")
+
+        dialog.bind("<Return>", lambda _event: apply())
+        ttk.Button(dialog, text="Save entry", command=apply).pack(anchor="e", padx=12, pady=12)
+
+    def _delete_activity(self):
+        listing_id = self._selected_application("Select application")
+        if listing_id is None:
+            return
+        selection = self.activity_tree.selection()
+        if not selection:
+            messagebox.showinfo("Select activity entry", "Select an activity entry to delete.",
+                                parent=self.root)
+            return
+        activity_id = int(selection[0])
+        values = self.activity_tree.item(activity_id, "values")
+        summary = f"{values[0]} — {values[1]}: {values[2]}"
+        if not messagebox.askyesno(
+            "Delete activity entry?",
+            f"Delete this entry from the history?\n\n{summary}\n\n"
+            "Deleting an entry removes it from the database. Nothing else changes: the application "
+            "status stays as it is.",
+            parent=self.root,
+        ):
+            self.status.set("Deletion cancelled; the entry was kept.")
+            return
+        try:
+            deleted = self.store.delete_activity(activity_id)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_activity()
+        if deleted:
+            self.status.set(f"Activity entry deleted: {summary}")
+        else:
+            # Nothing was removed, so reporting a deletion would be a claim about the database that the
+            # database just contradicted.
+            self.status.set("That activity entry was already gone; nothing was deleted.")
 
     def _update_status(self):
         selection = self.tracker_tree.selection()
@@ -1167,6 +1338,7 @@ class CareerAgentApp:
             # the loop below would otherwise raise out of a Tk callback, and the file must not be
             # half-written either way.
             tracker_rows = {job.listing_id: self.store.get_tracker_raw(job.listing_id) for job in jobs}
+            activity_rows = {job.listing_id: self.store.list_activity_raw(job.listing_id) for job in jobs}
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
@@ -1198,6 +1370,18 @@ class CareerAgentApp:
                 except ValueError:
                     stored_status["status_recognised"] = False
                 record["application_tracker"] = stored_status
+            # The history goes out as stored, for the same reason: an entry a later version wrote must
+            # be exportable rather than blocking the file. ``kind_recognised: false`` marks a value
+            # this version cannot label, and is only added in that case.
+            entries = []
+            for stored_entry in activity_rows[job.listing_id]:
+                entry = dict(stored_entry)
+                try:
+                    ActivityKind(entry["kind"])
+                except ValueError:
+                    entry["kind_recognised"] = False
+                entries.append(entry)
+            record["activity"] = entries
             payload["jobs"].append(record)
         try:
             # Owner-only from the first byte, and never through a symbolic link: the export holds

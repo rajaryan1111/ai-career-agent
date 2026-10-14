@@ -25,11 +25,12 @@ from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
+from career_agent.core import ActivityKind, ApplicationActivity
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
 RESTORE_STAMP = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -261,7 +262,9 @@ class Tree(ValidatedWidget):
         self.selected = (selection,) if isinstance(selection, str) else tuple(selection)
 
     def delete(self, item):
-        self.rows = tuple(row for row in self.rows if row != item)
+        # A deleted row leaves the tree: it is no longer a child and can no longer be read.
+        self.rows = tuple(row for row in self.rows if str(row) != str(item))
+        self.children = tuple(child for child in self.children if str(child) != str(item))
 
     def selection_remove(self, selection):
         self.selected = ()
@@ -271,8 +274,26 @@ class Tree(ValidatedWidget):
 
     def insert(self, parent, index, iid=None, values=None):
         self.rows += (iid,)
+        # ``inserted`` is an append-only record of what was inserted (what tests assert on);
+        # ``children`` is the current state, as real ``get_children`` reports it.
         self.inserted += ((iid, values),)
+        if parent in ("", None):
+            self.children += (iid,)
         return iid
+
+    def item(self, item, option=None, **kwargs):
+        """Real ``Treeview.item`` reads a row's options; ``values`` is the one this suite uses.
+
+        Item ids are Tcl strings, so an integer id reads the row inserted under that number's string
+        form, and a row that is no longer in the tree cannot be read at all.
+        """
+        if option == "values":
+            current = {str(row) for row in self.rows}
+            for iid, values in self.inserted:
+                if str(iid) == str(item) and str(iid) in current:
+                    return values
+            raise KeyError(f"Item {item} not found")
+        return {}
 
 
 class MessageRecorder:
@@ -1883,6 +1904,37 @@ class ExportPrivacyTests(HandlerTestCase):
         self.assertIn("Export complete", MESSAGES.titles())
         self.assertIn("Exported 1 jobs", self.app.status.get())
 
+    def test_the_export_carries_the_activity_history_as_stored(self):
+        """The history is part of the person's data, so taking it out must not depend on this build."""
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.APPLIED, date(2026, 10, 12), "Sent through the employer portal."))
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.RESPONSE, date(2026, 10, 20), "They asked for transcripts."))
+
+        self.app._export()
+
+        entries = self.exported()["jobs"][0]["activity"]
+        self.assertEqual([entry["occurred_on"] for entry in entries], ["2026-10-12", "2026-10-20"])
+        self.assertEqual(entries[0]["kind"], "applied")
+        self.assertEqual(entries[0]["detail"], "Sent through the employer portal.")
+        self.assertNotIn("kind_recognised", entries[0],
+                         "the marker is only added for a value this version cannot label")
+
+    def test_an_activity_kind_this_version_cannot_read_is_exported_and_marked(self):
+        """Otherwise one row a later version wrote would stop the person exporting anything."""
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.store._connection.execute("UPDATE application_activity SET kind = 'telerecruited'")
+        self.store._connection.commit()
+
+        self.app._export()
+
+        self.assertIn("Export complete", MESSAGES.titles())
+        entry, = self.exported()["jobs"][0]["activity"]
+        self.assertEqual(entry["kind"], "telerecruited")
+        self.assertIs(entry["kind_recognised"], False)
+        self.assertEqual(entry["detail"], "Called the recruiter.")
+
     @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
     def test_export_tightens_a_pre_existing_permissive_file(self):
         self.destination.write_text("older export", encoding="utf-8")
@@ -2186,6 +2238,202 @@ class ProfileAndDeletionTests(HandlerTestCase):
         self.assertEqual(payload["jobs"][0]["application_tracker"]["status_evidence"], "Employer email")
         self.assertIn("personal information", payload["privacy_note"])
         self.assertIn("Export complete", MESSAGES.titles())
+
+
+class ActivityHistoryTests(HandlerTestCase):
+    """The activity panel: append, read back, delete, and never touch the status from here."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_job(sample_job())
+        self.app = self.make_app()
+        self.app.activity_tree = Tree()
+        self.app.tracker_tree.selected = ("j1",)
+
+    def open_activity_dialog(self):
+        """Run the real handler and return the dialog's variables plus its save command."""
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        self.app._add_activity()
+        self.assertEqual(len(created), 3, "the dialog has a kind, a date and a detail field")
+        return created[0], created[1], created[2], BUTTONS.command
+
+    def test_selecting_an_application_shows_its_history_oldest_first(self):
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.RESPONSE, date(2026, 10, 20), "They replied."))
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.APPLIED, date(2026, 10, 12), "Applied through the portal."))
+
+        self.app._refresh_activity()
+
+        self.assertEqual([values[0] for _iid, values in self.app.activity_tree.inserted],
+                         ["2026-10-12", "2026-10-20"], "rows are shown oldest first")
+        self.assertEqual(self.app.activity_tree.inserted[0][1][1], "I applied")
+        self.assertEqual(self.app.activity_tree.inserted[0][1][2], "Applied through the portal.")
+
+    def test_selecting_a_row_loads_that_application_s_history(self):
+        """The wiring the panel depends on: choosing an application is what loads its entries."""
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.APPLIED, date(2026, 10, 12), "Applied through the portal."))
+        self.app.tracker_tree.children = ("j1",)
+
+        self.app._select_tracker()
+
+        self.assertEqual([values[2] for _iid, values in self.app.activity_tree.inserted],
+                         ["Applied through the portal."])
+        self.assertEqual(self.app.selected_job_id, "j1")
+
+    def test_saving_an_entry_stores_it_and_leaves_the_status_alone(self):
+        kind_var, date_var, detail_var, apply = self.open_activity_dialog()
+        kind_var.set("applied")
+        date_var.set("2026-10-12")
+        detail_var.set("Sent through the employer portal.")
+
+        apply()
+
+        stored, = self.store.list_activity("j1")
+        self.assertIs(stored.kind, ActivityKind.APPLIED)
+        self.assertEqual(stored.occurred_on, date(2026, 10, 12))
+        self.assertEqual(stored.detail, "Sent through the employer portal.")
+        self.assertIsNone(self.store.get_tracker("j1"), "an entry must not create a tracker record")
+        self.assertIn("status was not changed", self.app.status.get())
+        self.assertIn("2026-10-12", self.app.status.get())
+
+    def test_a_bad_date_is_refused_and_nothing_is_written(self):
+        kind_var, date_var, detail_var, apply = self.open_activity_dialog()
+        kind_var.set("applied")
+        date_var.set("12/10/2026")
+        detail_var.set("Sent it.")
+
+        apply()
+
+        self.assertIn("Activity entry not saved", MESSAGES.titles())
+        self.assertIn("YYYY-MM-DD", MESSAGES.messages[-1][2])
+        self.assertEqual(self.store.list_activity("j1"), ())
+        self.assertNotIn("status was not changed", self.app.status.get())
+
+    def test_a_blank_detail_is_refused_and_nothing_is_written(self):
+        kind_var, date_var, detail_var, apply = self.open_activity_dialog()
+        kind_var.set("note")
+        date_var.set("2026-10-12")
+        detail_var.set("   ")
+
+        apply()
+
+        self.assertIn("Activity entry not saved", MESSAGES.titles())
+        self.assertEqual(self.store.list_activity("j1"), ())
+
+    def test_a_database_failure_is_reported_and_not_as_success(self):
+        kind_var, date_var, detail_var, apply = self.open_activity_dialog()
+        kind_var.set("note")
+        date_var.set("2026-10-12")
+        detail_var.set("Called the recruiter.")
+
+        with mock.patch.object(self.store, "add_activity", side_effect=sqlite3.OperationalError("readonly")):
+            apply()
+
+        self.assertNotIn("Activity entry saved", self.app.status.get())
+        self.assertEqual(self.store.list_activity("j1"), ())
+
+    def test_adding_an_entry_needs_a_selected_application(self):
+        self.app.tracker_tree.selected = ()
+
+        self.app._add_activity()
+
+        self.assertIn("Select application", MESSAGES.titles())
+        self.assertEqual(self.store.list_activity("j1"), ())
+
+    def test_an_application_deleted_elsewhere_is_refused_before_a_dialog_opens(self):
+        self.store.delete_job("j1")
+        BUTTONS.clear()
+
+        self.app._add_activity()
+
+        self.assertIn("Application not saved", MESSAGES.titles())
+        self.assertIsNone(BUTTONS.command, "no dialog should have been built")
+
+    def test_deleting_reports_the_entry_and_asks_first(self):
+        activity_id = self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.app._refresh_activity()
+        self.app.activity_tree.selected = (str(activity_id),)
+        CONFIG["Delete activity entry?"] = True
+
+        self.app._delete_activity()
+
+        self.assertIn("Delete activity entry?", MESSAGES.titles())
+        self.assertIn("Called the recruiter.", MESSAGES.messages[-1][2])
+        self.assertEqual(self.store.list_activity("j1"), ())
+        self.assertIn("Activity entry deleted", self.app.status.get())
+
+    def test_declining_the_confirmation_keeps_the_entry(self):
+        activity_id = self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.app._refresh_activity()
+        self.app.activity_tree.selected = (str(activity_id),)
+        CONFIG["Delete activity entry?"] = False
+
+        self.app._delete_activity()
+
+        self.assertEqual(len(self.store.list_activity("j1")), 1)
+        self.assertIn("cancelled", self.app.status.get())
+
+    def test_deleting_something_already_gone_is_not_reported_as_a_deletion(self):
+        activity_id = self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.app._refresh_activity()
+        self.app.activity_tree.selected = (str(activity_id),)
+        self.store.delete_activity(activity_id)
+        CONFIG["Delete activity entry?"] = True
+
+        self.app._delete_activity()
+
+        self.assertNotIn("Activity entry deleted", self.app.status.get())
+        self.assertIn("already gone", self.app.status.get())
+
+    def test_deleting_without_a_selected_entry_changes_nothing(self):
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.app._refresh_activity()
+        self.app.activity_tree.selected = ()
+
+        self.app._delete_activity()
+
+        self.assertIn("Select activity entry", MESSAGES.titles())
+        self.assertEqual(len(self.store.list_activity("j1")), 1)
+
+    def test_a_stored_entry_this_version_cannot_read_is_reported_not_rendered(self):
+        """A later version's kind must not reach the panel as if it were understood."""
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.store._connection.execute("UPDATE application_activity SET kind = 'telerecruited'")
+        self.store._connection.commit()
+
+        self.app._refresh_activity()
+
+        self.assertEqual(self.app.activity_tree.rows, ())
+        self.assertIn("Saved record could not be read", MESSAGES.titles())
+        self.assertIn("telerecruited", MESSAGES.messages[-1][2])
+
+    def test_the_history_is_cleared_when_no_application_is_selected(self):
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.NOTE, date(2026, 10, 12), "Called the recruiter."))
+        self.app._refresh_activity()
+        self.assertEqual(len(self.app.activity_tree.inserted), 1)
+
+        self.app.tracker_tree.selected = ()
+        self.app._refresh_activity()
+
+        self.assertEqual(self.app.activity_tree.get_children(), ())
+        self.assertEqual(self.app.activity_tree.rows, (), "no rows may be left from another record")
 
 
 class DatabaseBackupHandlerTests(HandlerTestCase):

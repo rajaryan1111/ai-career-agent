@@ -7,6 +7,7 @@ future desktop application to call and test.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -43,6 +44,95 @@ class ApplicationStatus(str, Enum):
     INTERVIEW = "interview"
     REJECTED_BY_EMPLOYER = "rejected_by_employer"
     WITHDRAWN = "withdrawn"
+
+
+class ActivityKind(str, Enum):
+    """What a dated activity entry is.
+
+    A closed set, so the log can be grouped and read without interpreting free text. It records what
+    the *person* says happened; it is not evidence for a tracker confirmation and never changes a
+    status.
+    """
+
+    APPLIED = "applied"
+    RESPONSE = "response"
+    INTERVIEW = "interview"
+    ASSESSMENT = "assessment"
+    FOLLOW_UP = "follow-up"
+    NOTE = "note"
+
+
+#: How each kind is shown. First person for the person's own actions, plain description for the
+#: employer's, so the label never claims something the entry does not say.
+ACTIVITY_KIND_LABELS = {
+    ActivityKind.APPLIED: "I applied",
+    ActivityKind.RESPONSE: "Employer replied",
+    ActivityKind.INTERVIEW: "Interview",
+    ActivityKind.ASSESSMENT: "Assessment or test",
+    ActivityKind.FOLLOW_UP: "I followed up",
+    ActivityKind.NOTE: "Note",
+}
+
+#: The longest detail text an activity entry may hold. A log line, not a document: the limit keeps one
+#: entry readable in a list and keeps a pasted document out of the history.
+MAX_ACTIVITY_DETAIL_LENGTH = 500
+
+#: Bounds for a date a person typed. Wide enough for any real application history, narrow enough to
+#: catch a mistyped year (`2202-01-01`) instead of storing it.
+_MIN_ACTIVITY_YEAR = 1900
+_MAX_ACTIVITY_YEAR = 2100
+
+
+def validate_activity_detail(detail: str) -> str:
+    """Return the trimmed detail text, or raise ``ValueError`` with a message to show the person."""
+    if not isinstance(detail, str) or not detail.strip():
+        raise ValueError("Write what happened before saving an activity entry.")
+    text = detail.strip()
+    if len(text) > MAX_ACTIVITY_DETAIL_LENGTH:
+        raise ValueError(
+            f"An activity entry can hold at most {MAX_ACTIVITY_DETAIL_LENGTH} characters "
+            f"(this one is {len(text)}). Summarise it instead of pasting a whole document."
+        )
+    return text
+
+
+def validate_activity_date(value: date) -> date:
+    """Return the date, or raise ``ValueError`` when it cannot be a real entry date."""
+    if not isinstance(value, date) or isinstance(value, datetime):
+        raise ValueError("Give the activity entry a date as YYYY-MM-DD.")
+    if not _MIN_ACTIVITY_YEAR <= value.year <= _MAX_ACTIVITY_YEAR:
+        raise ValueError(
+            f"The date must be a real calendar date between {_MIN_ACTIVITY_YEAR} and "
+            f"{_MAX_ACTIVITY_YEAR}; {value.isoformat()} looks like a typo."
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class ApplicationActivity:
+    """One dated entry in an application's history: what the person says happened.
+
+    ``occurred_on`` is the day the person names and ``recorded_at`` is when this application wrote the
+    row, so the two are never confused. An entry is the person's own record: it is not evidence for a
+    tracker confirmation, it does not change a status, and it is never treated as proof that an
+    employer did anything.
+    """
+
+    kind: ActivityKind
+    occurred_on: date
+    detail: str
+    activity_id: int | None = None
+    recorded_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "detail", validate_activity_detail(self.detail))
+        object.__setattr__(self, "occurred_on", validate_activity_date(self.occurred_on))
+        if not isinstance(self.kind, ActivityKind):
+            object.__setattr__(self, "kind", ActivityKind(self.kind))
+
+    @property
+    def label(self) -> str:
+        return ACTIVITY_KIND_LABELS[self.kind]
 
 
 @dataclass(frozen=True)

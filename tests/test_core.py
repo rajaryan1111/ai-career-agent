@@ -1,4 +1,5 @@
 import unittest
+from datetime import date, datetime
 
 from career_agent import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
@@ -6,6 +7,77 @@ from career_agent import (
     evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
     is_substantive_confirmation_evidence, require_confirmation_evidence, selectable_tracker_statuses,
 )
+from career_agent.core import (
+    ACTIVITY_KIND_LABELS, MAX_ACTIVITY_DETAIL_LENGTH, ActivityKind, ApplicationActivity,
+)
+
+
+class ActivityEntryTests(unittest.TestCase):
+    """An activity entry is the person's own dated record; it is not proof and not a status."""
+
+    def test_the_kind_labels_describe_the_entry_without_overclaiming(self):
+        self.assertEqual(ACTIVITY_KIND_LABELS[ActivityKind.APPLIED], "I applied")
+        self.assertEqual(set(ACTIVITY_KIND_LABELS), set(ActivityKind))
+        for kind, label in ACTIVITY_KIND_LABELS.items():
+            with self.subTest(kind=kind):
+                self.assertTrue(label.strip())
+        # The employer's half of the story is described as a reply, never as an outcome.
+        self.assertIn("replied", ACTIVITY_KIND_LABELS[ActivityKind.RESPONSE])
+
+    def test_detail_is_trimmed_and_blank_text_is_refused(self):
+        entry = ApplicationActivity(ActivityKind.NOTE, date(2026, 10, 12), "  Called the recruiter.  ")
+
+        self.assertEqual(entry.detail, "Called the recruiter.")
+        for text in ("", "   ", "\n\t"):
+            with self.subTest(text=repr(text)):
+                with self.assertRaises(ValueError) as caught:
+                    ApplicationActivity(ActivityKind.NOTE, date(2026, 10, 12), text)
+                self.assertIn("Write what happened", str(caught.exception))
+
+    def test_an_over_long_detail_is_refused_with_the_limit_named(self):
+        with self.assertRaises(ValueError) as caught:
+            ApplicationActivity(ActivityKind.NOTE, date(2026, 10, 12),
+                                "x" * (MAX_ACTIVITY_DETAIL_LENGTH + 1))
+
+        message = str(caught.exception)
+        self.assertIn(str(MAX_ACTIVITY_DETAIL_LENGTH), message)
+        self.assertIn(str(MAX_ACTIVITY_DETAIL_LENGTH + 1), message)
+        # Exactly at the limit is allowed: the bound is a limit, not an off-by-one.
+        self.assertEqual(
+            len(ApplicationActivity(ActivityKind.NOTE, date(2026, 10, 12), "x" * MAX_ACTIVITY_DETAIL_LENGTH).detail),
+            MAX_ACTIVITY_DETAIL_LENGTH,
+        )
+
+    def test_a_date_that_cannot_be_real_is_refused(self):
+        for value in (date(2202, 1, 1), date(1899, 12, 31)):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as caught:
+                    ApplicationActivity(ActivityKind.NOTE, value, "Applied.")
+                self.assertIn("real calendar date", str(caught.exception))
+
+    def test_a_datetime_is_not_accepted_where_a_date_is_meant(self):
+        """``datetime`` is a subclass of ``date``; an entry dated to the minute is not what is stored."""
+        with self.assertRaises(ValueError) as caught:
+            ApplicationActivity(ActivityKind.NOTE, datetime(2026, 10, 12, 9, 30), "Applied.")
+
+        self.assertIn("YYYY-MM-DD", str(caught.exception))
+
+    def test_a_future_date_is_allowed_because_an_interview_can_be_scheduled(self):
+        entry = ApplicationActivity(ActivityKind.INTERVIEW, date(2099, 6, 1), "Interview scheduled.")
+
+        self.assertEqual(entry.occurred_on, date(2099, 6, 1))
+
+    def test_a_plain_string_kind_is_normalised_to_the_enum(self):
+        entry = ApplicationActivity("follow-up", date(2026, 10, 12), "Chased the recruiter.")
+
+        self.assertIs(entry.kind, ActivityKind.FOLLOW_UP)
+        self.assertEqual(entry.label, "I followed up")
+
+    def test_an_unknown_kind_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as caught:
+            ApplicationActivity("sent", date(2026, 10, 12), "Applied.")
+
+        self.assertIn("sent", str(caught.exception))
 
 
 def requirement(report, name):
