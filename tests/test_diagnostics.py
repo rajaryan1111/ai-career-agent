@@ -133,6 +133,46 @@ class PathRedactionTests(unittest.TestCase):
         self.assertEqual(redact_paths("file is not a database", home=Path("/home/someone")),
                          "file is not a database")
 
+    def test_a_relative_database_file_does_not_replace_every_dot_in_the_message(self):
+        # ``Path("db.sqlite3").parent`` is the current folder, and its text is the single character
+        # ".": replacing that hid every dot in the explanation and left it unreadable, so a failure
+        # reported with the ordinary ``--database db.sqlite3`` form could not be understood at all.
+        redacted = redact_paths(
+            "CareerStore: cannot open db.sqlite3. Schema version 2.0",
+            database_path="db.sqlite3", home=Path("/home/someone"),
+        )
+
+        self.assertIn("Schema version 2.0", redacted)
+        self.assertNotIn("db.sqlite3", redacted)
+        self.assertIn("<database file>", redacted)
+
+    def test_a_relative_folder_name_is_not_replaced_inside_ordinary_words(self):
+        # A folder called "data" must be hidden where it is a path, and left alone where it is prose.
+        untouched = "the data folder could not be used; data was not written"
+        self.assertEqual(redact_paths(untouched, database_path="data/db.sqlite3", home=Path("/home/someone")),
+                         untouched)
+        self.assertEqual(redact_paths("cannot open data/db.sqlite3", database_path="data/db.sqlite3",
+                                      home=Path("/home/someone")),
+                         "cannot open <database file>")
+
+    def test_a_path_the_caller_names_is_redacted_when_it_is_supplied(self):
+        # The command line can name a backup or a restore file; that location is the person's own, so
+        # it must not survive into a note written to be safe to share.
+        named = "/Volumes/Backup Drive/private/notes.sqlite3"
+
+        redacted = redact_paths(f"cannot read {named}", home=Path("/home/someone"), extra_paths=[named])
+
+        self.assertNotIn("Volumes", redacted)
+        self.assertNotIn("notes.sqlite3", redacted)
+        self.assertIn("<local path>", redacted)
+
+    def test_an_unsupplied_foreign_path_is_left_alone_rather_than_guessed_at(self):
+        # Only locations the caller knows about are replaced: guessing at every path-shaped word
+        # would rewrite text this module cannot verify.
+        text = "cannot read /Volumes/Backup Drive/private/notes.sqlite3"
+
+        self.assertEqual(redact_paths(text, home=Path("/home/someone")), text)
+
 
 class StartupFailureExplanationTests(unittest.TestCase):
     """The message shown when the window cannot open must be useful and must not leak."""
@@ -326,11 +366,44 @@ class CommandLineStartupFailureTests(unittest.TestCase):
         self.assertTrue(note.is_file())
         self.assertIn("something unexpected", note.read_text(encoding="utf-8"))
 
+    def test_a_file_the_person_named_on_the_command_line_stays_out_of_the_note(self):
+        # An unexpected failure while restoring is reported through the start-up explanation, so the
+        # file named on the command line must be redacted there as well: the note is written to be
+        # safe to share, and where a person keeps their backups is theirs.
+        named = Path(self.directory.name) / "private-backups" / "my-own-copy.sqlite3"
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch(
+            "career_agent.__main__.restore_backup",
+            side_effect=RuntimeError(f"unexpected failure while reading {named}"),
+        ):
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(["--database", str(self.database), "--restore-from", str(named), "--yes"])
+
+        self.assertEqual(code, cli.EXIT_UNEXPECTED)
+        self.assertNotIn("my-own-copy", err.getvalue())
+        self.assertNotIn("private-backups", err.getvalue())
+        note = self.database.parent / "logs" / DIAGNOSTIC_FILE_NAME
+        self.assertTrue(note.is_file())
+        written = note.read_text(encoding="utf-8")
+        self.assertNotIn("my-own-copy", written)
+        self.assertNotIn("private-backups", written)
+        self.assertIn("<local path>", written)
+
     def test_a_failure_before_the_database_is_known_still_explains_itself(self):
-        code, _out, err = self.run_cli([], ValueError("boom before any path is resolved"))
+        # With no --database there is nothing to place the note beside, so the note goes to the
+        # application-data folder this machine would really use. The test redirects that resolution
+        # into its own temporary directory: a test run must not write into the person's own folder
+        # (and must not overwrite the note a real failure left there).
+        redirected = Path(self.directory.name) / "application-data"
+        with mock.patch("career_agent.desktop_logic.default_data_folder", return_value=redirected):
+            code, _out, err = self.run_cli([], ValueError("boom before any path is resolved"))
 
         self.assertEqual(code, cli.EXIT_UNEXPECTED)
         self.assertIn("COULD NOT START", err)
+        note = redirected / "logs" / DIAGNOSTIC_FILE_NAME
+        self.assertTrue(note.is_file(), "the note must still be written, just not into the real folder")
+        self.assertIn("boom before any path is resolved", note.read_text(encoding="utf-8"))
 
 
 class TrackerStatusErrorExportTests(unittest.TestCase):

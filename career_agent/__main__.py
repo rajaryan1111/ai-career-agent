@@ -142,8 +142,13 @@ def main(argv: list[str] | None = None) -> int:
         # Start-up failures are explained in plain language with local paths redacted, and kept in a
         # bounded owner-only note beside the app data, because a terminal transcript is easy to paste
         # somewhere and must not carry candidate data, credentials, or filesystem locations.
-        explanation = describe_startup_failure(exc, database_path=args.database)
-        note = record_startup_failure(exc, database_path=args.database)
+        # A backup or restore that fails unexpectedly is reported here, so the file the person named
+        # on the command line is passed as well: a location they chose must not reach a note that is
+        # meant to be safe to share, even when the message mentioning it comes from an unexpected
+        # failure rather than a refusal this module already words.
+        named_paths = [named for named in (args.backup_to, args.restore_from) if named]
+        explanation = describe_startup_failure(exc, database_path=args.database, extra_paths=named_paths)
+        note = record_startup_failure(exc, database_path=args.database, extra_paths=named_paths)
         print(f"COULD NOT START: {explanation}", file=sys.stderr)
         if note is not None:
             print(f"A sanitised note was saved as {note.name} in the application's logs folder.", file=sys.stderr)

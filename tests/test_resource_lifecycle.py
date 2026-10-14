@@ -212,6 +212,29 @@ class RealDatabaseSafetyTests(unittest.TestCase):
             "pass home=, environ= or system= explicitly so the test cannot see the real machine",
         )
 
+    def test_a_test_that_writes_a_start_up_note_names_where_it_goes(self):
+        """The note path falls back to this machine's real application-data folder.
+
+        A note is only written when something fails, so a test that reaches that fallback writes into
+        the person's own folder - and overwrites whatever a real failure left there. Every test call
+        must therefore pass ``data_folder=`` or ``database_path=``.
+        """
+        offenders = []
+        for path, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if self._callee_name(node.func).split(".")[-1] != "record_startup_failure":
+                    continue
+                if not node.args and not node.keywords:
+                    offenders.append(
+                        f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}: no folder given"
+                    )
+
+        self.assertEqual(
+            offenders, [], "pass data_folder= or database_path= so no note lands in the real folder"
+        )
+
     def test_the_scan_sees_the_test_files_and_would_catch_a_violation(self):
         """A scanner that matched nothing would pass silently; give it a known-bad sample."""
         sample = ast.parse("store = CareerStore()\nroot = career_agent_data_root()\n")

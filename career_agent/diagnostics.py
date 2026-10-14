@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 import sqlite3
 
 from .store import PrivateWriteError, write_private_text_file
@@ -35,25 +36,69 @@ _RECOVERY_HINT = (
 )
 
 
-def redact_paths(text: str, *, database_path: str | Path | None = None, home: Path | None = None) -> str:
+def _is_substitutable_path(value: str) -> bool:
+    """True when replacing this text cannot damage unrelated prose.
+
+    ``Path("db.sqlite3").parent`` is the current folder, and its text is the single character ".":
+    substituting that would replace every dot in the message and leave something unreadable (for
+    example "schema version 2.0" became "schema version 2<placeholder>0"). A bare relative name
+    such as "data" would likewise be replaced wherever it appears as an ordinary word. Only an
+    absolute path, or a path that carries a separator, is a location rather than a word.
+    """
+    if not value or value in (".", ".."):
+        return False
+    return Path(value).is_absolute() or "/" in value or "\\" in value
+
+
+def _path_replacements(value: str | Path, placeholder: str) -> list[tuple[str, str]]:
+    """(text, placeholder) pairs that hide one path, longest first at the call site.
+
+    The folder is only hidden when it is itself a location (absolute), so a relative folder name
+    cannot be replaced inside ordinary words. A relative file name is still hidden when it looks
+    like a file name, because the person's choice of file name is theirs to keep private.
+    """
+    text = str(value)
+    pairs: list[tuple[str, str]] = []
+    if _is_substitutable_path(text):
+        pairs.append((text, placeholder))
+    elif "/" not in text and "\\" not in text and "." in Path(text).name:
+        pairs.append((text, placeholder))
+    parent = str(Path(text).parent)
+    if Path(parent).is_absolute() and _is_substitutable_path(parent):
+        pairs.append((parent, placeholder))
+    return pairs
+
+
+def redact_paths(
+    text: str,
+    *,
+    database_path: str | Path | None = None,
+    home: Path | None = None,
+    extra_paths: Iterable[str | Path] = (),
+) -> str:
     """Replace filesystem locations in ``text`` with neutral placeholders.
 
     Replaces the longest paths first (the database file, then its folder, then the user's home
     folder) so a nested path cannot survive by being a prefix of another replacement. The default
     database file name is kept because it names a product file, not a location.
+
+    ``extra_paths`` covers locations this module cannot know about - a file the person named on the
+    command line, for instance - so that a failure reported about such a file cannot write that
+    location into a note meant to be safe to share.
     """
     resolved_home = Path.home() if home is None else Path(home)
     replacements: list[tuple[str, str]] = []
     if database_path is not None:
         database = Path(database_path)
         if database.name != _DEFAULT_DATABASE_NAME:
-            replacements.append((str(database), "<database file>"))
-        replacements.append((str(database.parent), "<application data folder>"))
-    replacements.append((str(resolved_home), "<home folder>"))
+            replacements.extend(_path_replacements(database, "<database file>"))
+        replacements.extend(_path_replacements(database.parent, "<application data folder>"))
+    for extra in extra_paths:
+        replacements.extend(_path_replacements(extra, "<local path>"))
+    replacements.extend(_path_replacements(resolved_home, "<home folder>"))
     redacted = text
     for value, placeholder in sorted(replacements, key=lambda item: -len(item[0])):
-        if value:
-            redacted = redacted.replace(value, placeholder)
+        redacted = redacted.replace(value, placeholder)
     return redacted
 
 
@@ -63,13 +108,20 @@ def _truncate(text: str) -> str:
     return text[: MAX_DIAGNOSTIC_LENGTH - 3].rstrip() + "..."
 
 
-def describe_startup_failure(exc: BaseException, *, database_path: str | Path | None = None) -> str:
+def describe_startup_failure(
+    exc: BaseException,
+    *,
+    database_path: str | Path | None = None,
+    extra_paths: Iterable[str | Path] = (),
+) -> str:
     """Explain a start-up failure in plain language, with a next step and no sensitive detail.
 
     Known failures get a specific explanation; anything else keeps only the exception type and a
     redacted message, so an unexpected error is still reported honestly rather than hidden.
     """
-    detail = redact_paths(f"{type(exc).__name__}: {exc}".strip(), database_path=database_path)
+    detail = redact_paths(
+        f"{type(exc).__name__}: {exc}".strip(), database_path=database_path, extra_paths=extra_paths
+    )
     message = _truncate(detail)
     if isinstance(exc, ModuleNotFoundError) or (isinstance(exc, ImportError) and "tkinter" in str(exc).lower()):
         return (
@@ -138,6 +190,7 @@ def record_startup_failure(
     database_path: str | Path | None = None,
     data_folder: str | Path | None = None,
     timestamp: datetime | None = None,
+    extra_paths: Iterable[str | Path] = (),
 ) -> Path | None:
     """Write one bounded, redacted note about the failure; return its path, or ``None`` on failure.
 
@@ -150,7 +203,7 @@ def record_startup_failure(
     path = diagnostic_log_path(database_path, data_folder=data_folder)
     body = (
         f"AI Career Agent start-up note, {stamp.isoformat(timespec='seconds')}\n"
-        f"{describe_startup_failure(exc, database_path=database_path)}\n"
+        f"{describe_startup_failure(exc, database_path=database_path, extra_paths=extra_paths)}\n"
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
