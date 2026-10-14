@@ -741,6 +741,23 @@ class ParsingTests(ResumeTestCase):
         self.assertIs(proposal.confidence, ProposalConfidence.CONFIDENT)
         self.assertIn("Python", proposal.evidence)
 
+    def test_a_notice_after_skills_does_not_leak_into_the_skills_proposal(self):
+        result = self.parse(paragraphs=(
+            "Synthetic Test Candidate",
+            "Skills",
+            "Python, SQL, Git",
+            "TEST SAFETY NOTE",
+            "All values above are fictional test data. The year 2099 is intentionally unrealistic "
+            "and must not be treated as a real qualification.",
+        ))
+
+        proposal = resume.proposal_by_key(result, "skills")
+
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.value, "Python, SQL, Git")
+        self.assertNotIn("TEST", proposal.value)
+        self.assertNotIn("qualification", proposal.value)
+
     def test_a_table_row_holding_a_heading_and_its_list_is_read(self):
         """A table cell layout is common in Word résumés; the row arrives as "SKILLS | Python, SQL"."""
         result = self.parse(
