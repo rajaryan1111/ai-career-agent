@@ -577,6 +577,69 @@ class ParsingTests(ResumeTestCase):
         self.assertIsNotNone(degree, "the same rule must work for the education row")
         self.assertIn("Computer Science", degree.value)
 
+    def test_a_category_name_before_a_column_gap_is_not_read_as_a_skill(self):
+        # "Languages: Python, SQL" already reads correctly; the same statement written with the column
+        # gap the extractors report must not disagree and offer the category name as a skill.
+        for category in ("Languages", "Frameworks", "Tools", "Databases", "Cloud", "Testing"):
+            with self.subTest(category=category):
+                result = self.parse(paragraphs=("Sample Candidate", "Skills", f"{category} | Python, SQL"))
+
+                proposal = resume.proposal_by_key(result, "skills")
+
+                self.assertIsNotNone(proposal)
+                self.assertEqual(proposal.value, "Python, SQL")
+                self.assertNotIn(category, proposal.value)
+                self.assertIs(proposal.confidence, ProposalConfidence.CONFIDENT)
+
+    def test_a_merged_column_line_keeps_its_flag_when_another_line_is_labelled(self):
+        # A labelled line later in the same section must not clear the flag set by an earlier merged
+        # line: the proposal still holds values that were read out of a column nobody labelled.
+        result = self.parse(paragraphs=(
+            "Sample Candidate", "Skills", "Python, SQL    Built ETL pipelines", "Frameworks: Django",
+        ))
+
+        proposal = resume.proposal_by_key(result, "skills")
+
+        self.assertIsNotNone(proposal)
+        self.assertIn("Django", proposal.value)
+        self.assertIs(proposal.confidence, ProposalConfidence.NEEDS_REVIEW)
+
+    def test_a_plain_pipe_separated_list_of_skills_is_still_offered(self):
+        result = self.parse(paragraphs=("Sample Candidate", "Skills", "Python | SQL | PyTorch"))
+
+        proposal = resume.proposal_by_key(result, "skills")
+
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.value, "Python, SQL, PyTorch")
+
+    def test_a_skills_line_that_merges_two_columns_is_offered_for_review_not_pre_ticked(self):
+        # Two near-identical Word layouts cannot both be decided by counting words: one merged column
+        # held prose that reached the value, the other prose that was silently dropped. Neither may be
+        # presented as a confident, pre-ticked skill, so both are offered for the person to confirm.
+        for line in (
+            "Python, SQL, Django    Built ETL pipelines",
+            "Python, SQL    Built ETL pipelines at scale",
+            "Python | SQL | PyTorch",
+        ):
+            with self.subTest(line=line):
+                result = self.parse(paragraphs=("Sample Candidate", "Skills", line))
+
+                proposal = resume.proposal_by_key(result, "skills")
+
+                self.assertIsNotNone(proposal, "the values are still offered")
+                self.assertIs(proposal.confidence, ProposalConfidence.NEEDS_REVIEW)
+                self.assertTrue(proposal.evidence, "the whole original line is quoted for the reviewer")
+
+    def test_a_single_column_skills_list_is_confident_and_unchanged(self):
+        for line in ("Python, SQL, Data Structures", "Python, SQL", "Machine Learning, SQL"):
+            with self.subTest(line=line):
+                result = self.parse(paragraphs=("Sample Candidate", "Skills", line))
+
+                proposal = resume.proposal_by_key(result, "skills")
+
+                self.assertEqual(proposal.value, line)
+                self.assertIs(proposal.confidence, ProposalConfidence.CONFIDENT)
+
     def test_a_keyword_in_the_body_is_not_treated_as_a_skill(self):
         result = self.parse(paragraphs=(
             "Sample Candidate", "Summary", "Built a project with Python and PostgreSQL.",

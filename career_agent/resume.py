@@ -654,6 +654,10 @@ _MAX_INLINE_CONTENT_CHARACTERS = 120
 #: A conjunction that joins two heading words ("SKILLS & INTERESTS", "SKILLS / TOOLS").
 _LEADING_CONJUNCTION = re.compile(r"^(?:&|\+|/|,|;|and|or)\s*", re.I)
 
+#: How ``_clean_line`` reports a run of two or more spaces: the gap between two columns or two table
+#: cells on one extracted line. Named here because more than one reader has to interpret it.
+_COLUMN_GAP = " | "
+
 #: Names for a category *inside* a skills block ("Languages: Python, C++"). Their values are skills,
 #: so such a line stays part of the skills section instead of closing it, and the label is dropped
 #: before the values are read (the label is a category, not a skill).
@@ -793,16 +797,40 @@ def _skills_proposal(section: Iterable[str]) -> FieldProposal | None:
 
     A skill word appearing in the body of the document (in a project description, say) is not proof
     that the person lists it as a skill, so nothing is harvested from other sections.
+
+    A category name is a label, not a skill, whether the person separates it with a colon or with the
+    column gap the extractors report as ``|``: "Languages: Python, SQL" and "Languages | Python, SQL"
+    say the same thing and must not produce different values.
+
+    A line that carries a column gap *without* such a label merges two columns or two table cells that
+    the extractor joined, and which column holds the skills is then not knowable from the text alone
+    ("Python, SQL, Django    Built ETL pipelines" and "Python, SQL    Built ETL pipelines at scale"
+    cannot both be decided by counting words). The values are still offered exactly as read, but the
+    proposal is marked for review instead of pre-ticked, so nothing that was guessed at is one click
+    from being saved.
     """
     tokens: list[str] = []
     seen: set[str] = set()
     evidence = ""
+    merged_column = False
     for line in section:
         if not evidence:
             evidence = line
         # "Languages: Python, SQL" lists skills under a category name, so the values are read without
         # the label. The evidence shown to the person is always the whole original line.
         labelled = _LABELLED_SKILLS_LINE.match(line)
+        if not labelled and _COLUMN_GAP in line:
+            # The same category name before a column gap ("Languages | Python, SQL") is the same
+            # statement, so it is read the same way. Anything else before a gap is left to the
+            # reviewer (see the docstring).
+            first, rest = line.split(_COLUMN_GAP, 1)
+            match = _SKILLS_SUB_LABEL.match(_undecorated(first))
+            if match and match.group(0).strip().casefold() == first.strip().casefold():
+                labelled = _LABELLED_SKILLS_LINE.match(f"{match.group(0)}: {rest}")
+            else:
+                # Remembered for the whole proposal, never cleared: a later labelled line must not
+                # erase the fact that values were also read out of a merged column.
+                merged_column = True
         content = labelled.group(1) if labelled else line
         # Column gaps and tabs already arrive as the "|" separator (see ``_clean_line``), so this
         # splits on the separators a person actually writes between skills.
@@ -827,7 +855,8 @@ def _skills_proposal(section: Iterable[str]) -> FieldProposal | None:
         return None
     return FieldProposal(
         key="skills", label="Skills", value=", ".join(tokens),
-        confidence=ProposalConfidence.CONFIDENT, evidence=_snippet(evidence or ", ".join(tokens)),
+        confidence=ProposalConfidence.NEEDS_REVIEW if merged_column else ProposalConfidence.CONFIDENT,
+        evidence=_snippet(evidence or ", ".join(tokens)),
     )
 
 
