@@ -92,7 +92,8 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 ## Current implementation status
 
-The offline domain core, the SQLite persistence layer, and the Tkinter local desktop alpha (`python -m career_agent`) are implemented, with 210 standard-library tests passing locally and a Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
-floor and the backed-up record-correction tool, the Tk-free desktop logic, and the desktop handlers through widget stubs; they do not cover widget rendering, a real Tk session, or any operating-system integration, so the manual GUI smoke test — including macOS/Apple Silicon — remains outstanding.
+The offline domain core, the SQLite persistence layer, and the Tkinter local desktop alpha (`python -m career_agent`) are implemented, with 243 standard-library tests passing locally and a Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
+floor and the backed-up record-correction tool, owner-only export
+permissions, stale-selection handling, the Tk-free desktop logic, and the desktop handlers through widget stubs; they do not cover widget rendering, a real Tk session, or any operating-system integration, so the manual GUI smoke test — including macOS/Apple Silicon — remains outstanding.
 
 A local resume parser, remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.

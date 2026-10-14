@@ -1,12 +1,14 @@
 import os
 import sqlite3
+import stat
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
-from career_agent.store import CareerStore
+from career_agent.store import CareerStore, PrivateWriteError, write_private_text_file
 
 #: Permitted path used by tests that need an already-advanced record.
 _PATH_TO_SUBMISSION = (
@@ -549,6 +551,137 @@ class DatabaseFilePermissionTests(unittest.TestCase):
     def test_in_memory_databases_are_unaffected(self):
         with CareerStore(":memory:") as store:
             self.assertEqual(store.list_jobs(), ())
+
+
+class PrivateFileWriteTests(unittest.TestCase):
+    """Exported candidate data must reach disk owner-only, or not reach disk at all.
+
+    Uses temporary directories only. Tests that assert real POSIX mode bits are skipped where the
+    platform does not have POSIX permissions.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.directory = Path(self._directory.name)
+        self.secret = '{"degree_discipline": "ECE", "application_history": "confirmed 2026-10-14"}'
+
+    def mode_of(self, path):
+        return Path(path).stat().st_mode & 0o777
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_a_new_file_is_owner_only(self):
+        target = self.directory / "export.json"
+        write_private_text_file(target, self.secret)
+        self.assertEqual(self.mode_of(target), 0o600)
+        self.assertEqual(target.read_text(encoding="utf-8"), self.secret)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_the_protection_does_not_depend_on_the_process_umask(self):
+        target = self.directory / "umask.json"
+        previous = os.umask(0o000)  # the most permissive umask: mode bits cannot be relied on
+        try:
+            write_private_text_file(target, self.secret)
+        finally:
+            os.umask(previous)
+        self.assertEqual(self.mode_of(target), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_an_existing_permissive_file_is_tightened_not_left_readable(self):
+        for initial in (0o644, 0o666, 0o777):
+            with self.subTest(initial=oct(initial)):
+                target = self.directory / f"existing-{initial:o}.json"
+                target.write_text("old content", encoding="utf-8")
+                os.chmod(target, initial)
+                self.assertEqual(self.mode_of(target), initial, "precondition")
+                write_private_text_file(target, self.secret)
+                self.assertEqual(self.mode_of(target), 0o600)
+                self.assertEqual(target.read_text(encoding="utf-8"), self.secret)
+
+    def test_a_symbolic_link_destination_is_refused_and_its_target_is_untouched(self):
+        victim = self.directory / "victim.txt"
+        victim.write_text("ORIGINAL CONTENT THAT MUST SURVIVE", encoding="utf-8")
+        victim_mode = self.mode_of(victim)
+        link = self.directory / "link.json"
+        try:
+            os.symlink(victim, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links are unavailable here: {exc}")
+
+        with self.assertRaises(PrivateWriteError) as caught:
+            write_private_text_file(link, self.secret)
+
+        self.assertIn("symbolic link", str(caught.exception))
+        self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL CONTENT THAT MUST SURVIVE")
+        self.assertEqual(self.mode_of(victim), victim_mode)
+        self.assertTrue(link.is_symlink(), "the link itself must be left alone")
+
+    def test_a_symbolic_link_is_refused_even_where_the_open_flag_is_unavailable(self):
+        """The refusal must not depend on O_NOFOLLOW, which is POSIX-only.
+
+        With the flag forced to 0 the open would follow the link, so this exercises the explicit
+        pre-check that protects platforms without it.
+        """
+        victim = self.directory / "victim-flagless.txt"
+        victim.write_text("ORIGINAL CONTENT THAT MUST SURVIVE", encoding="utf-8")
+        link = self.directory / "flagless-link.json"
+        try:
+            os.symlink(victim, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links are unavailable here: {exc}")
+
+        with mock.patch.object(os, "O_NOFOLLOW", 0):
+            with self.assertRaises(PrivateWriteError) as caught:
+                write_private_text_file(link, self.secret)
+
+        self.assertIn("symbolic link", str(caught.exception))
+        self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL CONTENT THAT MUST SURVIVE")
+
+    def test_a_failure_to_apply_the_mode_writes_no_candidate_data(self):
+        target = self.directory / "blocked.json"
+        with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
+            with self.assertRaises(PrivateWriteError) as caught:
+                write_private_text_file(target, self.secret)
+        self.assertIn("nothing was written", str(caught.exception))
+        if target.exists():
+            self.assertNotIn("ECE", target.read_text(encoding="utf-8"))
+
+    def test_a_filesystem_that_ignores_the_mode_leaves_no_readable_export(self):
+        """Verification catches a mount where chmod appears to succeed but does not apply."""
+        target = self.directory / "sloppy-fs.json"
+        fake_stat = types.SimpleNamespace(st_mode=stat.S_IFREG | 0o644)
+        with mock.patch("career_agent.store.os.lstat", return_value=fake_stat):
+            with self.assertRaises(PrivateWriteError) as caught:
+                write_private_text_file(target, self.secret)
+        self.assertIn("owner-only", str(caught.exception))
+        # The export contained real candidate data, so the failed attempt must not survive on disk.
+        if target.exists():
+            self.assertNotIn("ECE", target.read_text(encoding="utf-8"))
+
+    def test_an_unwritable_destination_reports_a_useful_error(self):
+        with self.assertRaises(PrivateWriteError) as caught:
+            write_private_text_file(self.directory, self.secret)  # a directory, not a file
+        self.assertIn("could not be opened for writing", str(caught.exception))
+
+    def test_missing_parent_directory_reports_a_useful_error(self):
+        with self.assertRaises(PrivateWriteError) as caught:
+            write_private_text_file(self.directory / "absent" / "export.json", self.secret)
+        self.assertIn("could not be opened for writing", str(caught.exception))
+
+    def test_the_error_type_remains_an_oserror_for_existing_callers(self):
+        self.assertTrue(issubclass(PrivateWriteError, OSError))
+
+    def test_existing_database_helper_behaviour_is_unchanged(self):
+        """The database path still uses the same non-fatal helper after the refactor."""
+        database = self.directory / "unchanged.sqlite3"
+        store = CareerStore(database)
+        self.addCleanup(store.close)
+        if os.name == "posix":
+            self.assertEqual(self.mode_of(database), 0o600)
+        with mock.patch("career_agent.store.os.chmod", side_effect=OSError("unsupported")):
+            with CareerStore(database) as reopened:
+                self.assertEqual(reopened.list_jobs(), ())
+
 
 
 if __name__ == "__main__":

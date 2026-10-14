@@ -1,8 +1,14 @@
-"""SQLite persistence for AI Career Agent; storage is local and has no network code."""
+"""Local persistence for AI Career Agent; storage is local and has no network code.
+
+Holds the SQLite store and the owner-only file primitives shared with the desktop
+export: one place decides what "owner-only" means, so the database and exported
+candidate data cannot drift apart.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import errno
 import json
 import os
 import sqlite3
@@ -24,6 +30,30 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class PrivateWriteError(OSError):
+    """A private (owner-only) file write could not be completed safely.
+
+    An ``OSError`` subclass so callers that already handle file errors keep working; the message is
+    written to be shown to the user as-is.
+    """
+
+
+def _apply_owner_only_mode(target: int | str) -> bool:
+    """Apply the owner-only mode to a descriptor or path; return False if the OS refuses.
+
+    A descriptor (used when writing new files) is preferred where available because it cannot be
+    redirected by swapping the path, but the path form is kept for existing callers.
+    """
+    try:
+        if isinstance(target, int):
+            os.fchmod(target, _OWNER_ONLY_MODE)
+        else:
+            os.chmod(target, _OWNER_ONLY_MODE)
+    except OSError:
+        return False
+    return True
+
+
 def _restrict_to_owner(path: str) -> bool:
     """Make the database file owner-only where the platform supports it.
 
@@ -35,11 +65,95 @@ def _restrict_to_owner(path: str) -> bool:
     Concept adapted from Agent-Reach's owner-only config handling (MIT License, Copyright (c) 2025
     Agent Eyes): https://github.com/Panniantong/Agent-Reach, ``agent_reach/config.py``.
     """
+    return _apply_owner_only_mode(path)
+
+
+def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
+    """Write ``text`` to ``path`` so the file is owner-only from the moment it holds any data.
+
+    The file is created with the owner-only mode and the mode is re-applied through the open
+    descriptor *before* anything is written, so:
+
+    * there is no window in which candidate data exists in a group/world-readable file, unlike
+      writing first and fixing the permissions afterwards;
+    * a destination that already exists is corrected rather than left at whatever mode and umask
+      produced it (``umask`` can only remove bits, never add them, so it cannot be relied on);
+    * a destination that is a symbolic link is refused instead of followed, so a link cannot
+      redirect the write into an unintended file such as the user's private keys.
+
+    Fail-safe by omission: when the mode cannot be applied or cannot be verified, no candidate
+    data is written, and any file left behind by the failed attempt is removed where possible. A
+    file that reaches disk but cannot be verified as owner-only is deleted before raising.
+
+    Raises :class:`PrivateWriteError` (an ``OSError``) with a user-facing message. POSIX mode
+    guarantees apply on POSIX systems; other platforms get the same write path without the
+    permission guarantee, which is not claimed there.
+    """
+    target = Path(path)
+    if target.is_symlink():
+        # Checked before opening so the refusal also holds where O_NOFOLLOW is unavailable; the
+        # O_NOFOLLOW flag below additionally closes the race between this check and the open.
+        raise PrivateWriteError(
+            f"{target} is a symbolic link. Refusing to write through it because the link could "
+            "redirect the export to a different file. Choose a regular file."
+        )
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.chmod(path, _OWNER_ONLY_MODE)
-    except OSError:
-        return False
-    return True
+        descriptor = os.open(target, flags, _OWNER_ONLY_MODE)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PrivateWriteError(
+                f"{target} is a symbolic link. Refusing to write through it because the link could "
+                "redirect the export to a different file. Choose a regular file."
+            ) from exc
+        raise PrivateWriteError(
+            f"{target} could not be opened for writing: {exc.strerror or exc}."
+        ) from exc
+
+    try:
+        if not _apply_owner_only_mode(descriptor):
+            raise PrivateWriteError(
+                f"{target} could not be restricted to owner-only on this system, so nothing was "
+                "written. Move the export to a location that supports file permissions."
+            )
+        with os.fdopen(descriptor, "w", encoding=encoding) as handle:
+            descriptor = None  # the file object owns the descriptor from here
+            handle.write(text)
+    except PrivateWriteError:
+        raise
+    except OSError as exc:
+        raise PrivateWriteError(
+            f"{target} could not be written: {exc.strerror or exc}. The export was not completed."
+        ) from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    if os.name == "posix":
+        try:
+            current_mode = os.lstat(target).st_mode & 0o777
+        except OSError as exc:
+            raise PrivateWriteError(
+                f"{target} was written but could not be checked for owner-only access: "
+                f"{exc.strerror or exc}. Delete the export."
+            ) from exc
+        if current_mode & 0o077:
+            # A filesystem that silently ignores mode changes (some network/synced mounts). The
+            # file is on disk, so remove it rather than leave readable candidate data behind.
+            try:
+                os.unlink(target)
+                removed = "the file was removed"
+            except OSError:
+                removed = f"delete {target} manually"
+            raise PrivateWriteError(
+                f"{target} could not be kept owner-only on this filesystem (mode "
+                f"{oct(current_mode)}), so the export was not kept: {removed}."
+            )
+    return target
 
 
 def _json_default(value):

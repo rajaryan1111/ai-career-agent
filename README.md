@@ -47,6 +47,13 @@ python scripts/correct_tracker_record.py --database "<your database path>" --lis
 See [the smoke-test diagnosis](research/tracker-confirmation-smoke-test-diagnosis-2026-10-14.md) for
 the full explanation and the exact recovery steps. To use the core tests in a headless environment, no display is required.
 
+The JSON export is written owner-only (`0600`) on systems that support POSIX permissions, tightened
+even when the chosen file already existed, and it refuses to write through a symbolic link so a link
+cannot redirect candidate data into another file. If the permissions cannot be applied, the export is
+not kept and the app says so instead of writing readable data. A synced or shared destination folder
+can still expose the file, so export to a folder only you can access.
+
+
 ## Audit research data
 
 To regenerate a reproducible CSV integrity summary (including input SHA-256, row/column counts, duplicate IDs, canonical URL groups, status and permission counts):

@@ -9,6 +9,7 @@ handling. They do not verify rendering, theming, layout, or macOS behaviour; the
 manual smoke-test checklist in research/ is still required before GUI acceptance.
 """
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -17,7 +18,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
+from career_agent import (
+    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
+    evaluate_eligibility,
+)
 from career_agent.store import CareerStore
 
 
@@ -108,6 +112,7 @@ class Tree(Widget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.rows = ()
+        self.inserted = ()
         self.selected = ()
         self.children = ()
 
@@ -115,7 +120,11 @@ class Tree(Widget):
         return self.selected
 
     def selection_set(self, selection):
-        self.selected = tuple(selection)
+        # Real Tk accepts either one item id or a sequence; a bare string is one item.
+        self.selected = (selection,) if isinstance(selection, str) else tuple(selection)
+
+    def delete(self, item):
+        self.rows = tuple(row for row in self.rows if row != item)
 
     def selection_remove(self, selection):
         self.selected = ()
@@ -125,6 +134,7 @@ class Tree(Widget):
 
     def insert(self, parent, index, iid=None, values=None):
         self.rows += (iid,)
+        self.inserted += ((iid, values),)
         return iid
 
 
@@ -296,7 +306,11 @@ class HandlerTestCase(unittest.TestCase):
         app.job_edit_baseline = None
         app.jobs_tree = Tree()
         app.tracker_tree = Tree()
-        app.tabs = types.SimpleNamespace(select=lambda *args: None)
+        app.profile_tab = Widget()
+        app.jobs_tab = Widget()
+        app.tracker_tab = Widget()
+        selected_tabs = []
+        app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
         app._refresh_tracker = lambda: None
         app._evaluate = lambda: None
@@ -1120,6 +1134,293 @@ class ShortlistEligibilityMessageTests(HandlerTestCase):
         app._shortlist()
         self.assertIn("Not eligible to shortlist", MESSAGES.titles())
         self.assertIsNone(self.store.get_tracker("j1"))
+
+
+class ExportPrivacyTests(HandlerTestCase):
+    """The JSON export holds profile facts and application history, so it must be owner-only.
+
+    Every case runs through the real ``_export`` handler with the stubbed file dialog and a
+    disposable temporary directory; the user's own database is never involved.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_job(sample_job())
+        self.store.save_profile(PROFILE)
+        reach_status(self.store, ApplicationStatus.CONFIRMED, evidence="Employer portal shows Application Received")
+        self.destination = Path(self._directory.name) / "export.json"
+        FILEDIALOG.path = str(self.destination)
+        self.app = self.make_app(with_profile=True)
+
+    def exported(self):
+        return json.loads(self.destination.read_text(encoding="utf-8"))
+
+    def test_export_is_owner_only_and_keeps_the_existing_format_and_workflow(self):
+        self.app._export()
+
+        self.assertTrue(self.destination.is_file())
+        if os.name == "posix":
+            self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
+        payload = self.exported()
+        # Format and workflow are preserved: same keys, version, privacy note and content.
+        self.assertEqual(payload["format_version"], 1)
+        self.assertIn("privacy_note", payload)
+        self.assertEqual(payload["profile"]["degree_discipline"], "ECE")
+        self.assertEqual(len(payload["jobs"]), 1)
+        self.assertEqual(payload["jobs"][0]["application_tracker"]["status"], "confirmed")
+        self.assertIn("Export complete", MESSAGES.titles())
+        self.assertIn("Exported 1 jobs", self.app.status.get())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_export_tightens_a_pre_existing_permissive_file(self):
+        self.destination.write_text("older export", encoding="utf-8")
+        os.chmod(self.destination, 0o644)
+        self.assertEqual(self.destination.stat().st_mode & 0o777, 0o644, "precondition")
+
+        self.app._export()
+
+        self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.exported()["profile"]["degree_discipline"], "ECE")
+
+    def test_export_refuses_a_symlink_destination_without_touching_its_target(self):
+        victim = Path(self._directory.name) / "victim.txt"
+        victim.write_text("ORIGINAL CONTENT THAT MUST SURVIVE", encoding="utf-8")
+        link = Path(self._directory.name) / "link.json"
+        try:
+            os.symlink(victim, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links are unavailable here: {exc}")
+        FILEDIALOG.path = str(link)
+
+        self.app._export()
+
+        self.assertIn("Export not saved", MESSAGES.titles())
+        self.assertNotIn("Export complete", MESSAGES.titles())
+        self.assertIn("not saved", self.app.status.get())
+        self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL CONTENT THAT MUST SURVIVE")
+        self.assertNotIn("ECE", victim.read_text(encoding="utf-8"))
+
+    def test_export_reports_failure_and_leaves_no_readable_candidate_data(self):
+        with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
+            self.app._export()
+
+        self.assertIn("Export not saved", MESSAGES.titles())
+        self.assertNotIn("Export complete", MESSAGES.titles())
+        self.assertIn("not saved", self.app.status.get())
+        if self.destination.exists():
+            self.assertNotIn("ECE", self.destination.read_text(encoding="utf-8"))
+
+    def test_cancelling_the_dialog_writes_nothing_and_says_nothing(self):
+        FILEDIALOG.path = ""
+        self.app._export()
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(MESSAGES.titles(), [])
+        self.assertNotIn("Exported", self.app.status.get())
+
+    def test_an_unwritable_destination_is_reported_without_claiming_success(self):
+        FILEDIALOG.path = str(Path(self._directory.name) / "absent-folder" / "export.json")
+        self.app._export()
+        self.assertIn("Export not saved", MESSAGES.titles())
+        self.assertNotIn("Exported", self.app.status.get())
+
+
+class StaleSelectionTests(HandlerTestCase):
+    """A selection that no longer resolves must be reported, not used. Reproduces audit H1."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_job(sample_job())
+        self.store.save_profile(PROFILE)
+        self.app = self.make_app(with_profile=True)
+        # HandlerTestCase.make_app stubs these so other tests never execute them; this class
+        # exists to exercise the real handlers, so the stubs are removed here.
+        del self.app._evaluate, self.app._refresh_jobs, self.app._refresh_tracker
+
+    def select_missing_listing(self, app, listing_id="gone-listing"):
+        """Simulate a listing removed outside the view: selected id points at nothing stored."""
+        app.selected_job_id = listing_id
+        app.jobs_tree.selected = (listing_id,)
+        return listing_id
+
+    def test_evaluate_with_a_stale_selection_reports_instead_of_crashing(self):
+        listing_id = self.select_missing_listing(self.app)
+        self.app._evaluate()
+        self.assertIn("Listing not found", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker(listing_id))
+        self.assertIsNone(self.app.selected_job_id, "the stale selection must be cleared")
+
+    def test_evaluate_with_a_stale_selection_performs_no_writes(self):
+        self.select_missing_listing(self.app)
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("a stale selection must not write")
+        ):
+            self.app._evaluate()
+        self.assertIn("Listing not found", MESSAGES.titles())
+
+    def test_shortlist_with_a_stale_selection_reports_and_creates_no_record(self):
+        listing_id = self.select_missing_listing(self.app)
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("a stale selection must not write")
+        ):
+            self.app._shortlist()
+        self.assertIn("Listing not found", MESSAGES.titles())
+        self.assertNotIn("Not eligible to shortlist", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker(listing_id))
+
+    def test_shortlist_with_a_stale_selection_still_refuses_after_a_fresh_selection(self):
+        """The stale guard must not leave the app in a state where a later click misbehaves."""
+        self.select_missing_listing(self.app)
+        self.app._shortlist()
+        self.assertIsNone(self.app.selected_job_id)
+
+        self.app.selected_job_id = "j1"
+        self.app.jobs_tree.selected = ("j1",)
+        self.app._shortlist()
+        stored = self.store.get_tracker("j1")
+        self.assertIsNotNone(stored)
+        self.assertIs(stored.status, ApplicationStatus.SHORTLISTED)
+
+    def test_evaluate_with_no_selection_asks_the_user_to_select(self):
+        self.app.selected_job_id = None
+        self.app.jobs_tree.selected = ()
+        self.app._evaluate()
+        self.assertIn("Select a job", MESSAGES.titles())
+        self.assertEqual(self.store.list_jobs()[0].listing_id, "j1")
+
+    def test_shortlist_with_no_selection_asks_the_user_to_select(self):
+        self.app.selected_job_id = None
+        self.app.jobs_tree.selected = ()
+        self.app._shortlist()
+        self.assertIn("Select a job", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+    def test_evaluate_reports_the_real_decision_and_evidence_lines(self):
+        job = self.store.get_job("j1")
+        expected = evaluate_eligibility(PROFILE, job)
+        reports = []
+        self.app._report = reports.append
+        self.app.selected_job_id = "j1"
+
+        self.app._evaluate()
+
+        self.assertEqual(len(reports), 1)
+        report = reports[0]
+        self.assertIn(f"ELIGIBILITY: {expected.decision.value.upper()}", report)
+        self.assertIn("Only explicit PASS is eligible. UNKNOWN is not eligible.", report)
+        self.assertIn("Skill overlap:", report)
+        for item in expected.requirements:
+            self.assertIn(f"[{item.decision.value.upper()}] {item.requirement}:", report)
+        self.assertEqual(self.app.status.get(), f"Eligibility for {job.role_title}: {expected.decision.value}.")
+
+    def test_evaluate_keeps_an_unproven_listing_unknown(self):
+        """The behaviour the user saw on macOS: no availability evidence means UNKNOWN."""
+        self.store.save_job(sample_job(availability_status=Availability.UNKNOWN))
+        reports = []
+        self.app._report = reports.append
+        self.app.selected_job_id = "j1"
+
+        self.app._evaluate()
+
+        self.assertIn("ELIGIBILITY: UNKNOWN", reports[0])
+
+    def test_evaluate_without_a_profile_asks_for_one(self):
+        store = CareerStore(str(Path(self._directory.name) / "no-profile.sqlite3"))
+        self.addCleanup(store.close)
+        store.save_job(sample_job())
+        app = self.make_app()
+        app.store = store
+        app.selected_job_id = "j1"
+        del app._evaluate  # remove the stub so the real handler runs
+
+        app._evaluate()
+
+        self.assertIn("Profile required", MESSAGES.titles())
+        self.assertEqual(app.tabs.selected_tabs, [app.profile_tab], "the profile tab must be shown")
+
+    def test_shortlist_still_blocks_unknown_and_fail_eligibility(self):
+        for label, job in (
+            ("unknown", sample_job(availability_status=Availability.UNKNOWN)),
+            ("fail", sample_job(eligible_countries=("United States",))),
+        ):
+            with self.subTest(eligibility=label):
+                directory = tempfile.TemporaryDirectory()
+                self.addCleanup(directory.cleanup)
+                store = CareerStore(str(Path(directory.name) / f"{label}.sqlite3"))
+                self.addCleanup(store.close)
+                store.save_job(job)
+                store.save_profile(PROFILE)
+                MESSAGES.reset()
+                app = self.make_app()
+                app.store = store
+                app.selected_job_id = "j1"
+                app._shortlist()
+                self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+                self.assertIsNone(store.get_tracker("j1"), f"{label} eligibility must not create a record")
+
+    def test_shortlist_creates_the_record_only_for_explicit_eligibility_pass(self):
+        job = self.store.get_job("j1")
+        self.assertIs(evaluate_eligibility(PROFILE, job).decision, Decision.PASS, "fixture precondition")
+        self.app.selected_job_id = "j1"
+
+        self.app._shortlist()
+
+        stored = self.store.get_tracker("j1")
+        self.assertIsNotNone(stored)
+        self.assertIs(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertFalse(stored.candidate_confirmed)
+
+    def test_deleting_the_selected_job_clears_the_selection_and_its_tracker(self):
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        self.app.selected_job_id = "j1"
+        CONFIG["Delete job"] = True
+
+        self.app._delete_job()
+
+        self.assertIsNone(self.app.selected_job_id)
+        self.assertEqual(self.store.list_jobs(), ())
+        self.assertIsNone(self.store.get_tracker("j1"), "the tracker record must cascade with the job")
+        self.assertIn("deleted locally", self.app.status.get())
+
+    def test_deleting_a_missing_job_is_reported_without_claiming_success(self):
+        self.select_missing_listing(self.app)
+        CONFIG["Delete job"] = True
+
+        self.app._delete_job()
+
+        self.assertIn("nothing was deleted", self.app.status.get())
+        self.assertEqual(len(self.store.list_jobs()), 1)
+
+    def test_delete_database_error_leaves_data_intact(self):
+        CONFIG["Delete job"] = True
+        self.app.selected_job_id = "j1"
+        self.app.jobs_tree.selected = ("j1",)
+        with mock.patch.object(self.store, "delete_job", side_effect=sqlite3.OperationalError("database is locked")):
+            self.app._delete_job()
+        self.assertIn("Job not deleted", MESSAGES.titles())
+        self.assertIn("not deleted", self.app.status.get())
+        self.assertEqual(len(self.store.list_jobs()), 1)
+
+    def test_refresh_lists_rebuild_from_the_database(self):
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        self.app.jobs_tree.rows = ()
+        self.app.tracker_tree.rows = ()
+
+        self.app._refresh_jobs()
+
+        self.assertIn("j1", self.app.jobs_tree.rows)
+        self.assertIn("j1", self.app.tracker_tree.rows)
+        shown = dict(self.app.tracker_tree.inserted)["j1"]
+        self.assertEqual(shown[0], "Example Inc")
+        self.assertEqual(shown[2], "shortlisted", "the tracker tab shows the stored status")
+
+    def test_selecting_a_tracker_row_syncs_the_job_selection(self):
+        self.app.jobs_tree.children = ("j1",)
+        self.app.tracker_tree.selected = ("j1",)
+
+        self.app._select_tracker()
+
+        self.assertEqual(self.app.selected_job_id, "j1")
+        self.assertEqual(self.app.jobs_tree.selected, ("j1",))
 
 
 class ProfileAndDeletionTests(HandlerTestCase):

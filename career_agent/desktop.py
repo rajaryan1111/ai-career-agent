@@ -18,7 +18,7 @@ from .desktop_logic import (
     JobSaveMode, build_candidate_profile, default_database_path, form_values,
     job_form_values, plan_job_save, profile_form_values,
 )
-from .store import CareerStore
+from .store import CareerStore, PrivateWriteError, write_private_text_file
 from .urls import redact_url_credentials
 
 
@@ -286,12 +286,48 @@ class CareerAgentApp:
             f"Availability evidence: {job.provenance_note or 'Not supplied'}"
         ))
 
+    def _selected_listing_id(self):
+        """Return the listing id the user is acting on, or None when nothing is selected."""
+        return self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
+
+    def _loaded_selected_job(self, listing_id):
+        """Return the stored listing for ``listing_id``, or None when it is no longer stored.
+
+        A selection can go stale when the database changes outside the current view (an external
+        tool, a restored backup, another window). The stored row is the authority, so a selection
+        that no longer resolves must be reported instead of being used as if it existed.
+        """
+        return self.store.get_job(listing_id)
+
+    def _drop_stale_selection(self, listing_id):
+        """Reset the view after a selection no longer resolves, changing no persisted data."""
+        if self.selected_job_id == listing_id:
+            self.selected_job_id = None
+            if hasattr(self, "jobs_tree"):
+                self.jobs_tree.selection_remove(self.jobs_tree.selection())
+        self._refresh_jobs()
+
+    def _report_stale_selection(self, listing_id):
+        """Explain a vanished selection and resynchronise the lists. Never raises."""
+        self._drop_stale_selection(listing_id)
+        messagebox.showinfo(
+            "Listing not found",
+            "The selected job is no longer in the local database, so nothing was changed. "
+            "The lists have been refreshed; select a saved job and try again.",
+            parent=self.root,
+        )
+
     def _evaluate(self):
-        listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
+        listing_id = self._selected_listing_id()
         if not listing_id:
             messagebox.showinfo("Select a job", "Save or select a job first.", parent=self.root)
             return
-        job, profile = self.store.get_job(listing_id), self.store.get_profile()
+        job = self._loaded_selected_job(listing_id)
+        if job is None:
+            # Stale selection: report and resync rather than evaluating a listing that is gone.
+            self._report_stale_selection(listing_id)
+            return
+        profile = self.store.get_profile()
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
             self.tabs.select(self.profile_tab)
@@ -307,11 +343,17 @@ class CareerAgentApp:
         self.status.set(f"Eligibility for {job.role_title}: {report.decision.value}.")
 
     def _shortlist(self):
-        listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
+        listing_id = self._selected_listing_id()
         if not listing_id:
             messagebox.showinfo("Select a job", "Select a saved job first.", parent=self.root)
             return
-        job, profile = self.store.get_job(listing_id), self.store.get_profile()
+        job = self._loaded_selected_job(listing_id)
+        if job is None:
+            # Same guard as _evaluate: a vanished selection must never reach the eligibility
+            # check, and must never create a tracker record.
+            self._report_stale_selection(listing_id)
+            return
+        profile = self.store.get_profile()
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
             return
@@ -519,11 +561,30 @@ class CareerAgentApp:
             } if tracker else None
             payload["jobs"].append(record)
         try:
-            Path(destination).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-            self.status.set(f"Exported {len(payload['jobs'])} jobs to a user-selected local file.")
-            messagebox.showinfo("Export complete", "JSON export created. Keep it private; it may contain personal data.", parent=self.root)
+            # Owner-only from the first byte, and never through a symbolic link: the export holds
+            # profile facts and application history, so it must not inherit a permissive umask or
+            # land in whatever file a link points at.
+            write_private_text_file(destination, json.dumps(payload, indent=2, ensure_ascii=False))
+        except PrivateWriteError as exc:
+            messagebox.showerror(
+                "Export not saved",
+                f"{exc}\n\nNothing was written. Choose a regular file in a folder you control.",
+                parent=self.root,
+            )
+            self.status.set("Export not saved (the file could not be protected).")
+            return
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc), parent=self.root)
+            self.status.set("Export failed (local file error).")
+            return
+        self.status.set(f"Exported {len(payload['jobs'])} jobs to a user-selected local file.")
+        messagebox.showinfo(
+            "Export complete",
+            "JSON export created with owner-only permissions where the file system supports them. "
+            "Keep it private; it may contain personal data. A synced or shared folder can still "
+            "expose it, so export to a folder only you can access.",
+            parent=self.root,
+        )
 
     def _report(self, text):
         if not hasattr(self, "report"):
