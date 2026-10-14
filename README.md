@@ -101,6 +101,27 @@ empty, or written for a newer schema). It exits `1` when it finds a problem and 
 which makes it usable from a launcher or a script. Its report lists file locations, so remove them
 before sharing it; the start-up note described below is the redacted one.
 
+### Logs and diagnostics
+
+The application writes one line per event to `logs/application.log`, beside the database it describes
+(so `--database /somewhere/else.sqlite3` keeps its log in `/somewhere/else/logs/`). The file answers
+"what has this app been doing?" without anyone having to remember: the version starting up, a database
+being opened and migrated (and which step from which version), a migration that failed, profile, job,
+tracker and activity writes, résumé imports, exports, backups and restores — including each refusal, so a
+backup that never happened cannot look like one that did.
+
+```bash
+career-agent --doctor             # prints the log's path and the most recent event
+```
+
+A line holds an event name plus an identifier, a count or a category. It never holds profile values,
+résumé text, evidence text or a URL, so the file can be shared with whoever is helping you; any local
+location inside a detail is replaced with a placeholder by the same function that sanitises the start-up
+note. The file is owner-only on systems that support POSIX permissions, capped at 256 KiB with one
+previous file kept (`application.log.1`), and a line that cannot be written is dropped rather than
+failing the action it was describing — a full disk never costs you a saved job. There is no viewer inside
+the window yet; read the file with any text editor, or ask `--doctor` for the last line.
+
 If the window cannot open, the message says what happened and what to do next instead of showing a raw
 traceback. A short, sanitised note is kept as `logs/startup-diagnostics.log` in the application-data
 folder; it holds no candidate data, credentials, or filesystem locations (the database path, its folder,

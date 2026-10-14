@@ -503,7 +503,34 @@ def create_backup(database_path: str | Path, destination: str | Path, *,
     followed), refuses while another connection is committing to the database, and removes its own
     partial file on any failure. Nothing is reported as successful until the new file has been read
     back and verified.
+
+    The outcome - a written backup or the reason it was refused - is also recorded in the application
+    log beside the database, so "did the backup run, and when?" has an answer that does not depend on
+    anyone remembering. That record is best effort: it never changes what this function returns or
+    raises.
     """
+    try:
+        info = _create_backup(database_path, destination, timestamp=timestamp)
+    except BackupError as exc:
+        _record_backup_event("backup.refused", database_path, f"reason={exc}")
+        raise
+    _record_backup_event(
+        "backup.written", database_path,
+        f"jobs={info.job_count} trackers={info.tracker_count} schema={info.schema_version}",
+    )
+    return info
+
+
+def _record_backup_event(event: str, database_path: str | Path, detail: str) -> None:
+    """Record one backup or restore event beside ``database_path``; never raise, never matter here."""
+    from .event_log import record_event  # local import keeps this module importable on its own
+
+    record_event(event, detail=detail, database_path=database_path)
+
+
+def _create_backup(database_path: str | Path, destination: str | Path, *,
+                   timestamp: datetime | None = None) -> DatabaseInfo:
+    """The backup implementation; see :func:`create_backup` for the guarantees it provides."""
     source = Path(database_path)
     target = Path(destination)
     if source.is_symlink() or not source.is_file():
@@ -549,7 +576,28 @@ def create_backup(database_path: str | Path, destination: str | Path, *,
 
 def restore_backup(backup_path: str | Path, database_path: str | Path, *,
                    timestamp: datetime | None = None) -> RestoreResult:
-    """Replace the local database with a validated copy of ``backup_path``.
+    """Replace the live database from ``backup_path``, recording the outcome in the application log.
+
+    Recording is best effort and never changes what this function returns or raises; the successful
+    event is written only after the installed file has been validated, so the log cannot claim a
+    restore that did not complete.
+    """
+    try:
+        result = _restore_backup(backup_path, database_path, timestamp=timestamp)
+    except BackupError as exc:
+        _record_backup_event("restore.refused", database_path, f"reason={exc}")
+        raise
+    _record_backup_event(
+        "restore.completed", database_path,
+        f"jobs={result.info.job_count} trackers={result.info.tracker_count} "
+        f"schema={result.info.schema_version}",
+    )
+    return result
+
+
+def _restore_backup(backup_path: str | Path, database_path: str | Path, *,
+                    timestamp: datetime | None = None) -> RestoreResult:
+    """The restore implementation; see :func:`restore_backup` for the guarantees it provides.
 
     Each step refuses rather than guesses, and the live database is only touched after the chosen
     file has been validated, a staged copy of it has been validated, and the current database has

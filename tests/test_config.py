@@ -31,11 +31,21 @@ from career_agent.config import (
     DATABASE_ENV, SOURCE_COMMAND_LINE, SOURCE_DEFAULT, SOURCE_ENVIRONMENT, database_path_for_run,
     describe_settings, resolve_settings,
 )
+from career_agent.event_log import LOG_FILE_NAME
 from career_agent.desktop_logic import (
     CAREER_AGENT_HOME_ENV, DATABASE_FILE_NAME, default_data_folder,
 )
 from career_agent.backup import validate_app_database
+from career_agent.core import Availability, JobListing
 from career_agent.store import SCHEMA_VERSION, CareerStore
+
+
+def sample_job(listing_id: str = "j1") -> JobListing:
+    return JobListing(
+        listing_id=listing_id, source_id="manual", source_name="Manual entry",
+        source_listing_url=f"https://jobs.example/{listing_id}", employer_name="Example Inc",
+        role_title="AI Intern", availability_status=Availability.OPEN,
+    )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -268,6 +278,31 @@ class DoctorCommandTests(unittest.TestCase):
         self.assertEqual(code, cli.EXIT_PROBLEM_FOUND)
         self.assertIn("is not writable", out)
         self.assertFalse((self.home_override / "ai-career-agent").exists())
+
+    def test_the_doctor_reports_the_event_log_and_the_last_event(self) -> None:
+        """Someone asking "what has this app been doing?" must be able to find the answer."""
+        self.default_database.parent.mkdir(parents=True)
+        with CareerStore(str(self.default_database)) as store:
+            store.save_job(sample_job())
+
+        code, out, _ = self.run_doctor()
+
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Event log:", out)
+        self.assertIn(LOG_FILE_NAME, out)
+        self.assertIn("last event:", out)
+        self.assertIn("event=job.saved detail=id=j1", out)
+
+    def test_the_doctor_says_when_nothing_has_been_recorded_yet(self) -> None:
+        self.default_database.parent.mkdir(parents=True)
+        with CareerStore(str(self.default_database)):
+            pass
+        (self.default_database.parent / "logs" / LOG_FILE_NAME).unlink()
+
+        code, out, _ = self.run_doctor()
+
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("nothing recorded yet", out)
 
     def test_an_explicit_database_path_overrides_the_environment(self) -> None:
         elsewhere = Path(self._temporary.name) / "chosen.sqlite3"

@@ -319,12 +319,25 @@ class BackupValidationTests(BackupTestCase):
         live = populate(self.directory / "career_agent.sqlite3")
         before = live.read_bytes()
         mode_before = self.mode_of(live)
+        # The application's own log folder sits beside the database (the store writes one line per
+        # event), so "nothing appeared" is measured against what was already there, and every
+        # neighbour's contents and mode are checked as well rather than only their names.
+        neighbours = {
+            path.name: (path.read_bytes(), self.mode_of(path))
+            for path in self.directory.iterdir() if path.is_file() and path != live
+        }
 
         validate_app_database(live)
 
         self.assertEqual(live.read_bytes(), before)
         self.assertEqual(self.mode_of(live), mode_before)
-        self.assertEqual([p.name for p in self.directory.iterdir() if p.name != live.name], [])
+        self.assertEqual(
+            {path.name for path in self.directory.iterdir() if path.name != live.name},
+            set(neighbours) | {"logs"},
+        )
+        for name, (contents, mode) in neighbours.items():
+            self.assertEqual((self.directory / name).read_bytes(), contents, f"{name} was rewritten")
+            self.assertEqual(self.mode_of(self.directory / name), mode, f"{name} changed mode")
 
     def test_a_non_database_file_is_refused(self):
         target = self.directory / "not-a-database.sqlite3"

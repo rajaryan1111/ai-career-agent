@@ -28,6 +28,7 @@ from career_agent import (
 from career_agent.core import ActivityKind, ApplicationActivity
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
+from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 from datetime import date, datetime, timezone
@@ -943,6 +944,20 @@ class WindowShutdownTests(HandlerTestCase):
 
         self.assertEqual(MESSAGES.titles(), [])
         self.assertEqual(MESSAGES.titles("showerror"), [])
+
+    def test_opening_and_closing_the_window_are_recorded_in_the_log(self):
+        """The sequence is what makes the log useful later, so both ends of a run are written."""
+        app, _root, database = self.build_app()
+        log = log_path(database_path=database)
+
+        started = log.read_text(encoding="utf-8")
+        app.close()
+        finished = log.read_text(encoding="utf-8")
+
+        self.assertIn("event=app.started", started)
+        self.assertIn("event=database.opened", started)
+        self.assertIn("event=app.stopped", finished)
+        self.assertGreater(len(finished.splitlines()), len(started.splitlines()))
 
 
 class MissingTrackerRowTests(HandlerTestCase):
@@ -1904,6 +1919,23 @@ class ExportPrivacyTests(HandlerTestCase):
         self.assertIn("Export complete", MESSAGES.titles())
         self.assertIn("Exported 1 jobs", self.app.status.get())
 
+    def test_the_export_is_recorded_with_counts_and_no_profile_values(self):
+        self.app._export()
+
+        logged = log_path(database_path=Path(self.store.database_path)).read_text(encoding="utf-8")
+        self.assertIn("event=export.written detail=jobs=1", logged)
+        self.assertNotIn("ECE", logged)
+        self.assertNotIn("India", logged)
+
+    def test_a_failed_export_is_recorded_as_a_failure(self):
+        FILEDIALOG.path = str(Path(self._directory.name) / "absent-folder" / "export.json")
+
+        self.app._export()
+
+        logged = read_lines(database_path=Path(self.store.database_path), limit=1)
+        self.assertEqual(len(logged), 1)
+        self.assertIn("event=export.failed", logged[0])
+
     def test_the_export_carries_the_activity_history_as_stored(self):
         """The history is part of the person's data, so taking it out must not depend on this build."""
         self.store.add_activity("j1", ApplicationActivity(
@@ -2464,12 +2496,36 @@ class DatabaseBackupHandlerTests(HandlerTestCase):
 
     def test_backup_is_cancelled_without_writing_anything(self):
         FILEDIALOG.path = ""  # the user closed the save dialog
+        # The application keeps its own event log in a ``logs`` folder beside the database, so what a
+        # cancelled action must not do is change what is already there - not make the folder empty.
+        before = {
+            path.name: (path.read_bytes() if path.is_file() else None)
+            for path in sorted(Path(self._directory.name).rglob("*"))
+        }
 
         self.app._backup_database()
 
-        self.assertEqual([path.name for path in Path(self._directory.name).iterdir()], ["handlers.sqlite3"])
+        after = {
+            path.name: (path.read_bytes() if path.is_file() else None)
+            for path in sorted(Path(self._directory.name).rglob("*"))
+        }
+        self.assertEqual(after, before, "a cancelled backup changed the folder")
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(any("backup" in path.name for path in Path(self._directory.name).iterdir()))
         self.assertEqual(MESSAGES.calls, [])
         self.assertIn("cancelled", self.app.status.get())
+
+    def test_a_written_backup_and_a_refusal_are_both_recorded(self):
+        """A backup that never happened must not look like one that did."""
+        self.app._backup_database()
+        self.app._backup_database()  # the same destination again: refused, and never overwritten
+
+        lines = read_lines(database_path=Path(self.store.database_path), limit=100)
+        events = [line for line in lines if "event=backup." in line]
+        self.assertEqual([line.partition(" event=")[2].split(" ", 1)[0] for line in events],
+                         ["backup.written", "backup.refused"])
+        self.assertIn("jobs=1 trackers=0 schema=", events[0])
+        self.assertNotIn("Confidential Employer", "\n".join(events))
 
     def test_backup_refuses_an_existing_file_and_leaves_it_alone(self):
         self.destination.write_text("an older backup the user still needs", encoding="utf-8")
@@ -2838,6 +2894,28 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertEqual(MESSAGES.titles(), [])
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertIn("cancelled", app.status.get())
+
+    def test_a_refused_document_is_recorded_by_type_and_never_by_text(self):
+        """The log explains that a read failed without repeating anything the document said."""
+        unreadable = Path(self._directory.name) / "resume.docx"
+        unreadable.write_text("SECRET-DOCUMENT-TEXT that is not a Word file at all", encoding="utf-8")
+        app = self.make_app()
+
+        _app, dialog = self.import_resume(unreadable)
+
+        self.assertIsNone(dialog)
+        self.assertIn("Resume not imported", MESSAGES.titles())
+        logged = log_path(database_path=Path(self.store.database_path)).read_text(encoding="utf-8")
+        self.assertIn("event=resume.failed detail=type=ResumeUnreadable", logged)
+        self.assertNotIn("SECRET-DOCUMENT-TEXT", logged)
+
+    def test_a_readable_document_is_recorded_by_counts_only(self):
+        response = self.import_resume(self.write_docx())
+
+        self.assertIsNotNone(response[1])
+        logged = log_path(database_path=Path(self.store.database_path)).read_text(encoding="utf-8")
+        self.assertIn("event=resume.proposed detail=format=DOCX proposals=", logged)
+        self.assertNotIn("ada@example.com", logged)
 
     def test_a_file_that_cannot_be_read_is_reported_without_changing_the_profile(self):
         refusal = Path(self._directory.name) / "resume.rtf"

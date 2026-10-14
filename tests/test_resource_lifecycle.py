@@ -235,6 +235,30 @@ class RealDatabaseSafetyTests(unittest.TestCase):
             offenders, [], "pass data_folder= or database_path= so no note lands in the real folder"
         )
 
+    def test_a_test_that_records_an_event_names_where_the_log_goes(self):
+        """The same rule for the event log, which shares the fallback to the real data folder.
+
+        A test that records an event with neither location writes into this machine's own logs folder,
+        which is both pollution and a way for a test to look at data it must not see. Every call in
+        ``tests/`` names a database path or a data folder.
+        """
+        offenders = []
+        for path, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if self._callee_name(node.func).split(".")[-1] != "record_event":
+                    continue
+                keywords = {keyword.arg for keyword in node.keywords}
+                if not {"database_path", "data_folder"} & keywords:
+                    offenders.append(
+                        f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}: no location given"
+                    )
+
+        self.assertEqual(
+            offenders, [], "pass database_path= or data_folder= so no event lands in the real logs folder"
+        )
+
     def test_the_scan_sees_the_test_files_and_would_catch_a_violation(self):
         """A scanner that matched nothing would pass silently; give it a known-bad sample."""
         sample = ast.parse("store = CareerStore()\nroot = career_agent_data_root()\n")

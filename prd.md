@@ -118,8 +118,12 @@ The intended audience is cross-industry and cross-experience: students, interns,
   resolved against the working directory. `--doctor` prints the version, the paths, and what the
   database contains — or the same refusal the app itself would give — without a display, creating or
   changing nothing, and exits non-zero when it finds a problem. Start-up failures are explained in
-  plain language with local paths redacted, plus one bounded owner-only local note. **Planned:**
-  structured rotating logs and a log viewer; a version/data-compatibility policy for released builds.
+  plain language with local paths redacted, plus one bounded owner-only local note. An event log
+  (`logs/application.log`, beside the database) records what the application did - opened, migrated,
+  saved, deleted, imported, exported, backed up, restored, failed - as one bounded, rotated line per
+  event, holding event names, identifiers and counts rather than candidate content, with local paths
+  redacted by the same function that sanitises the start-up note. **Planned:** a diagnostics view in the
+  window that reads the log, and a version/data-compatibility policy for released builds.
 - Data export and deletion.
 - Accessible, understandable user interface.
 - Cross-platform distribution to be evaluated before commitment.

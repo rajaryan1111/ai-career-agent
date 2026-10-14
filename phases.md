@@ -144,8 +144,18 @@ against the working directory. The window, the backup/restore commands and `--do
 file they name cannot differ. `python -m career_agent --doctor` reports the version, the interpreter,
 the resolved path and the rule that chose it, whether the data folder is writable, and what the database
 contains — or the same refusal the app would show for a damaged, empty, or too-new file — without a
-display, without writing anything, and with exit status 1 when it finds a problem. Structured rotating
-logs, a log viewer, and a version/data-compatibility policy for releases are still planned.
+display, without writing anything, and with exit status 1 when it finds a problem.
+
+The application also keeps an event log: `logs/application.log` beside the database, written by
+`career_agent/event_log.py` with one line per event (the application starting and stopping, a database
+being opened and migrated, a migration failing, profile/job/tracker/activity writes, résumé imports,
+exports, backups and restores, and each refusal). A line carries an event name plus an identifier, a
+count or a category — never profile values, document text or URLs — is stripped to a single line, capped,
+and redacted with the same function the start-up note uses; the file is owner-only where the platform
+supports it, bounded by rotation at 256 KiB with one previous file kept, and a logging failure returns
+`None` rather than failing the action it describes. `--doctor` prints the log's path and its most recent
+line. A diagnostics view inside the window is still planned, as is the version/data-compatibility policy
+for releases.
 
 Schema versioning and safe updates are implemented. `career_agent.store` holds an ordered list of
 schema steps (version 1 created the profile/job/tracker tables; version 2 adds the application activity

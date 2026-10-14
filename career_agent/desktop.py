@@ -22,7 +22,9 @@ from .core import (
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationStatus, ApplicationTracker, Availability,
     Decision, evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
+from . import __version__
 from .config import database_path_for_run
+from .event_log import record_event
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
     format_stored_timestamp, form_values, job_form_values, plan_job_save,
@@ -70,6 +72,9 @@ class CareerAgentApp:
         # place is what stops the app from opening a different database than the doctor reports.
         self.db_path = database_path_for_run(database_path)
         self.store = CareerStore(self.db_path)
+        # The log beside the database records the sequence of what this application did. It is not a
+        # second database: it holds event names, identifiers and counts, never profile or document text.
+        self._record("app.started", f"version={__version__}")
         self.selected_job_id = None
         self.job_save_mode = JobSaveMode.NEW
         self.job_edit_baseline = None
@@ -457,6 +462,7 @@ class CareerAgentApp:
                 parent=self.root,
             )
             self.status.set("Resume not imported; the profile was not changed.")
+            self._record("resume.failed", f"type={type(exc).__name__}")
             return
         except Exception as exc:  # noqa: BLE001 - defensive: a Tk callback has no handler above it
             # The reader is written to refuse every unreadable file with a ResumeImportError, so this
@@ -470,7 +476,14 @@ class CareerAgentApp:
                 parent=self.root,
             )
             self.status.set("Resume not imported; the profile was not changed.")
+            self._record("resume.failed", f"type={type(exc).__name__}")
             return
+        # Counts only: the document's text and the values it proposed are not events.
+        self._record(
+            "resume.proposed",
+            f"format={result.source_format.value} proposals={len(result.proposals)} "
+            f"unmapped={len(result.unmapped)} characters={result.text_characters}",
+        )
         self._review_resume(result)
 
     def _review_resume(self, result):
@@ -1399,11 +1412,14 @@ class CareerAgentApp:
                 parent=self.root,
             )
             self.status.set("Export not saved (the file could not be protected).")
+            self._record("export.failed", "reason=the file could not be kept owner-only")
             return
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc), parent=self.root)
             self.status.set("Export failed (local file error).")
+            self._record("export.failed", f"reason={exc}")
             return
+        self._record("export.written", f"jobs={len(payload['jobs'])}")
         self.status.set(f"Exported {len(payload['jobs'])} jobs to a user-selected local file.")
         messagebox.showinfo(
             "Export complete",
@@ -1421,7 +1437,12 @@ class CareerAgentApp:
         self.report.insert("1.0", text)
         self.report.configure(state="disabled")
 
+    def _record(self, event: str, detail: str | None = None) -> None:
+        """Record one event about this run; never let logging fail an action the person asked for."""
+        record_event(event, detail=detail, database_path=str(self.db_path))
+
     def close(self):
+        self._record("app.stopped")
         self.store.close()
         self.root.destroy()
 

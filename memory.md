@@ -1659,3 +1659,51 @@ regressions this change introduced — a CLI test that patched `__main__.default
 to point the *setting* at a different database and assert the backup's own row counts), and a new test of
 mine that opened a connection in a `with` statement, which `tests/test_resource_lifecycle.py` refuses.
 Suite: 695 OK (13 skipped). The suite's own guards are the reason both were caught rather than shipped.
+
+## 2026-10-15 — One event log the person can read, and the bounds that keep it honest
+
+**What changed.** `career_agent/event_log.py` records what the application did, one line per event, into
+`logs/application.log` beside the database it describes. It is written from the places that already know
+an outcome: `CareerStore` (opened, migrated, migration failed, profile saved/deleted, job saved/deleted,
+tracker saved, activity added/deleted), `backup.create_backup`/`restore_backup` (written, refused,
+completed), the desktop app (started, stopped, résumé proposed/failed, export written/failed), and
+`diagnostics.record_startup_failure` (startup failed). `--doctor` now prints the log's path and its most
+recent line; `store.append_private_text_file` is the owner-only append primitive, sharing the mode and
+symlink rules with `write_private_text_file`.
+
+**Why.** The start-up note explains *one* failed launch and is overwritten each time, so nothing answered
+"when did my database change?", "did that backup actually run?", or "which step migrated this file?".
+Support questions about a local-first app have exactly those shapes.
+
+**The rules the module keeps, each one a test.** *One line per event:* a detail is flattened (control
+characters to spaces, whitespace collapsed), capped at 200 characters with a `... (truncated)` marker,
+and redacted with `diagnostics.redact_paths`, so a newline in a detail cannot forge a second event and a
+local location cannot reach a file meant to be shareable. *Never candidate content:* callers pass an
+identifier, a count or a category — the tests save a job, a profile and an activity entry through the real
+store and assert the employer name, the role title, the skills and the entry text are all absent.
+*Bounded:* rotation at 256 KiB keeps one previous file, so the logs folder can never grow without limit;
+the newest events are the ones that survive. *Never in the way:* an unwritable folder, a full disk, a
+database that is not a file (`:memory:`) or a permissions model that refuses owner-only files is reported
+by returning `None`, because a log line failing must not fail the job save it was describing. The one
+condition that raises is a malformed event name, which is a bug in this application rather than a state a
+person can be in.
+
+**Decisions.** The vocabulary lives in one tuple (`event_log.EVENTS`) and a test reads the shipped source
+with `ast` and fails if a name is used that is not declared, or declared and never used — otherwise the
+list would rot into documentation. Event names are positional-first (`timestamp event=name detail=...`),
+which is what makes "a detail cannot impersonate an event" a property rather than a convention. The log
+follows the database rather than a global constant, so a database on an external or backed-up volume
+takes its own history with it; when no location is known at all, it falls back to the per-user
+application-data folder, never the current working directory. A *second* guard test scans `tests/` and
+fails any `record_event(...)` call that names neither `database_path=` nor `data_folder=`, because the
+fallback would otherwise let a test write into this machine's real logs folder — the same protection the
+start-up note already had.
+
+**Teeth checks.** Removing the detail sanitisation failed 2 tests; removing rotation failed 2; making a
+write failure escape failed 2; moving the activity event before the write failed 1; and inserting a bare
+`record_event("app.started")` into a test made the new guard fail. All restored afterwards.
+
+**Found rather than assumed.** Two existing tests caught this change honestly: "validating a database
+creates no side files" and "a cancelled backup writes nothing" both noticed the new `logs` folder, and
+both were rewritten to compare the folder's contents before and after the action (the first now also
+checks every pre-existing neighbour's bytes and mode) instead of being weakened into passing.

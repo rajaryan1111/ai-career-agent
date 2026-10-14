@@ -368,6 +368,48 @@ def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf
     return target
 
 
+def append_private_text_file(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
+    """Append ``text`` to ``path``, creating it owner-only and never following a symbolic link.
+
+    Shares :func:`create_private_file`'s guarantees - the owner-only mode is applied through the
+    descriptor before anything is written, and a link is refused - but opens for append rather than
+    truncating, because this is how the application's own event log accumulates. The mode is applied
+    on every append, so a file whose mode was loosened after creation is tightened again rather than
+    trusted. Raises :class:`PrivateWriteError` (an ``OSError``) with a user-facing message.
+    """
+    target = Path(path)
+    if target.is_symlink():
+        raise _symlink_refusal(target)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(target, flags, _OWNER_ONLY_MODE)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise _symlink_refusal(target) from exc
+        raise PrivateWriteError(f"{target} could not be opened for writing: {exc.strerror or exc}.") from exc
+
+    if not _apply_owner_only_mode(descriptor):
+        os.close(descriptor)
+        raise PrivateWriteError(
+            f"{target} could not be restricted to owner-only on this system, so nothing was appended "
+            "to it. Choose a location that supports file permissions."
+        )
+    try:
+        with os.fdopen(descriptor, "a", encoding=encoding) as handle:
+            descriptor = None  # the file object owns the descriptor from here
+            handle.write(text)
+    except OSError as exc:
+        raise PrivateWriteError(f"{target} could not be written: {exc.strerror or exc}.") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    return target
+
+
 def _json_default(value):
     if isinstance(value, (set, frozenset, tuple)):
         return sorted(value)
@@ -415,8 +457,9 @@ def _migration_to_v1(connection: sqlite3.Connection) -> None:
 
     The statements are exactly the ones this application always created its schema with, so a database
     written by an earlier build has the same objects at the same version. ``IF NOT EXISTS`` is
-    defensive: a file holding tables but recording no version is refused before any step runs (see
-    :meth:`CareerStore._initialize`), so today this step only ever runs against a file with no tables.
+    defensive only: a file that holds tables but records no version is refused before any step runs
+    (see :meth:`CareerStore._initialize`), and a step that fails is rolled back whole, so in practice
+    this step only ever runs against a file with no tables in it.
     """
     for statement in (
         """CREATE TABLE IF NOT EXISTS candidate_profile (
@@ -487,6 +530,7 @@ class CareerStore:
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._initialize()
             _restrict_to_owner(self.database_path)
+            self._record("database.opened", f"schema={_SCHEMA_VERSION}")
         except BaseException:
             # A store that failed to open must not keep its connection: nothing can reach this one
             # (the caller only ever sees the exception), so leaving it to the garbage collector holds
@@ -504,6 +548,18 @@ class CareerStore:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    def _record(self, event: str, detail: str | None = None) -> None:
+        """Append one line about this database to the application log; never fail a save over it.
+
+        Imported here rather than at module level because ``event_log`` reports through
+        ``diagnostics`` and ``diagnostics`` reports *about* this module: one local import keeps the
+        import graph acyclic without moving the owner-only write primitive out of this module, which is
+        the one place that decides what "owner-only" means.
+        """
+        from .event_log import record_event  # local import: avoids a circular import at load time
+
+        record_event(event, detail=detail, database_path=self.database_path)
 
     def _initialize(self) -> None:
         """Bring the database to the schema this build expects, one recorded step at a time."""
@@ -551,8 +607,14 @@ class CareerStore:
             self._connection.execute(f"PRAGMA user_version = {target}")
             self._connection.execute("COMMIT")
         except Exception as exc:
+            # A failed step is worth a line in the log as well as the exception: the log records the
+            # sequence, so a step that was rolled back and one that was applied cannot be confused
+            # when someone reads it afterwards.
+            self._record("database.migration_failed", f"to={target} from={from_version}")
             raise SchemaMigrationError(target, description, from_version,
                                        self._roll_back_step(), exc) from exc
+        # After the commit, so the log only claims a change the database itself records.
+        self._record("database.migrated", f"from={from_version} to={target} ({description})")
 
     def _roll_back_step(self) -> int | None:
         """Undo a failed schema step and report the version the database records afterwards."""
@@ -575,6 +637,9 @@ class CareerStore:
                    ON CONFLICT(profile_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
                 (payload, _now()),
             )
+        # No detail: what the profile says is candidate data and stays out of a log meant to be safe to
+        # share. The timestamp is the answer to "when was this last saved?".
+        self._record("profile.saved")
 
     def get_profile(self) -> CandidateProfile | None:
         row = self._connection.execute("SELECT payload FROM candidate_profile WHERE profile_id=1").fetchone()
@@ -601,6 +666,7 @@ class CareerStore:
                      last_seen_at=excluded.last_seen_at""",
                 (job.listing_id, payload, duplicate_key(job), timestamp, timestamp),
             )
+        self._record("job.saved", f"id={job.listing_id}")
 
     def get_job(self, listing_id: str) -> JobListing | None:
         row = self._connection.execute("SELECT payload FROM job_listings WHERE listing_id=?", (listing_id,)).fetchone()
@@ -683,6 +749,8 @@ class CareerStore:
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("Save the job listing before its application tracker.") from exc
+        self._record("tracker.saved", f"id={tracker.listing_id} status={tracker.status.value} "
+                                      f"confirmed={int(bool(tracker.candidate_confirmed))}")
 
     def add_activity(self, listing_id: str, activity: ApplicationActivity) -> int:
         """Append one dated entry to a listing's history and return its ``activity_id``.
@@ -713,6 +781,7 @@ class CareerStore:
             raise ValueError(
                 f"No saved listing {listing_id!r} to attach this activity to. Save the job listing first."
             ) from exc
+        self._record("activity.added", f"id={listing_id} kind={kind.value}")
         return int(cursor.lastrowid)
 
     def list_activity(self, listing_id: str) -> tuple[ApplicationActivity, ...]:
@@ -746,7 +815,10 @@ class CareerStore:
             cursor = self._connection.execute(
                 "DELETE FROM application_activity WHERE activity_id = ?", (int(activity_id),)
             )
-        return cursor.rowcount == 1
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("activity.deleted", f"activity_id={int(activity_id)}")
+        return removed
 
     def _decode_activity(self, row: sqlite3.Row) -> ApplicationActivity:
         noun = "activity entry"
@@ -863,12 +935,18 @@ class CareerStore:
     def delete_profile(self) -> bool:
         with self._connection:
             cursor = self._connection.execute("DELETE FROM candidate_profile WHERE profile_id=1")
-        return cursor.rowcount > 0
+        removed = cursor.rowcount > 0
+        if removed:
+            self._record("profile.deleted")
+        return removed
 
     def delete_job(self, listing_id: str) -> bool:
         with self._connection:
             cursor = self._connection.execute("DELETE FROM job_listings WHERE listing_id=?", (listing_id,))
-        return cursor.rowcount > 0
+        removed = cursor.rowcount > 0
+        if removed:
+            self._record("job.deleted", f"id={listing_id}")
+        return removed
 
     def _decode_job(self, payload: str) -> JobListing:
         noun = "job listing"

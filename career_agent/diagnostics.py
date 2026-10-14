@@ -341,6 +341,15 @@ def record_startup_failure(
         f"AI Career Agent start-up note, {stamp.isoformat(timespec='seconds')}\n"
         f"{describe_startup_failure(exc, database_path=database_path, extra_paths=extra_paths)}\n"
     )
+    # The note is overwritten by the next failure, so the sequence is kept in the application log
+    # as well: only the exception's type, because the note already holds the full explanation and the
+    # log must stay one line per event without document or profile text in it.
+    from .event_log import record_event  # local import: ``event_log`` reports *through* this module
+
+    record_event(
+        "startup.failed", detail=f"type={type(exc).__name__}",
+        database_path=database_path, data_folder=data_folder, timestamp=stamp,
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         write_private_text_file(path, body)

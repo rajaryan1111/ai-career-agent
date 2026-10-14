@@ -32,6 +32,7 @@ from . import __version__
 from .backup import BackupError, DatabaseInUse, create_backup, restore_backup, suggested_backup_name, validate_app_database
 from .config import database_path_for_run, describe_settings, resolve_settings
 from .diagnostics import describe_startup_failure, diagnostic_log_path, record_startup_failure
+from .event_log import LOG_FILE_NAME, MAX_LOG_BYTES, log_path, read_lines
 from .store import SCHEMA_VERSION
 
 EXIT_OK = 0
@@ -189,6 +190,16 @@ def run_doctor(args: argparse.Namespace) -> int:
         print(f"PROBLEM: start-up notes cannot be written to {note_folder}.")
     else:
         print(f"Start-up notes: {note_path} (kept local; paths are redacted before they are written)")
+        events = log_path(database_path=database)
+        print(
+            f"Event log: {events} "
+            f"(one line per event, rotated at {MAX_LOG_BYTES // 1024} KiB, local paths redacted)"
+        )
+        recent = read_lines(database_path=database, limit=1)
+        if recent:
+            print(f"          last event: {recent[-1]}")
+        elif not events.exists():
+            print(f"          nothing recorded yet ({LOG_FILE_NAME} is created by the first event)")
 
     if settings.notes:
         print("Settings that were ignored are listed above with the reason.")

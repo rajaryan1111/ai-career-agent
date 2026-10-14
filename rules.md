@@ -62,6 +62,13 @@
 - Send the minimum necessary data to external services.
 - Never store passwords in plaintext or commit secrets to Git.
 - Keep sensitive content out of logs where possible.
+  **Implemented as an invariant:** the application's own event log (`career_agent/event_log.py`,
+  `logs/application.log` beside the database) carries an event name, an identifier, a count or a
+  category - never profile values, résumé text, evidence text or a URL. Every detail is stripped to one
+  line, capped, and passed through the same path redaction as the start-up note, so a log written for
+  support can be shared without exposing candidate data or local locations. The file is owner-only where
+  the platform supports it, bounded by rotation, and a logging failure never fails the action it was
+  describing.
 - Support deletion and export of user data.
 - Do not use real candidate data in public test fixtures or screenshots without explicit permission.
 
