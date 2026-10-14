@@ -236,11 +236,56 @@ _KNOWN_COUNTRIES: tuple[tuple[str, str], ...] = (
     ("Nepal", "nepal"),
 )
 
+#: Section headings a résumé may use. Each pattern is anchored at the start of the line and kept
+#: deliberately small: a heading is a few words, so these are matched against short lines only, and a
+#: word that merely appears in a sentence never opens a section.
 _SECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("skills", re.compile(r"^(?:technical\s+|key\s+|core\s+|professional\s+)*skills?\b|^technolog(?:y|ies)\b|^tools?\b", re.I)),
-    ("education", re.compile(r"^education\b|^academics?\b|^academic\s+qualifications?\b|^qualifications?\b", re.I)),
-    ("experience", re.compile(r"^(?:work|professional|relevant|industry)\s+experience\b|^experience\b|^employment\b", re.I)),
-    ("summary", re.compile(r"^(?:professional\s+)?(?:summary|profile|objective|about)\b", re.I)),
+    (
+        "skills",
+        re.compile(
+            r"^(?:technical|key|core|professional|relevant|additional|other|computer|software|it|soft|"
+            r"hard)\s+skills?\b"
+            # "Skill Set" must match as a whole before the bare "skill" alternative can claim it and
+            # leave "Set" looking like a value.
+            r"|^skill\s?sets?\b|^skills?\b"
+            r"|^areas?\s+of\s+expertise\b|^(?:technical|core)\s+expertise\b|^expertise\b"
+            r"|^(?:core|key)\s+competenc(?:y|ies)\b|^competenc(?:y|ies)\b"
+            r"|^(?:technical|core)\s+proficienc(?:y|ies)\b|^proficienc(?:y|ies)\b"
+            r"|^technolog(?:y|ies)\b|^tech\s+stack\b|^stack\s+of\s+tools\b"
+            r"|^tools?\b|^abilities\b|^strengths\b"
+            r"|^(?:programming|query|scripting|markup|database)\s+languages?\b"
+            # "Software & Tools", "Tools and Technologies", "Core Competencies & Expertise": a short
+            # leading word joined by &/and to one of the words a skills heading is made of.
+            r"|^[A-Za-z][A-Za-z /\-]{0,24}(?:&|and)\s*(?:skills?|tools?|technolog(?:y|ies)|techniques"
+            r"|competenc(?:y|ies)|expertise|proficienc(?:y|ies)|languages?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "education",
+        re.compile(
+            r"^education\b|^academics?\b|^academic\s+(?:qualifications?|background|credentials?)\b"
+            r"|^(?:educational\s+)?qualifications?\b",
+            re.I,
+        ),
+    ),
+    (
+        "experience",
+        re.compile(
+            r"^(?:work|professional|relevant|industry|employment|career|practical|hands[\s-]on)\s+"
+            r"(?:experience|history|background)\b"
+            r"|^experience\b|^employment\b",
+            re.I,
+        ),
+    ),
+    (
+        "summary",
+        re.compile(
+            r"^(?:professional|career|executive)\s+(?:summary|profile|objective)\b"
+            r"|^(?:summary|profile|objective|about(?:\s+me)?|overview|highlights)\b",
+            re.I,
+        ),
+    ),
     ("other", re.compile(r"^(?:projects?|certifications?|certificates?|awards?|achievements?|publications?|internships?|activities|volunteering|interests?|languages?|declaration|references?)\b", re.I)),
 )
 
@@ -292,10 +337,29 @@ _AUTHORIZATION_PHRASES: tuple[re.Pattern[str], ...] = (
 )
 
 
+#: Characters that may decorate a heading ("=== SKILLS ===", "* Skills *", "SKILLS ---") and the
+#: bullets a text extractor leaves at the start of a list item. Stripped from the ends only.
+_HEADING_DECORATION = "*_=#~>»«•·▪◦| \t-–—"
+
+#: What may separate a heading from content that continues on the same line ("Skills: Python").
+_HEADING_SEPARATORS = ":|•·/"
+
+#: The separator ``_clean_line`` writes for a column gap or a tab, so it can be named in one place.
+_COLUMN_SEPARATOR = " | "
+
+
 def _clean_line(line: str) -> str:
-    """Collapse whitespace in a line of extracted text and strip list bullets."""
-    collapsed = re.sub(r"\s+", " ", line).strip()
-    return collapsed.lstrip("•·▪◦*-–—> \t").strip()
+    """Collapse whitespace in a line of extracted text, keeping column gaps, and strip bullets.
+
+    A run of two or more spaces (or a tab) is how a text extractor reports the gap between two columns
+    or between two table cells on one line, so it is kept as an explicit ``|`` separator rather than
+    collapsed into a single space: collapsing it merges a heading with its own list and joins
+    unrelated columns into one value. The separator matches what the DOCX extractor already emits
+    between table cells.
+    """
+    spaced = re.sub(r"[ \t]{2,}", " | ", line.replace("\t", " | "))
+    collapsed = re.sub(r"\s+", " ", spaced).strip()
+    return collapsed.lstrip(_HEADING_DECORATION).strip()
 
 
 def _snippet(line: str) -> str:
@@ -581,29 +645,144 @@ def _lines(text: str) -> list[str]:
     return [line for line in (_clean_line(raw) for raw in text.splitlines()) if line]
 
 
-def _section_of(line: str) -> str | None:
-    """The section a heading line opens, or ``None`` when the line is not a heading."""
-    # A heading is short; a paragraph that merely starts with the word "Experience" is not one.
-    if len(line) > 60:
-        return None
-    candidate = line.rstrip(":").strip()
-    if not candidate:
-        return None
+#: How long a heading may be. A paragraph that merely starts with the word "Experience" is not one.
+_MAX_HEADING_CHARACTERS = 60
+
+#: How long the content that shares a heading's line may be before it is treated as prose.
+_MAX_INLINE_CONTENT_CHARACTERS = 120
+
+#: A conjunction that joins two heading words ("SKILLS & INTERESTS", "SKILLS / TOOLS").
+_LEADING_CONJUNCTION = re.compile(r"^(?:&|\+|/|,|;|and|or)\s*", re.I)
+
+#: Names for a category *inside* a skills block ("Languages: Python, C++"). Their values are skills,
+#: so such a line stays part of the skills section instead of closing it, and the label is dropped
+#: before the values are read (the label is a category, not a skill).
+_SKILLS_SUB_LABEL_NAMES = (
+    r"(?:programming|query|scripting|markup|computer|spoken)\s+languages?", r"languages?",
+    r"frameworks?", r"libraries", r"tools?", r"technolog(?:y|ies)", r"databases?", r"platforms?",
+    r"cloud", r"devops", r"version\s+control", r"testing", r"methodolog(?:y|ies)", r"packages?",
+    r"ides?", r"stacks?",
+)
+_SKILLS_SUB_LABEL = re.compile(r"^(?:" + "|".join(_SKILLS_SUB_LABEL_NAMES) + r")\b", re.I)
+#: The same name followed by a separator and its values, as it appears on one line.
+_LABELLED_SKILLS_LINE = re.compile(
+    r"^(?:" + "|".join(_SKILLS_SUB_LABEL_NAMES) + r")\s*[:\-–—]\s*(.+)$", re.I
+)
+
+
+def _undecorated(text: str) -> str:
+    """Remove heading decoration and bullets from both ends of ``text``."""
+    return text.strip().strip(_HEADING_DECORATION).strip()
+
+
+def _despaced(text: str) -> str:
+    """Join a letter-spaced heading back together ("S K I L L S" is the heading "SKILLS").
+
+    Only applied to a run whose words are all single letters, which is what a tracked heading looks
+    like after a PDF text extractor has finished with it; ordinary prose is returned unchanged. A
+    column gap inside the line is preserved, so "T E C H N I C A L | S K I L L S" becomes
+    "TECHNICAL | SKILLS" rather than one run-together word.
+    """
+    segments = text.split(_COLUMN_SEPARATOR)
+    joined = []
+    for segment in segments:
+        parts = segment.split()
+        joined.append("".join(parts) if len(parts) >= 2 and all(len(part) == 1 for part in parts) else segment)
+    return _COLUMN_SEPARATOR.join(joined)
+
+
+def _heading_name(candidate: str) -> str | None:
+    """The section a candidate heading names, or ``None``."""
     for name, pattern in _SECTION_PATTERNS:
-        if pattern.search(candidate):
+        if pattern.match(candidate):
             return name
     return None
 
 
+def _looks_like_inline_content(remainder: str) -> bool:
+    """Whether text that follows a heading on the same line is a value list rather than a sentence.
+
+    "SKILLS Python, SQL" and "SKILLS Python" carry a value; "Skills are the reason I applied" is prose
+    and is left out. A list separator decides it, and a single word counts because that is how a
+    one-entry list looks; anything with spaces and no separator is treated as a sentence.
+    """
+    if len(remainder) > _MAX_INLINE_CONTENT_CHARACTERS:
+        return False
+    if re.search(r"[,;|•·/]", remainder):
+        return True
+    return " " not in remainder
+
+
+def _heading_match(line: str) -> tuple[str, str] | None:
+    """The section ``line`` opens and any content that shares the line, or ``None``.
+
+    Returning the content matters because a text extractor frequently puts a heading and its list on
+    one line - a sidebar layout or a table cell produces "SKILLS Python, SQL", and "SKILLS: Python, SQL"
+    is written that way on purpose. Treating such a line as a heading only would silently discard the
+    list, which is exactly the "no skills section was found" report this handles.
+    """
+    if len(line) > _MAX_HEADING_CHARACTERS:
+        return None
+    candidate = _despaced(_undecorated(line.rstrip(":")))
+    if not candidate:
+        return None
+    # A column gap can sit inside the heading itself ("TECHNICAL | SKILLS"). Matching the flattened
+    # form as a fallback covers that without touching a gap that belongs to the content, which is
+    # what keeps the two columns of a content line splittable further down.
+    match_candidates = [candidate]
+    if _COLUMN_SEPARATOR in candidate:
+        match_candidates.append(candidate.replace(_COLUMN_SEPARATOR, " "))
+    for match_candidate in match_candidates:
+        for name, pattern in _SECTION_PATTERNS:
+            match = pattern.match(match_candidate)
+            if not match:
+                continue
+            remainder = _undecorated(match_candidate[match.end():])
+            if not remainder:
+                return name, ""
+            tail = _undecorated(_LEADING_CONJUNCTION.sub("", remainder))
+            # Two columns' headings can arrive on one line ("SKILLS EXPERIENCE"), and a heading can be
+            # joined to another by a conjunction ("SKILLS & INTERESTS"). The tail is a heading word,
+            # not a value: keeping it would propose "EXPERIENCE" or "INTERESTS" as a skill.
+            if _despaced(tail) and _heading_name(_despaced(tail)) is not None:
+                return name, ""
+            if remainder[0] in _HEADING_SEPARATORS:
+                return name, _undecorated(remainder.lstrip(_HEADING_SEPARATORS)).strip()
+            if not remainder[0].isalnum():
+                return name, ""
+            if _looks_like_inline_content(remainder):
+                return name, remainder
+            return name, ""
+    return None
+
+
+def _section_of(line: str) -> str | None:
+    """The section a heading line opens, or ``None`` when the line is not a heading."""
+    opened = _heading_match(line)
+    return opened[0] if opened else None
+
+
 def _sections(lines: Sequence[str]) -> dict[str, list[str]]:
-    """Split cleaned lines into sections keyed by heading; preamble text lands under ``"header"``."""
+    """Split cleaned lines into sections keyed by heading; preamble text lands under ``"header"``.
+
+    Content that shares a heading's line is kept as that section's first content line, and a *labelled*
+    category line inside a skills block ("Languages: Python, C++") stays in the skills block: its
+    values are skills. A bare word on its own line ("Languages") is left to open its own section,
+    because a list under it may well be spoken languages rather than skills.
+    """
     sections: dict[str, list[str]] = {"header": []}
     current = "header"
     for line in lines:
-        heading = _section_of(line)
-        if heading is not None:
-            current = heading
+        opened = _heading_match(line)
+        merge_into_skills = (
+            opened is not None and bool(opened[1]) and current == "skills" and opened[0] == "other"
+            and _SKILLS_SUB_LABEL.match(_undecorated(line))
+        )
+        if opened is not None and not merge_into_skills:
+            current, remainder = opened
             sections.setdefault(current, [])
+            if remainder:
+                sections[current].append(remainder)
             continue
         sections.setdefault(current, []).append(line)
     return sections
@@ -621,7 +800,13 @@ def _skills_proposal(section: Iterable[str]) -> FieldProposal | None:
     for line in section:
         if not evidence:
             evidence = line
-        for part in re.split(r"[,;|•·/]|\s{3,}|\t| - | – ", line):
+        # "Languages: Python, SQL" lists skills under a category name, so the values are read without
+        # the label. The evidence shown to the person is always the whole original line.
+        labelled = _LABELLED_SKILLS_LINE.match(line)
+        content = labelled.group(1) if labelled else line
+        # Column gaps and tabs already arrive as the "|" separator (see ``_clean_line``), so this
+        # splits on the separators a person actually writes between skills.
+        for part in re.split(r"[,;•·/]| - | – |\|", content):
             token = _clean_line(part)
             token = re.sub(r"^(?:and|&)\s+", "", token, flags=re.I).strip(" .")
             if not token or len(token) < 2 or len(token) > 40:
@@ -869,8 +1054,19 @@ def parse_resume_text(text: str) -> tuple[tuple[FieldProposal, ...], tuple[Unmap
     skills = _skills_proposal(sections.get("skills", ()))
     if skills:
         proposals.append(skills)
+    elif "skills" in sections:
+        # A heading was recognised but no value followed it: say so instead of reporting that the
+        # document has no skills section, which is a different problem with a different next step.
+        notes.append(
+            "A skills heading was recognised, but no list of skills followed it, so no skills were "
+            "proposed. If the document lists them elsewhere, type them into the Skills field."
+        )
     else:
-        notes.append("No skills section was found, so no skills were proposed.")
+        notes.append(
+            "No skills heading was recognised in this document (headings such as Skills, Technical "
+            "Skills, Competencies, Expertise, Technologies and Tools are recognised), so no skills "
+            "were proposed. Type them into the Skills field if you want them stored."
+        )
     education_lines = sections.get("education", ())
     degree = _degree_proposal(education_lines, lines)
     if degree:

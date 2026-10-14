@@ -110,6 +110,10 @@ def _docx_paragraph(text: str) -> str:
 def _docx_table(rows) -> str:
     body = []
     for row in rows:
+        if isinstance(row, str):
+            # A bare string "row" would iterate as its characters, producing a table of one-letter
+            # cells that still looks plausible when it is extracted. Refuse it here instead.
+            raise TypeError("a table row must be a sequence of cell strings, not a string")
         cells = "".join(f"<w:tc>{_docx_paragraph(str(cell))}</w:tc>" for cell in row)
         body.append(f"<w:tr>{cells}</w:tr>")
     return f"<w:tbl>{''.join(body)}</w:tbl>"
@@ -188,6 +192,31 @@ class ResumeTestCase(unittest.TestCase):
 # --------------------------------------------------------------------------------------
 # PDF extraction
 # --------------------------------------------------------------------------------------
+
+
+@unittest.skipUnless(PDF_AVAILABLE, "the optional pypdf package is not installed")
+@unittest.skipUnless(PDF_AVAILABLE, "the optional pypdf package is not installed")
+class PdfSidebarLayoutTests(ResumeTestCase):
+    """The reported case, end to end: pypdf returns a sidebar heading and its list as one line."""
+
+    def test_a_sidebar_heading_and_its_list_on_one_line_are_parsed(self):
+        path = self.write("sidebar.pdf", build_pdf_runs([
+            (72, 720, "Sample Candidate"),
+            (72, 700, "SKILLS"),
+            (190, 700, "Python, SQL, PyTorch"),
+            (72, 680, "EDUCATION"),
+            (190, 680, "B.Tech in Computer Science, 2027"),
+        ]))
+
+        document = resume.extract_text(path)
+        self.assertIn("SKILLS Python, SQL, PyTorch", document.text, "the extractor joins the two columns")
+
+        result = resume.parse_resume(path)
+
+        skills = resume.proposal_by_key(result, "skills")
+        self.assertIsNotNone(skills, "a sidebar layout must not lose its skills list")
+        self.assertEqual(skills.value, "Python, SQL, PyTorch")
+        self.assertIsNotNone(resume.proposal_by_key(result, "degree"))
 
 
 @unittest.skipUnless(PDF_AVAILABLE, "the optional pypdf package is not installed")
@@ -530,6 +559,24 @@ class ParsingTests(ResumeTestCase):
         self.assertIs(proposal.confidence, ProposalConfidence.CONFIDENT)
         self.assertIn("Python", proposal.evidence)
 
+    def test_a_table_row_holding_a_heading_and_its_list_is_read(self):
+        """A table cell layout is common in Word résumés; the row arrives as "SKILLS | Python, SQL"."""
+        result = self.parse(
+            paragraphs=("Sample Candidate",),
+            tables=(
+                (("SKILLS", "Python, SQL, PyTorch"), ("EDUCATION", "B.Tech in Computer Science, 2027")),
+            ),
+        )
+
+        skills = resume.proposal_by_key(result, "skills")
+        degree = resume.proposal_by_key(result, "degree")
+
+        self.assertIsNotNone(skills, "the row's second cell holds the skills")
+        self.assertEqual(skills.value, "Python, SQL, PyTorch")
+        self.assertNotIn("SKILLS", skills.value.upper())
+        self.assertIsNotNone(degree, "the same rule must work for the education row")
+        self.assertIn("Computer Science", degree.value)
+
     def test_a_keyword_in_the_body_is_not_treated_as_a_skill(self):
         result = self.parse(paragraphs=(
             "Sample Candidate", "Summary", "Built a project with Python and PostgreSQL.",
@@ -537,7 +584,7 @@ class ParsingTests(ResumeTestCase):
         ))
 
         self.assertIsNone(resume.proposal_by_key(result, "skills"))
-        self.assertTrue(any("No skills section" in note for note in result.notes), result.notes)
+        self.assertTrue(any("No skills heading was recognised" in note for note in result.notes), result.notes)
 
     def test_a_degree_with_a_subject_is_confident_and_a_level_alone_needs_review(self):
         with_subject = self.parse(paragraphs=("Education", "B.Tech in Computer Science"))
@@ -780,6 +827,197 @@ socket.getaddrinfo = _deny
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("PROPOSALS", completed.stdout)
         self.assertIn("FORMAT DOCX", completed.stdout)
+
+
+# --------------------------------------------------------------------------------------
+# Skills-section recognition: the layout shapes a real extractor produces
+# --------------------------------------------------------------------------------------
+
+
+def build_pdf_runs(runs) -> bytes:
+    """A PDF whose text is positioned absolutely, so a heading and a value can share a baseline.
+
+    ``build_pdf`` writes one line per row of a text block; this builder exists for the layouts a
+    sidebar or tabular résumé produces, where two runs sit at different x positions on the same page
+    line and the extractor therefore returns them as one line.
+    """
+    body = ["BT /F1 11 Tf"]
+    for x, y, text in runs:
+        body.append(f"1 0 0 1 {x} {y} Tm ({_escape_pdf_text(text)}) Tj")
+    body.append("ET")
+    stream = "\n".join(body).encode("latin-1", "replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> "
+        b"/Contents 4 0 R >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    document = bytearray(PDF_HEADER)
+    offsets = []
+    for number, blob in enumerate(objects, start=1):
+        offsets.append(len(document))
+        document += f"{number} 0 obj\n".encode() + blob + b"\nendobj\n"
+    xref_offset = len(document)
+    document += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
+    for offset in offsets:
+        document += f"{offset:010d} 00000 n \n".encode()
+    document += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n"
+    ).encode()
+    return bytes(document)
+
+
+class SkillsSectionRecognitionTests(unittest.TestCase):
+    """The shapes a text extractor really produces must yield the skills the document lists.
+
+    Every case here came out of a real extraction rather than a guess about one: a sidebar or a table
+    cell puts a heading and its list on one line ("SKILLS Python, SQL"), a heading may be written with
+    its list after a colon on the same line, two columns' headings can land on one line, and PDF
+    tracking letter-spaces a heading. The rules stay conservative in the other direction: prose is
+    never harvested as a skill, and a heading word that merely shares a line is not a value.
+    """
+
+    def skills_of(self, *lines):
+        """The skills proposal for a text excerpt, or ``None``."""
+        proposals, _unmapped, _notes = resume.parse_resume_text("\n".join(lines))
+        for proposal in proposals:
+            if proposal.key == "skills":
+                return proposal
+        return None
+
+    def notes_of(self, *lines):
+        return resume.parse_resume_text("\n".join(lines))[2]
+
+    def test_a_heading_and_its_list_on_one_line_are_both_read(self):
+        """The reported bug: the whole line was consumed as a heading and the list was discarded."""
+        for line in (
+            "SKILLS Python, SQL",
+            "SKILLS: Python, SQL",
+            "Skills:Python, SQL",
+            "SKILLS | Python, SQL",
+            "Skills\tPython, SQL",
+            "SKILLS    Python, SQL",
+            "Skills Python",
+            "=== SKILLS ===  Python, SQL",
+        ):
+            with self.subTest(line=line):
+                proposal = self.skills_of(line)
+                self.assertIsNotNone(proposal, f"the list on {line!r} must not be discarded")
+                self.assertIn("Python", proposal.value)
+                self.assertNotIn("SKILLS", proposal.value.upper(), "the heading is not a skill")
+
+    def test_common_skills_heading_names_are_recognised(self):
+        for heading in (
+            "Skills", "SKILLS", "Technical Skills", "Key Skills", "Core Skills", "Professional Skills",
+            "Relevant Skills", "Additional Skills", "Other Skills", "Computer Skills", "Software Skills",
+            "IT Skills", "Soft Skills", "Skillset", "Skill Set", "Areas of Expertise", "Expertise",
+            "Technical Expertise", "Key Competencies", "Core Competencies", "Competencies",
+            "Technical Proficiencies", "Proficiencies", "Technologies", "Technology", "Tools",
+            "Tools & Technologies", "Tools and Technologies", "Software & Tools", "Tech Stack",
+            "Programming Languages", "Skills & Interests", "TECHNICAL SKILLS:", "Skills / Abilities",
+        ):
+            with self.subTest(heading=heading):
+                proposal = self.skills_of(heading, "Python, SQL")
+                self.assertIsNotNone(proposal, f"{heading!r} should open a skills section")
+                self.assertEqual(proposal.value, "Python, SQL")
+
+    def test_decoration_and_letter_spacing_do_not_hide_a_heading(self):
+        for heading in ("=== SKILLS ===", "*** Skills ***", "--- SKILLS ---", "• Skills", "S K I L L S",
+                        "T E C H N I C A L   S K I L L S"):
+            with self.subTest(heading=heading):
+                proposal = self.skills_of(heading, "Python, SQL")
+                self.assertIsNotNone(proposal, f"{heading!r} should open a skills section")
+                self.assertEqual(proposal.value, "Python, SQL")
+
+    def test_a_heading_word_that_shares_a_line_is_never_a_skill(self):
+        """Two columns' headings merge into one extracted line; neither word is a value."""
+        merged_columns = self.skills_of("SKILLS EXPERIENCE", "Python, SQL")
+        joined_heading = self.skills_of("SKILLS & INTERESTS", "Python, SQL")
+
+        self.assertIsNotNone(merged_columns)
+        self.assertEqual(merged_columns.value, "Python, SQL")
+        self.assertIsNotNone(joined_heading)
+        self.assertEqual(joined_heading.value, "Python, SQL")
+        for proposal in (merged_columns, joined_heading):
+            self.assertNotIn("EXPERIENCE", proposal.value.upper())
+            self.assertNotIn("INTERESTS", proposal.value.upper())
+
+    def test_a_sentence_that_starts_with_a_heading_word_produces_nothing(self):
+        """Prose must never become a skill: the reminder that a heading was seen is not a value."""
+        for sentence in (
+            "Skills are the reason I applied to this role and I would like to discuss them.",
+            "Experience gained through coursework and personal projects over the last two years.",
+            "Interests include hiking and reading.",
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertIsNone(self.skills_of(sentence), "prose is not a list of skills")
+
+    def test_a_wide_gap_or_tab_between_columns_keeps_every_value(self):
+        """The two-column split had been unreachable, so a second column was merged into one token."""
+        for row in ("Python, SQL\tGit, Docker", "Python, SQL    Git, Docker"):
+            with self.subTest(row=row):
+                proposal = self.skills_of("Skills", row)
+                self.assertIsNotNone(proposal)
+                self.assertEqual(
+                    {part.strip() for part in proposal.value.split(",")},
+                    {"Python", "SQL", "Git", "Docker"},
+                )
+
+    def test_labelled_categories_keep_their_values_without_the_labels(self):
+        proposal = self.skills_of("Technical Skills", "Languages: Python, C++", "Frameworks: Django, PyTorch")
+
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.value, "Python, C++, Django, PyTorch")
+        for label in ("Languages", "Frameworks"):
+            self.assertNotIn(label, proposal.value, "a category label is not a skill")
+        self.assertIn("Languages: Python, C++", proposal.evidence, "the evidence is the whole line")
+
+    def test_a_bare_languages_label_is_left_to_open_its_own_section(self):
+        """A list under a bare "Languages" heading may be spoken languages, not skills."""
+        proposal = self.skills_of("Skills", "Python, SQL", "Languages", "English, Hindi")
+
+        self.assertIsNotNone(proposal)
+        self.assertEqual(proposal.value, "Python, SQL")
+        self.assertNotIn("English", proposal.value)
+
+    def test_a_heading_found_without_a_list_is_reported_as_its_own_case(self):
+        """The two failures need different next steps, so the notes must not conflate them."""
+        heading_without_list = self.notes_of("Skills")
+        no_heading = self.notes_of("Sample Candidate", "A summary sentence about the candidate.")
+
+        self.assertTrue(any("no list of skills followed it" in note for note in heading_without_list))
+        self.assertTrue(any("No skills heading was recognised" in note for note in no_heading))
+        for note in heading_without_list + no_heading:
+            self.assertNotIn("Sample Candidate", note, "notes never quote the document")
+
+    def test_education_content_on_a_heading_line_is_used(self):
+        """The same rule fixes the other section: "EDUCATION B.Tech ..., 2028" used to lose its content."""
+        proposals, _unmapped, _notes = resume.parse_resume_text(
+            "\n".join(("Sample Candidate", "EDUCATION B.Tech in Electronics, 2028"))
+        )
+        by_key = {proposal.key: proposal for proposal in proposals}
+
+        self.assertIn("degree", by_key)
+        self.assertIn("Electronics", by_key["degree"].value)
+        self.assertIn("graduation_year", by_key)
+        self.assertEqual(by_key["graduation_year"].value, "2028")
+
+    def test_the_proposals_never_carry_the_document_text(self):
+        """Recognition was widened, so re-assert the privacy property over the new paths."""
+        result = resume.parse_resume_text(
+            "\n".join((
+                "Sample Candidate", "sample.candidate@example.invalid",
+                "Technical Skills", "Languages: Python, C++", "Frameworks: Django",
+                "A long paragraph of prose that must never be repeated back as a value, because it "
+                "belongs to the document and not to the profile being built from it.",
+            ))
+        )
+        for proposal in result[0]:
+            self.assertLessEqual(len(proposal.evidence), resume.MAX_EVIDENCE_CHARACTERS)
+            self.assertNotIn("must never be repeated back", proposal.value)
+            self.assertNotIn("example.invalid", proposal.value)
 
 
 if __name__ == "__main__":
