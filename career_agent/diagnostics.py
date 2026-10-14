@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+import os
 import re
 import sqlite3
 
@@ -161,6 +162,60 @@ def _truncate(text: str) -> str:
     return text[: MAX_DIAGNOSTIC_LENGTH - 3].rstrip() + "..."
 
 
+def _explain_database_open_failure(exc: BaseException, database_path: str | Path | None) -> str | None:
+    """Explain a database that SQLite could not *open*, when the cause is the location itself.
+
+    Reached only when SQLite's own message is "unable to open database file", which is what it reports
+    when the file cannot be created or opened at all - as opposed to a file that exists and is not a
+    database ("file is not a database", handled separately below). The distinction matters because the
+    two need opposite advice. Reported verbatim from a real run: starting the app with a database path
+    inside a folder that did not exist produced "The local database could not be read ... it may be
+    damaged" and told the person to rename or restore a file that was never there.
+
+    The three causes that can be told apart here are the location's own: the folder does not exist, the
+    path is itself a folder, or the folder is not writable by this account. Nothing is created, moved,
+    renamed or tested destructively - only ``Path.is_dir`` and ``os.access`` are consulted - and no
+    filesystem location is ever put into the message. Returns ``None`` when the folder looks usable, so
+    the caller keeps its existing explanation for a file that is present but unreadable.
+    """
+    if not isinstance(exc, sqlite3.Error) or "unable to open database file" not in str(exc).lower():
+        return None
+    if database_path is None:
+        return None  # no path to inspect: claiming a cause here would be a guess
+    target = Path(database_path)
+    try:
+        parent = target.parent
+        parent_missing = not parent.is_dir()
+        target_is_folder = parent.is_dir() and target.is_dir()
+        parent_unwritable = parent.is_dir() and not os.access(parent, os.W_OK)
+    except OSError:
+        return None  # the check itself failed: report the original failure rather than a guess
+    if parent_missing:
+        return (
+            "The application could not create or open the local database because the folder that is "
+            "meant to hold it does not exist, so the application did not start. Nothing was created "
+            "and nothing was uploaded.\n\n"
+            "Create that folder and start the app again, or point the app at a database inside a "
+            "folder that already exists: python -m career_agent --database PATH"
+        )
+    if target_is_folder:
+        return (
+            "The application could not open the local database because the path it was given is "
+            "itself a folder, so the application did not start. Nothing was created and nothing was "
+            "uploaded.\n\n"
+            "Give the app a file path inside a folder: python -m career_agent --database PATH"
+        )
+    if parent_unwritable:
+        return (
+            "The application could not create or open the local database because the folder that "
+            "holds it is not writable by your account, so the application did not start. Nothing was "
+            "written and nothing was uploaded.\n\n"
+            "Check that you can write to your own application-data folder (or to the folder you "
+            "passed with --database), then start the app again."
+        )
+    return None
+
+
 def describe_startup_failure(
     exc: BaseException,
     *,
@@ -194,6 +249,9 @@ def describe_startup_failure(
             f"{message}\n\nNothing was written and nothing was uploaded. Check that you can write to "
             "your own application-data folder, then try again."
         )
+    location_problem = _explain_database_open_failure(exc, database_path)
+    if location_problem is not None:
+        return location_problem
     if isinstance(exc, sqlite3.DatabaseError):
         return (
             "The local database could not be read, so the application did not start. It may be "

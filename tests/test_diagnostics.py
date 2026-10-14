@@ -23,7 +23,7 @@ from career_agent.diagnostics import (
     DIAGNOSTIC_FILE_NAME, MAX_DIAGNOSTIC_LENGTH, describe_startup_failure, diagnostic_log_path,
     record_startup_failure, redact_paths,
 )
-from career_agent.store import SCHEMA_VERSION, PrivateWriteError, TrackerStatusError
+from career_agent.store import SCHEMA_VERSION, CareerStore, PrivateWriteError, TrackerStatusError
 
 
 class VersionReportingTests(unittest.TestCase):
@@ -231,6 +231,75 @@ class StartupFailureExplanationTests(unittest.TestCase):
         self.assertIn("malformed", text)
         self.assertNotIn("/home/someone", text)
         self.assertIn("<application data folder>", text)
+
+    def test_a_missing_folder_is_explained_as_a_missing_folder_not_a_damaged_database(self):
+        """Reproduced before this test existed, from the macOS report and repeated here.
+
+        Starting the app with a database path inside a folder that does not exist made SQLite report
+        "unable to open database file", and the app answered "the local database could not be read ...
+        it may be damaged" and advised renaming or restoring a file that was never there. Nothing was
+        damaged and neither suggestion could work: the folder itself was missing.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "not-created-yet" / "career_agent.sqlite3"
+            try:
+                CareerStore(missing)
+            except sqlite3.Error as exc:
+                real_error = exc
+            else:  # pragma: no cover - the precondition is that this open fails
+                self.fail("the store must fail to open a database in a folder that does not exist")
+            # Classified while the folder is still absent: the answer depends on the filesystem, so the
+            # temporary directory must not be cleaned up first.
+            message = describe_startup_failure(real_error, database_path=missing)
+
+        self.assertIn("folder", message)
+        self.assertIn("does not exist", message)
+        self.assertIn("--database", message, "the message must name a next step that can work")
+        self.assertNotIn("damaged", message, "nothing is damaged in this case")
+        self.assertNotIn("--restore-from", message, "restoring would fail for the same reason")
+        self.assertNotIn(str(missing), message, "the location must not be disclosed")
+        self.assertNotIn("unable to open database file", message, "SQLite's own words are not helpful here")
+
+    def test_a_path_that_is_a_folder_is_explained_as_a_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "this-is-a-folder"
+            folder.mkdir()
+            try:
+                CareerStore(folder)
+            except sqlite3.Error as exc:
+                real_error = exc
+            else:  # pragma: no cover - the precondition is that this open fails
+                self.fail("the store must fail to open a folder as a database")
+            message = describe_startup_failure(real_error, database_path=folder)
+
+        self.assertIn("itself a folder", message)
+        self.assertIn("--database", message)
+        self.assertNotIn(str(folder), message)
+
+    def test_a_database_file_that_is_present_but_unreadable_keeps_the_existing_message(self):
+        """The new branch must not swallow the case it was not written for."""
+        with tempfile.TemporaryDirectory() as directory:
+            corrupt = Path(directory) / "corrupt.sqlite3"
+            corrupt.write_text("this is not a database", encoding="utf-8")
+            try:
+                CareerStore(corrupt)
+            except sqlite3.Error as exc:
+                real_error = exc
+            else:  # pragma: no cover - the precondition is that this open fails
+                self.fail("the store must fail to open a file that is not a database")
+            message = describe_startup_failure(real_error, database_path=corrupt)
+
+        self.assertIn("could not be read", message)
+        self.assertIn("--restore-from", message)
+        self.assertIn("not a database", message, "SQLite's own words are still shown for this case")
+
+    def test_an_open_failure_with_no_path_available_does_not_guess(self):
+        message = describe_startup_failure(
+            sqlite3.OperationalError("unable to open database file"), database_path=None
+        )
+
+        self.assertIn("could not be read", message, "without a path the honest answer is the general one")
+        self.assertNotIn("does not exist", message, "no cause may be claimed that was not checked")
 
     def test_a_permission_failure_names_the_permission_not_the_location(self):
         text = self.explain(PermissionError(13, "Permission denied"))
