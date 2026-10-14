@@ -8,10 +8,25 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
+from career_agent.core import duplicate_key
 from career_agent.store import (
-    CareerStore, PrivateWriteError, TrackerStatusError, create_private_file, require_owner_only,
-    write_private_text_file,
+    CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError, create_private_file,
+    require_owner_only, write_private_text_file,
 )
+
+#: A fixed, clearly local timestamp so a test never depends on the clock.
+_TIMESTAMP = "2026-01-01T00:00:00+00:00"
+
+
+def sample_job(listing_id="j1", **overrides):
+    """A minimal saved listing; only the fields a test is about are overridden."""
+    values = dict(
+        listing_id=listing_id, source_id="manual", source_name="Manual entry",
+        source_listing_url=f"https://jobs.example/role/{listing_id}", employer_name="Example",
+        role_title="AI Intern", availability_status=Availability.OPEN,
+    )
+    values.update(overrides)
+    return JobListing(**values)
 
 #: Permitted path used by tests that need an already-advanced record.
 _PATH_TO_SUBMISSION = (
@@ -848,6 +863,147 @@ class RecordTimeTests(unittest.TestCase):
         reach_status(self.store, ApplicationStatus.DISCOVERED)
         raw = self.store.get_tracker_raw("j1")
         self.assertTrue(raw["updated_at"], "the tracker row records when the app last wrote it")
+
+
+class UnreadableStoredRecordTests(unittest.TestCase):
+    """A row a damaged or hand-edited database holds must be refused as itself, never as a crash.
+
+    The payloads here are written directly, the way a damaged file or a manual edit would arrive, and
+    then read back through the public API. Left alone, those shapes raise four different exception
+    types (``KeyError``, ``TypeError``, ``AttributeError``, ``json.JSONDecodeError``), none of which a
+    Tk callback or a list refresh catches, so one read of one bad row could take down a whole view.
+    Nothing may be repaired, migrated, rewritten, or deleted: the stored payload is compared before and
+    after every refused read, and rows that are fine stay readable.
+    """
+
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def _stored_payload(self, table="candidate_profile", key="profile_id", value=1):
+        return self.store._connection.execute(
+            f"SELECT payload FROM {table} WHERE {key}=?", (value,)
+        ).fetchone()["payload"]
+
+    def write_profile_payload(self, payload):
+        with self.store._connection:
+            self.store._connection.execute(
+                "INSERT INTO candidate_profile(profile_id, payload, updated_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(profile_id) DO UPDATE SET payload=excluded.payload",
+                (payload, _TIMESTAMP),
+            )
+        return payload
+
+    def write_job_payload(self, payload, listing_id="broken"):
+        """Store a raw listing payload, keyed so a duplicate-group lookup finds this same row."""
+        self.store.save_job(sample_job(listing_id="healthy"))
+        with self.store._connection:
+            self.store._connection.execute(
+                "INSERT INTO job_listings(listing_id, payload, duplicate_key, first_seen_at, last_seen_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (listing_id, payload, duplicate_key(sample_job(listing_id=listing_id)), _TIMESTAMP, _TIMESTAMP),
+            )
+        return payload
+
+    def test_the_refusal_is_a_value_error_so_existing_callers_keep_working(self):
+        from career_agent import StoredRecordError as exported
+
+        self.assertIs(exported, StoredRecordError)
+        self.assertTrue(issubclass(StoredRecordError, ValueError))
+
+    def test_a_profile_holding_a_field_this_version_does_not_know_is_refused(self):
+        payload = self.write_profile_payload('{"candidate_country": "India", "nickname": "Ada"}')
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_profile()
+
+        self.assertIn("candidate profile", str(caught.exception))
+        self.assertIn("nickname", str(caught.exception))
+        self.assertEqual(self._stored_payload(), payload, "a refused read must change nothing")
+
+    def test_a_profile_payload_that_is_not_a_stored_record_is_refused(self):
+        for payload in ("[]", '"career_agent.sqlite3"', "null", "3", "true"):
+            with self.subTest(payload=payload):
+                self.write_profile_payload(payload)
+
+                with self.assertRaises(StoredRecordError):
+                    self.store.get_profile()
+
+                self.assertEqual(self._stored_payload(), payload)
+
+    def test_damaged_profile_text_is_refused_instead_of_escaping_as_a_json_error(self):
+        for payload in ('{"candidate_country": "Ind', "", "   ", "{'candidate_country': 'India'}"):
+            with self.subTest(payload=payload):
+                self.write_profile_payload(payload)
+
+                with self.assertRaises(StoredRecordError) as caught:
+                    self.store.get_profile()
+
+                self.assertIn("not valid JSON", str(caught.exception))
+                self.assertEqual(self._stored_payload(), payload)
+
+    def test_skills_stored_as_a_string_are_refused_rather_than_split_into_letters(self):
+        # frozenset("Python") is a set of six single characters: every later comparison would use
+        # skills nobody stated, and the requirement checks would still report a confident answer.
+        payload = self.write_profile_payload('{"candidate_country": "India", "skills": "Python"}')
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_profile()
+
+        self.assertIn("skills", str(caught.exception))
+        self.assertEqual(self._stored_payload(), payload)
+
+    def test_an_ordinary_profile_still_reads_after_a_damaged_row_is_refused(self):
+        profile = CandidateProfile(candidate_country="India", skills=frozenset({"Python", "RAG"}))
+        self.store.save_profile(profile)
+        good_payload = self._stored_payload()
+
+        self.assertEqual(self.store.get_profile(), profile)
+        self.write_profile_payload("{not json at all}")
+        with self.assertRaises(StoredRecordError):
+            self.store.get_profile()
+
+        self.write_profile_payload(good_payload)
+        self.assertEqual(self.store.get_profile(), profile)
+
+    def test_a_listing_with_no_saved_availability_status_is_refused_on_every_read_path(self):
+        payload = self.write_job_payload('{"listing_id": "broken", "employer_name": "Example"}')
+
+        for read in (lambda: self.store.get_job("broken"),
+                     self.store.list_jobs,
+                     lambda: self.store.find_duplicate_group(sample_job(listing_id="broken"))):
+            with self.subTest(read=read):
+                with self.assertRaises(StoredRecordError) as caught:
+                    read()
+                self.assertIn("availability status", str(caught.exception))
+
+        self.assertEqual(self._stored_payload("job_listings", "listing_id", "broken"), payload)
+
+    def test_a_listing_whose_saved_status_is_unknown_to_this_version_is_refused(self):
+        payload = self.write_job_payload('{"listing_id": "broken", "availability_status": "probably_open"}')
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_job("broken")
+
+        self.assertIn("probably_open", str(caught.exception))
+        self.assertEqual(self._stored_payload("job_listings", "listing_id", "broken"), payload)
+
+    def test_a_listing_whose_required_skills_are_a_string_is_refused(self):
+        self.write_job_payload('{"listing_id": "broken", "availability_status": "open", "required_skills": "Python"}')
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.list_jobs()
+
+        self.assertIn("required_skills", str(caught.exception))
+
+    def test_a_refused_listing_read_leaves_the_other_listings_readable(self):
+        self.write_job_payload("{not json at all}")
+
+        with self.assertRaises(StoredRecordError):
+            self.store.list_jobs()
+
+        self.assertIsNotNone(self.store.get_job("healthy"))
+        self.assertEqual(self.store.get_job("healthy").listing_id, "healthy")
 
 
 if __name__ == "__main__":

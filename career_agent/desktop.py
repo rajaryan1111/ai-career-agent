@@ -27,7 +27,7 @@ from .desktop_logic import (
 )
 from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
-from .store import CareerStore, PrivateWriteError, write_private_text_file
+from .store import CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file
 from .urls import redact_url_credentials
 
 
@@ -314,7 +314,11 @@ class CareerAgentApp:
         self._refresh_tracker()
 
     def _load_profile(self):
-        profile = self.store.get_profile()
+        try:
+            profile = self.store.get_profile()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if not profile:
             return
         for key, value in profile_form_values(profile).items():
@@ -545,9 +549,11 @@ class CareerAgentApp:
         """Validate and save reviewed resume values, and confirm what the database actually holds.
 
         The accepted values go through the same ``build_candidate_profile`` pathway as the Save
-        button, so a proposed value cannot reach the database by a second, weaker route. A failure at
-        any step leaves the stored profile as it was and reports failure; success is only reported
-        after the stored profile has been read back and compared field by field.
+        button, so a proposed value cannot reach the database by a second, weaker route. A failure
+        before the write leaves the stored profile as it was and reports failure; success is only
+        reported after the stored profile has been read back and compared field by field. A failure
+        to verify after the write is reported as unconfirmed rather than as "nothing was saved",
+        because by then the row has been written.
         """
         merged = form_values(self.profile_vars)
         merged.update(accepted)
@@ -557,11 +563,26 @@ class CareerAgentApp:
             return False, f"{exc} Nothing was saved."
         try:
             self.store.save_profile(profile)
-            stored = self.store.get_profile()
         except sqlite3.Error as exc:
             return False, (
                 "The profile could not be written to the local database. Nothing was saved; your "
                 f"previously saved profile is unchanged.\n\n{exc}"
+            )
+        # The write and the verification are reported separately on purpose: once the row has been
+        # written, a failure to read it back must not tell the person that nothing was saved.
+        try:
+            stored = self.store.get_profile()
+        except StoredRecordError as exc:
+            return False, (
+                "The reviewed values were written to the local database, but the saved profile could "
+                "not be read back to verify them, so this import is reported as unconfirmed. Open the "
+                f"Profile tab and check what is stored before relying on it. {exc}"
+            )
+        except sqlite3.Error as exc:
+            return False, (
+                "The reviewed values were written to the local database, but the saved profile could "
+                "not be read back to verify them, so this import is reported as unconfirmed. Open the "
+                f"Profile tab and check what is stored before relying on it.\n\n{exc}"
             )
         if stored is None:
             return False, (
@@ -657,9 +678,14 @@ class CareerAgentApp:
     def _refresh_jobs(self):
         if not hasattr(self, "jobs_tree"):
             return
+        try:
+            jobs = self.store.list_jobs()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         for item in self.jobs_tree.get_children():
             self.jobs_tree.delete(item)
-        for job in self.store.list_jobs():
+        for job in jobs:
             times = self.store.get_record_times(job.listing_id) or {}
             self.jobs_tree.insert("", END, iid=job.listing_id, values=(
                 job.employer_name, job.role_title, job.availability_status.value,
@@ -672,7 +698,11 @@ class CareerAgentApp:
         selection = self.jobs_tree.selection()
         if not selection:
             return
-        job = self.store.get_job(selection[0])
+        try:
+            job = self.store.get_job(selection[0])
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if not job:
             return
         self.selected_job_id = job.listing_id
@@ -728,17 +758,36 @@ class CareerAgentApp:
             parent=self.root,
         )
 
+    def _report_unreadable_record(self, error):
+        """Explain a saved record this version cannot read, and change nothing.
+
+        A damaged or hand-edited record must never surface as a raw traceback from a Tk callback: the
+        read is refused, the lists are left in a defined state, and the message says what the record is
+        and that nothing was changed. Nothing is repaired, rewritten, or deleted here.
+        """
+        self._report(str(error))
+        self.status.set("A saved record could not be read; nothing was changed.")
+        messagebox.showerror("Saved record could not be read", str(error), parent=self.root)
+
     def _evaluate(self):
         listing_id = self._selected_listing_id()
         if not listing_id:
             messagebox.showinfo("Select a job", "Save or select a job first.", parent=self.root)
             return
-        job = self._loaded_selected_job(listing_id)
+        try:
+            job = self._loaded_selected_job(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if job is None:
             # Stale selection: report and resync rather than evaluating a listing that is gone.
             self._report_stale_selection(listing_id)
             return
-        profile = self.store.get_profile()
+        try:
+            profile = self.store.get_profile()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
             self.tabs.select(self.profile_tab)
@@ -758,13 +807,21 @@ class CareerAgentApp:
         if not listing_id:
             messagebox.showinfo("Select a job", "Select a saved job first.", parent=self.root)
             return
-        job = self._loaded_selected_job(listing_id)
+        try:
+            job = self._loaded_selected_job(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if job is None:
             # Same guard as _evaluate: a vanished selection must never reach the eligibility
             # check, and must never create a tracker record.
             self._report_stale_selection(listing_id)
             return
-        profile = self.store.get_profile()
+        try:
+            profile = self.store.get_profile()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
             return
@@ -825,9 +882,14 @@ class CareerAgentApp:
     def _refresh_tracker(self):
         if not hasattr(self, "tracker_tree"):
             return
+        try:
+            jobs = self.store.list_jobs()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         for item in self.tracker_tree.get_children():
             self.tracker_tree.delete(item)
-        for job in self.store.list_jobs():
+        for job in jobs:
             stored = self.store.get_tracker_raw(job.listing_id)
             # The note is the person's own record: shown as stored in both cases, including when the
             # status itself is a value this version does not recognise. The time column is when this
@@ -1008,14 +1070,19 @@ class CareerAgentApp:
         destination = filedialog.asksaveasfilename(parent=self.root, title="Export local data", defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not destination:
             return
-        profile = self.store.get_profile()
+        try:
+            profile = self.store.get_profile()
+            jobs = self.store.list_jobs()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
         payload = {"format_version": 1, "profile": asdict(profile) if profile else None, "jobs": [],
                    "privacy_note": "Export may contain personal information; store securely."}
         if payload["profile"]:
             for key, value in payload["profile"].items():
                 if isinstance(value, (set, frozenset, tuple)):
                     payload["profile"][key] = sorted(value)
-        for job in self.store.list_jobs():
+        for job in jobs:
             record = asdict(job)
             record["availability_status"] = job.availability_status.value
             for key, value in record.items():

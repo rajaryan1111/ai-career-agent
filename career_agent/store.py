@@ -55,6 +55,26 @@ class TrackerStatusError(ValueError):
         )
 
 
+class StoredRecordError(ValueError):
+    """A stored record holds data this build cannot interpret.
+
+    Raised from read paths instead of the ``KeyError``, ``TypeError``, ``AttributeError`` or
+    ``json.JSONDecodeError`` a malformed payload would otherwise produce, so that a damaged or
+    hand-edited record is reported as itself and can be handled like any other validation failure (it
+    is a ``ValueError``). Nothing is repaired, migrated, rewritten, or deleted: the record stays exactly
+    as stored, so the local backup/restore commands still work on the file and the user decides what to
+    do about it.
+    """
+
+    def __init__(self, noun: str, detail: str) -> None:
+        self.noun = noun
+        self.detail = detail
+        super().__init__(
+            f"The saved {noun} could not be read ({detail}). It was not changed. Use the export tool or "
+            "restore a verified backup if the record is wrong."
+        )
+
+
 class PrivateWriteError(OSError):
     """A private (owner-only) file write could not be completed safely.
 
@@ -222,6 +242,33 @@ def _json_default(value):
     raise TypeError(f"Unsupported JSON value: {type(value).__name__}")
 
 
+def _stored_object(payload: object, noun: str) -> dict:
+    """Decode a stored JSON payload into a record, or refuse with a message naming the problem."""
+    try:
+        values = json.loads(payload) if isinstance(payload, (str, bytes)) else payload
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise StoredRecordError(noun, f"the saved text is not valid JSON: {exc}") from exc
+    if not isinstance(values, dict):
+        raise StoredRecordError(noun, f"it holds {type(values).__name__} rather than a stored record")
+    return values
+
+
+def _stored_text_values(value: object, noun: str, field: str) -> list:
+    """A stored list of strings, or refuse. A bare string is refused rather than split into letters.
+
+    The application always writes a list here. A string instead - which only a hand edit or damage
+    produces - would otherwise become a set of single characters, quietly turning one value into
+    several wrong ones that later comparisons would use.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raise StoredRecordError(noun, f"its {field} is a single string rather than a list of values")
+    if not isinstance(value, (list, tuple)):
+        raise StoredRecordError(noun, f"its {field} is {type(value).__name__} rather than a list of values")
+    return list(value)
+
+
 class CareerStore:
     """Small explicit local store. Pass a path; no database is created implicitly."""
 
@@ -294,10 +341,14 @@ class CareerStore:
         row = self._connection.execute("SELECT payload FROM candidate_profile WHERE profile_id=1").fetchone()
         if row is None:
             return None
-        values = json.loads(row["payload"])
+        noun = "candidate profile"
+        values = _stored_object(row["payload"], noun)
         for key in ("skills", "preferred_locations", "preferred_work_modes", "preferred_role_types"):
-            values[key] = frozenset(values.get(key) or [])
-        return CandidateProfile(**values)
+            values[key] = frozenset(_stored_text_values(values.get(key), noun, key))
+        try:
+            return CandidateProfile(**values)
+        except TypeError as exc:
+            raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc
 
     def save_job(self, job: JobListing, *, observed_at: str | None = None) -> None:
         timestamp = observed_at or _now()
@@ -464,11 +515,23 @@ class CareerStore:
         return cursor.rowcount > 0
 
     def _decode_job(self, payload: str) -> JobListing:
-        values = json.loads(payload)
-        values["availability_status"] = Availability(values["availability_status"])
-        values["eligible_countries"] = tuple(values.get("eligible_countries") or [])
+        noun = "job listing"
+        values = _stored_object(payload, noun)
+        raw_status = values.get("availability_status")
+        try:
+            values["availability_status"] = Availability(raw_status)
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun,
+                "it has no saved availability status" if raw_status is None
+                else f"its saved availability status {raw_status!r} is not one this version recognises",
+            ) from exc
+        values["eligible_countries"] = tuple(_stored_text_values(values.get("eligible_countries"), noun, "eligible_countries"))
         for key in ("allowed_work_authorizations", "allowed_degree_disciplines", "allowed_study_statuses", "allowed_graduation_years"):
             if values.get(key) is not None:
-                values[key] = tuple(values[key])
-        values["required_skills"] = frozenset(values.get("required_skills") or [])
-        return JobListing(**values)
+                values[key] = tuple(_stored_text_values(values[key], noun, key))
+        values["required_skills"] = frozenset(_stored_text_values(values.get("required_skills"), noun, "required_skills"))
+        try:
+            return JobListing(**values)
+        except TypeError as exc:
+            raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc

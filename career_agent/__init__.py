@@ -5,7 +5,7 @@
 #: distribution metadata; until then this literal is the honest answer for both.
 __version__ = "0.1.0"
 
-from .store import CareerStore, TrackerStatusError
+from .store import CareerStore, StoredRecordError, TrackerStatusError
 from .core import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, EligibilityReport, JobListing, RequirementResult,
@@ -18,7 +18,7 @@ from .core import (
 __all__ = [
     "__version__", "CareerStore", "ApplicationStatus", "ApplicationTracker", "Availability",
     "CandidateProfile", "Decision", "EligibilityReport", "JobListing", "RequirementResult",
-    "TrackerStatusError",
+    "StoredRecordError", "TrackerStatusError",
     "canonicalize_url", "deduplicate_listings", "duplicate_key",
     "INITIAL_APPLICATION_STATUS", "evaluate_eligibility", "is_allowed_tracker_transition",
     "is_substantive_confirmation_evidence", "require_confirmation_evidence",

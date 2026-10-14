@@ -27,7 +27,7 @@ from career_agent import (
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
-from career_agent.store import CareerStore
+from career_agent.store import CareerStore, StoredRecordError
 from datetime import datetime, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
@@ -2867,6 +2867,131 @@ class WindowConstructionTests(HandlerTestCase):
         self.assertTrue(hasattr(app, "profile_tab") and hasattr(app, "jobs_tab"))
         self.assertTrue(hasattr(app, "tracker_tab") and hasattr(app, "data_tab"))
         self.assertEqual(app.profile_vars["skills"].get(), "", "a fresh window starts with an empty profile")
+
+
+class UnreadableStoredRecordTests(HandlerTestCase):
+    """A damaged or hand-edited row must be reported, never escape a Tk callback as a traceback.
+
+    ``career_agent.store`` refuses such a row with a named ``StoredRecordError``, but a refusal still
+    has to be *handled*: a Tk callback that lets one escape prints a traceback to stderr and leaves the
+    window in an undefined state, and the person is told nothing. Every case here writes the payload the
+    way damage or a manual edit would (directly, through the standard library) and then runs the real
+    handler, checking the message shown and that nothing was written, repaired, or half-rendered.
+    """
+
+    def corrupt_profile(self, payload='{"candidate_country": "India", "nickname": "Ada"}'):
+        self.store.save_profile(PROFILE)
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE candidate_profile SET payload=? WHERE profile_id=1", (payload,)
+            )
+        return payload
+
+    def stored_profile_payload(self):
+        return self.store._connection.execute(
+            "SELECT payload FROM candidate_profile WHERE profile_id=1"
+        ).fetchone()["payload"]
+
+    def corrupt_listing(self, listing_id="j1", payload=None):
+        self.store.save_job(sample_job(listing_id=listing_id))
+        raw = payload or '{"listing_id": "%s", "employer_name": "Example Inc"}' % listing_id
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE job_listings SET payload=? WHERE listing_id=?", (raw, listing_id)
+            )
+        return raw
+
+    def test_the_profile_view_reports_it_and_changes_nothing(self):
+        payload = self.corrupt_profile()
+        app = self.make_app_with_real_handlers("_load_profile")
+
+        app._load_profile()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertNotIn("Traceback", MESSAGES.text("showerror"))
+        self.assertIn("nickname", MESSAGES.text("showerror"))
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertEqual(self.stored_profile_payload(), payload, "a refused read must not rewrite the row")
+
+    def test_the_jobs_list_reports_it_instead_of_breaking_the_refresh(self):
+        self.corrupt_listing()
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_jobs()  # must not raise: a Tk callback has no caller to catch it
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertEqual(len(app.jobs_tree.inserted), 0, "no half-rendered list is shown for a refused read")
+
+    def test_the_tracker_view_reports_it_instead_of_breaking_the_refresh(self):
+        self.corrupt_listing()
+        app = self.make_app_with_real_handlers("_refresh_tracker")
+
+        app._refresh_tracker()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertEqual(len(app.tracker_tree.inserted), 0)
+
+    def test_selecting_an_unreadable_listing_reports_it_and_keeps_the_view_defined(self):
+        self.corrupt_listing()
+        app = self.make_app_with_real_handlers("_select_job")
+        app.jobs_tree.selected = ("j1",)
+
+        app._select_job()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertIsNone(app.selected_job_id, "an unreadable row must not become the selection")
+        self.assertEqual(app.job_save_mode, desktop.JobSaveMode.NEW)
+
+    def test_evaluating_an_unreadable_listing_refuses_without_writing_a_tracker_row(self):
+        self.corrupt_listing()
+        app = self.make_app_with_real_handlers("_evaluate")
+        app.jobs_tree.selected = ("j1",)
+
+        app._evaluate()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertIsNone(self.store.get_tracker_raw("j1"), "a refused evaluation must store nothing")
+
+    def test_shortlisting_an_unreadable_listing_refuses_without_writing_a_tracker_row(self):
+        self.corrupt_listing()
+        app = self.make_app()
+        app.jobs_tree.selected = ("j1",)
+
+        app._shortlist()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertIsNone(self.store.get_tracker_raw("j1"))
+
+    def test_export_reports_it_and_writes_no_file(self):
+        self.corrupt_profile()
+        destination = Path(self._directory.name) / "export.json"
+        FILEDIALOG.path = str(destination)
+        app = self.make_app()
+
+        app._export()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertNotIn("Export complete", MESSAGES.titles())
+        self.assertFalse(destination.exists(), "a refused export must not leave a file behind")
+        self.assertNotIn("ECE", destination.read_text(encoding="utf-8") if destination.exists() else "")
+
+    def test_a_resume_save_whose_read_back_fails_is_not_reported_as_saved(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        error = StoredRecordError("candidate profile", "it holds field(s) this version cannot use")
+
+        with mock.patch.object(self.store, "get_profile", side_effect=error):
+            saved, message = app._apply_accepted_profile_values({"experience": "1"})
+
+        self.assertFalse(saved)
+        self.assertNotIn("Verified in the local database", message)
+        # The write itself succeeded, so the message must not claim nothing was saved: it says the
+        # values were written but could not be verified, and points at where to check.
+        self.assertIn("written to the local database", message)
+        self.assertIn("unconfirmed", message)
+        self.assertIn("Profile tab", message)
+        self.assertNotIn("Traceback", message)
 
 
 if __name__ == "__main__":
