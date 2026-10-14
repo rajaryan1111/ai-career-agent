@@ -190,12 +190,19 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
 - The current database is preserved first: a verified snapshot when it is readable, and a raw
   owner-only copy (reported honestly as unverified) when it is not — that unreadable case is often why
   a restore is needed at all. If it cannot be preserved at all, the restore is refused.
-- The restore refuses while another connection is active in a transaction, holds the database's
-  exclusive lock across the replacement, replaces the file in one atomic step, removes stale SQLite side
-  files (a stale `-wal` left beside a replaced database silently discards the restored data), and reopens
-  and verifies the result. Holding the lock across the swap is what keeps a competing write from being
-  *accepted and then thrown away* by the replacement: while the swap is happening that writer is told the
-  database is busy instead. If that final check fails, the previous database is put back.
+- The restore refuses while another connection is active in a transaction, replaces the file in one
+  atomic step, removes stale SQLite side files (side files left beside the replaced database belong to the
+  previous one, and whether SQLite applies them is SQLite's decision rather than the app's), and reopens
+  and verifies the result. If that final check fails, the previous database is put back.
+- While the file is being replaced the app holds the database's exclusive lock, so a competing write is
+  refused ("database is busy") instead of being accepted and then thrown away by the replacement. This
+  applies on macOS and Linux. On Windows the lock cannot be held across the replacement, because SQLite
+  opens its database files in a way that makes the operating system refuse to replace them while the app's
+  own handle is open: the lock is released immediately before the swap there, and the operating system's
+  refusal to replace a file another program is holding open is what protects it. On Windows a restore
+  therefore refuses with a message, and leaves the current database untouched, while another program holds
+  the file open. (This platform's behaviour is reasoned from the operating system's documented file-sharing
+  rules and SQLite's open flags; it is not covered by the tests here, which run on Linux.)
 - A newer or older schema version is refused rather than migrated or downgraded.
 
 **Limitations**
@@ -204,8 +211,7 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
   your unlocked account or a copy of the file; a synced or shared folder can still expose it. Store
   backups somewhere only you can reach.
 - Owner-only permissions are a POSIX capability. On Windows the file is written without that protection
-  and the app does not claim otherwise; Windows also refuses to replace a database another program has
-  open, in which case the restore fails with a message and the original is untouched.
+  and the app does not claim otherwise (the restore and the lock it can hold there are described above).
 - `PRAGMA integrity_check` detects the damage SQLite can detect. It cannot prove a backup is complete or
   untouched by every byte-level change, so keep more than one backup if the data matters.
 - An exclusive-access check turns "another copy of the app is writing the database" into a refusal with a

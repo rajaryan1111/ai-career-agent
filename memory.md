@@ -1346,3 +1346,49 @@ that fails without the fix.
   against the code and the existing tests (78 résumé tests OK, including the notice-heading regression that keeps
   the skills proposal at exactly ``Python, SQL, Git``) but no new defect was reproduced there; the gate remains
   **NOT PASSED** and live discovery stays disabled.
+
+## 2026-10-14 (later) — Platform review of the swap guard, the side-file window, and the verification pass
+
+A review pass over the three hardening changes from the previous entry, plus the repository-side verification
+that can be done without a Mac.
+
+- **One genuine defect found and fixed: the swap guard could not work on Windows.** ``_lock_for_swap`` takes
+  ``BEGIN EXCLUSIVE`` and holds it across ``os.replace``. On POSIX that is exactly right — measured during this
+  pass, the guard's own open handle is what refuses a competing writer inside the swap window (an independent
+  connection attempting ``BEGIN IMMEDIATE`` there is told "database is locked", while an opener arriving after
+  the swap sees the restored data). On Windows it was a defect: SQLite opens its database files with
+  ``FILE_SHARE_READ | FILE_SHARE_WRITE`` and never ``FILE_SHARE_DELETE``, so ``MoveFileEx`` - what
+  ``os.replace`` calls - fails with a sharing violation (WinError 32) while the app holds its own guard open,
+  which would have made **every** restore fail there. ``_CAN_REPLACE_AN_OPEN_FILE`` now records the platform
+  capability (``os.name != "nt"``), and where it is false the guard is closed immediately before the
+  replacement. Nothing is lost on Windows: the operating system refuses to replace a file any other handle has
+  open, so a second copy of the app makes the restore refuse with the current database untouched, and the only
+  remaining window is the instant between releasing the guard and the swap. Two tests pin the two behaviours so
+  neither can regress into the other: one asserts a competing write is *refused* where the guard is held, the
+  other asserts the database is writable again inside the replacement where it is released first.
+- **A documented risk that did not reproduce.** ``_remove_sidecars`` described a stale ``-wal`` being replayed
+  onto a replaced database as silently discarding the restored data. The removal is necessary (the side files
+  belong to the previous database) but its stated rationale is stronger than the code path demonstrates: with a
+  genuine stale ``-wal`` written by a killed WAL-mode writer, an opener arriving in the window between the swap
+  and the removal saw the **restored** rows, both with the stale ``-shm`` present and with it deleted, and the
+  restore completed (the restore removes both afterwards). SQLite discarded the mismatched WAL itself, because
+  the change counter it records (9) no longer matches the restored file's (1). The docstring now says that
+  rather than claiming the module is the thing preventing the loss, and a test guards the ordering
+  (snapshot → swap → remove) that keeps that window safe.
+- **Verification completed without a Mac**: full suite **584 tests, OK** locally (582 at the reviewed head plus
+  the two tests above; 12 skipped only because the optional ``pypdf`` was absent); with ``pypdf 6.20.1``
+  installed in an isolated virtual environment the same suite runs **584 OK with nothing skipped**, so the PDF
+  extraction, scanned-encrypted-damaged rejection and sidebar-layout tests really execute rather than skip.
+  ``compileall`` exit 0; ``scripts/audit_job_source_csv.py`` exit 0 with the unchanged CSV SHA-256
+  ``0356b093…f414``; ``--version`` and ``--help`` exit 0. The suite's own leak watch reports **1219 connections
+  created, 0 never closed** across the whole suite, which includes the new guard paths.
+- **Checklist steps 17, 18, 21, 22 and 23 were executed end to end at the CLI level** against a throwaway
+  database in a temporary folder: a backup is written and verified; a second backup to the same path is refused
+  with exit 2 and the earlier file is byte-identical (same hash and mtime); the backup file is ``-rw-------`` on
+  Linux; a restore from a text file is refused with exit 2 and the database hash is unchanged; a confirmed
+  restore replaces the data (the job added after the backup is gone), reports the previous-database copy beside
+  the database, and exits 0; nothing is written inside the repository. The GUI half of those steps, and the
+  résumé review window, still require a real desktop session: the UI tests run against a stub harness that
+  reproduces Tk's option validation (``unknown option "-wraplength"`` is raised by the stub exactly as real ttk
+  raised it), which is what guards the macOS regression, but the harness is not Tk and the manual checklist stays
+  outstanding. Python 3.14 on macOS remains unverified here.
