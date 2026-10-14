@@ -1193,6 +1193,47 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   scan that refuses any test call to `record_startup_failure()` with no `data_folder=`/`database_path=`.
   Re-run evidence: the real note's mtime and size are byte-identical before and after a full suite run.
 
+- Defect 12 (two DOCX shapes escaped the reader as raw exceptions). `extract_docx` refused the shapes it
+  knew about, but a DOCX arriving with ZIP's encryption flag set on its members - which some archivers and
+  online converters produce, distinct from Word's own password-protected OLE container, already refused -
+  made the standard library raise `RuntimeError("File 'word/document.xml' is encrypted, password required
+  for extraction")`. A member declared with an unimplemented compression method (AES, method 99) raised
+  `NotImplementedError`. Both are reproducible with a normal ZIP whose header fields are rewritten, and
+  neither is a `ResumeImportError`, which is the *only* type `_import_resume` catches: the person choosing
+  that file would have seen a Tk traceback instead of an explanation. The reader now checks the document
+  part's flag bits and compression method itself and refuses with its own wording, and any remaining
+  failure in the function is wrapped as `ResumeUnreadable`, so `parse_resume`'s documented promise - every
+  failure is a `ResumeImportError` - holds for shapes this build has not seen. Verified with
+  `/tmp/probe_docx_hostile.py`: nine fixture shapes, `non-ResumeImportError escapes: 0` (was 2), with the
+  control file still reading `skills='Python, SQL'`. Regression tests:
+  `test_a_password_protected_docx_is_refused_as_encrypted`,
+  `test_a_docx_stored_with_an_unsupported_compression_method_is_refused`,
+  `test_a_damaged_compression_stream_is_refused_with_the_docx_message`,
+  `test_every_unreadable_docx_is_refused_as_a_resume_import_error` (nine shapes), plus the handler tests
+  `test_a_password_protected_docx_is_reported_and_nothing_is_saved` and
+  `test_an_unexpected_reader_failure_is_reported_rather_than_escaping_the_callback`. That last one also
+  hardened `_import_resume` with a last-resort branch: it reports the exception's *type* (never its
+  message, which could quote document text) and states that nothing was proposed and the profile is
+  unchanged, so an unforeseen reader failure cannot reach a Tk callback that has no handler above it.
+
+- Defect 13 (a location quoted by a failure message reached the note meant to be safe to share).
+  `redact_paths` replaced the database path, its folder, the home folder, and paths named on the command
+  line, and deliberately left every other path-shaped string alone - a documented rule with its own test.
+  Measured, that rule leaks: a path inside an exception's own text (the file `create_backup` names, or any
+  location an unexpected failure quotes) stays verbatim in both the terminal message and
+  `logs/startup-diagnostics.log`, so a note advertised as sanitised could carry
+  `/Volumes/Investor Backup/private/notes.sqlite3`. The rule is superseded: after the named locations are
+  replaced, any remaining *absolute* location - POSIX, Windows drive, UNC, quoted or containing single
+  spaces - becomes `<local path>`. The sweep is deliberately narrow: a relative word, a version number, a
+  relative file name, and a public URL are not locations and are untouched, and trailing sentence
+  punctuation is preserved. Regression tests:
+  `test_an_unsupplied_absolute_path_is_hidden_rather_than_copied_into_a_note` (five shapes),
+  `test_redacting_a_location_keeps_the_sentence_around_it_readable`,
+  `test_a_relative_word_or_a_public_url_is_never_mistaken_for_a_location`, and the end-to-end
+  `test_a_location_quoted_inside_the_failure_message_never_reaches_the_note`. Recorded limit: prose the
+  module cannot classify as a location is still copied into the note, because it is local and the message
+  is what makes it useful - the promise is path redaction, not content filtering.
+
 - Coverage added where the audit found none: `tests/test_cli_backup_restore.py` (14 tests) drives the real
   argument parser and exit codes for `--backup-to`/`--restore-from` — refusals leave files untouched, a
   restore without a terminal or without `--yes` is refused, a confirmed restore keeps the previous
@@ -1206,10 +1247,15 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   handler-suite `UnreadableStoredRecordTests` (8 tests, every view), four path-redaction tests, a
   command-line redaction test, two data-folder tests for relative environment overrides, four skills
   tests (category labels before a column gap, merged columns, and the flag surviving a later labelled
-  line), and a fourth isolation scan (no start-up note may be written into the real folder).
+  line), and a fourth isolation scan (no start-up note may be written into the real folder). A second
+  audit stretch added nine tests: four DOCX-refusal cases (encryption flag, unsupported compression
+  method, damaged stream, and one battery over nine malformed shapes), two import-handler cases (a
+  password-protected file, and an unforeseen reader failure that must not escape the callback), three
+  redaction cases (absolute locations in five shapes, punctuation preserved, relative words or URLs left
+  alone), and their end-to-end command-line case.
 
-- Evidence. Suite 483 → 526 → **557 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and
-  **557 OK, no skips** with pypdf 6.20.1; targeted runs green (backup 55, CLI 14, resume, store/core/validation,
+- Evidence. Suite 483 → 526 → 557 → **566 tests, OK** (12 skips without pypdf: the PDF-extraction cases)
+  and **566 OK, no skips** with pypdf 6.20.1; targeted runs green (backup 55, CLI 14, resume, store/core/validation,
   desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases with
   `/tmp/probe_backup.py`, 17/17 checks: a verified backup holding profile, jobs and tracker rows; a round
   trip restoring the same rows with the replaced database kept as a verified owner-only copy; the chosen
@@ -1220,7 +1266,23 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   adds six odd destination shapes (symlink in place of the live database, a folder, an empty file, a
   restore onto its own source, a read-only folder, an unreadable backup): each is refused or completed
   safely, with the symlink target and the folder left untouched. URL probe 42/42; CSV audit exit 0 with the
-  unchanged SHA-256 `0356b093…f414`; `compileall` and `tabnanny` exit 0; `git diff --check` exit 0. No test
+  unchanged SHA-256 `0356b093…f414`; `compileall` and `tabnanny` exit 0; `git diff --check` exit 0. The
+  second audit stretch adds: `/tmp/probe_backup_scale.py` 11/11 (a 500-listing database round-trips with
+  every row and the listing order intact, a 512 MiB file of zeroes is refused in 0.00 s without touching
+  the database, a torn file is refused, the live database is byte-identical after each refusal, and a
+  second backup/restore cycle keeps the rows), `/tmp/probe_tracker_matrix.py` (all 13 statuses reachable,
+  the chooser offers exactly the domain's transitions for every status, and the store accepts all 41
+  permitted pairs and refuses the rest), `/tmp/probe_sources_gate.py` (discovery and submission closed for
+  all six reviewed sources, unknown ids refused, no network-capable import in `sources.py`, every recorded
+  decision carrying a real ISO date and an evidence reference), `/tmp/probe_cli_e2e.py` 27/27 (process-level
+  exit codes 0/2/3, an existing backup never overwritten, a restore without `--yes` refused, the previous
+  database kept, a corrupt backup refused with the live database byte-identical, and a note that carries no
+  path from the failure text), `/tmp/probe_eligibility_conservative.py` 7/7 (label fields normalise case
+  and spacing, work authorization stays exact but case-insensitive, unknown never passes, and a
+  similar-looking country does not match), `/tmp/probe_display_credentials.py` 9/9 (the real application
+  object builds against the stubs, the jobs list, tracker list, status line and detail report show no
+  stored credential, and an export is owner-only `0600`), and the re-run hostile-DOCX probe with zero
+  escapes. No test
   or script opens the default database or writes into the real application-data folder (verified by mtime),
   and no candidate data, database file, secret or temporary artifact entered a commit.
 
@@ -1236,5 +1298,7 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   shows a "Saved record could not be read" dialog instead of a traceback) are proven here only through the
   widget stubs. The audit changed behaviour only where a probe or a test could demonstrate it; the two
   remaining skills-layout failures, prose of four words or fewer inside a skills section, and the
-  folder-creating side effect of `default_database_path` (deliberate, and named by an existing test) are
-  documented instead of papered over.
+  folder-creating side effect of `default_database_path` (deliberate - SQLite cannot open a database in a
+  folder that does not exist - and now stated in its docstring rather than only implied by a test) are
+  documented instead of papered over. A note keeps prose from an exception message that is not a location:
+  the redaction promise covers filesystem locations, not content the module cannot classify.

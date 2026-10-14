@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 557 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
+implemented, with 566 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
 compilation checks, and the research-CSV audit. The suite also holds the safety properties an audit
 turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
 the form and can never make an experience requirement pass, no test may resolve this machine's real
@@ -104,7 +104,11 @@ phrases that describe trying the feature rather than what an employer showed. A 
 payload this version cannot read (an unknown field, damaged JSON, a bare string where a list belongs) is
 refused as one named error with a plain message instead of a raw `KeyError`/`TypeError`/JSON error, on
 every read path and in every view, and nothing is repaired or rewritten; a failure to verify a profile
-save *after* the write is reported as unconfirmed rather than as "nothing was saved". The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
+save *after* the write is reported as unconfirmed rather than as "nothing was saved". Résumé reading
+refuses a password-protected or unreadably compressed DOCX with its own message, and the import handler
+reports an unforeseen reader failure by name instead of letting it escape a Tk callback, so no unreadable
+document can end in a traceback; start-up diagnostics hide any absolute location quoted by a failure,
+not only the locations a command named. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
 floor and the backed-up record-correction tool, owner-only export
 permissions, stale-selection handling, the status chooser's option set measured against the state machine, unrecognised stored statuses and the refusal paths they trigger, stored records this version cannot read (an unknown field, damaged JSON, a string where a list belongs, a listing with no saved availability status) on every read path and in every view, stored-timestamp rendering (missing, offset-less and unparseable values), version reporting and start-up diagnostics (including path redaction for the database, the home folder, and any file named on the command line), backup and restore (verified snapshots, corruption and
 schema-version refusals, POSIX permissions, WAL and side-file handling, the command-line front end),

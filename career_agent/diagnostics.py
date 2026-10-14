@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+import re
 import sqlite3
 
 from .store import PrivateWriteError, write_private_text_file
@@ -69,6 +70,53 @@ def _path_replacements(value: str | Path, placeholder: str) -> list[tuple[str, s
     return pairs
 
 
+#: Shapes of an *absolute* location that can appear inside text this module did not write - the message
+#: of an unexpected exception, for instance, which the caller cannot enumerate in advance. The quoted
+#: form may contain spaces (this is how Python formats a path in ``FileNotFoundError`` and friends); a
+#: bare form may not, because a space would turn ordinary prose into part of the match. A URL is never
+#: a match: it names a public address rather than a location on this machine, and hiding it would lose
+#: the one piece of information that diagnoses a link problem. A bare relative word is never a match
+#: either, which is what keeps a folder name such as ``data`` out of ordinary sentences.
+_ABSOLUTE_LOCATION_PATTERNS = (
+    re.compile(r"""(?P<quote>['"])(?P<path>(?:/|[A-Za-z]:[\\/]|\\\\)[^'"\n]*)(?P=quote)"""),
+    re.compile(
+        r"(?<![\w:/<>\"'])"
+        r"(?:/[^\s/<>\"'|]+)+(?: [^\s/<>\"'|]+(?:/[^\s/<>\"'|]+)+)*/?"
+        r"|(?<![\w:])(?:[A-Za-z]:[\\/]|\\\\)(?:[^\s\\/<>\"'|]+[\\/]?)+"
+    ),
+)
+
+#: Punctuation that ends a sentence rather than a file name. Trimmed from a match so that
+#: "cannot open /Volumes/X/notes.sqlite3." keeps its full stop.
+_TRAILING_PUNCTUATION = ".,;:)]}"
+
+
+def _replace_location(match: re.Match) -> str:
+    if "path" in match.groupdict():  # the quoted form: keep the quotes, hide the location inside
+        return match.group(0).replace(match.group("path"), "<local path>")
+    token = match.group(0)
+    trailing = ""
+    while token and token[-1] in _TRAILING_PUNCTUATION:
+        trailing = token[-1] + trailing
+        token = token[:-1]
+    return "<local path>" + trailing if token else match.group(0)
+
+
+def _hide_undeclared_locations(text: str) -> str:
+    """Hide absolute locations in ``text`` that no caller named, so nothing can smuggle one through.
+
+    The declared locations are handled first (they get the more informative placeholders, and the
+    home folder is a prefix of most of them). This sweep is the safety net for a location that only
+    appears in the failure text itself: without it, a message quoting a path from somewhere else on
+    the machine - an external volume, a sync folder - would be copied verbatim into a note that is
+    written to be safe to share.
+    """
+    redacted = text
+    for pattern in _ABSOLUTE_LOCATION_PATTERNS:
+        redacted = pattern.sub(_replace_location, redacted)
+    return redacted
+
+
 def redact_paths(
     text: str,
     *,
@@ -81,6 +129,11 @@ def redact_paths(
     Replaces the longest paths first (the database file, then its folder, then the user's home
     folder) so a nested path cannot survive by being a prefix of another replacement. The default
     database file name is kept because it names a product file, not a location.
+
+    Afterwards, any remaining *absolute* location is replaced with a neutral placeholder. This
+    supersedes the earlier rule of leaving unsupplied paths alone: a caller cannot list every location
+    an unexpected failure message might quote, and the note this text ends up in is written to be safe
+    to share. Relative words are still never touched, and neither are public URLs.
 
     ``extra_paths`` covers locations this module cannot know about - a file the person named on the
     command line, for instance - so that a failure reported about such a file cannot write that
@@ -99,7 +152,7 @@ def redact_paths(
     redacted = text
     for value, placeholder in sorted(replacements, key=lambda item: -len(item[0])):
         redacted = redacted.replace(value, placeholder)
-    return redacted
+    return _hide_undeclared_locations(redacted)
 
 
 def _truncate(text: str) -> str:

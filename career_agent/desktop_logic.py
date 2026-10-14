@@ -176,7 +176,12 @@ def default_database_path(
     environ: Mapping[str, str] | None = None,
     home: Path | None = None,
 ) -> Path:
-    """Choose a per-user app-data database path; candidate data never enters the repository."""
+    """Choose a per-user app-data database path, creating the folder that holds it.
+
+    Creating the folder is this function's one side effect, and it is deliberate: SQLite cannot open a
+    database inside a folder that does not exist, so without it a first run would fail before the window
+    opens. Nothing is written into the folder here, and candidate data never enters the repository.
+    """
     folder = default_data_folder(system=system, environ=environ, home=home)
     folder.mkdir(parents=True, exist_ok=True)
     return folder / DATABASE_FILE_NAME

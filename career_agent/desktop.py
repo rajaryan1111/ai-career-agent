@@ -383,6 +383,19 @@ class CareerAgentApp:
             )
             self.status.set("Resume not imported; the profile was not changed.")
             return
+        except Exception as exc:  # noqa: BLE001 - defensive: a Tk callback has no handler above it
+            # The reader is written to refuse every unreadable file with a ResumeImportError, so this
+            # is the last line of defence against a failure shape this build does not know about. Only
+            # the exception's *type* is shown: an unexpected message could quote document text, and an
+            # unhandled exception here would otherwise print a traceback and leave the window silent.
+            messagebox.showerror(
+                "Resume not imported",
+                "This file could not be read, so nothing was proposed. Your saved profile was not "
+                f"changed.\n\nThe reader reported {type(exc).__name__}; the file itself was not modified.",
+                parent=self.root,
+            )
+            self.status.set("Resume not imported; the profile was not changed.")
+            return
         self._review_resume(result)
 
     def _review_resume(self, result):

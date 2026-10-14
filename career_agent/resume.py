@@ -77,6 +77,12 @@ MAX_UNMAPPED_CHARACTERS = 120
 _WORD_NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DOCX_DOCUMENT_PART = "word/document.xml"
 _DOCX_MACRO_PART = "word/vbaProject.bin"
+#: The ZIP general-purpose bit that marks one entry as encrypted (a password-protected re-save).
+_ZIP_ENCRYPTED_FLAG = 0x1
+#: The ZIP compression methods this build can decompress (the set the ``zipfile`` module supports).
+#: A part written with anything else - AES, for instance, which another tool may use - is refused with
+#: its own message instead of raising ``NotImplementedError`` from inside the archive reader.
+_SUPPORTED_ZIP_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED, zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA)
 _OLE_CONTAINER_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
@@ -557,6 +563,23 @@ def extract_docx(path: Path) -> ExtractedDocument:
             if _DOCX_MACRO_PART in names:
                 # Reported so the person knows the macro was seen - and ignored, never run.
                 notes.append("The document carries a macro project (vbaProject.bin); it was ignored.")
+            document_info = archive.getinfo(_DOCX_DOCUMENT_PART)
+            if document_info.flag_bits & _ZIP_ENCRYPTED_FLAG:
+                # Word's own "password to open" produces an OLE container, which is handled above, but
+                # a DOCX can also arrive as a ZIP whose member is encrypted (some archivers and online
+                # converters do this). Reading it raises RuntimeError from the zipfile module, so it is
+                # recognised here and refused with the same plain explanation as an encrypted Word file.
+                raise ResumeEncrypted(
+                    f"{path.name} is password-protected: its document part is stored encrypted. Export "
+                    "an unprotected copy from your word processor, or type the values into the profile "
+                    "yourself."
+                )
+            if document_info.compress_type not in _SUPPORTED_ZIP_METHODS:
+                raise ResumeUnreadable(
+                    f"{path.name} stores its document with a compression method this app cannot read "
+                    f"(ZIP method {document_info.compress_type}). Open it in your word processor, save a "
+                    "fresh copy as .docx, and import that."
+                )
             declared = sum(
                 info.file_size for info in archive.infolist()
                 if info.filename in (_DOCX_DOCUMENT_PART,)
@@ -575,6 +598,17 @@ def extract_docx(path: Path) -> ExtractedDocument:
         raise ResumeUnreadable(
             f"{path.name} could not be opened as a DOCX archive, so it may be damaged or only partly "
             "downloaded. Open it in your word processor, save a fresh copy as .docx, and import that."
+        ) from exc
+    except Exception as exc:
+        # Anything else the archive reader or the decompressor raises for a file that is not a plain,
+        # readable DOCX (a damaged stream, a member this build cannot decompress, an error type that
+        # varies by Python version) is reported as a refusal naming the failure type. ``parse_resume``
+        # promises every failure here is a ResumeImportError: the desktop review flow catches that one
+        # type, so anything else would reach a Tk callback that has no handler for it.
+        raise ResumeUnreadable(
+            f"{path.name} could not be read as a DOCX document ({type(exc).__name__}). The file may be "
+            "password-protected or damaged, or saved by a tool this app cannot read. Open it in your "
+            "word processor, save a fresh copy as .docx, and import that."
         ) from exc
     if len(raw) > MAX_DOCX_UNCOMPRESSED_BYTES:
         raise ResumeTooLarge(

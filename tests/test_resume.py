@@ -119,6 +119,40 @@ def _docx_table(rows) -> str:
     return f"<w:tbl>{''.join(body)}</w:tbl>"
 
 
+def _patch_zip_headers(data: bytes, fields) -> bytes:
+    """Rewrite fields in every ZIP local header and central entry of an already-built archive.
+
+    ``fields`` is a sequence of ``(signature, offset_in_header, width, value)``. This is how the tests
+    reproduce a DOCX written by another tool - a password-protected member, or a compression method
+    this build cannot read - without depending on that tool being installed.
+    """
+    patched = bytearray(data)
+    for signature, offset, width, value in fields:
+        position = patched.find(signature)
+        while position != -1:
+            patched[position + offset:position + offset + width] = value.to_bytes(width, "little")
+            position = patched.find(signature, position + 4)
+    return bytes(patched)
+
+
+def encrypt_docx_members(data: bytes) -> bytes:
+    """A DOCX whose ZIP members carry the encryption flag, as a password-protected re-save looks."""
+    return _patch_zip_headers(data, [(b"PK\x03\x04", 6, 2, 0x1), (b"PK\x01\x02", 8, 2, 0x1)])
+
+
+def set_docx_compression(data: bytes, method: int) -> bytes:
+    """A DOCX whose members declare ``method`` as their compression method."""
+    return _patch_zip_headers(data, [(b"PK\x03\x04", 8, 2, method), (b"PK\x01\x02", 10, 2, method)])
+
+
+def build_docx_without_document_part() -> bytes:
+    """A ZIP that is not a DOCX: it has no ``word/document.xml`` part."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+    return buffer.getvalue()
+
+
 def build_docx(*, paragraphs=(), tables=(), document_xml=None, macro=False, extra_parts=()) -> bytes:
     """A minimal but structurally real DOCX built with the standard library."""
     if document_xml is None:
@@ -531,6 +565,154 @@ class FileHandlingTests(ResumeTestCase):
 # Parsing: proposals, evidence, confidence, and what is deliberately not guessed
 # --------------------------------------------------------------------------------------
 
+class FileHandlingTests(ResumeTestCase):
+    def test_a_file_over_the_size_limit_is_refused_before_it_is_read(self):
+        path = self.write("huge.docx", b"x" * 64)
+
+        with mock.patch.object(resume, "MAX_RESUME_BYTES", 16):
+            with self.assertRaises(ResumeTooLarge) as caught:
+                resume.extract_text(path)
+
+        self.assertIn("limit", str(caught.exception))
+
+    def test_a_file_that_grows_past_the_limit_is_refused(self):
+        small = build_docx(paragraphs=("Sample",))
+        path = self.write("grows.docx", small)
+
+        with mock.patch.object(resume, "MAX_RESUME_BYTES", len(small) - 1):
+            with self.assertRaises(ResumeTooLarge):
+                resume.extract_text(path)
+
+    def test_documents_over_the_text_limit_are_refused_not_truncated(self):
+        long_paragraph = "word " * (resume.MAX_EXTRACTED_CHARACTERS // 4)
+        path = self.write_docx(paragraphs=(long_paragraph,))
+
+        with self.assertRaises(ResumeTooLarge) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("characters", str(caught.exception))
+
+    def test_an_empty_file_is_refused(self):
+        path = self.write("empty.pdf", b"")
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("empty", str(caught.exception))
+
+    def test_a_missing_file_is_refused(self):
+        with self.assertRaises(ResumeUnreadable):
+            resume.extract_text(self.folder / "absent.pdf")
+
+    def test_a_folder_is_refused(self):
+        folder = self.folder / "folder.pdf"
+        folder.mkdir()
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(folder)
+
+        self.assertIn("folder", str(caught.exception))
+
+    def test_unsupported_and_legacy_extensions_are_named(self):
+        text_file = self.write("resume.txt", b"plain text")
+        legacy = self.write("resume.doc", b"\xd0\xcf\x11\xe0legacy")
+
+        with self.assertRaises(ResumeUnreadable) as unsupported:
+            resume.extract_text(text_file)
+        with self.assertRaises(ResumeUnreadable) as old:
+            resume.extract_text(legacy)
+
+        self.assertIn("not a supported", str(unsupported.exception))
+        self.assertIn(".docx or PDF", str(old.exception))
+
+    def test_reading_a_malformed_docx_prints_nothing(self):
+        """A failed read reports through its message only: nothing is written to the console."""
+        path = self.write("damaged.docx", b"PK\x03\x04damaged archive payload")
+        captured = io.StringIO()
+
+        with mock.patch("sys.stderr", captured):
+            with self.assertRaises(ResumeUnreadable):
+                resume.extract_text(path)
+
+        self.assertEqual(captured.getvalue(), "")
+
+    def test_reading_a_document_creates_no_files_and_keeps_no_copy(self):
+        path = self.write_docx(paragraphs=RESUME_PARAGRAPHS)
+        before = sorted(self.folder.iterdir())
+
+        resume.parse_resume(path)
+
+        self.assertEqual(sorted(self.folder.iterdir()), before, "no copy or temporary file may appear")
+
+
+# --------------------------------------------------------------------------------------
+# Parsing: proposals, evidence, confidence, and what is deliberately not guessed
+# --------------------------------------------------------------------------------------
+
+    def test_a_password_protected_docx_is_refused_as_encrypted(self):
+        # Some archivers and online converters save a .docx as a ZIP whose member is encrypted. Reading
+        # it raises RuntimeError from the zipfile module, which the review flow has no handler for, so
+        # the file must be recognised and refused with the same plain explanation as an encrypted Word
+        # file - never as a traceback and never as an empty "nothing found" result.
+        path = self.write("protected.docx", encrypt_docx_members(build_docx(paragraphs=("Sample Candidate", "Skills", "Python, SQL"))))
+
+        with self.assertRaises(ResumeEncrypted) as caught:
+            resume.parse_resume(path)
+
+        self.assertIn("password-protected", str(caught.exception))
+        self.assertIn(path.name, str(caught.exception))
+        self.assertNotIn(str(self.folder), str(caught.exception), "a folder on disk is never named")
+
+    def test_a_docx_stored_with_an_unsupported_compression_method_is_refused(self):
+        path = self.write("aes.docx", set_docx_compression(build_docx(paragraphs=("Sample Candidate",)), 99))
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("compression method", str(caught.exception))
+        self.assertIn("99", str(caught.exception))
+
+    def test_a_damaged_compression_stream_is_refused_with_the_docx_message(self):
+        # Method 12 (bzip2) with data that is not bzip2: the decompressor raises OSError, which used to
+        # surface as "could not be opened (it may be unreadable or in use by another program)" - a
+        # message about a file that is in fact perfectly readable, holding a damaged document part.
+        path = self.write("bzip2.docx", set_docx_compression(build_docx(paragraphs=("Sample Candidate",)), 12))
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("could not be read as a DOCX document", str(caught.exception))
+        self.assertNotIn("in use by another program", str(caught.exception))
+
+    def test_every_unreadable_docx_is_refused_as_a_resume_import_error(self):
+        """The invariant the desktop flow depends on: one catchable type, never a raw reader error.
+
+        ``_import_resume`` catches ``ResumeImportError``; anything else would reach a Tk callback that
+        has no handler for it, so the person would see a traceback instead of an explanation. Each
+        fixture here is a shape a real file can arrive in.
+        """
+        good = build_docx(paragraphs=("Sample Candidate", "Skills", "Python, SQL"))
+        fixtures = {
+            "encrypted member": encrypt_docx_members(good),
+            "unsupported compression method": set_docx_compression(good, 99),
+            "damaged bzip2 stream": set_docx_compression(good, 12),
+            "truncated archive": good[:-30],
+            "no document part": build_docx_without_document_part(),
+            "not a zip at all": b"this is not a zip archive",
+            "OLE (encrypted or legacy) container": resume._OLE_CONTAINER_SIGNATURE + b"\x00" * 64,
+            "empty file": b"",
+            "still readable (control)": good,
+        }
+        for label, data in fixtures.items():
+            with self.subTest(label=label):
+                path = self.write(label.replace(" ", "-") + ".docx", data)
+                if label.startswith("still readable"):
+                    self.assertIsNotNone(resume.extract_text(path))
+                    continue
+                with self.assertRaises(ResumeImportError) as caught:
+                    resume.parse_resume(path)
+                self.assertIsInstance(caught.exception, ResumeImportError)
+                self.assertNotIn(str(self.folder), str(caught.exception))
 
 class ParsingTests(ResumeTestCase):
     def parse(self, paragraphs=RESUME_PARAGRAPHS, **kwargs):

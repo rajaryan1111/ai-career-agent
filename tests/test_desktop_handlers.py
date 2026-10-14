@@ -2382,6 +2382,17 @@ def docx_table(rows):
     return f"<w:tbl>{body}</w:tbl>"
 
 
+def mark_zip_members_encrypted(data: bytes) -> bytes:
+    """Set ZIP's encryption flag on every entry header, as a password-protected re-save looks."""
+    patched = bytearray(data)
+    for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+        position = patched.find(signature)
+        while position != -1:
+            patched[position + offset:position + offset + 2] = (0x1).to_bytes(2, "little")
+            position = patched.find(signature, position + 4)
+    return bytes(patched)
+
+
 def write_resume_docx(path, *, paragraphs=(), tables=()):
     """Write a minimal but structurally real DOCX; standard library only, synthetic content."""
     body = "".join(docx_paragraph(text) for text in paragraphs)
@@ -2836,6 +2847,45 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertIn("cancelled", app.status.get(), "Escape must say what the Cancel button says")
 
+
+    def test_a_password_protected_docx_is_reported_and_nothing_is_saved(self):
+        path = Path(self._directory.name) / "protected.docx"
+        write_resume_docx(path, paragraphs=RESUME_LINES)
+        path.write_bytes(mark_zip_members_encrypted(path.read_bytes()))
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+
+        app, dialog = self.import_resume(path, app)
+
+        self.assertIsNone(dialog, "an unreadable file must not open the review window")
+        self.assertIn("Resume not imported", MESSAGES.titles("showerror"))
+        self.assertIn("password-protected", MESSAGES.text("showerror"))
+        self.assertNotIn(str(self._directory.name), MESSAGES.text("showerror"))
+        self.assertEqual(self.store.get_profile(), PROFILE, "nothing may be written")
+        self.assertIn("profile was not changed", app.status.get())
+
+    def test_an_unexpected_reader_failure_is_reported_rather_than_escaping_the_callback(self):
+        path = Path(self._directory.name) / "resume.docx"
+        write_resume_docx(path, paragraphs=RESUME_LINES)
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        leaked = "Ada Placeholder and the rest of the document text"
+
+        with mock.patch.object(
+            desktop.resume, "parse_resume", side_effect=RuntimeError(f"{leaked} at {path}")
+        ):
+            app._import_resume()  # must not raise out of the callback
+
+        self.assertIn("Resume not imported", MESSAGES.titles("showerror"))
+        message = MESSAGES.text("showerror")
+        self.assertIn("RuntimeError", message, "the failure type is named so it can be reported")
+        self.assertNotIn(leaked, message, "an unexpected message may quote document text")
+        self.assertNotIn(str(path), message)
+        self.assertNotIn(str(self._directory.name), message)
+        self.assertEqual(RecordingToplevel.created, [], "no review window may open")
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertIn("profile was not changed", app.status.get())
 
 class WindowConstructionTests(HandlerTestCase):
     """Every widget the real window builds must accept the options it is given.

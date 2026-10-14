@@ -166,13 +166,48 @@ class PathRedactionTests(unittest.TestCase):
         self.assertNotIn("notes.sqlite3", redacted)
         self.assertIn("<local path>", redacted)
 
-    def test_an_unsupplied_foreign_path_is_left_alone_rather_than_guessed_at(self):
-        # Only locations the caller knows about are replaced: guessing at every path-shaped word
-        # would rewrite text this module cannot verify.
-        text = "cannot read /Volumes/Backup Drive/private/notes.sqlite3"
+    def test_an_unsupplied_absolute_path_is_hidden_rather_than_copied_into_a_note(self):
+        # A caller cannot list every location an unexpected failure message might quote: an external
+        # volume, a sync folder, another drive. The note this text ends up in is written to be safe to
+        # share, so an absolute location is hidden wherever it appears, not only when the caller named
+        # it. This supersedes an earlier, weaker rule that left unsupplied paths alone.
+        cases = {
+            "bare": ("cannot read /Volumes/Investor Backup/private/notes.sqlite3", "/Volumes"),
+            "quoted with spaces": (
+                "FileNotFoundError: [Errno 2] No such file or directory: "
+                "'/Volumes/Investor Backup/private/notes.sqlite3'",
+                "/Volumes",
+            ),
+            "windows drive": ('could not write "C:\\Users\\ada\\Documents\\export.json"', "C:\\Users"),
+            "unc share": ("cannot open \\\\fileserver\\share\\notes\\x.sqlite3", "\\\\fileserver"),
+            "system location": ("see /usr/lib/python3.11/zipfile.py for details", "/usr/lib"),
+        }
+        for label, (text, hidden) in cases.items():
+            with self.subTest(shape=label):
+                redacted = redact_paths(text, home=Path("/home/someone"))
+
+                self.assertIn("<local path>", redacted)
+                self.assertNotIn(hidden, redacted)
+                self.assertNotIn("Investor", redacted)
+                self.assertNotIn("notes.sqlite3", redacted)
+
+    def test_redacting_a_location_keeps_the_sentence_around_it_readable(self):
+        text = "cannot open /Volumes/Investor Backup/private/notes.sqlite3 on this machine."
+
+        self.assertEqual(redact_paths(text, home=Path("/home/someone")),
+                         "cannot open <local path> on this machine.")
+
+    def test_a_relative_word_or_a_public_url_is_never_mistaken_for_a_location(self):
+        # The narrow rule that makes the sweep safe: a location starts with a separator (an absolute
+        # POSIX path, a drive letter, or a UNC prefix). Ordinary words, version numbers, relative file
+        # names, and public addresses are not locations and must survive untouched, because rewriting
+        # them would corrupt a diagnostic message this module cannot verify.
+        text = (
+            "version 2.0 of the schema is fine; data/resume.docx was not read and "
+            "https://example.invalid/jobs/1?q=a/b still answers"
+        )
 
         self.assertEqual(redact_paths(text, home=Path("/home/someone")), text)
-
 
 class StartupFailureExplanationTests(unittest.TestCase):
     """The message shown when the window cannot open must be useful and must not leak."""
@@ -389,6 +424,31 @@ class CommandLineStartupFailureTests(unittest.TestCase):
         self.assertNotIn("my-own-copy", written)
         self.assertNotIn("private-backups", written)
         self.assertIn("<local path>", written)
+
+    def test_a_location_quoted_inside_the_failure_message_never_reaches_the_note(self):
+        # The person names one file on the command line, but the failure message itself may quote a
+        # location from somewhere else on this machine (an external volume, a folder synced from
+        # elsewhere). That text is copied into the note, which is written to be safe to share, so the
+        # location must be hidden even though this command never named it.
+        backup = Path(self.directory.name) / "chosen-copy.sqlite3"
+        foreign = "/Volumes/Investor Backup/private/notes.sqlite3"
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch(
+            "career_agent.__main__.restore_backup",
+            side_effect=RuntimeError(f"cannot open {foreign} while reading the file"),
+        ):
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(["--database", str(self.database), "--restore-from", str(backup), "--yes"])
+
+        self.assertEqual(code, cli.EXIT_UNEXPECTED)
+        note = self.database.parent / "logs" / DIAGNOSTIC_FILE_NAME
+        self.assertTrue(note.is_file())
+        written = note.read_text(encoding="utf-8")
+        self.assertNotIn("Investor", written)
+        self.assertNotIn("Volumes", written)
+        self.assertNotIn("notes.sqlite3", written)
+        self.assertIn("<local path>", written)
+        self.assertNotIn("Investor", err.getvalue())
 
     def test_a_failure_before_the_database_is_known_still_explains_itself(self):
         # With no --database there is nothing to place the note beside, so the note goes to the

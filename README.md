@@ -125,8 +125,11 @@ silently truncated:
   text layer cannot be read by this feature and is not pretended to be readable:** the app says so and
   asks you to type the values in. OCR is **not** implemented.
 - A legacy `.doc`, an unsupported format, or a DOCX carrying macros is refused, or has the macro part
-  reported and ignored — embedded content is never executed. The document is treated as untrusted input:
-  this is text extraction, **not** a malware scanner, and no parsing is risk-free.
+  reported and ignored — embedded content is never executed. A DOCX whose document part is stored
+  encrypted (a password-protected re-save) is refused with the same plain message as an encrypted Word
+  file, and one written with a compression method this build cannot read is refused naming that method;
+  neither can reach the window as a raw error. The document is treated as untrusted input: this is text
+  extraction, **not** a malware scanner, and no parsing is risk-free.
 - The file you selected is read in place; no copy of it is kept anywhere.
 
 **PDF support is an optional third-party library.** DOCX import uses the standard library alone. For PDF
@@ -274,9 +277,13 @@ There is no installer and no packaged build, and nothing in this repository clai
   `python -m career_agent --version` prints it with the database schema version and works with no
   packaging metadata, no display, and no third-party tools.
 - `career_agent.diagnostics` explains a start-up failure in plain language, redacts the local paths it
-  knows about (the database file and folder, the home folder, and any path named on the command line, while
-  never substituting a value that could match ordinary prose), and keeps one bounded owner-only note. The
-  failure classes it distinguishes and the redaction rules are covered by tests.
+  knows about (the database file and folder, the home folder, and any path named on the command line,
+  while never substituting a value that could match ordinary prose), replaces any remaining *absolute*
+  location found in the failure text itself (an external volume, a network share, a Windows drive path)
+  with a placeholder, leaves relative words and public URLs untouched, and keeps one bounded owner-only
+  note. The failure classes it distinguishes and the redaction rules are covered by tests. Text it cannot
+  classify — ordinary prose inside an exception message — is kept as it is: the note is local, and the
+  message is what makes it useful.
 
 Missing pieces, in the order they are needed, for a packaged desktop alpha:
 
