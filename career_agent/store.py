@@ -37,6 +37,24 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class TrackerStatusError(ValueError):
+    """A stored tracker status is not a value this build recognises.
+
+    Raised from read paths instead of the bare ``ValueError`` an enum constructor produces, so a
+    legacy or hand-edited value can be reported as itself. Nothing is repaired, migrated, or
+    deleted: an unknown status has no defined position in the state machine, so no transition from
+    it can be validated, and the app refuses to change such a record rather than guessing.
+    """
+
+    def __init__(self, raw_value: str) -> None:
+        self.raw_value = raw_value
+        super().__init__(
+            f"The saved status {raw_value!r} is not one this version of the application recognises. "
+            "The record was not changed. Read the value in the database or restore a verified backup "
+            "if the record is wrong."
+        )
+
+
 class PrivateWriteError(OSError):
     """A private (owner-only) file write could not be completed safely.
 
@@ -371,15 +389,58 @@ class CareerStore:
                 f"not {tracker.status.value}."
             )
 
+    def get_tracker_raw(self, listing_id: str) -> dict | None:
+        """The stored tracker row exactly as persisted, or ``None`` when there is no record.
+
+        Deliberately uninterpreted: a list view or an export can show a legacy or unexpected status
+        as it is stored, and a read never fails because one row holds a value this build does not
+        know. ``updated_at`` is when the app last wrote this record locally, not anything the
+        employer or the source said. This is read-only; it never writes, repairs, migrates, or
+        deletes anything.
+        """
+        row = self._connection.execute(
+            "SELECT status, status_evidence, candidate_confirmed, updated_at FROM application_tracker WHERE listing_id=?",
+            (listing_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "status": row["status"], "status_evidence": row["status_evidence"],
+            "candidate_confirmed": bool(row["candidate_confirmed"]), "updated_at": row["updated_at"],
+        }
+
+    def get_record_times(self, listing_id: str) -> dict | None:
+        """When this device first and last wrote a listing, or ``None`` when it is not stored.
+
+        These are the application's own observation times: ``first_seen_at`` is never rewritten by a
+        later save, while ``last_seen_at`` moves with every save. The store has no source publication
+        or update date, so these values must never be shown as one.
+        """
+        row = self._connection.execute(
+            "SELECT first_seen_at, last_seen_at FROM job_listings WHERE listing_id=?", (listing_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {"first_seen_at": row["first_seen_at"], "last_seen_at": row["last_seen_at"]}
+
     def get_tracker(self, listing_id: str) -> ApplicationTracker | None:
+        """The stored tracker record, or ``None`` when the listing has no record.
+
+        Raises :class:`TrackerStatusError` (a ``ValueError``) instead of a bare enum error when the
+        stored status is not one this build recognises, so callers refuse safely and can say why.
+        """
         row = self._connection.execute(
             "SELECT listing_id, status, status_evidence, candidate_confirmed FROM application_tracker WHERE listing_id=?",
             (listing_id,),
         ).fetchone()
         if row is None:
             return None
+        try:
+            status = ApplicationStatus(row["status"])
+        except ValueError as exc:
+            raise TrackerStatusError(row["status"]) from exc
         return ApplicationTracker(
-            listing_id=row["listing_id"], status=ApplicationStatus(row["status"]),
+            listing_id=row["listing_id"], status=status,
             status_evidence=row["status_evidence"], candidate_confirmed=bool(row["candidate_confirmed"]),
         )
 

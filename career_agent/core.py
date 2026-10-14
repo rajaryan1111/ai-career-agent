@@ -341,6 +341,20 @@ def is_allowed_tracker_transition(current: ApplicationStatus, new_status: Applic
     return new_status == current or new_status in _TRACKER_TRANSITIONS[current]
 
 
+def selectable_tracker_statuses(current: ApplicationStatus) -> tuple[ApplicationStatus, ...]:
+    """The statuses a chooser may offer for a record that is currently at ``current``.
+
+    Exactly the statuses an action can succeed with: the current one (so a record can be re-saved, and
+    a new record can be created at the permitted initial status) plus every permitted transition.
+    Offering anything else would imply the application supports a move it will refuse, and a chooser
+    that lists all thirteen statuses invites a user to pick one that cannot be recorded. The order
+    follows the declaration order of :class:`ApplicationStatus` — the order the statuses are documented
+    in — so the list reads the same way every time and no option is promoted by being listed first.
+    """
+    permitted = _TRACKER_TRANSITIONS[current]
+    return tuple(status for status in ApplicationStatus if status is current or status in permitted)
+
+
 @dataclass(frozen=True)
 class ApplicationTracker:
     listing_id: str

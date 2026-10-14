@@ -16,7 +16,15 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Conservative URL/requisition deduplication.
 - Separate source-listing and employer-application URLs.
 - Guarded application status transitions; confirmation requires a deliberate user assertion plus
-  substantive evidence (the app's own instruction text and bare placeholders are refused).
+  substantive evidence (the app's own instruction text and bare placeholders are refused). The status
+  chooser offers only the moves the record may actually take, and a stored status this version does not
+  recognise is shown as it is and left untouched rather than repaired, hidden, or carried forward.
+- Local record times shown as such — when this device first wrote a listing and when it last saved it —
+  with a clear statement that the source's publication or update date is not available, because none is
+  stored.
+- A version string that works from a source checkout (`python -m career_agent --version`) and a
+  non-sensitive start-up failure report that names a next step without exposing paths, credentials or
+  candidate data.
 - Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
 - Validation of manually entered links as public http(s) addresses only (no credentials, no
   localhost/private/internal targets) and display-time redaction of credentials in older rows.
@@ -25,15 +33,25 @@ The dependency-free Python domain core in `career_agent/` provides:
   partial, challenged, or failed run.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine, local JSON export, and explicit delete controls. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
 Python 3.10+ with Tkinter available:
 
 ```bash
-python -m career_agent
+python -m career_agent            # open the desktop window
+python -m career_agent --version  # print the version and schema version of this checkout
 ```
+
+`--version` needs no display and no packaging metadata: it reports the version recorded in the source.
+The app has no installer yet — see [Packaging status](#packaging-status) for the exact missing pieces.
+
+If the window cannot open, the message says what happened and what to do next instead of showing a raw
+traceback. A short, sanitised note is kept as `logs/startup-diagnostics.log` in the application-data
+folder; it holds no candidate data, credentials, or filesystem locations, and a copy can be sent to
+whoever is helping you without revealing personal information. The database commands above work without
+the window, which is what you need when the database itself is the problem.
 
 Candidate data is stored in the operating system's per-user application-data directory, not inside the repository.
 If a tracker record is wrong — for example a smoke-test record left `confirmed` when nothing was ever
@@ -143,13 +161,41 @@ python -m unittest discover -s tests -v
 
 The suite covers the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
 the source permission gates and run-outcome rules, the Tk-free desktop logic (form mapping, save
-planning, database-path resolution), verified backup and restore (including corruption, schema-version
-and permission failures, WAL and side-file handling, and the command-line front end), and the desktop
-handlers exercised through widget stubs. It
+planning, database-path resolution, stored-timestamp rendering), the status chooser's option set against
+the state machine, unrecognised stored statuses and the refusal paths they trigger, version reporting and
+start-up diagnostics (including path redaction), verified backup and restore (including corruption,
+schema-version and permission failures, WAL and side-file handling, and the command-line front end), and
+the desktop handlers exercised through widget stubs. It
 requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
 behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
 remains outstanding and is tracked in
 [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md).
+
+## Packaging status
+
+There is no installer and no packaged build, and nothing in this repository claims one. What exists today:
+
+- The app runs from a source checkout with `python -m career_agent` and needs the standard library plus
+  Tkinter, nothing else.
+- `career_agent.__version__` is the single source of truth the checkout reports.
+  `python -m career_agent --version` prints it with the database schema version and works with no
+  packaging metadata, no display, and no third-party tools.
+- `career_agent.diagnostics` explains a start-up failure in plain language, redacts local paths, and keeps
+  one bounded owner-only note. The failure classes it distinguishes are covered by tests.
+
+Missing pieces, in the order they are needed, for a packaged desktop alpha:
+
+1. Distribution metadata (`pyproject.toml` with PEP 621 project metadata, `requires-python`, and a
+   `console_scripts` entry point) plus a build verified in CI, so the version comes from one source
+   instead of a literal that could drift from a packaged build.
+2. Per-platform launch artefacts, code signing and notarisation (macOS `.app`, Windows installer), with
+   the icon, identity, and update story that implies.
+3. A decision on bundling the interpreter (PyInstaller/Briefcase-style) versus requiring a system Python
+   with Tkinter — including the size, update, and Tk-availability consequences of each choice.
+4. A release checklist that runs this repository's suite, the manual desktop checklist, and a
+   backup/restore rehearsal on each supported operating system from the packaged build.
+
+Until those exist, "local alpha from a source checkout" is the accurate description.
 
 ## Safety and product principles
 

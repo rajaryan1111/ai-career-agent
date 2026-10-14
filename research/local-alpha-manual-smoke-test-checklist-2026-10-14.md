@@ -9,6 +9,8 @@ This checklist is intentionally separate from unit tests. It requires a real des
 
 - [ ] Python 3.10+ is installed.
 - [ ] Tkinter is available in that Python installation.
+- [ ] From the repository root, run: python -m career_agent --version; it must print the version and the
+  schema version and exit with status 0, in a terminal and with no display variables set.
 - [ ] From the repository root, run: python -m unittest discover -s tests -v
 - [ ] Run: python -m compileall -q career_agent scripts tests
 - [ ] Run: python scripts/audit_job_source_csv.py; it should print a JSON report with an input SHA-256 and no unhandled error.
@@ -67,6 +69,40 @@ This checklist is intentionally separate from unit tests. It requires a real des
     and confirm it restores and reports the previous-database copy.
 23. [ ] Confirm no file was created inside the repository (`git status` must stay clean) and that nothing
     was uploaded: the backup commands must work with networking switched off.
+
+## Status choices, record times, and start-up diagnostics
+
+24. [ ] Save a new job so it has no application record yet. Open **Update selected status**: the *New
+    status* list must contain only `discovered`, `shortlisted`, `withdrawn`. Nothing in the list may imply
+    a submission, an employer response, or a confirmation that has not happened. Confirm that opening the
+    dialog does not by itself create a tracker record (close it, refresh, the job must still show
+    `discovered` with no stored record).
+25. [ ] Shortlist the job (only possible on an explicit eligibility PASS), reopen the dialog, and check the
+    list again: it must offer only the statuses the record may move to from `shortlisted`. For a
+    `submission_attempted` record the list must include `submitted_unverified`, `confirmed`, `failed` and
+    `unknown_status` but not `interview` or `response_received`; those appear only after `confirmed`.
+26. [ ] Close a record honestly: move an application to `withdrawn` with a note. Reopen **Update selected
+    status** for it. The app must say the record is in a final state and must not offer a list of statuses
+    at all. The stored note must still be shown in the tracker list, unchanged.
+27. [ ] Cancel the dialog with Escape and confirm with Return on the *Save status* button; both must work
+    without a mouse. Pressing Escape must change nothing.
+28. [ ] In the jobs tab, select a job and read the detail pane: it must show the local record times
+    labelled as this app's own observations (first noted / last saved, in UTC), and must state that the
+    source's publication or update date is not provided. Then save a change to the same job and confirm
+    the *last saved* time moves while *first noted* stays the same.
+29. [ ] Start the app with a damaged database (throwaway copy): `python -m career_agent --database
+    "<copy of the database with garbage written over the first bytes>"`. The window must show a plain-language
+    explanation naming a next step (restoring a verified backup), not a bare `file is not a database`, and
+    must not print a filesystem path, candidate data, or a credential. The same text must appear, timestamped,
+    in `logs/startup-diagnostics.log` beside the application data, owner-only on macOS/Linux.
+30. [ ] Confirm the diagnostic note is replaced, not appended, by running the failing start-up twice, and
+    that its content is safe to share (no name, email, phone, employer, or local path).
+31. [ ] Insert an unknown status into a *throwaway copy* (`sqlite3 "<copy>" "UPDATE application_tracker SET
+    status='ghost_status' WHERE listing_id='<id>';"`), then start the app against it: both lists must still
+    render that row, showing the stored value with a clear "not recognised by this version" marker rather
+    than crashing or silently showing a different status. **Update selected status** must refuse with an
+    explanation, and the JSON export must still work and contain the stored value unchanged. Confirm the
+    row is unchanged afterwards in `sqlite3`.
 
 ## Record results
 

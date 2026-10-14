@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import platform
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
@@ -105,6 +106,51 @@ def career_agent_data_root(
     return Path(environment.get("XDG_DATA_HOME") or (resolved_home / ".local" / "share"))
 
 
+#: Shown when a record carries no usable timestamp. Never replaced with an invented time.
+TIMESTAMP_NOT_RECORDED = "not recorded"
+
+
+def format_stored_timestamp(value: str | None, *, fallback: str = TIMESTAMP_NOT_RECORDED) -> str:
+    """Render a stored instant for display, or say exactly why it cannot be shown.
+
+    This is a display helper: it never invents a time and never reinterprets one. The application
+    writes UTC timestamps with an explicit offset; those are converted to UTC and rendered
+    unambiguously. A value with no offset is timezone-ambiguous, and a value that cannot be parsed
+    may have been written by another tool, so both are shown as they are stored with a plain label
+    instead of being guessed at, dropped, or silently "corrected".
+    """
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return fallback
+    # ``fromisoformat`` accepts a trailing ``Z`` only from Python 3.11, so normalise it first: the
+    # application runs on 3.10 as well and the same instant must format identically on both.
+    parsable = f"{text[:-1]}+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        moment = datetime.fromisoformat(parsable)
+    except ValueError:
+        return f"{text} (unrecognised timestamp format)"
+    if moment.tzinfo is None:
+        return f"{text} (no timezone recorded)"
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def default_data_folder(
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """The per-user folder the app keeps its own files in; no directory is created here.
+
+    Shared by the database path and by the start-up diagnostic note, so both always point at the
+    same folder on every platform. Callers that need the folder to exist create it themselves;
+    a diagnostics path in particular must not have directory side effects.
+    """
+    resolved_system = platform.system() if system is None else system
+    folder_name = APPLICATION_FOLDER_NAME if resolved_system in {"Darwin", "Windows"} else "ai-career-agent"
+    return career_agent_data_root(system=resolved_system, environ=environ, home=home) / folder_name
+
+
 def default_database_path(
     *,
     system: str | None = None,
@@ -112,9 +158,7 @@ def default_database_path(
     home: Path | None = None,
 ) -> Path:
     """Choose a per-user app-data database path; candidate data never enters the repository."""
-    resolved_system = platform.system() if system is None else system
-    folder_name = APPLICATION_FOLDER_NAME if resolved_system in {"Darwin", "Windows"} else "ai-career-agent"
-    folder = career_agent_data_root(system=resolved_system, environ=environ, home=home) / folder_name
+    folder = default_data_folder(system=system, environ=environ, home=home)
     folder.mkdir(parents=True, exist_ok=True)
     return folder / DATABASE_FILE_NAME
 

@@ -850,3 +850,76 @@ adapter, scheduler, submission path, or external transmission was added; the sou
 **NOT PASSED**; the Mac database was never accessed. Stated honestly rather than tested: no GUI was
 rendered here (no display, no tkinter in this sandbox), so the macOS checklist items added to
 `research/local-alpha-manual-smoke-test-checklist-2026-10-14.md` still need the user's manual run.
+
+## 2026-10-14 (desktop readiness) — Status choices, record times, version reporting
+
+**Scope.** Three inspected areas, in this order: (A) tracker status choices and transition validation,
+(B) data freshness and timestamps, (C) packaging, version reporting, and diagnostics. Starting point
+`9f5fb9db11a4a1ad198a67f2c679011959896242` on branch `arena/351e052d-ai-career-agent`; `main` untouched.
+
+**Findings (reproduced before any change).**
+
+- **A1 — the status dialog offered illegal statuses.** `_update_status` listed all thirteen
+  `ApplicationStatus` values for every record, so a record at `discovered` was offered ten transitions the
+  domain refuses (`confirmed`, `interview`, `submitted_unverified`, …). The refusal only appeared after
+  clicking Save. The canonical vocabulary is the existing enum and `_TRACKER_TRANSITIONS`; no new
+  vocabulary was invented.
+- **A2 — one unrecognised stored status disabled four views.** `store.get_tracker` builds
+  `ApplicationStatus(row["status"])`, so a legacy, hand-edited, or future value raised a bare
+  `ValueError` from a read path: the tracker list, the jobs list, the status dialog, and the JSON export
+  all failed with `'ghost_status' is not a valid ApplicationStatus`. The stored row itself was never
+  modified, which is correct and was preserved.
+- **A3 — a final state still presented a full chooser.** A `withdrawn` record was offered every status,
+  all of which the domain refuses (withdrawal is terminal).
+- **B — no freshness information was displayed at all**, although the database has persisted
+  `job_listings.first_seen_at`/`last_seen_at` and `application_tracker.updated_at` since schema 1. The
+  app stores no source publication or update date, so no source date can be shown and none is invented.
+- **C — no version reporting, no packaging metadata, unusable start-up diagnostics.** `--version` was not
+  recognised, `career_agent.__version__` did not exist, there was no `pyproject.toml`, and a start-up
+  failure showed only the raw exception text (`file is not a database`) with no version, no next step,
+  and no redaction.
+
+**Decisions.**
+
+- Storage-level enforcement stays exactly as it is: `save_tracker`/`_check_tracker_invariants` remain the
+  authority for initial status, permitted transitions, the confirmation-evidence floor, and
+  earned-only `candidate_confirmed`. Nothing was moved into the UI, and no safeguard was weakened.
+- The chooser is now derived from the state machine through `core.selectable_tracker_statuses`, and a
+  record in a final state is told so instead of being offered impossible changes.
+- A stored status the build does not recognise is surfaced verbatim (lists, status dialog, export) and
+  blocks status changes, because no transition can be validated from an unknown state. The app does not
+  guess, repair, rewrite, or delete the row. A scoped repair flow is deferred: choosing a replacement
+  status is a domain decision that needs its own safety design (explicit target, reason, backup,
+  migration tests), not a side effect of this phase.
+- Record times are displayed in the detail pane as this app's own observations, labelled as local, with a
+  plain statement that the source's publication or update date is not available. Missing values read
+  "not recorded"; an offset-less or unparseable value is shown as stored with a label instead of being
+  guessed at. No schema change: the columns already exist.
+- Version reporting is a literal in `career_agent/__init__.py` (`__version__`), reported by
+  `python -m career_agent --version` together with the schema version, and it works with no packaging
+  metadata and no display.
+- Start-up failures are explained by the new Tk-free `career_agent.diagnostics`: a plain-language
+  message that names the next step, with the database and home paths redacted, plus one bounded
+  owner-only note beside the app data that holds no candidate data, credentials, or filesystem
+  locations.
+- Packaging stays a documented gap: no `pyproject.toml`, installer, or bundled interpreter was added,
+  because none of that can be verified for the supported operating systems here. The README lists the
+  missing pieces and the order they are needed in.
+- `desktop.main` now shows the sanitised explanation (including the note's file name) instead of the raw
+  exception, and still re-raises so the process exit status stays non-zero. The status dialog gained
+  Escape (cancel) and Return (save) bindings and a final `except Exception` that reports an unexpected
+  failure without claiming success.
+
+**Evidence.** Regression tests cover the chooser's option set measured against the state machine, every
+stored status, terminal records, unrecognised stored values across all four affected views, the unchanged
+storage-level refusals, timestamp rendering (missing, offset-less, unparseable, converted), the
+version path with Tkinter blocked, and diagnostics redaction. Test count **313 → 388**. Test teeth: **20
+controlled mutations, all 20 caught** (the one initially missed — disabling the dialog's unrecognised-status
+check — showed the same refusal was reached through a second read; the two reads were merged into one, and
+the mutation was then caught by 15 tests). Files were restored SHA-256-identical after each run.
+Verification: full suite 388 OK, also with a socket-blocking `sitecustomize` shim (`/tmp/blocknet`);
+`compileall` exit 0; `tabnanny` exit 0; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414` (83
+records). No dependency, adapter, scheduler, submission path, or external transmission was added; the
+source-quality gate remains **NOT PASSED**; the Mac database was never accessed. Stated honestly rather
+than tested: no GUI was rendered here (no display, no tkinter in this sandbox), so the macOS checklist
+items added for the new UI behaviour still need the user's manual run.

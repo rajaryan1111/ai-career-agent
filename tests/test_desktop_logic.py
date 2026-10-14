@@ -9,9 +9,9 @@ from pathlib import Path
 
 from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.desktop_logic import (
-    DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, JobSaveMode, build_candidate_profile,
-    build_job_listing, career_agent_data_root, default_database_path, form_values,
-    job_form_values, plan_job_save, profile_form_values,
+    DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED, JobSaveMode,
+    build_candidate_profile, build_job_listing, career_agent_data_root, default_database_path,
+    format_stored_timestamp, form_values, job_form_values, plan_job_save, profile_form_values,
 )
 
 
@@ -234,6 +234,55 @@ class DatabasePathTests(unittest.TestCase):
                     self.assertEqual(path.parent.name, expected_folder_name[system])
                     self.assertTrue(path.parent.is_dir())
                     self.assertTrue(str(path).startswith(str(home)))
+
+
+class StoredTimestampFormattingTests(unittest.TestCase):
+    """A stored instant is rendered exactly, or labelled honestly. It is never invented.
+
+    The application writes UTC with an explicit offset. Values that arrive without an offset, or in a
+    form this version cannot read, may come from another tool or another platform, so they are shown
+    as they are stored with a plain label instead of being guessed at or silently dropped.
+    """
+
+    def test_a_missing_value_is_reported_as_not_recorded(self):
+        for value in (None, "", "   "):
+            with self.subTest(value=value):
+                self.assertEqual(format_stored_timestamp(value), TIMESTAMP_NOT_RECORDED)
+
+    def test_a_missing_value_can_use_a_context_specific_fallback(self):
+        self.assertEqual(format_stored_timestamp(None, fallback="no record yet"), "no record yet")
+
+    def test_a_utc_instant_is_rendered_with_its_offset_made_explicit(self):
+        self.assertEqual(format_stored_timestamp("2026-10-14T14:32:09+00:00"), "2026-10-14 14:32:09 UTC")
+
+    def test_another_offset_is_converted_to_utc_rather_than_dropped(self):
+        self.assertEqual(format_stored_timestamp("2026-10-14T20:02:09+05:30"), "2026-10-14 14:32:09 UTC")
+
+    def test_a_zulu_suffix_is_accepted_on_every_supported_python(self):
+        self.assertEqual(format_stored_timestamp("2026-10-14T14:32:09Z"), "2026-10-14 14:32:09 UTC")
+
+    def test_a_naive_instant_is_shown_as_stored_with_a_timezone_label(self):
+        self.assertEqual(
+            format_stored_timestamp("2026-10-14T14:32:09"),
+            "2026-10-14T14:32:09 (no timezone recorded)",
+        )
+
+    def test_an_unreadable_value_is_shown_as_stored_with_a_label(self):
+        for value in ("yesterday", "2026-13-45T99:99:99+00:00", "nan"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    format_stored_timestamp(value), f"{value} (unrecognised timestamp format)"
+                )
+
+    def test_surrounding_whitespace_never_changes_a_parsed_instant(self):
+        self.assertEqual(format_stored_timestamp("  2026-10-14T14:32:09+00:00  "), "2026-10-14 14:32:09 UTC")
+
+    def test_nothing_rendered_mentions_a_source_or_an_employer(self):
+        # The helper describes local observation times only; wording that could be read as a source
+        # publication or update date must never come from here.
+        rendered = format_stored_timestamp("2026-10-14T14:32:09+00:00")
+        for word in ("posted", "published", "updated by", "source", "employer"):
+            self.assertNotIn(word, rendered.lower())
 
 
 if __name__ == "__main__":

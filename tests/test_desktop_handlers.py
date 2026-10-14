@@ -20,7 +20,7 @@ from unittest import mock
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
-    evaluate_eligibility,
+    evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent.store import CareerStore
@@ -79,7 +79,12 @@ class Widget:
     def column(self, *args, **kwargs):
         return self
 
-    def bind(self, *args, **kwargs):
+    def bind(self, sequence=None, func=None, add=None):
+        # Real Tk keeps the handler per event sequence; recording it lets tests assert that the
+        # keyboard paths (Escape to cancel, Return to save) are actually wired.
+        self.bindings = getattr(self, "bindings", {})
+        if sequence:
+            self.bindings[sequence] = func
         return self
 
     def title(self, *args, **kwargs):
@@ -148,13 +153,20 @@ class MessageRecorder:
 
     def __init__(self):
         self.calls = []
+        self.messages = []
 
     def reset(self):
         self.calls = []
+        self.messages = []
 
     def _record(self, kind, title, message, answer=True):
         self.calls.append((title, answer, kind))
+        self.messages.append((kind, title, message))
         return answer
+
+    def text(self, kind=None):
+        """Every message body recorded so far, for the given dialog kind when one is named."""
+        return "\n".join(body for call_kind, _title, body in self.messages if kind is None or call_kind == kind)
 
     def showinfo(self, title, message, **kwargs):
         return self._record("showinfo", title, message)
@@ -200,6 +212,31 @@ class FileDialog:
     def askopenfilename(self, **kwargs):
         self.opened = self.path
         return self.path
+
+
+class RecordingCombobox(Widget):
+    """Combobox stand-in that keeps every instance, so a test can read the offered values."""
+
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        RecordingCombobox.created.append(self)
+
+    @property
+    def offered(self):
+        """The values this chooser offered, as a list of status strings."""
+        return list(self.options.get("values") or ())
+
+
+class RecordingToplevel(Widget):
+    """Toplevel stand-in that keeps every dialog, so a test can read its event bindings."""
+
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        RecordingToplevel.created.append(self)
 
 
 CONFIG = {}
@@ -304,6 +341,8 @@ class HandlerTestCase(unittest.TestCase):
         CONFIG.clear()
         MESSAGES.reset()
         BUTTONS.clear()
+        RecordingCombobox.created = []
+        RecordingToplevel.created = []
         FILEDIALOG.path = ""
         FILEDIALOG.opened = None
 
@@ -340,6 +379,18 @@ class HandlerTestCase(unittest.TestCase):
     def fill_job_form(self, app, values):
         for key, value in values.items():
             app.job_vars[key].set(value)
+
+    def make_app_with_real_handlers(self, *names):
+        """Build the double with the named handlers bound to the real methods.
+
+        ``make_app`` replaces the refresh/report handlers with no-ops so most tests can ignore them;
+        a test that inspects what a list actually rendered must bind the real method instead.
+        """
+        app = self.make_app()
+        for name in names:
+            if name in app.__dict__:
+                delattr(app, name)
+        return app
 
     def open_status_dialog(self, listing_id="j1"):
         """Run the real handler and return the dialog's variables plus its save button command.
@@ -1090,44 +1141,419 @@ class TrackerConfirmationRegressionTests(HandlerTestCase):
                 self.assert_apply_is_refused_without_writing(app, apply)
                 self.assertEqual(self.stored_row(), before)
 
-    def test_a_withdrawn_record_cannot_transition_anywhere(self):
-        """Withdrawal is terminal: nothing may move out of it, in the UI or in storage."""
-        self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
-        reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id="j2")
+    def withdrawn_record(self, listing_id="j2"):
+        """Store a withdrawn record for ``listing_id`` and return it."""
+        self.store.save_job(sample_job(listing_id=listing_id, source_listing_url=f"https://jobs.example/role/{listing_id}"))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id=listing_id)
         with CareerStore(self.store.database_path) as seeding:
             seeding.save_tracker(
-                seeding.get_tracker("j2").transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
+                seeding.get_tracker(listing_id).transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
             )
-        withdrawn = self.store.get_tracker("j2")
+        withdrawn = self.store.get_tracker(listing_id)
         self.assertIs(withdrawn.status, ApplicationStatus.WITHDRAWN)
+        return withdrawn
 
-        for target in (status.value for status in ApplicationStatus if status is not ApplicationStatus.WITHDRAWN):
-            with self.subTest(target=target):
-                MESSAGES.reset()
-                app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
-                status_var.set(target)
-                evidence_var.set("attempt out of a terminal state")
-                apply()
-                self.assertIn("Invalid status change", MESSAGES.titles())
-                self.assertEqual(self.store.get_tracker("j2"), withdrawn)
-                self.assertEqual(self.store.get_tracker("j2").status_evidence, "Candidate withdrew")
+    def test_a_withdrawn_record_is_offered_no_further_status(self):
+        """Withdrawal is terminal, so the status chooser must not be able to request a move out of it.
 
-    def test_reapplying_withdrawn_is_reported_as_a_no_op(self):
+        The refusal moved earlier than before: instead of letting the person pick an impossible
+        target and rejecting it afterwards, the dialog is not offered at all for a terminal record.
+        The row is still untouched, ``save_tracker`` is still never called, and the domain still
+        refuses every forced transition — nothing about the safeguard was relaxed.
+        """
+        withdrawn = self.withdrawn_record()
+        app = self.make_app()
+        app.tracker_tree.selected = ("j2",)
+
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("a terminal record must not be written")
+        ):
+            app._update_status()
+
+        self.assertIn("No further status", MESSAGES.titles())
+        self.assertNotIn("Invalid status change", MESSAGES.titles())
+        self.assertIn("Nothing was changed", MESSAGES.text("showinfo"))
+        self.assertEqual(RecordingCombobox.created, [], "a terminal record must not get a status chooser")
+        self.assertEqual(self.store.get_tracker("j2"), withdrawn)
+        self.assertEqual(self.store.get_tracker("j2").status_evidence, "Candidate withdrew")
+
+        # The domain refusal is unchanged and is what actually protects the record.
+        for target in (status for status in ApplicationStatus if status is not ApplicationStatus.WITHDRAWN):
+            with self.subTest(target=target.value):
+                self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, target))
+                with self.assertRaises(ValueError):
+                    withdrawn.transition(target, evidence="attempt out of a terminal state")
+
+    def test_a_terminal_record_keeps_its_note_and_is_never_rewritten(self):
+        """A withdrawn record keeps its note, and the terminal record is never rewritten."""
+        withdrawn = self.withdrawn_record()
+        app = self.make_app()
+        app.tracker_tree.selected = ("j2",)
+
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("a terminal record must not be written")
+        ):
+            app._update_status()
+
+        stored = self.store.get_tracker("j2")
+        self.assertEqual(stored, withdrawn)
+        self.assertEqual(stored.status_evidence, "Candidate withdrew")
+
+    def test_reapplying_the_current_status_is_still_reported_as_a_no_op(self):
+        """Re-applying a status is an idempotent no-op whose supplied note is never stored."""
         self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
         reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id="j2")
-        with CareerStore(self.store.database_path) as seeding:
-            seeding.save_tracker(
-                seeding.get_tracker("j2").transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
-            )
         before = self.store.get_tracker("j2")
         app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
-        status_var.set("withdrawn")
+        status_var.set("shortlisted")
         evidence_var.set("replacement note that must not be stored")
         apply()
         self.assertIn("No change", MESSAGES.titles())
         self.assertNotIn("Invalid status change", MESSAGES.titles())
         self.assertIn("Nothing was saved", app.status.get())
         self.assertEqual(self.store.get_tracker("j2"), before)
+        self.assertNotEqual(self.store.get_tracker("j2").status_evidence, "replacement note that must not be stored")
+
+
+#: A permitted walk from ``discovered`` to each status, used to build records for the choice tests.
+#: Every step is a transition the domain permits, so the fixtures are built the way the app builds
+#: records instead of writing statuses straight into the table.
+_STATUS_PATHS = {
+    ApplicationStatus.DISCOVERED: (),
+    ApplicationStatus.SHORTLISTED: (ApplicationStatus.SHORTLISTED,),
+    ApplicationStatus.PREPARED: (ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED),
+    ApplicationStatus.AWAITING_USER: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER),
+    ApplicationStatus.SUBMISSION_ATTEMPTED: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED),
+    ApplicationStatus.SUBMITTED_UNVERIFIED: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.SUBMITTED_UNVERIFIED),
+    ApplicationStatus.CONFIRMED: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.CONFIRMED),
+    ApplicationStatus.RESPONSE_RECEIVED: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.CONFIRMED, ApplicationStatus.RESPONSE_RECEIVED),
+    ApplicationStatus.INTERVIEW: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.CONFIRMED,
+        ApplicationStatus.RESPONSE_RECEIVED, ApplicationStatus.INTERVIEW),
+    ApplicationStatus.REJECTED_BY_EMPLOYER: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.CONFIRMED,
+        ApplicationStatus.REJECTED_BY_EMPLOYER),
+    ApplicationStatus.UNKNOWN_STATUS: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.UNKNOWN_STATUS),
+    ApplicationStatus.FAILED: (
+        ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED, ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.FAILED),
+    ApplicationStatus.WITHDRAWN: (ApplicationStatus.SHORTLISTED, ApplicationStatus.WITHDRAWN),
+}
+
+
+def build_record_at(store, status, listing_id):
+    """Store a listing whose tracker record reaches ``status`` through permitted transitions."""
+    store.save_job(sample_job(listing_id=listing_id, source_listing_url=f"https://jobs.example/role/{listing_id}"))
+    tracker = ApplicationTracker(listing_id)
+    store.save_tracker(tracker)
+    for step in _STATUS_PATHS[status]:
+        tracker = tracker.transition(
+            step,
+            evidence="Employer confirmation email" if step is ApplicationStatus.CONFIRMED else None,
+            candidate_confirmed=True if step is ApplicationStatus.CONFIRMED else None,
+        )
+        store.save_tracker(tracker)
+    return tracker
+
+
+class TrackerStatusChoiceTests(HandlerTestCase):
+    """The dialog offers exactly the statuses the record may move to, and no others.
+
+    The expected set is recomputed from ``is_allowed_tracker_transition`` — the rule the storage
+    layer enforces — rather than from a second hand-written table, so the interface and the domain
+    cannot drift apart without a test failing.
+    """
+
+    def run_status_handler(self, listing_id):
+        """Run the real handler with recording widgets; return ``(app, offered values or None)``.
+
+        ``None`` means no status chooser was created at all, which is what a terminal status gets.
+        """
+        app = self.make_app()
+        app.tracker_tree.selected = (listing_id,)
+        RecordingCombobox.created = []
+        RecordingToplevel.created = []
+        with mock.patch.object(desktop.ttk, "Combobox", RecordingCombobox), \
+                mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._update_status()
+        if not RecordingCombobox.created:
+            return app, None
+        self.assertEqual(len(RecordingCombobox.created), 1, "expected a single status chooser")
+        return app, RecordingCombobox.created[0].offered
+
+    def assert_offers_only_permitted_statuses(self, listing_id, current):
+        """Require the choices (or the absence of choices) to match what the state machine permits."""
+        permitted = {status.value for status in ApplicationStatus if is_allowed_tracker_transition(current, status)}
+        app, offered = self.run_status_handler(listing_id)
+        if len(permitted) == 1:  # a terminal status permits no move at all
+            self.assertIsNone(offered, "a terminal record must not be offered a status chooser")
+            self.assertIn("No further status", MESSAGES.titles())
+            return None
+        self.assertEqual(set(offered), permitted, "the chooser must offer exactly the permitted statuses")
+        self.assertIn(current.value, offered, "re-applying the current status must stay possible")
+        self.assertEqual(len(offered), len(set(offered)), "no option may be listed twice")
+        return offered
+
+    def test_a_record_without_a_tracker_row_offers_only_the_initial_status_and_its_moves(self):
+        self.store.save_job(sample_job())
+        offered = self.assert_offers_only_permitted_statuses("j1", ApplicationStatus.DISCOVERED)
+        self.assertEqual(offered, ["discovered", "shortlisted", "withdrawn"])
+        self.assertIsNone(self.store.get_tracker("j1"), "opening the dialog must not create a record")
+
+    def test_every_stored_status_is_offered_only_its_permitted_moves(self):
+        for index, status in enumerate(ApplicationStatus):
+            listing_id = f"job-{index}"
+            with self.subTest(status=status.value):
+                build_record_at(self.store, status, listing_id)
+                self.assert_offers_only_permitted_statuses(listing_id, status)
+
+    def test_impossible_targets_are_never_offered(self):
+        self.store.save_job(sample_job())
+        _app, offered = self.run_status_handler("j1")
+        for impossible in ("confirmed", "interview", "rejected_by_employer", "response_received",
+                           "submission_attempted", "submitted_unverified", "unknown_status", "failed",
+                           "awaiting_user", "prepared"):
+            self.assertNotIn(impossible, offered, f"{impossible} cannot be applied to this record")
+
+    def test_a_confirmed_record_may_still_be_offered_its_recorded_next_steps(self):
+        build_record_at(self.store, ApplicationStatus.CONFIRMED, "j1")
+        offered = self.assert_offers_only_permitted_statuses("j1", ApplicationStatus.CONFIRMED)
+        self.assertIsNotNone(offered)
+        self.assertIn("interview", offered)
+        self.assertIn("withdrawn", offered)
+        self.assertEqual(offered.count("confirmed"), 1, "an option must not be listed twice")
+
+    def test_the_dialog_offers_keyboard_dismissal_and_saving(self):
+        self.store.save_job(sample_job())
+        self.run_status_handler("j1")
+
+        dialog = RecordingToplevel.created[0]
+        self.assertIn("<Escape>", dialog.bindings, "the dialog must be cancellable from the keyboard")
+        self.assertIn("<Return>", dialog.bindings, "the dialog must be confirmable from the keyboard")
+        self.assertTrue(callable(dialog.bindings["<Escape>"]))
+        self.assertTrue(callable(dialog.bindings["<Return>"]))
+
+    def test_an_unexpected_failure_never_reports_success(self):
+        self.store.save_job(sample_job())
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("shortlisted")
+        with mock.patch.object(self.store, "save_tracker", side_effect=RuntimeError("disk on fire")):
+            apply()
+
+        self.assertIn("Status not saved", MESSAGES.titles())
+        self.assertNotIn("updated", app.status.get())
+        self.assertIn("nothing was saved", MESSAGES.text("showerror").lower())
+        self.assertIsNone(self.store.get_tracker("j1"), "a failed write must not create a record")
+
+
+class UnrecognisedStoredStatusTests(HandlerTestCase):
+    """A stored status this version does not know is surfaced honestly and never rewritten.
+
+    The row is written with the standard library, which is what a database from another build or an
+    older version looks like from here. Every case checks that reading it cannot break a view and
+    that nothing about it is silently repaired, reinterpreted, or discarded.
+    """
+
+    def store_legacy_status(self, value="ghost_status", listing_id="j1"):
+        """Store a listing with a status string this build does not recognise."""
+        self.store.save_job(sample_job(listing_id=listing_id, source_listing_url=f"https://jobs.example/role/{listing_id}"))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id=listing_id)
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            with connection:
+                connection.execute(
+                    "UPDATE application_tracker SET status=? WHERE listing_id=?", (value, listing_id)
+                )
+        finally:
+            connection.close()
+
+    def stored_status(self, listing_id="j1"):
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            return connection.execute(
+                "SELECT status, status_evidence, candidate_confirmed FROM application_tracker WHERE listing_id=?",
+                (listing_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+
+    def test_both_lists_render_the_stored_value_without_crashing(self):
+        self.store_legacy_status()
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_jobs()
+        app._refresh_tracker()
+
+        jobs_row = dict(zip(("employer", "role", "availability", "status", "source", "observed"),
+                            app.jobs_tree.inserted[-1][1]))
+        self.assertIn("ghost_status", jobs_row["status"])
+        self.assertIn("not recognised", jobs_row["status"])
+        tracker_row = dict(zip(("employer", "role", "status", "saved", "evidence"),
+                               app.tracker_tree.inserted[-1][1]))
+        self.assertIn("ghost_status", tracker_row["status"])
+        self.assertEqual(self.stored_status()[0], "ghost_status", "rendering must not rewrite the row")
+
+    def test_the_status_dialog_refuses_and_explains_instead_of_guessing(self):
+        self.store_legacy_status()
+        app = self.make_app()
+        app.tracker_tree.selected = ("j1",)
+        before = self.stored_status()
+
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("an unknown status must not be written")
+        ), mock.patch.object(desktop.ttk, "Combobox", RecordingCombobox):
+            app._update_status()
+
+        self.assertIn("Status not recognised", MESSAGES.titles())
+        self.assertIn("ghost_status", MESSAGES.text("showerror"))
+        self.assertEqual(RecordingCombobox.created, [], "no chooser may be offered from an unknown state")
+        self.assertEqual(self.stored_status(), before)
+
+    def test_saving_a_listing_leaves_an_unrecognised_status_alone(self):
+        self.store_legacy_status()
+        app = self.make_app()
+        app.jobs_tree.selected = ("j1",)
+        app._select_job()
+        self.fill_job_form(app, {**job_form_values(sample_job()), "location": "Pune"})
+
+        app._save_job()
+
+        self.assertIn("Pune", self.store.get_job("j1").location_text, "the listing edit must still save")
+        self.assertEqual(self.stored_status()[0], "ghost_status")
+        self.assertNotIn("Cannot save job", MESSAGES.titles())
+
+    def test_shortlisting_is_refused_from_an_unrecognised_status(self):
+        self.store_legacy_status()
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app.selected_job_id = "j1"
+        before = self.stored_status()
+
+        app._shortlist()
+
+        self.assertIn("Cannot shortlist", MESSAGES.titles())
+        self.assertEqual(self.stored_status(), before)
+
+    def test_the_export_carries_the_value_verbatim_and_marks_it(self):
+        self.store_legacy_status()
+        destination = Path(self._directory.name) / "export-legacy.json"
+        FILEDIALOG.path = str(destination)
+        app = self.make_app()
+
+        app._export()
+
+        payload = json.loads(destination.read_text(encoding="utf-8"))
+        tracker = payload["jobs"][0]["application_tracker"]
+        self.assertEqual(tracker["status"], "ghost_status")
+        self.assertIs(tracker["status_recognised"], False)
+        self.assertEqual(tracker["status_evidence"], self.stored_status()[1])
+
+    def test_a_recognised_export_is_unchanged_by_the_marker(self):
+        self.store.save_job(sample_job())
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        destination = Path(self._directory.name) / "export-known.json"
+        FILEDIALOG.path = str(destination)
+        app = self.make_app()
+
+        app._export()
+
+        tracker = json.loads(destination.read_text(encoding="utf-8"))["jobs"][0]["application_tracker"]
+        self.assertEqual(tracker["status"], "shortlisted")
+        self.assertNotIn("status_recognised", tracker)
+
+
+class LocalRecordTimeDisplayTests(HandlerTestCase):
+    """Lists and the detail pane show real stored times, never presented as source dates."""
+
+    def test_the_detail_report_labels_local_times_and_reports_missing_source_dates(self):
+        self.store.save_job(sample_job(), observed_at="2026-10-14T09:15:00+00:00")
+        app = self.make_app()
+        reports = []
+        app._report = reports.append
+        app.jobs_tree.selected = ("j1",)
+
+        app._select_job()
+
+        text = reports[-1]
+        self.assertIn("Local record times", text)
+        self.assertIn("first noted 2026-10-14 09:15:00 UTC", text)
+        self.assertIn("last saved 2026-10-14 09:15:00 UTC", text)
+        self.assertIn("Source publication or update date: not provided", text)
+
+    def test_a_later_save_moves_the_last_time_shown_and_keeps_the_first(self):
+        self.store.save_job(sample_job(), observed_at="2026-10-14T09:15:00+00:00")
+        self.store.save_job(sample_job(), observed_at="2026-10-15T11:45:00+00:00")
+        app = self.make_app()
+        reports = []
+        app._report = reports.append
+        app.jobs_tree.selected = ("j1",)
+
+        app._select_job()
+
+        text = reports[-1]
+        self.assertIn("first noted 2026-10-14 09:15:00 UTC", text)
+        self.assertIn("last saved 2026-10-15 11:45:00 UTC", text)
+
+    def test_the_jobs_list_shows_the_last_time_this_app_saved_the_record(self):
+        self.store.save_job(sample_job(), observed_at="2026-10-14T09:15:00+00:00")
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_jobs()
+
+        row = dict(zip(("employer", "role", "availability", "status", "source", "observed"),
+                       app.jobs_tree.inserted[-1][1]))
+        self.assertEqual(row["observed"], "2026-10-14 09:15:00 UTC")
+
+    def test_the_tracker_list_shows_when_the_status_was_last_saved_locally(self):
+        from datetime import datetime, timezone
+        build_record_at(self.store, ApplicationStatus.SHORTLISTED, "j1")
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_tracker()
+
+        row = dict(zip(("employer", "role", "status", "saved", "evidence"),
+                       app.tracker_tree.inserted[-1][1]))
+        self.assertEqual(row["status"], "shortlisted")
+        parsed = datetime.fromisoformat(row["saved"].replace(" UTC", "+00:00"))
+        self.assertLess(abs((parsed - datetime.now(timezone.utc)).total_seconds()), 120)
+
+    def test_a_listing_without_a_tracker_record_shows_no_status_time(self):
+        self.store.save_job(sample_job())
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_tracker()
+        row = dict(zip(("employer", "role", "status", "saved", "evidence"), app.tracker_tree.inserted[-1][1]))
+        self.assertEqual(row["status"], "discovered")
+        self.assertEqual(row["saved"], "not recorded")
+
+    def test_an_unusable_stored_timestamp_is_labelled_and_breaks_nothing(self):
+        self.store.save_job(sample_job())
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            with connection:
+                connection.execute("UPDATE job_listings SET last_seen_at='whenever' WHERE listing_id='j1'")
+        finally:
+            connection.close()
+        app = self.make_app_with_real_handlers("_refresh_jobs", "_refresh_tracker")
+
+        app._refresh_jobs()
+
+        row = dict(zip(("employer", "role", "availability", "status", "source", "observed"),
+                       app.jobs_tree.inserted[-1][1]))
+        self.assertEqual(row["observed"], "whenever (unrecognised timestamp format)")
 
 
 class ShortlistEligibilityMessageTests(HandlerTestCase):

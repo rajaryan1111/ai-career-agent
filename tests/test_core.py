@@ -1,10 +1,10 @@
 import unittest
 
 from career_agent import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
+    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, JobListing, canonicalize_url, deduplicate_listings,
     evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
-    is_substantive_confirmation_evidence, require_confirmation_evidence,
+    is_substantive_confirmation_evidence, require_confirmation_evidence, selectable_tracker_statuses,
 )
 
 
@@ -350,6 +350,58 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.CONFIRMED))
         self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, ApplicationStatus.SHORTLISTED))
         self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.INTERVIEW, ApplicationStatus.DISCOVERED))
+
+
+class SelectableTrackerStatusTests(unittest.TestCase):
+    """The chooser's vocabulary is derived from the state machine, not maintained beside it.
+
+    The expected set is recomputed here from ``is_allowed_tracker_transition`` — the rule the storage
+    layer enforces — rather than from a second hand-written table, so the UI and the domain cannot
+    drift apart without a test failing.
+    """
+
+    def permitted(self, current):
+        return {status for status in ApplicationStatus if is_allowed_tracker_transition(current, status)}
+
+    def test_offered_statuses_are_exactly_the_permitted_ones_for_every_status(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                offered = selectable_tracker_statuses(current)
+                self.assertEqual(set(offered), self.permitted(current))
+                self.assertIn(current, offered, "re-applying the current status must stay possible")
+
+    def test_nothing_outside_the_domain_vocabulary_is_offered(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                for status in selectable_tracker_statuses(current):
+                    self.assertIsInstance(status, ApplicationStatus)
+
+    def test_the_order_is_stable_and_follows_the_declaration_order(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                offered = selectable_tracker_statuses(current)
+                self.assertEqual(list(offered), sorted(offered, key=lambda status: list(ApplicationStatus).index(status)))
+
+    def test_a_new_record_offers_only_the_initial_status_and_its_permitted_moves(self):
+        self.assertEqual(
+            tuple(status.value for status in selectable_tracker_statuses(INITIAL_APPLICATION_STATUS)),
+            ("discovered", "shortlisted", "withdrawn"),
+        )
+
+    def test_terminal_statuses_offer_only_themselves(self):
+        for current in (ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED_BY_EMPLOYER):
+            with self.subTest(current=current.value):
+                self.assertEqual(selectable_tracker_statuses(current), (current,))
+
+    def test_no_status_is_offered_that_the_state_machine_would_refuse(self):
+        # The property that matters: a choice presented by the interface must be applicable.
+        for current in ApplicationStatus:
+            for offered in selectable_tracker_statuses(current):
+                with self.subTest(current=current.value, offered=offered.value):
+                    tracker = ApplicationTracker("j1", current, None, False)
+                    if offered is current:
+                        continue  # no-ops keep the record as it is, so they cannot be validated here
+                    self.assertTrue(is_allowed_tracker_transition(current, offered))
 
 
 if __name__ == "__main__":

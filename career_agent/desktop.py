@@ -17,13 +17,34 @@ from .backup import (
     BACKUP_SUFFIX, BackupError, create_backup, restore_backup, suggested_backup_name,
     validate_app_database,
 )
-from .core import ApplicationStatus, ApplicationTracker, Availability, Decision, evaluate_eligibility, score_relevance
-from .desktop_logic import (
-    JobSaveMode, build_candidate_profile, default_database_path, form_values,
-    job_form_values, plan_job_save, profile_form_values,
+from .core import (
+    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, Decision,
+    evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
+from .desktop_logic import (
+    JobSaveMode, build_candidate_profile, default_database_path, format_stored_timestamp,
+    form_values, job_form_values, plan_job_save, profile_form_values,
+)
+from .diagnostics import describe_startup_failure, record_startup_failure
 from .store import CareerStore, PrivateWriteError, write_private_text_file
 from .urls import redact_url_credentials
+
+
+def stored_status_text(row: dict | None) -> str:
+    """Status text for a list row, shown exactly as stored when this version does not know it.
+
+    A legacy, hand-edited, or future value is displayed as it is rather than being hidden or
+    rewritten: the row is the person's own data, and an unfamiliar value is information about what
+    happened, not something for the interface to repair silently. ``row`` is what
+    ``CareerStore.get_tracker_raw`` returns, or ``None`` when there is no record yet.
+    """
+    if row is None:
+        # No record yet: the domain's initial status is what such a row would start at.
+        return INITIAL_APPLICATION_STATUS.value
+    try:
+        return ApplicationStatus(row["status"]).value
+    except ValueError:
+        return f"{row['status']} (not recognised by this version)"
 
 
 class CareerAgentApp:
@@ -121,8 +142,8 @@ class CareerAgentApp:
         self.job_mode = tk.StringVar()
         ttk.Label(self.jobs_tab, textvariable=self.job_mode).grid(row=11, column=0, columnspan=6, sticky=W, pady=(4, 0))
         self._set_job_mode_display()
-        self.jobs_tree = ttk.Treeview(self.jobs_tab, columns=("employer", "role", "availability", "status", "source"), show="headings", height=9)
-        for col, label, width in [("employer", "Employer", 140), ("role", "Role", 170), ("availability", "Availability", 100), ("status", "Tracker status", 150), ("source", "Source", 190)]:
+        self.jobs_tree = ttk.Treeview(self.jobs_tab, columns=("employer", "role", "availability", "status", "source", "observed"), show="headings", height=9)
+        for col, label, width in [("employer", "Employer", 140), ("role", "Role", 170), ("availability", "Availability", 100), ("status", "Tracker status", 150), ("source", "Source", 190), ("observed", "Last saved here (this app, UTC)", 200)]:
             self.jobs_tree.heading(col, text=label)
             self.jobs_tree.column(col, width=width, anchor=W)
         self.jobs_tree.grid(row=9, column=0, columnspan=6, sticky="nsew", pady=(6, 0))
@@ -139,8 +160,8 @@ class CareerAgentApp:
         ttk.Button(actions, text="Update selected status", command=self._update_status).pack(side="left", padx=8)
         ttk.Button(actions, text="Export local data to JSON", command=self._export).pack(side="left", padx=8)
         ttk.Label(self.tracker_tab, text="A confirmed application requires evidence. An attempt or timeout is not proof.").pack(anchor=W, pady=(0, 8))
-        self.tracker_tree = ttk.Treeview(self.tracker_tab, columns=("employer", "role", "status", "evidence"), show="headings")
-        for col, label, width in [("employer", "Employer", 170), ("role", "Role", 200), ("status", "Status", 180), ("evidence", "Evidence / note", 420)]:
+        self.tracker_tree = ttk.Treeview(self.tracker_tab, columns=("employer", "role", "status", "saved", "evidence"), show="headings")
+        for col, label, width in [("employer", "Employer", 170), ("role", "Role", 200), ("status", "Status", 180), ("saved", "Status saved here (this app, UTC)", 200), ("evidence", "Evidence / note", 380)]:
             self.tracker_tree.heading(col, text=label)
             self.tracker_tree.column(col, width=width, anchor=W)
         self.tracker_tree.pack(fill=BOTH, expand=True)
@@ -362,8 +383,9 @@ class CareerAgentApp:
                     if not messagebox.askyesno("Possible duplicate", "This job matches an existing canonical URL/requisition. Existing source observations are kept separately. Save another observation anyway?\n\n" + summary, parent=self.root):
                         return
             self.store.save_job(job)
-            # Only create the initial tracker row; an existing row keeps its status.
-            if self.store.get_tracker(job.listing_id) is None:
+            # Only create the initial tracker row; an existing row keeps its status — including a
+            # status this version does not recognise, which is never rewritten by an unrelated save.
+            if self.store.get_tracker_raw(job.listing_id) is None:
                 self.store.save_tracker(ApplicationTracker(job.listing_id))
         except ValueError as exc:
             messagebox.showerror("Cannot save job", str(exc), parent=self.root)
@@ -390,10 +412,11 @@ class CareerAgentApp:
         for item in self.jobs_tree.get_children():
             self.jobs_tree.delete(item)
         for job in self.store.list_jobs():
-            tracker = self.store.get_tracker(job.listing_id)
+            times = self.store.get_record_times(job.listing_id) or {}
             self.jobs_tree.insert("", END, iid=job.listing_id, values=(
                 job.employer_name, job.role_title, job.availability_status.value,
-                tracker.status.value if tracker else "discovered", job.source_name,
+                stored_status_text(self.store.get_tracker_raw(job.listing_id)), job.source_name,
+                format_stored_timestamp(times.get("last_seen_at")),
             ))
         self._refresh_tracker()
 
@@ -413,11 +436,17 @@ class CareerAgentApp:
         # Redaction is for the report pane only. Records saved before URL validation existed may hold
         # credential-bearing links; they are shown safely but never rewritten, and the edit form keeps the
         # stored value so the user can see and correct it themselves.
+        times = self.store.get_record_times(job.listing_id) or {}
         self._report(redact_url_credentials(
             f"Selected {job.role_title} at {job.employer_name}\n"
             f"Source listing: {job.source_listing_url}\n"
             f"Employer application URL: {job.employer_apply_url or 'Not verified / not supplied'}\n"
-            f"Availability evidence: {job.provenance_note or 'Not supplied'}"
+            f"Availability evidence: {job.provenance_note or 'Not supplied'}\n"
+            f"Local record times (this device only, never the source's dates): "
+            f"first noted {format_stored_timestamp(times.get('first_seen_at'))}, "
+            f"last saved {format_stored_timestamp(times.get('last_seen_at'))}\n"
+            f"Source publication or update date: not provided by the source here, and never inferred "
+            f"from the local record time"
         ))
 
     def _selected_listing_id(self):
@@ -551,9 +580,14 @@ class CareerAgentApp:
         for item in self.tracker_tree.get_children():
             self.tracker_tree.delete(item)
         for job in self.store.list_jobs():
-            tracker = self.store.get_tracker(job.listing_id) or ApplicationTracker(job.listing_id)
+            stored = self.store.get_tracker_raw(job.listing_id)
+            # The note is the person's own record: shown as stored in both cases, including when the
+            # status itself is a value this version does not recognise. The time column is when this
+            # app last wrote the record locally, never a claim about the employer or the source.
             self.tracker_tree.insert("", END, iid=job.listing_id, values=(
-                job.employer_name, job.role_title, tracker.status.value, tracker.status_evidence or "",
+                job.employer_name, job.role_title, stored_status_text(stored),
+                format_stored_timestamp((stored or {}).get("updated_at")),
+                (stored or {}).get("status_evidence") or "",
             ))
 
     def _select_tracker(self, _event=None):
@@ -569,15 +603,54 @@ class CareerAgentApp:
             messagebox.showinfo("Select application", "Select an application row first.", parent=self.root)
             return
         listing_id = selection[0]
-        tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
+        # One read of the stored row, interpreted in one place: the dialog is never built from a second
+        # read that could disagree with the first. No transition can be validated from a status this
+        # build does not know, so such a record is left exactly as it is and the situation is
+        # explained, rather than guessed at.
+        stored = self.store.get_tracker_raw(listing_id)
+        try:
+            current_tracker = (
+                ApplicationTracker(listing_id) if stored is None
+                else ApplicationTracker(
+                    listing_id, ApplicationStatus(stored["status"]),
+                    stored["status_evidence"], stored["candidate_confirmed"],
+                )
+            )
+        except ValueError:
+            messagebox.showerror(
+                "Status not recognised",
+                f"The saved status for this application is {stored['status']!r}, which this version of "
+                "the application does not know. Nothing was changed and no new status is offered, "
+                "because the application cannot tell which changes would be valid from an unknown "
+                "state.\n\nThe value is still in your database; if you know what it should be, correct "
+                "it there or restore a verified backup.",
+                parent=self.root,
+            )
+            return
+        options = selectable_tracker_statuses(current_tracker.status)
+        if len(options) == 1:
+            # A terminal status has no permitted next step. Offering a chooser whose every option
+            # would be refused would imply an action that does not exist.
+            messagebox.showinfo(
+                "No further status",
+                f"This application is {current_tracker.status.value}, which is a final state: no "
+                "further status change is permitted. Nothing was changed.\n\nIf the record is wrong, "
+                "delete the entry or keep it as the honest record of what happened.",
+                parent=self.root,
+            )
+            return
         dialog = tk.Toplevel(self.root)
         dialog.title("Update application status")
         dialog.transient(self.root)
         dialog.grab_set()
-        ttk.Label(dialog, text=f"Current status: {tracker.status.value}").pack(anchor=W, padx=12, pady=(12, 5))
+        # Keyboard cancellation, so the dialog does not require a mouse.
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        ttk.Label(dialog, text=f"Current status: {current_tracker.status.value}").pack(anchor=W, padx=12, pady=(12, 5))
         status_var, evidence_var = tk.StringVar(), tk.StringVar()
         ttk.Label(dialog, text="New status").pack(anchor=W, padx=12)
-        ttk.Combobox(dialog, textvariable=status_var, values=[x.value for x in ApplicationStatus], state="readonly", width=30).pack(fill=X, padx=12, pady=4)
+        # Only statuses this record may actually move to (plus its current one), so the chooser
+        # cannot suggest a change the domain will refuse.
+        ttk.Combobox(dialog, textvariable=status_var, values=[x.value for x in options], state="readonly", width=30).pack(fill=X, padx=12, pady=4)
         ttk.Label(dialog, text="Evidence / note (required to confirm)").pack(anchor=W, padx=12, pady=(8, 0))
         ttk.Entry(dialog, textvariable=evidence_var, width=48).pack(fill=X, padx=12, pady=4)
         ttk.Label(
@@ -595,7 +668,7 @@ class CareerAgentApp:
                  "(not a test or a simulated submission)",
             variable=confirmed_assertion,
         ).pack(anchor=W, padx=12, pady=(8, 0))
-        if tracker.status is ApplicationStatus.CONFIRMED:
+        if current_tracker.status is ApplicationStatus.CONFIRMED:
             ttk.Label(
                 dialog,
                 text="This record is already confirmed. If that confirmation was a mistake or a test, "
@@ -666,9 +739,21 @@ class CareerAgentApp:
                 )
                 self.status.set("Status not saved (local database error).")
                 return
+            except Exception as exc:  # noqa: BLE001 - unexpected failures are reported, never hidden
+                # A last boundary: an unforeseen error must not close the dialog as if the change had
+                # been saved. Nothing is claimed and the saved record is untouched.
+                messagebox.showerror(
+                    "Status not saved",
+                    "The status change could not be completed and nothing was saved. The saved status "
+                    f"is unchanged.\n\nUnexpected problem: {type(exc).__name__}: {exc}",
+                    parent=dialog,
+                )
+                self.status.set("Status not saved (unexpected problem).")
+                return
             dialog.destroy()
             self._refresh_jobs()
             self.status.set(message)
+        dialog.bind("<Return>", lambda _event: apply())
         ttk.Button(dialog, text="Save status", command=apply).pack(anchor="e", padx=12, pady=12)
 
     def _export(self):
@@ -688,11 +773,19 @@ class CareerAgentApp:
             for key, value in record.items():
                 if isinstance(value, (set, frozenset, tuple)):
                     record[key] = sorted(value)
-            tracker = self.store.get_tracker(job.listing_id)
-            record["application_tracker"] = {
-                "status": tracker.status.value, "status_evidence": tracker.status_evidence,
-                "candidate_confirmed": tracker.candidate_confirmed,
-            } if tracker else None
+            # The stored values are exported exactly as they are, so a record whose status this
+            # version does not recognise can still be taken out of the app instead of blocking the
+            # whole export. ``status_recognised: false`` marks that value; it is only added when this
+            # version did not understand the stored status, so the format is unchanged otherwise.
+            stored_status = self.store.get_tracker_raw(job.listing_id)
+            if stored_status is None:
+                record["application_tracker"] = None
+            else:
+                try:
+                    ApplicationStatus(stored_status["status"])
+                except ValueError:
+                    stored_status["status_recognised"] = False
+                record["application_tracker"] = stored_status
             payload["jobs"].append(record)
         try:
             # Owner-only from the first byte, and never through a symbolic link: the export holds
@@ -738,7 +831,18 @@ def main(database_path=None):
     try:
         CareerAgentApp(root, database_path=database_path)
     except Exception as exc:
-        messagebox.showerror("AI Career Agent could not start", str(exc), parent=root)
+        # The window cannot be shown, so this message carries the whole explanation. It is built by
+        # ``diagnostics`` so it names a next step without exposing candidate data, database contents,
+        # credentials or filesystem locations, and the same sanitised text is kept in one bounded
+        # note beside the local data folder for later diagnosis.
+        explanation = describe_startup_failure(exc, database_path=database_path)
+        note = record_startup_failure(exc, database_path=database_path)
+        if note is not None:
+            explanation += (
+                f"\n\nA short, sanitised note was saved as {note.name} in the application's logs "
+                "folder. It holds no candidate data."
+            )
+        messagebox.showerror("AI Career Agent could not start", explanation, parent=root)
         root.destroy()
         raise
     root.mainloop()

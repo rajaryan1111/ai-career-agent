@@ -1,13 +1,15 @@
 """Command-line entry point: open the desktop app, or back up and restore the local database.
 
     python -m career_agent                            # open the desktop app
+    python -m career_agent --version                  # print the version this checkout runs
     python -m career_agent --backup-to PATH           # write a verified, owner-only backup
     python -m career_agent --restore-from PATH        # validate, confirm, then replace the database
 
 The two database commands exist because the situation that needs a restore most — a database the app
 cannot read — is also the situation in which the window cannot be opened. They import no GUI toolkit,
 so they work in a headless session, and they use the same tested :mod:`career_agent.backup` module as
-the desktop buttons: one implementation, two front ends.
+the desktop buttons: one implementation, two front ends. ``--version`` and the start-up failure report
+are likewise Tk-free, so they work when the window cannot open.
 
 Nothing here touches the network. Restoring replaces candidate data, so it always requires an explicit
 confirmation: the file must be named and confirmed interactively, or ``--yes`` must be passed.
@@ -18,8 +20,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import __version__
 from .backup import BackupError, create_backup, restore_backup, suggested_backup_name
 from .desktop_logic import default_database_path
+from .diagnostics import describe_startup_failure, record_startup_failure
+from .store import SCHEMA_VERSION
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -52,6 +57,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--yes", action="store_true",
         help="Confirm the restore without the interactive prompt (needed when input is not a terminal).",
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"%(prog)s {__version__} (database schema version {SCHEMA_VERSION})",
+        help="Print the version of this checkout and exit.",
     )
     return parser.parse_args(argv)
 
@@ -129,7 +139,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     except Exception as exc:  # noqa: BLE001 - report honestly rather than showing a bare traceback
-        print(f"UNEXPECTED ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        # Start-up failures are explained in plain language with local paths redacted, and kept in a
+        # bounded owner-only note beside the app data, because a terminal transcript is easy to paste
+        # somewhere and must not carry candidate data, credentials, or filesystem locations.
+        explanation = describe_startup_failure(exc, database_path=args.database)
+        note = record_startup_failure(exc, database_path=args.database)
+        print(f"COULD NOT START: {explanation}", file=sys.stderr)
+        if note is not None:
+            print(f"A sanitised note was saved as {note.name} in the application's logs folder.", file=sys.stderr)
         return EXIT_UNEXPECTED
 
 

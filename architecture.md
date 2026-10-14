@@ -26,7 +26,7 @@ The first usable desktop slice uses Python's standard-library Tkinter UI, the ex
 
 The decision is reversible. Validate Tk availability, accessibility, native look-and-feel, packaging, update strategy, and Windows/macOS/Linux smoke tests before release. If those checks fail, compare Tauri/React or another shell using measured packaging and maintenance evidence.
 
-- UI/runtime: Python + Tkinter; launch with `python -m career_agent`.
+- UI/runtime: Python + Tkinter; launch with `python -m career_agent`. `python -m career_agent --version` reports the version recorded in the source plus the database schema version, with no packaging metadata and no display. Start-up failures are explained by `career_agent.diagnostics` (Tk-free): a plain-language message that names the next step, with local paths redacted, plus one bounded owner-only note beside the app data. Packaging, launchers, and installers are not implemented; the exact missing pieces are listed in the README's packaging status.
 - Core logic: Python standard library.
 - Local database: SQLite; verified local backup and restore are implemented (owner-only files, no overwrite, validated before and after replacement). Schema migrations, encryption-at-rest, and portability remain Phase 2 work.
 - Resume parsing: deferred from the first usable slice; later local PDF/DOCX extraction must include field-level confidence/review and must not upload candidate data.

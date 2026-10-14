@@ -299,3 +299,52 @@ Exception` in `main`), P5's packaging/README items, desktop statement coverage (
 the manual GUI smoke checklist, which still needs recording on a real desktop. Nothing in the "must
 remain disabled" section has changed: the source-quality gate is still **NOT PASSED**, and no adapters,
 submission, scheduling, resume parsing or external data transmission were added.
+
+## 12. Status update, same day (2026-10-14, desktop-readiness phase)
+
+This section records what the next phase changed, so the findings above stay readable as the point-in-time
+record they are. All work is on the same open, unmerged branch; `main` was not touched.
+
+- **H2 (status chooser offered illegal transitions) — fixed.** The chooser is now derived from the state
+  machine through `core.selectable_tracker_statuses`: a record at `discovered` is offered exactly
+  `discovered`, `shortlisted`, `withdrawn`; a record in a final state (`withdrawn`,
+  `rejected_by_employer`) is told that no further change is permitted and is not given a chooser at all.
+  Storage-level enforcement was not touched and is still the authority; regression tests assert the option
+  set against `is_allowed_tracker_transition` rather than a second hand-written list.
+- **Unrecognised stored statuses — handled, and the four views they disabled are fixed.** The audit did
+  not report this one: reproducing H2 showed that a status value this build does not know (an older build,
+  another tool, a hand edit) raised a bare `ValueError` from `store.get_tracker`, which broke the tracker
+  list, the jobs list, the status dialog, **and the JSON export**. Reads now distinguish an interpreted
+  record (`get_tracker`, still strict, now raising a named `UnrecognizedStoredStatus` with an actionable
+  message) from the stored row itself (`get_tracker_row`/`list_tracker_rows`), which is surfaced verbatim.
+  Such a row blocks status changes — no transition can be validated from an unknown state — and is never
+  guessed at, repaired, rewritten, or deleted. A scoped repair mode remains deferred with its own design
+  requirements.
+- **H3 (no freshness display) — fixed without a schema change.** `job_listings.first_seen_at`/`last_seen_at`
+  and `application_tracker.updated_at` existed but were never shown. The detail pane now reports the app's
+  own observation times, labelled as local, and states that the source's publication or update date is not
+  available (the app stores none, and import time is never presented as one). Missing values read "not
+  recorded"; offset-less or unparseable values are shown as stored with a label. Formatting lives in the
+  Tk-free `desktop_logic` module and is unit-tested for missing, malformed and timezone cases.
+- **B2 (packaging, `__version__`) — partly fixed, partly documented rather than claimed.**
+  `career_agent.__version__` is now the single literal the source reports, and
+  `python -m career_agent --version` prints it with the schema version, with no packaging metadata and no
+  display. `pyproject.toml`, installers, code signing, and an interpreter-bundling decision are *not*
+  implemented; the README's packaging status lists them and the order they are needed in.
+- **P4 (dialog bindings, final catch) — partly fixed.** The status dialog now binds Escape (cancel) and
+  Return (save) and has a final `except Exception` that reports an unexpected failure instead of closing as
+  if the change had been saved. `desktop.main` shows the sanitised explanation rather than the raw
+  exception; it still re-raises so the exit status stays non-zero.
+- **Diagnostics (previously absent) — implemented.** `career_agent.diagnostics` classifies a start-up
+  failure, explains it in plain language with a next step, redacts the database and home paths, and keeps
+  one bounded owner-only note (`logs/startup-diagnostics.log`) containing no candidate data, credentials, or
+  filesystem locations.
+- Tests went from 312 to 388. Twenty controlled mutations were applied; all twenty were caught (the first
+  sweep missed one because a second read enforced the same refusal — the two reads were merged into one and
+  the mutation was then caught by fifteen tests). Files were restored SHA-256-identical after every run.
+
+**Still open after this phase:** M2/M4 (corrupt-body detection and the pre-migration backup story), H2's
+siblings in area A that need a *repair* path for unrecognised statuses, packaging and distribution
+(README's packaging status), residual desktop statement coverage, and the manual GUI smoke checklist,
+which still needs recording on a real desktop. The source-quality gate remains **NOT PASSED**, and nothing
+in the "must remain disabled" section changed.

@@ -9,7 +9,8 @@ from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.store import (
-    CareerStore, PrivateWriteError, create_private_file, require_owner_only, write_private_text_file,
+    CareerStore, PrivateWriteError, TrackerStatusError, create_private_file, require_owner_only,
+    write_private_text_file,
 )
 
 #: Permitted path used by tests that need an already-advanced record.
@@ -728,6 +729,125 @@ class PrivateFileCreationTests(unittest.TestCase):
 
         self.assertIn("owner-only", str(caught.exception))
         unlink.assert_called_once()
+
+
+class UnrecognisedStatusReadTests(unittest.TestCase):
+    """A status this build does not know is reported as itself; it is never repaired or hidden.
+
+    The value is written straight into the file with the standard library, which is what a database
+    written by another version, an older build, or a hand edit looks like from here.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = CareerStore(str(Path(self.directory.name) / "legacy.sqlite3"))
+        self.addCleanup(self.store.close)
+        self.store.save_job(JobListing(
+            listing_id="j1", source_id="s1", source_name="test",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN, provenance_note="checked",
+        ))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        self.write_status("ghost_status")
+
+    def write_status(self, value):
+        """Store an arbitrary status string the way another tool or an older build would."""
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            with connection:
+                connection.execute(
+                    "UPDATE application_tracker SET status=? WHERE listing_id='j1'", (value,)
+                )
+        finally:
+            connection.close()
+
+    def stored_row(self):
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            return connection.execute(
+                "SELECT listing_id, status, status_evidence, candidate_confirmed, updated_at "
+                "FROM application_tracker WHERE listing_id='j1'"
+            ).fetchone()
+        finally:
+            connection.close()
+
+    def test_reading_the_raw_row_reports_the_stored_value(self):
+        raw = self.store.get_tracker_raw("j1")
+        self.assertEqual(raw["status"], "ghost_status")
+        self.assertEqual(raw["candidate_confirmed"], False)
+        self.assertTrue(raw["updated_at"])
+
+    def test_reading_the_raw_row_never_rewrites_the_record(self):
+        before = self.stored_row()
+        for _ in range(3):
+            self.store.get_tracker_raw("j1")
+        self.assertEqual(self.stored_row(), before)
+
+    def test_the_domain_read_raises_a_specific_error_that_names_the_stored_value(self):
+        with self.assertRaises(TrackerStatusError) as caught:
+            self.store.get_tracker("j1")
+
+        self.assertIn("ghost_status", str(caught.exception))
+        self.assertEqual(caught.exception.raw_value, "ghost_status")
+        # It stays a ValueError, so existing refusal paths keep working unchanged.
+        self.assertIsInstance(caught.exception, ValueError)
+        self.assertEqual(self.stored_row()[1], "ghost_status", "a failed read must not repair the row")
+
+    def test_a_listing_without_a_record_reads_as_none(self):
+        self.assertIsNone(self.store.get_tracker_raw("missing"))
+        self.assertIsNone(self.store.get_tracker("missing"))
+
+    def test_a_recognised_status_still_reads_as_a_domain_object(self):
+        self.write_status(ApplicationStatus.SHORTLISTED.value)
+        tracker = self.store.get_tracker("j1")
+        self.assertIs(tracker.status, ApplicationStatus.SHORTLISTED)
+        self.assertEqual(self.store.get_tracker_raw("j1")["status"], "shortlisted")
+
+
+class RecordTimeTests(unittest.TestCase):
+    """The stored times are the app's own observations and must behave as such."""
+
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.job = JobListing(
+            listing_id="j1", source_id="s1", source_name="test",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN, provenance_note="checked",
+        )
+
+    def test_a_new_record_has_the_same_first_and_last_time(self):
+        self.store.save_job(self.job, observed_at="2026-10-14T10:00:00+00:00")
+        times = self.store.get_record_times("j1")
+        self.assertEqual(times, {
+            "first_seen_at": "2026-10-14T10:00:00+00:00",
+            "last_seen_at": "2026-10-14T10:00:00+00:00",
+        })
+
+    def test_a_later_save_moves_the_last_time_and_preserves_the_first(self):
+        self.store.save_job(self.job, observed_at="2026-10-14T10:00:00+00:00")
+        self.store.save_job(self.job, observed_at="2026-10-14T12:30:00+00:00")
+        times = self.store.get_record_times("j1")
+        self.assertEqual(times["first_seen_at"], "2026-10-14T10:00:00+00:00")
+        self.assertEqual(times["last_seen_at"], "2026-10-14T12:30:00+00:00")
+
+    def test_an_unknown_listing_has_no_record_times(self):
+        self.assertIsNone(self.store.get_record_times("missing"))
+
+    def test_reading_times_never_writes(self):
+        self.store.save_job(self.job, observed_at="2026-10-14T10:00:00+00:00")
+        before = self.store.get_record_times("j1")
+        for _ in range(3):
+            self.store.get_record_times("j1")
+        self.assertEqual(self.store.get_record_times("j1"), before)
+
+    def test_the_tracker_row_carries_a_local_write_time(self):
+        self.store.save_job(self.job, observed_at="2026-10-14T10:00:00+00:00")
+        reach_status(self.store, ApplicationStatus.DISCOVERED)
+        raw = self.store.get_tracker_raw("j1")
+        self.assertTrue(raw["updated_at"], "the tracker row records when the app last wrote it")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
