@@ -292,7 +292,7 @@ _SECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
-    ("other", re.compile(r"^(?:projects?|certifications?|certificates?|awards?|achievements?|publications?|internships?|activities|volunteering|interests?|languages?|declaration|references?)\b", re.I)),
+    ("other", re.compile(r"^(?:(?:test|safety)\s+)*(?:notes?|notices?|disclaimers?)\b|^(?:projects?|certifications?|certificates?|awards?|achievements?|publications?|internships?|activities|volunteering|interests?|languages?|declaration|references?)\b", re.I)),
 )
 
 _DEGREE_PATTERN = re.compile(
