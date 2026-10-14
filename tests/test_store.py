@@ -322,6 +322,70 @@ class TrackerInvariantTests(unittest.TestCase):
         self.assertEqual(stored.status, ApplicationStatus.WITHDRAWN)
         self.assertTrue(stored.candidate_confirmed)
 
+    def _raw_row(self, listing_id="j1"):
+        """Read the stored row directly, including the write timestamp."""
+        return self.store._connection.execute(
+            "SELECT status, status_evidence, candidate_confirmed, updated_at FROM application_tracker "
+            "WHERE listing_id=?",
+            (listing_id,),
+        ).fetchone()
+
+    def test_every_placeholder_evidence_form_is_refused_at_the_storage_boundary(self):
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        before = self._raw_row()
+        for text in (None, "", "   ", "\t\n", "n/a", "N/A", "todo", "TBD", "test", "testing",
+                     "placeholder", "yes", "evidence", "<your evidence here>",
+                     "A confirmed application requires evidence. An attempt or timeout is not proof."):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.store.save_tracker(
+                        ApplicationTracker("j1", ApplicationStatus.CONFIRMED, text, True)
+                    )
+        self.assertEqual(self._raw_row(), before, "a refused write must not touch the row")
+
+    def test_evidence_that_reads_as_a_real_observation_is_accepted_at_the_boundary(self):
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+        for text in (
+            "Employer portal shows Application Received on 2026-10-14",
+            "Recruiter email acknowledged the application (thread ref ABC-123)",
+        ):
+            with self.subTest(text=text[:40]):
+                self.store.save_tracker(
+                    ApplicationTracker("j1", ApplicationStatus.CONFIRMED, text, True)
+                )
+                stored = self.store.get_tracker("j1")
+                self.assertIs(stored.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(stored.status_evidence, text)
+                self.assertTrue(stored.candidate_confirmed)
+                # Reset so the next case starts from the same permitted predecessor.
+                with self.store._connection:
+                    self.store._connection.execute(
+                        "UPDATE application_tracker SET status=?, status_evidence=NULL, candidate_confirmed=0 "
+                        "WHERE listing_id=?",
+                        (ApplicationStatus.SUBMISSION_ATTEMPTED.value, "j1"),
+                    )
+
+    def test_a_withdrawn_record_is_terminal_at_the_storage_boundary(self):
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        self.store.save_tracker(
+            self.store.get_tracker("j1").transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
+        )
+        before = self._raw_row()
+        self.assertIs(self.store.get_tracker("j1").status, ApplicationStatus.WITHDRAWN)
+        for status in (ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED,
+                       ApplicationStatus.SUBMISSION_ATTEMPTED, ApplicationStatus.SUBMITTED_UNVERIFIED,
+                       ApplicationStatus.CONFIRMED, ApplicationStatus.RESPONSE_RECEIVED,
+                       ApplicationStatus.INTERVIEW, ApplicationStatus.DISCOVERED):
+            with self.subTest(status=status.value):
+                with self.assertRaises(ValueError):
+                    self.store.save_tracker(
+                        ApplicationTracker("j1", status, "Employer portal shows Application Received", True)
+                    )
+        self.assertEqual(self._raw_row(), before, "a terminal record must not move")
+        # Re-applying the same status stays an idempotent no-op, not an error.
+        self.store.save_tracker(self.store.get_tracker("j1"))
+        self.assertEqual(self._raw_row(), before)
+
     def test_status_jump_is_refused_and_the_stored_row_is_unchanged(self):
         self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
         with self.assertRaisesRegex(ValueError, "Invalid application transition: discovered -> interview"):

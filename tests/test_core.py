@@ -274,6 +274,57 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertTrue(response.candidate_confirmed)
         self.assertEqual(response.status_evidence, "Employer email received")
 
+    def test_withdrawn_is_terminal_and_cannot_be_un_withdrawn(self):
+        withdrawn = ApplicationTracker("j1", ApplicationStatus.WITHDRAWN, "Candidate withdrew", False)
+        for status in ApplicationStatus:
+            with self.subTest(status=status.value):
+                if status is ApplicationStatus.WITHDRAWN:
+                    continue
+                self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, status))
+                with self.assertRaisesRegex(ValueError, "Invalid application transition"):
+                    withdrawn.transition(status, evidence="Employer portal shows Application Received")
+        # Re-applying the same status remains an idempotent no-op.
+        self.assertIs(withdrawn.transition(ApplicationStatus.WITHDRAWN), withdrawn)
+        self.assertEqual(withdrawn.status_evidence, "Candidate withdrew")
+
+    def test_every_route_to_confirmed_applies_the_same_evidence_floor(self):
+        """No predecessor may reach a confirmation with instruction text or a placeholder."""
+        predecessors = (
+            ApplicationStatus.SUBMISSION_ATTEMPTED,
+            ApplicationStatus.SUBMITTED_UNVERIFIED,
+            ApplicationStatus.UNKNOWN_STATUS,
+        )
+        refused = (
+            None, "", "   ", "todo", "n/a", "yes", "test", "<your evidence here>",
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Evidence / note (required to confirm)",
+        )
+        for predecessor in predecessors:
+            for text in refused:
+                with self.subTest(predecessor=predecessor.value, text=str(text)[:30]):
+                    tracker = ApplicationTracker("j1", predecessor, "earlier note", False)
+                    with self.assertRaises(ValueError):
+                        tracker.transition(ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True)
+                    self.assertIs(tracker.status, predecessor)
+                    self.assertEqual(tracker.status_evidence, "earlier note")
+                    self.assertFalse(tracker.candidate_confirmed)
+
+        accepted = "Employer portal shows Application Received on 2026-10-14"
+        for predecessor in predecessors:
+            with self.subTest(predecessor=predecessor.value):
+                confirmed = ApplicationTracker("j1", predecessor, "earlier note", False).transition(
+                    ApplicationStatus.CONFIRMED, evidence=accepted, candidate_confirmed=True
+                )
+                self.assertIs(confirmed.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(confirmed.status_evidence, accepted)
+                self.assertTrue(confirmed.candidate_confirmed)
+
+    def test_the_evidence_floor_never_asserts_confirmation_on_its_own(self):
+        """A valid transition still records only what the caller passed: the flag is never invented."""
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer portal shows Application Received")
+        self.assertFalse(confirmed.candidate_confirmed, "the domain must not claim a confirmation nobody made")
+
     def test_invalid_transition_is_rejected(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
         with self.assertRaises(ValueError):

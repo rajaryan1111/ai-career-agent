@@ -890,6 +890,238 @@ class TrackerUpdateTests(HandlerTestCase):
         self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.SUBMISSION_ATTEMPTED)
 
 
+class TrackerConfirmationRegressionTests(HandlerTestCase):
+    """Confirmation-dialog regressions, driven through the real handler on temporary databases.
+
+    Every case here goes through ``_update_status`` — the same code path the Mac smoke test used —
+    with stub widgets and a disposable SQLite file. "Writes nothing" is proved two ways: the stored
+    row is re-read from disk and compared field by field, and ``save_tracker`` is patched to fail if
+    it is ever called, so a refusal that secretly wrote would fail the test rather than pass quietly.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_job(sample_job())
+        reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
+
+    def stored_row(self):
+        """Read the row straight from the database file, bypassing the store's own connection."""
+        connection = sqlite3.connect(self.store.database_path)
+        try:
+            row = connection.execute(
+                "SELECT listing_id, status, status_evidence, candidate_confirmed, updated_at "
+                "FROM application_tracker WHERE listing_id=?",
+                ("j1",),
+            ).fetchone()
+        finally:
+            connection.close()
+        return row
+
+    def assert_apply_is_refused_without_writing(self, app, apply):
+        """Run the dialog's save command; require a refusal, no write, and an unchanged row."""
+        before = self.stored_row()
+        self.assertIsNotNone(before)
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("a refused change must not write")
+        ):
+            apply()
+        self.assertIn("Invalid status change", MESSAGES.titles())
+        self.assertNotIn("updated", app.status.get())
+        self.assertEqual(self.stored_row(), before, "a refused change must leave the row byte-identical")
+
+    def test_empty_evidence_is_refused_without_writing(self):
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+        status_var.set("confirmed")
+        evidence_var.set("")
+        assertion.set(True)
+        self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_whitespace_only_evidence_is_refused_without_writing(self):
+        for text in (" ", "   ", "\t", "\n", " \t\n "):
+            with self.subTest(text=text):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set("confirmed")
+                evidence_var.set(text)
+                assertion.set(True)
+                self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_the_applications_own_instruction_text_is_refused_without_writing(self):
+        """The reported smoke-test failure mode, through the dialog the tester actually used."""
+        for text in (
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Confirmation requires evidence; a click or attempted submission is not proof.",
+            "Evidence / note (required to confirm)",
+            "Confirm with a meaningful evidence note, then move it to response_received or interview.",
+            "To revise the evidence, move the status forward with a meaningful note, "
+            "or keep the existing record as it is.",
+        ):
+            with self.subTest(text=text[:40]):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set("confirmed")
+                evidence_var.set(text)
+                assertion.set(True)
+                self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_placeholder_and_template_evidence_are_refused_without_writing(self):
+        for text in ("n/a", "N/A", "todo", "TBD", "test", "testing", "placeholder", "yes",
+                     "evidence", "<your evidence here>"):
+            with self.subTest(text=text):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set("confirmed")
+                evidence_var.set(text)
+                assertion.set(True)
+                self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_confirmed_without_the_explicit_assertion_is_refused_without_writing(self):
+        for evidence in ("Employer portal shows Application Received (2026-10-14)", "", "n/a"):
+            with self.subTest(evidence=evidence[:30]):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set("confirmed")
+                evidence_var.set(evidence)
+                self.assertFalse(assertion.get(), "the assertion must start unticked")
+                self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_the_assertion_is_refused_with_every_other_status(self):
+        """The checkbox claims a confirmation, so it may only accompany the confirmation status."""
+        for status in ("shortlisted", "prepared", "awaiting_user", "submission_attempted",
+                       "submitted_unverified", "response_received", "withdrawn", "discovered"):
+            with self.subTest(status=status):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set(status)
+                evidence_var.set("Note supplied with a wrongly ticked assertion")
+                assertion.set(True)
+                self.assert_apply_is_refused_without_writing(app, apply)
+
+    def test_a_valid_note_with_the_assertion_completes_the_permitted_workflow(self):
+        """Walk the whole permitted path; the flag may only appear at the confirmation step."""
+        self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
+        steps = (
+            ("shortlisted", False),
+            ("prepared", False),
+            ("awaiting_user", False),
+            ("submission_attempted", False),
+            ("submitted_unverified", False),
+        )
+        MESSAGES.reset()
+        for status, expected_flag in steps:
+            app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
+            status_var.set(status)
+            evidence_var.set(f"Moved to {status} while testing the workflow")
+            apply()
+            stored = self.store.get_tracker("j2")
+            self.assertIs(stored.status, ApplicationStatus(status))
+            self.assertIs(stored.candidate_confirmed, expected_flag)
+            self.assertNotIn("Invalid status change", MESSAGES.titles())
+
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
+        status_var.set("confirmed")
+        evidence_var.set("Employer portal shows Application Received (2026-10-14)")
+        assertion.set(True)
+        apply()
+        confirmed = self.store.get_tracker("j2")
+        self.assertIs(confirmed.status, ApplicationStatus.CONFIRMED)
+        self.assertEqual(confirmed.status_evidence, "Employer portal shows Application Received (2026-10-14)")
+        self.assertTrue(confirmed.candidate_confirmed)
+
+        # The assertion is not needed again: later statuses keep the existing confirmation.
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
+        status_var.set("response_received")
+        evidence_var.set("Recruiter replied with a screening request")
+        apply()
+        advanced = self.store.get_tracker("j2")
+        self.assertIs(advanced.status, ApplicationStatus.RESPONSE_RECEIVED)
+        self.assertTrue(advanced.candidate_confirmed)
+
+    def test_a_failed_validation_never_changes_the_stored_tracker(self):
+        """Every refusal category, checked against the row on disk."""
+        refusals = (
+            ("confirmed", "", False),
+            ("confirmed", "   ", False),
+            ("confirmed", "Employer portal shows Application Received", False),
+            ("confirmed", "A confirmed application requires evidence. An attempt or timeout is not proof.", True),
+            ("confirmed", "todo", True),
+            ("interview", "pretend invite", False),
+            ("shortlisted", "wrong direction", True),
+            ("", "no status selected", False),
+        )
+        for status, evidence, assertion_value in refusals:
+            with self.subTest(status=status, evidence=evidence[:30], assertion=assertion_value):
+                MESSAGES.reset()
+                before = self.stored_row()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog()
+                status_var.set(status)
+                evidence_var.set(evidence)
+                assertion.set(assertion_value)
+                self.assert_apply_is_refused_without_writing(app, apply)
+                self.assertEqual(self.stored_row(), before)
+
+    def test_a_withdrawn_record_cannot_transition_anywhere(self):
+        """Withdrawal is terminal: nothing may move out of it, in the UI or in storage."""
+        self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id="j2")
+        with CareerStore(self.store.database_path) as seeding:
+            seeding.save_tracker(
+                seeding.get_tracker("j2").transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
+            )
+        withdrawn = self.store.get_tracker("j2")
+        self.assertIs(withdrawn.status, ApplicationStatus.WITHDRAWN)
+
+        for target in (status.value for status in ApplicationStatus if status is not ApplicationStatus.WITHDRAWN):
+            with self.subTest(target=target):
+                MESSAGES.reset()
+                app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
+                status_var.set(target)
+                evidence_var.set("attempt out of a terminal state")
+                apply()
+                self.assertIn("Invalid status change", MESSAGES.titles())
+                self.assertEqual(self.store.get_tracker("j2"), withdrawn)
+                self.assertEqual(self.store.get_tracker("j2").status_evidence, "Candidate withdrew")
+
+    def test_reapplying_withdrawn_is_reported_as_a_no_op(self):
+        self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
+        reach_status(self.store, ApplicationStatus.SHORTLISTED, listing_id="j2")
+        with CareerStore(self.store.database_path) as seeding:
+            seeding.save_tracker(
+                seeding.get_tracker("j2").transition(ApplicationStatus.WITHDRAWN, evidence="Candidate withdrew")
+            )
+        before = self.store.get_tracker("j2")
+        app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j2")
+        status_var.set("withdrawn")
+        evidence_var.set("replacement note that must not be stored")
+        apply()
+        self.assertIn("No change", MESSAGES.titles())
+        self.assertNotIn("Invalid status change", MESSAGES.titles())
+        self.assertIn("Nothing was saved", app.status.get())
+        self.assertEqual(self.store.get_tracker("j2"), before)
+
+
+class ShortlistEligibilityMessageTests(HandlerTestCase):
+    """Locks the shortlist wording verified on macOS: unknown eligibility cannot be shortlisted."""
+
+    def test_shortlist_reports_unknown_eligibility_and_changes_nothing(self):
+        self.store.save_job(sample_job(availability_status=Availability.UNKNOWN))
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app.selected_job_id = "j1"
+        app._shortlist()
+        self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1"), "a blocked shortlist must not create a record")
+
+    def test_shortlist_reports_failed_eligibility_and_changes_nothing(self):
+        self.store.save_job(sample_job(eligible_countries=("United States",)))
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app.selected_job_id = "j1"
+        app._shortlist()
+        self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+
 class ProfileAndDeletionTests(HandlerTestCase):
     def test_profile_saves_and_validation_failures_are_reported(self):
         app = self.make_app()
