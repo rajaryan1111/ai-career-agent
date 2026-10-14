@@ -55,6 +55,16 @@ class TrackerStatusError(ValueError):
         )
 
 
+class StaleTrackerRecord(ValueError):
+    """A conditional tracker write matched no row: the record changed after it was read.
+
+    Raised by :meth:`CareerStore.save_tracker` when ``expected`` no longer describes the stored row,
+    which is the only reliable way to catch a change that the transition rules alone would allow
+    (a forward move, new evidence, or a confirmation recorded while the caller was deciding). Nothing
+    is written, so the newer data wins by default rather than being overwritten by a stale decision.
+    """
+
+
 class StoredRecordError(ValueError):
     """A stored record holds data this build cannot interpret.
 
@@ -73,6 +83,49 @@ class StoredRecordError(ValueError):
             f"The saved {noun} could not be read ({detail}). It was not changed. Use the export tool or "
             "restore a verified backup if the record is wrong."
         )
+
+
+class StoreUnavailable(sqlite3.Error):
+    """The store cannot be used at all, so no read or write may be attempted through it.
+
+    Raised when a connection is replaced by :class:`UnavailableStore` after the database could not be
+    reopened (a restore that finished but left a file this process cannot open). It subclasses
+    ``sqlite3.Error`` deliberately: every caller that already reports a database failure reports this
+    one too, with the reason attached, instead of letting a raw ``ProgrammingError`` escape a Tk
+    callback and appear as a traceback.
+    """
+
+
+class UnavailableStore:
+    """Stands in for :class:`CareerStore` when the database cannot be opened.
+
+    Kept deliberately tiny: it answers ``close()`` so shutdown stays safe, and refuses every other
+    use with :class:`StoreUnavailable` and the reason the reopen failed. Without it the closed
+    connection stayed in place, so the next action raised ``ProgrammingError: Cannot operate on a
+    closed database`` - a message that describes the symptom, not the cause, and not the fix.
+    """
+
+    def __init__(self, database_path: str | Path, reason: str) -> None:
+        # Both are plain attributes: the window shows the path and the reason, and neither read may
+        # fail just because nothing is open.
+        self.database_path = str(database_path)
+        self.reason = reason
+
+    def close(self) -> None:
+        """Nothing is open; closing twice must stay safe (the window close handler calls this)."""
+        return None
+
+    def __getattr__(self, name: str):
+        # Only reached for attributes this class does not define, so ``close``/``reason`` above are
+        # unaffected. Every store method becomes an honest refusal rather than an AttributeError.
+        def refuse(*_args, **_kwargs):
+            raise StoreUnavailable(
+                f"The local database could not be opened ({self.reason}). Restart the application "
+                f"once the problem is resolved; this window cannot read or write "
+                f"{Path(self.database_path).name}."
+            )
+
+        return refuse
 
 
 class PrivateWriteError(OSError):
@@ -381,7 +434,7 @@ class CareerStore:
         ).fetchall()
         return tuple(self._decode_job(row["payload"]) for row in rows)
 
-    def save_tracker(self, tracker: ApplicationTracker) -> None:
+    def save_tracker(self, tracker: ApplicationTracker, *, expected: dict | None = None) -> None:
         """Persist tracker state, enforcing the domain invariants at the storage boundary.
 
         Creating a record always starts at :data:`~career_agent.core.INITIAL_APPLICATION_STATUS`
@@ -393,10 +446,44 @@ class CareerStore:
         ``ApplicationTracker.transition`` before saving, so valid sequential use is
         unaffected; an arbitrary or contradictory record is refused instead of being written.
         No schema change is required and existing rows are never rewritten.
+
+        ``expected`` is for callers that read a row, decide something about it, and then write
+        minutes later (``scripts/correct_tracker_record.py``): pass the fields that were read and
+        the write becomes a *conditional* update. Another writer moving the record on - even to a
+        status this transition also permits, with evidence or a confirmation this caller never saw -
+        makes the update match no row and raise :class:`StaleTrackerRecord` instead of silently
+        overwriting the newer data. Re-checking only the transition rules cannot catch that: a
+        forward move usually leaves the intended transition permitted.
         """
         stored = self.get_tracker(tracker.listing_id)
         self._check_tracker_invariants(tracker, stored)
         timestamp = _now()
+        if expected is not None:
+            # One statement, so there is no window between checking and writing, and it is committed
+            # before ``rowcount`` is interpreted: a conditional write left open in a transaction would
+            # be invisible to the very read (often on another connection) that verifies it.
+            # ``status_evidence`` is compared with IFNULL because a stored NULL and an absent note mean
+            # the same thing.
+            with self._connection:
+                cursor = self._connection.execute(
+                    """UPDATE application_tracker
+                          SET status = ?, status_evidence = ?, candidate_confirmed = ?, updated_at = ?
+                        WHERE listing_id = ? AND status = ? AND IFNULL(status_evidence, '') = ?
+                          AND candidate_confirmed = ?""",
+                    (tracker.status.value, tracker.status_evidence, int(tracker.candidate_confirmed),
+                     timestamp, tracker.listing_id, str(expected.get("status")),
+                     str(expected.get("status_evidence") or ""),
+                     int(bool(expected.get("candidate_confirmed")))),
+                )
+                matched = cursor.rowcount
+            if matched != 1:
+                raise StaleTrackerRecord(
+                    f"The tracker record for {tracker.listing_id} changed after it was read "
+                    f"(expected {expected.get('status')!r}, "
+                    f"confirmed={bool(expected.get('candidate_confirmed'))}), so this write was "
+                    "refused and nothing was changed. Read the record again and redo the change."
+                )
+            return
         try:
             with self._connection:
                 self._connection.execute(

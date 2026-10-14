@@ -10,8 +10,8 @@ from unittest import mock
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.core import duplicate_key
 from career_agent.store import (
-    CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError, create_private_file,
-    require_owner_only, write_private_text_file,
+    CareerStore, PrivateWriteError, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
+    create_private_file, require_owner_only, write_private_text_file,
 )
 
 #: A fixed, clearly local timestamp so a test never depends on the clock.
@@ -461,6 +461,129 @@ class TrackerInvariantTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid application transition"):
             self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
         self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.CONFIRMED)
+
+
+class ConditionalTrackerWriteTests(unittest.TestCase):
+    """``save_tracker(..., expected=...)``: a compare-and-set read at the storage boundary.
+
+    Used by callers that read a row, decide something about it, and write later
+    (``scripts/correct_tracker_record.py``). The transition rules alone cannot catch a record that
+    moved on, because a forward move usually leaves the intended transition permitted.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "conditional.sqlite3"
+        self.store = CareerStore(str(self.path))
+        self.addCleanup(self.store.close)
+        self.store.save_job(sample_job())
+
+    def test_an_expectation_that_matches_writes_and_is_visible_to_another_connection_at_once(self):
+        """The conditional write must be committed before it is treated as done.
+
+        A conditional UPDATE left open inside the store's transaction is invisible to every other
+        connection - including the read-only check that verifies a correction afterwards - so the
+        write has to be durable the moment the call returns.
+        """
+        self.store.save_tracker(ApplicationTracker("j1"))
+        expected = self.store.get_tracker_raw("j1")
+        corrected = ApplicationTracker("j1").transition(
+            ApplicationStatus.SHORTLISTED, evidence="Reviewed by hand")
+
+        with mock.patch("career_agent.store._now", return_value=_TIMESTAMP):
+            self.store.save_tracker(corrected, expected=expected)
+
+        reader = sqlite3.connect(str(self.path))
+        self.addCleanup(reader.close)
+        row = reader.execute(
+            "SELECT status, status_evidence, updated_at FROM application_tracker WHERE listing_id='j1'"
+        ).fetchone()
+        self.assertEqual(row[0], ApplicationStatus.SHORTLISTED.value)
+        self.assertEqual(row[1], "Reviewed by hand")
+        self.assertEqual(row[2], _TIMESTAMP, "the write timestamp must be the one this write used")
+
+    def test_a_record_that_moved_on_is_refused_and_the_newer_row_is_kept(self):
+        self.store.save_tracker(ApplicationTracker("j1"))
+        expected = self.store.get_tracker_raw("j1")
+        # Another writer advances the record after the caller read it.
+        moved_on = ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED)
+        self.store.save_tracker(moved_on)
+
+        with self.assertRaises(StaleTrackerRecord) as caught:
+            self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.WITHDRAWN),
+                                    expected=expected)
+
+        self.assertIn("changed after it was read", str(caught.exception))
+        self.assertIn("nothing was changed", str(caught.exception))
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.SHORTLISTED,
+                         "the newer status must win")
+        self.assertIsInstance(caught.exception, ValueError, "callers treat validation failures as ValueError")
+
+    def test_newer_evidence_or_a_newer_confirmation_is_not_overwritten_even_at_the_same_status(self):
+        """The comparison covers every field the caller decided from, not just the status."""
+        reach_status(self.store, ApplicationStatus.CONFIRMED, evidence="First confirmation")
+        expected = self.store.get_tracker_raw("j1")
+
+        # The same status, but the evidence and the flag now describe a different, real confirmation.
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE application_tracker SET status_evidence=?, candidate_confirmed=1 WHERE listing_id='j1'",
+                ("Second, more specific confirmation",),
+            )
+
+        with self.assertRaises(StaleTrackerRecord):
+            self.store.save_tracker(ApplicationTracker("j1").transition(
+                ApplicationStatus.WITHDRAWN, candidate_confirmed=True), expected=expected)
+
+        row = self.store.get_tracker_raw("j1")
+        self.assertEqual(row["status_evidence"], "Second, more specific confirmation")
+        self.assertEqual(row["status"], ApplicationStatus.CONFIRMED.value)
+
+    def test_a_missing_note_and_a_stored_null_are_the_same_expectation(self):
+        """An absent note is stored as NULL, so a caller that read it as ``None`` must still match."""
+        self.store.save_tracker(ApplicationTracker("j1"))
+        expected = self.store.get_tracker_raw("j1")
+        self.assertIsNone(expected["status_evidence"])
+
+        self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED),
+                                expected=expected)
+
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.SHORTLISTED)
+
+    def test_a_deleted_row_is_refused_rather_than_recreated_by_a_conditional_write(self):
+        """Two independent rules refuse this, and both are checked.
+
+        The state machine refuses to create a record in any state but the first one, and the
+        conditional update matches no row. Whichever fires, the row must not come back from an
+        expectation that was read before it was deleted.
+        """
+        self.store.save_tracker(ApplicationTracker("j1"))
+        expected = self.store.get_tracker_raw("j1")
+        with self.store._connection:
+            self.store._connection.execute("DELETE FROM application_tracker WHERE listing_id='j1'")
+
+        with self.assertRaises(ValueError):
+            self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED),
+                                    expected=expected)
+
+        self.assertIsNone(self.store.get_tracker_raw("j1"), "a conditional write never inserts")
+
+    def test_a_conditional_write_still_enforces_the_transition_rules(self):
+        """The new option must not become a way around the invariants enforced for every write."""
+        self.store.save_tracker(ApplicationTracker("j1"))
+        expected = self.store.get_tracker_raw("j1")
+
+        with self.assertRaises(ValueError) as caught:
+            # discovered -> confirmed directly is not a permitted transition.
+            self.store.save_tracker(
+                ApplicationTracker("j1").transition(ApplicationStatus.CONFIRMED,
+                                                    evidence="Invented", candidate_confirmed=True),
+                expected=expected)
+
+        self.assertNotIsInstance(caught.exception, StaleTrackerRecord,
+                                 "this is a rule refusal, not a staleness refusal")
+        self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.DISCOVERED)
 
 
 class DurabilityTests(unittest.TestCase):
