@@ -92,7 +92,11 @@ This checklist is intentionally separate from unit tests. It requires a real des
     suggest typing the values in. It must not claim a successful parse and must not silently save anything.
 30. [ ] Import a DOCX whose skills are in a table: the table text must be read as rows. Import a damaged PDF
     and an encrypted PDF: each must be refused with its own message, no traceback, and no change to the
-    profile.
+    profile. If a layout puts two columns on one line (for example a category on the left and prose on the
+    right, as in "Python, SQL, Django    Built ETL pipelines"), the skills from that line must be offered as
+    read but marked `needs review` and must start **unticked** — the app must not pre-select text it cannot
+    tell apart from prose. A category written before a column gap ("Languages | Python, SQL") must be read
+    like the colon form, with the category itself not offered as a skill.
 31. [ ] After any import (successful or refused), confirm the chosen file is unchanged, no copy of it was
     left beside the database or in the repository (`git status` stays clean), and the app never asks for a
     network connection or reports one.
@@ -130,6 +134,12 @@ This checklist is intentionally separate from unit tests. It requires a real des
     than crashing or silently showing a different status. **Update selected status** must refuse with an
     explanation, and the JSON export must still work and contain the stored value unchanged. Confirm the
     row is unchanged afterwards in `sqlite3`.
+40. [ ] In a *throwaway copy*, damage a stored payload instead of a status:
+    `sqlite3 "<copy>" "UPDATE job_listings SET payload='{\"listing_id\": 5}' WHERE listing_id='<id>';"`, then
+    start the app against that copy. The jobs and tracker tabs must report "Saved record could not be read"
+    with a plain explanation and no traceback, the profile tab must still load, and re-reading the row in
+    `sqlite3` must show it byte-identical — a refused read must never repair, rewrite, or delete what is
+    stored. Confirm the same holds after a restart, and that the app still starts and exits normally.
 
 ## Record results
 

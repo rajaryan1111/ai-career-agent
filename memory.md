@@ -1116,6 +1116,83 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   evidence for `confirmed`. The whole-value list now covers those phrases; a sentence that merely contains
   such a word is still accepted, and both the domain and storage tests list the new cases.
 
+- Defect 6 (a damaged stored record crashed the read paths). `store.get_profile()` and `store._decode_job()`
+  passed a stored JSON payload straight into a dataclass, so a hand-edited or damaged row raised whatever
+  the standard library raised: an unknown field gave `TypeError: CandidateProfile.__init__() got an
+  unexpected keyword argument`, a list/string/`null` payload gave `AttributeError: '…' object has no
+  attribute 'get'`, truncated or empty text gave `json.JSONDecodeError`, and a listing without
+  `availability_status` gave `KeyError`. None of those is caught by a Tk callback or a list refresh, so one
+  bad row could take a whole view down with a traceback. Worse, `{"skills": "Python"}` did not raise at all:
+  `frozenset("Python")` silently turned one value into six single-character skills that later comparisons
+  would use. Reads now go through `_stored_object`/`_stored_text_values` and raise one named
+  `store.StoredRecordError` (a `ValueError`, exported like `TrackerStatusError`) with a plain message; a
+  string where a list belongs is refused rather than split into letters; and nothing is repaired, rewritten,
+  or deleted. `desktop.py` handles it on every read path (`_load_profile`, `_refresh_jobs`,
+  `_refresh_tracker`, `_select_job`, `_evaluate`, `_shortlist`, `_export`, the résumé read-back) with one
+  `_report_unreadable_record` helper, so the person sees what is wrong and that nothing changed. Regression
+  tests: `UnreadableStoredRecordTests` in `tests/test_store.py` (10) and in `tests/test_desktop_handlers.py` (8).
+
+- Defect 7 (a post-write verification failure claimed nothing was saved). `_apply_accepted_profile_values`
+  wrapped `save_profile` and the verifying `get_profile` read-back in one `try`, so any failure of the
+  read-back was reported with "Nothing was saved; your previously saved profile is unchanged" even though
+  the row had already been written. The write and the verification are now separate steps: a failure before
+  the write keeps that wording, and a failure to read the profile back afterwards is reported as written but
+  unconfirmed, pointing at the Profile tab. Regression test:
+  `test_a_resume_save_whose_read_back_fails_is_not_reported_as_saved`.
+
+- Defect 8 (start-up diagnostics mangled the message or leaked a name the user chose). `redact_paths`
+  replaced "the database folder" literally, so `--database db.sqlite3` (whose parent is the current folder,
+  text `.`) rewrote every dot in the explanation — "Schema version 2.0" became
+  "Schema version 2<application data folder>0" — and a short relative folder name such as `data` was
+  replaced inside ordinary prose ("the data folder could not be used"). A file named on the command line
+  (`--backup-to`, `--restore-from`) was not covered at all, so an unexpected failure while restoring could
+  write the person's own backup location into the local note that exists to be safe to share. Substitution
+  now applies only to absolute paths or paths that carry a separator, the folder is hidden only when it is
+  itself absolute, and `describe_startup_failure`/`record_startup_failure` accept `extra_paths`, which
+  `__main__.main()` fills with the paths named on the command line. Regression tests:
+  `test_a_relative_database_file_does_not_replace_every_dot_in_the_message`,
+  `test_a_relative_folder_name_is_not_replaced_inside_ordinary_words`,
+  `test_a_path_the_caller_names_is_redacted_when_it_is_supplied`,
+  `test_an_unsupplied_foreign_path_is_left_alone_rather_than_guessed_at`, and
+  `test_a_file_the_person_named_on_the_command_line_stays_out_of_the_note`.
+
+- Defect 9 (a relative data-folder override moved the database with the working directory). `XDG_DATA_HOME`
+  and `LOCALAPPDATA` were used as given, so a relative value produced a database path resolved against
+  whatever directory the app was started from: the same person's profile would appear to move (or vanish)
+  between launches. The base-directory specification requires these variables to be absolute and says a
+  relative value should be considered invalid and ignored, which is what `_absolute_root` now does, falling
+  back to the documented per-user default. Regression tests: `test_a_relative_environment_override_is_ignored`
+  and `test_a_relative_override_never_reaches_the_database_path` (a non-empty absolute override is still
+  respected, by the existing test).
+
+- Defect 10 (a skills category was saved as a skill, and merged columns were pre-ticked on a word count).
+  "Languages: Python, SQL" already read correctly, but the same statement written with the column gap the
+  extractors report — "Languages | Python, SQL" — kept the category, producing 'Languages, Python, SQL' as
+  a *confident* proposal, one click from being saved. Merged columns were worse
+  than inconsistent: "Python, SQL, Django␣␣␣␣Built ETL pipelines" offered the prose as a skill (three words,
+  under the four-word guard) while "Python, SQL␣␣␣␣Built ETL pipelines at scale" silently dropped it (five
+  words) — the same layout, opposite outcomes, decided by counting words. The category list is now applied
+  to the column-gap form exactly as to the colon form, and a line that merges two columns with no
+  recognisable category label is still offered exactly as read but marked `needs review`, so nothing that
+  was guessed at is pre-ticked. Regression tests:
+  `test_a_category_name_before_a_column_gap_is_not_read_as_a_skill`,
+  `test_a_plain_pipe_separated_list_of_skills_is_still_read`,
+  `test_a_skills_line_that_merges_two_columns_is_offered_for_review_not_pre_ticked`,
+  `test_a_single_column_skills_list_is_confident_and_unchanged`. Known residual: a skills line with no
+  column gap whose values are prose of four words or fewer is still offered as read (no reliable rule
+  distinguishes "Built ETL pipelines" from "Google Cloud Platform"), and the two layouts that produce no
+  proposal at all (a category on its own line, a headline merged with a skills heading) are still refused.
+
+- Defect 11 (a test run wrote into the person's own application-data folder). `cli.main([])` carries no
+  database path when it fails before one is resolved, so `record_startup_failure` fell back to the real
+  per-user folder and wrote `logs/startup-diagnostics.log` there - which is exactly where a real failure
+  writes its note, so running the suite overwrote the note a real failure had left behind. Verified by
+  running the suite and reading the file it produced (`ValueError: boom before any path is resolved`, the
+  message of the one test that does this). That test now redirects `default_data_folder` into its own
+  temporary directory and asserts the note still lands there, and `RealDatabaseSafetyTests` gained a fourth
+  scan that refuses any test call to `record_startup_failure()` with no `data_folder=`/`database_path=`.
+  Re-run evidence: the real note's mtime and size are byte-identical before and after a full suite run.
+
 - Coverage added where the audit found none: `tests/test_cli_backup_restore.py` (14 tests) drives the real
   argument parser and exit codes for `--backup-to`/`--restore-from` — refusals leave files untouched, a
   restore without a terminal or without `--yes` is refused, a confirmed restore keeps the previous
@@ -1124,18 +1201,28 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   the validating stubs and proves the `WM_DELETE_WINDOW` handler closes the store, destroys the window and
   writes none of the form's unsaved values. `RealDatabaseSafetyTests` (3 tests) reads the test files as
   syntax trees and refuses a `CareerStore(...)` with no path, and any call to the default-path functions
-  that would resolve this machine's real folder, so the suite cannot open the candidate's database.
+  that would resolve this machine's real folder, so the suite cannot open the candidate's database. The
+  audit in this stretch added `UnreadableStoredRecordTests` (10 tests, the stored-record refusal), the
+  handler-suite `UnreadableStoredRecordTests` (8 tests, every view), four path-redaction tests, a
+  command-line redaction test, two data-folder tests for relative environment overrides, four skills
+  tests (category labels before a column gap, merged columns, and the flag surviving a later labelled
+  line), and a fourth isolation scan (no start-up note may be written into the real folder).
 
-- Evidence. Suite 483 → **526 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and **526 OK,
-  no skips** with pypdf 6.20.1; targeted runs green (backup 55, CLI 14, resume, store/core/validation,
-  desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases, 19/19
-  checks: a round trip restoring the same schema and rows with the replaced data kept in a verified
-  snapshot, a 2000-row database, and every malformed or mis-shaped input (missing, empty, not a database,
-  truncated, a folder, a symlink, a newer schema, a missing table, read-only folder, unreadable file,
-  bytes damaged in a place SQLite still calls intact) refused or installed with the previous rows
-  preserved — never with data lost. URL probe 42/42; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`;
-  `compileall` and `tabnanny` exit 0. No test or script opens the default database, and no candidate data,
-  database file, secret or temporary artifact entered the commit.
+- Evidence. Suite 483 → 526 → **557 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and
+  **557 OK, no skips** with pypdf 6.20.1; targeted runs green (backup 55, CLI 14, resume, store/core/validation,
+  desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases with
+  `/tmp/probe_backup.py`, 17/17 checks: a verified backup holding profile, jobs and tracker rows; a round
+  trip restoring the same rows with the replaced database kept as a verified owner-only copy; the chosen
+  backup file never modified; a 2000-row (2.2 MB) database; and a missing, empty, non-database, truncated,
+  newer-schema, missing-table or folder input each refused with the live database byte-identical, a
+  read-only folder refused with the database untouched, bytes damaged in the middle of the file refused
+  with the database untouched, and the real per-user database never created. `/tmp/probe_restore_edges.py`
+  adds six odd destination shapes (symlink in place of the live database, a folder, an empty file, a
+  restore onto its own source, a read-only folder, an unreadable backup): each is refused or completed
+  safely, with the symlink target and the folder left untouched. URL probe 42/42; CSV audit exit 0 with the
+  unchanged SHA-256 `0356b093…f414`; `compileall` and `tabnanny` exit 0; `git diff --check` exit 0. No test
+  or script opens the default database or writes into the real application-data folder (verified by mtime),
+  and no candidate data, database file, secret or temporary artifact entered a commit.
 
 - Gate status unchanged. `SOURCE_QUALITY_GATE_PASSED` stays `False`: `enabled_discovery_sources()` is
   still empty, the acceptance evidence (≥20 unique relevant currently-available vacancies, a measured
@@ -1144,6 +1231,10 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   test asserts the constant is `False`, so nothing can flip it to make a build pass.
 
 - Limitations. No display and no tkinter in this environment, so widget rendering, window behaviour and
-  macOS-specific behaviour still rest on the manual smoke-test checklist; the audit changed behaviour only
-  where a probe or a test could demonstrate it, and the two remaining skills-layout failures are documented
-  instead of papered over.
+  macOS-specific behaviour still rest on the manual smoke-test checklist: the two behaviours this stretch
+  changed in a window (a merged-column skills proposal arrives unticked, and an unreadable stored record
+  shows a "Saved record could not be read" dialog instead of a traceback) are proven here only through the
+  widget stubs. The audit changed behaviour only where a probe or a test could demonstrate it; the two
+  remaining skills-layout failures, prose of four words or fewer inside a skills section, and the
+  folder-creating side effect of `default_database_path` (deliberate, and named by an existing test) are
+  documented instead of papered over.

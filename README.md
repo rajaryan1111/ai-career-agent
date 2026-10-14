@@ -53,8 +53,9 @@ The app has no installer yet — see [Packaging status](#packaging-status) for t
 
 If the window cannot open, the message says what happened and what to do next instead of showing a raw
 traceback. A short, sanitised note is kept as `logs/startup-diagnostics.log` in the application-data
-folder; it holds no candidate data, credentials, or filesystem locations, and a copy can be sent to
-whoever is helping you without revealing personal information. The database commands above work without
+folder; it holds no candidate data, credentials, or filesystem locations (the database path, its folder,
+your home folder, and any file named on the command line are replaced with placeholders), and a copy can
+be sent to whoever is helping you without revealing personal information. The database commands above work without
 the window, which is what you need when the database itself is the problem.
 
 Candidate data is stored in the operating system's per-user application-data directory, not inside the repository.
@@ -106,6 +107,11 @@ What is parsed, and what is deliberately not:
   and nothing is inferred about eligibility, work authorization, location or study status. Study status
   and work authorization are always `needs review`; a field the document is silent about is reported as
   missing, never as a confirmed "no".
+- **Categories and merged columns:** a category name before a skills list is a label, not a skill, whether
+  it is written `Languages: Python, SQL` or `Languages | Python, SQL`, and its values are read without it.
+  When an extractor reports two columns (or two table cells) on one line and no such label explains them,
+  the text on that line is still offered exactly as read but marked `needs review` instead of ticked,
+  because which column holds the skills cannot be known from the text alone.
 - Values with no matching profile field (name, contact details, institutions, employers, employment
   dates) are listed as "present in the document but not stored" — the database schema is not extended to
   hold them.
@@ -267,8 +273,10 @@ There is no installer and no packaged build, and nothing in this repository clai
 - `career_agent.__version__` is the single source of truth the checkout reports.
   `python -m career_agent --version` prints it with the database schema version and works with no
   packaging metadata, no display, and no third-party tools.
-- `career_agent.diagnostics` explains a start-up failure in plain language, redacts local paths, and keeps
-  one bounded owner-only note. The failure classes it distinguishes are covered by tests.
+- `career_agent.diagnostics` explains a start-up failure in plain language, redacts the local paths it
+  knows about (the database file and folder, the home folder, and any path named on the command line, while
+  never substituting a value that could match ordinary prose), and keeps one bounded owner-only note. The
+  failure classes it distinguishes and the redaction rules are covered by tests.
 
 Missing pieces, in the order they are needed, for a packaged desktop alpha:
 
