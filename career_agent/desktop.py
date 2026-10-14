@@ -23,8 +23,9 @@ from .core import (
 )
 from .desktop_logic import (
     JobSaveMode, build_candidate_profile, default_database_path, format_stored_timestamp,
-    form_values, job_form_values, plan_job_save, profile_form_values,
+    form_values, job_form_values, plan_job_save, profile_fields_not_matching, profile_form_values,
 )
+from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
 from .store import CareerStore, PrivateWriteError, write_private_text_file
 from .urls import redact_url_credentials
@@ -110,8 +111,26 @@ class CareerAgentApp:
         actions = ttk.Frame(self.profile_tab)
         actions.grid(row=6, column=0, columnspan=4, sticky=W, pady=12)
         ttk.Button(actions, text="Save profile locally", command=self._save_profile).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="Import resume (PDF/DOCX)", command=self._import_resume).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Delete saved profile", command=self._delete_profile).pack(side="left")
-        ttk.Label(self.profile_tab, text="Privacy: no cloud sync, external AI API, resume upload, or data transfer is performed. Data stays in the local application-data folder.", wraplength=850).grid(row=7, column=0, columnspan=4, sticky=W, pady=8)
+        ttk.Label(
+            self.profile_tab,
+            text=(
+                "Resume import reads the chosen file on this device and proposes values for you to "
+                "review: nothing is uploaded, nothing is saved until you confirm, and the extracted "
+                "text is not kept. Privacy: no cloud sync, external AI API, or data transfer is "
+                "performed. Data stays in the local application-data folder."
+            ),
+            wraplength=850,
+        ).grid(row=7, column=0, columnspan=4, sticky=W, pady=8)
+        ttk.Label(
+            self.profile_tab,
+            text=(
+                "A resume is untrusted input: the import reads text only, never runs macros, and refuses "
+                "an encrypted or over-sized file. It is not a malware scanner."
+            ),
+            wraplength=850,
+        ).grid(row=8, column=0, columnspan=4, sticky=W)
 
     def _build_jobs(self):
         for col in (1, 3, 5):
@@ -333,6 +352,188 @@ class CareerAgentApp:
         for variable in self.profile_vars.values():
             variable.set("")
         self.status.set("Saved profile deleted.")
+
+    def _import_resume(self):
+        """Read a chosen resume locally and open the review screen. Nothing is saved here.
+
+        The file is parsed in this process by :mod:`career_agent.resume`; no value reaches the profile
+        until the person reviews the proposals and confirms, and the extracted text is discarded as
+        soon as the proposals are built.
+        """
+        chosen = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose a resume to read locally (PDF or DOCX)",
+            filetypes=[("Resume (PDF or DOCX)", "*.pdf *.docx"), ("PDF", "*.pdf"), ("Word document", "*.docx")],
+        )
+        if not chosen:
+            self.status.set("Resume import cancelled; the profile was not changed.")
+            return
+        try:
+            result = resume.parse_resume(chosen)
+        except resume.ResumeImportError as exc:
+            # The message names the file and the problem, never document text or a folder on disk.
+            messagebox.showerror(
+                "Resume not imported",
+                f"{exc}\n\nYour saved profile was not changed.",
+                parent=self.root,
+            )
+            self.status.set("Resume not imported; the profile was not changed.")
+            return
+        self._review_resume(result)
+
+    def _review_resume(self, result):
+        """Show what was found and let the person choose; writes nothing until they confirm."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Review resume import (nothing saved yet)")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        ttk.Label(
+            dialog,
+            text=f"{result.file_name} · {result.source_format.value} · {result.text_characters:,} characters read",
+            font=("TkDefaultFont", 11, "bold"),
+        ).pack(anchor=W, padx=12, pady=(12, 4))
+        ttk.Label(
+            dialog,
+            text=(
+                "Nothing has been saved. Select the values you want, then press Save selected values. "
+                "Unselected values, and anything this document did not mention, keep your current "
+                "profile. The resume text itself is not stored."
+            ),
+            wraplength=760, justify=LEFT,
+        ).pack(anchor=W, padx=12, pady=(0, 8))
+
+        selections = {}
+        for proposal in result.proposals:
+            row = ttk.Frame(dialog)
+            row.pack(fill=X, anchor=W, padx=12, pady=(4, 0))
+            variable = tk.BooleanVar(value=proposal.confidence is resume.ProposalConfidence.CONFIDENT)
+            selections[proposal.key] = variable
+            ttk.Checkbutton(
+                row, text=f"{proposal.label}: {proposal.value}", variable=variable, wraplength=720,
+                justify=LEFT,
+            ).pack(anchor=W)
+            ttk.Label(
+                row, text=f"{proposal.confidence.value} · from: {proposal.evidence}", wraplength=720,
+                justify=LEFT,
+            ).pack(anchor=W)
+        if not result.proposals:
+            ttk.Label(dialog, text="No supported profile value was found in this document.").pack(anchor=W, padx=12)
+
+        missing = resume.missing_field_labels(result.proposals)
+        if missing:
+            ttk.Label(
+                dialog,
+                text="Not found in this document (your saved values are kept): " + ", ".join(missing),
+                wraplength=760, justify=LEFT,
+            ).pack(anchor=W, padx=12, pady=(10, 0))
+        if result.unmapped:
+            ttk.Label(
+                dialog,
+                text=(
+                    "Present in the document but not stored (the profile has no field for it): "
+                    + "; ".join(f"{item.label}: {item.value}" for item in result.unmapped)
+                ),
+                wraplength=760, justify=LEFT,
+            ).pack(anchor=W, padx=12, pady=(6, 0))
+        if result.notes:
+            ttk.Label(
+                dialog, text="Notes: " + " ".join(result.notes), wraplength=760, justify=LEFT,
+            ).pack(anchor=W, padx=12, pady=(6, 0))
+
+        def cancel():
+            dialog.destroy()
+            self.status.set("Resume import cancelled; the profile was not changed.")
+
+        def apply_selected():
+            accepted = resume.accepted_values(
+                result.proposals, {key: variable.get() for key, variable in selections.items()}
+            )
+            if not accepted:
+                messagebox.showinfo(
+                    "Nothing selected",
+                    "No value is selected, so there is nothing to save. Select at least one value, or "
+                    "close this window.",
+                    parent=dialog,
+                )
+                return
+            chosen_labels = [
+                label for key, label in resume.PROFILE_FIELD_LABELS if key in accepted
+            ]
+            detail = "\n".join(f"• {label}: {accepted[key]}" for key, label in resume.PROFILE_FIELD_LABELS if key in accepted)
+            if not messagebox.askyesno(
+                "Save these values?",
+                f"Selected value(s):\n{detail}\n\nThis saves the profile with these values. Other "
+                "fields keep the values shown in the form, and the database is written in one "
+                "transaction. Save now?",
+                parent=dialog,
+            ):
+                return
+            saved, message = self._apply_accepted_profile_values(accepted)
+            if not saved:
+                messagebox.showerror("Profile not saved", message, parent=dialog)
+                self.status.set("Resume import: nothing was saved.")
+                return
+            dialog.destroy()
+            skipped = [label for key, label in resume.PROFILE_FIELD_LABELS if key in resume.RESUMABLE_FIELD_KEYS
+                       and key not in accepted and resume.proposal_by_key(result, key) is not None]
+            messagebox.showinfo(
+                "Resume import result",
+                message
+                + ("\n\nNot saved (not selected): " + ", ".join(skipped) if skipped else "")
+                + ("\n\nNot found in this document (kept as they were): " + ", ".join(missing) if missing else "")
+                + "\n\nThe resume text was not stored."
+            )
+            self.status.set(
+                f"Resume import saved {len(accepted)} value(s) ({', '.join(chosen_labels)}); "
+                f"{len(skipped)} selected proposal(s) left unsaved."
+            )
+
+        # Escape and Cancel must do exactly the same thing, including the status line they leave behind.
+        dialog.bind("<Escape>", lambda _event: cancel())
+        ttk.Button(dialog, text="Cancel", command=cancel).pack(anchor="e", side="right", padx=12, pady=12)
+        dialog.bind("<Return>", lambda _event: apply_selected())
+        ttk.Button(dialog, text="Save selected values", command=apply_selected).pack(anchor="e", side="right", pady=12)
+
+    def _apply_accepted_profile_values(self, accepted):
+        """Validate and save reviewed resume values, and confirm what the database actually holds.
+
+        The accepted values go through the same ``build_candidate_profile`` pathway as the Save
+        button, so a proposed value cannot reach the database by a second, weaker route. A failure at
+        any step leaves the stored profile as it was and reports failure; success is only reported
+        after the stored profile has been read back and compared field by field.
+        """
+        merged = form_values(self.profile_vars)
+        merged.update(accepted)
+        try:
+            profile = build_candidate_profile(merged)
+        except ValueError as exc:
+            return False, f"{exc} Nothing was saved."
+        try:
+            self.store.save_profile(profile)
+            stored = self.store.get_profile()
+        except sqlite3.Error as exc:
+            return False, (
+                "The profile could not be written to the local database. Nothing was saved; your "
+                f"previously saved profile is unchanged.\n\n{exc}"
+            )
+        if stored is None:
+            return False, (
+                "The profile could not be read back after saving, so this import is reported as "
+                "unconfirmed rather than saved."
+            )
+        mismatched = profile_fields_not_matching(stored, accepted)
+        if mismatched:
+            labels = ", ".join(
+                label for key, label in resume.PROFILE_FIELD_LABELS if key in mismatched
+            )
+            return False, (
+                f"The stored profile does not match the value(s) you selected ({labels}), so this "
+                "import is reported as failed rather than saved."
+            )
+        for key, value in profile_form_values(stored).items():
+            self.profile_vars[key].set(value)
+        saved_labels = ", ".join(label for key, label in resume.PROFILE_FIELD_LABELS if key in accepted)
+        return True, f"Saved {len(accepted)} profile value(s): {saved_labels}. Verified in the local database."
 
     def _job_from_form(self):
         """Map the current form to the listing to save and the explicit save plan.

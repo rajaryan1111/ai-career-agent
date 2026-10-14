@@ -304,6 +304,43 @@ def build_candidate_profile(values: Mapping[str, str]) -> CandidateProfile:
     )
 
 
+def profile_fields_not_matching(profile: CandidateProfile, expected: Mapping[str, str]) -> tuple[str, ...]:
+    """Which expected form values the stored profile does not actually hold.
+
+    A save is only reported as successful after the stored profile is read back and compared with what
+    was asked for. Comparison is semantic rather than textual, because the form renders a multi-value
+    field back in one canonical way (sorted, comma separated) and an integer field as a string: a
+    textual comparison would report a failure for a value that was stored correctly, and a false
+    failure is as unhelpful as a false success.
+    """
+    rendered = profile_form_values(profile)
+    mismatched: list[str] = []
+    for key, wanted in expected.items():
+        stored = rendered.get(key, "")
+        if key in ("skills", "locations", "work_modes", "role_types"):
+            matches = (
+                {item.casefold() for item in split_values(wanted)}
+                == {item.casefold() for item in split_values(stored)}
+            )
+        elif key == "graduation_year":
+            matches = _compared(optional_int, wanted, stored)
+        elif key == "experience":
+            matches = _compared(optional_float, wanted, stored)
+        else:
+            matches = wanted.strip().casefold() == stored.strip().casefold()
+        if not matches:
+            mismatched.append(key)
+    return tuple(mismatched)
+
+
+def _compared(parse, wanted: str, stored: str) -> bool:
+    """Whether two form strings parse to the same value (``False`` when either cannot be parsed)."""
+    try:
+        return parse(wanted, "value") == parse(stored, "value")
+    except ValueError:
+        return False
+
+
 def profile_form_values(profile: CandidateProfile) -> dict[str, str]:
     """Render a saved candidate profile back into the profile form's string fields."""
     return {

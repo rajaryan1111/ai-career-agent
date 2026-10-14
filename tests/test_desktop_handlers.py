@@ -8,6 +8,7 @@ These tests verify handler decisions, validation messages, and database-error
 handling. They do not verify rendering, theming, layout, or macOS behaviour; the
 manual smoke-test checklist in research/ is still required before GUI acceptance.
 """
+import io
 import json
 import os
 import sqlite3
@@ -15,14 +16,17 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
+from xml.sax.saxutils import escape
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
+from career_agent import resume
 from career_agent.store import CareerStore
 from datetime import datetime, timezone
 
@@ -185,17 +189,21 @@ class MessageRecorder:
 
 
 class ButtonRegistry:
-    """Remembers the command of the most recently created button."""
+    """Remembers button commands: the most recent one, and one per button label."""
 
     def __init__(self):
         self.command = None
+        self.by_text = {}
 
     def clear(self):
         self.command = None
+        self.by_text = {}
 
     def button(self, *args, **kwargs):
         if kwargs.get("command"):
             self.command = kwargs["command"]
+            if kwargs.get("text"):
+                self.by_text[kwargs["text"]] = kwargs["command"]
         return Widget(**kwargs)
 
 
@@ -229,6 +237,38 @@ class RecordingCombobox(Widget):
         return list(self.options.get("values") or ())
 
 
+class RecordingCheckbutton(Widget):
+    """Checkbutton stand-in that keeps every instance, so a test can read or set its variable."""
+
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        RecordingCheckbutton.created.append(self)
+
+    @property
+    def variable(self):
+        return self.options.get("variable")
+
+    @property
+    def text(self):
+        return self.options.get("text", "")
+
+
+class RecordingLabel(Widget):
+    """Label stand-in that keeps every instance, so a test can read what a dialog displayed."""
+
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        RecordingLabel.created.append(self)
+
+    @property
+    def text(self):
+        return self.options.get("text", "")
+
+
 class RecordingToplevel(Widget):
     """Toplevel stand-in that keeps every dialog, so a test can read its event bindings."""
 
@@ -258,8 +298,8 @@ _tkinter.X = "x"
 _tkinter.filedialog = FILEDIALOG
 _tkinter.messagebox = MESSAGES
 _tkinter.ttk = types.SimpleNamespace(
-    Frame=Widget, Label=Widget, Notebook=Widget, Combobox=Widget, Entry=Widget, Treeview=Tree,
-    Checkbutton=Widget, Button=BUTTONS.button,
+    Frame=Widget, Label=RecordingLabel, Notebook=Widget, Combobox=Widget, Entry=Widget, Treeview=Tree,
+    Checkbutton=RecordingCheckbutton, Button=BUTTONS.button,
 )
 
 _ORIGINAL_TKINTER = sys.modules.get("tkinter")
@@ -342,6 +382,8 @@ class HandlerTestCase(unittest.TestCase):
         MESSAGES.reset()
         BUTTONS.clear()
         RecordingCombobox.created = []
+        RecordingCheckbutton.created = []
+        RecordingLabel.created = []
         RecordingToplevel.created = []
         FILEDIALOG.path = ""
         FILEDIALOG.opened = None
@@ -2108,6 +2150,384 @@ class DatabaseRestoreHandlerTests(HandlerTestCase):
         self.app._restore_database()
 
         self.assertIn("Replace the local database?", MESSAGES.titles())
+
+
+DOCX_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def docx_paragraph(text):
+    """One paragraph of a synthetic DOCX body."""
+    return f"<w:p><w:r><w:t>{escape(text)}</w:t></w:r></w:p>"
+
+
+def docx_table(rows):
+    """One table of a synthetic DOCX body; each row is a sequence of cell strings."""
+    body = "".join(
+        "<w:tr>" + "".join(f"<w:tc><w:p><w:r><w:t>{escape(cell)}</w:t></w:r></w:p></w:tc>" for cell in row) + "</w:tr>"
+        for row in rows
+    )
+    return f"<w:tbl>{body}</w:tbl>"
+
+
+def write_resume_docx(path, *, paragraphs=(), tables=()):
+    """Write a minimal but structurally real DOCX; standard library only, synthetic content."""
+    body = "".join(docx_paragraph(text) for text in paragraphs)
+    body += "".join(docx_table(rows) for rows in tables)
+    document = (
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+        f'<w:document xmlns:w="{DOCX_NAMESPACE}"><w:body>{body}</w:body></w:document>'
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", document)
+    return Path(path)
+
+
+#: A fictional candidate. Nothing in these fixtures belongs to a real person.
+RESUME_LINES = (
+    "Ada Placeholder",
+    "ada.placeholder@example.invalid | +91 00000 00000 | Bengaluru",
+    "Skills",
+    "Python, SQL, Machine Learning",
+    "Education",
+    "B.Tech in Electronics and Communication Engineering, Example Institute of Technology, 2028",
+)
+
+#: Stands in for arbitrary prose from a document: it must never reach a message, the status line,
+#: a dialog, or the database. A fragment of it is what the tests search for.
+LONG_PROSE = (
+    "This paragraph is a long unique marker standing in for arbitrary sentences from the document, "
+    "and this application must not copy it into a message, a status line or the database."
+)
+PROSE_FRAGMENT = "long unique marker standing in"
+
+
+class ResumeImportHandlerTests(HandlerTestCase):
+    """The review screen is the only route from a document to the profile, and it saves nothing first.
+
+    The fixtures are synthetic DOCX files built in the test process. They exercise the real handler,
+    the real parser and a real SQLite file; they do not verify rendering, and the manual checklist in
+    research/ is still what covers the GUI itself.
+    """
+
+    def write_docx(self, name="ada-resume.docx", *, paragraphs=RESUME_LINES, tables=()):
+        return write_resume_docx(Path(self._directory.name) / name, paragraphs=paragraphs, tables=tables)
+
+    def import_resume(self, path, app=None):
+        """Run the real import handler for the chosen file and return the app and the review dialog."""
+        app = app or self.make_app()
+        try:
+            self.parsed = resume.parse_resume(path)
+        except resume.ResumeImportError:
+            self.parsed = None  # the handler must refuse the same file
+        FILEDIALOG.path = str(path)
+        RecordingToplevel.created = []
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._import_resume()
+        dialog = RecordingToplevel.created[0] if RecordingToplevel.created else None
+        return app, dialog
+
+    def shown_text(self):
+        """Every string the review screen displayed: dialog labels and proposal checkbuttons."""
+        labels = [label.text for label in RecordingLabel.created]
+        buttons = [button.text for button in RecordingCheckbutton.created]
+        return "\n".join(labels + buttons)
+
+    def selection(self, key):
+        """The checkbutton variable for a proposal key, matched by the label the dialog displayed."""
+        for proposal in self.parsed.proposals:
+            if proposal.key != key:
+                continue
+            for button in RecordingCheckbutton.created:
+                if button.text.startswith(f"{proposal.label}:"):
+                    return button.variable
+        raise AssertionError(f"no checkbutton was created for {key!r}")
+
+    def test_a_cancelled_chooser_changes_nothing(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        FILEDIALOG.path = ""
+
+        app._import_resume()
+
+        self.assertEqual(RecordingToplevel.created, [])
+        self.assertEqual(MESSAGES.titles(), [])
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertIn("cancelled", app.status.get())
+
+    def test_a_file_that_cannot_be_read_is_reported_without_changing_the_profile(self):
+        refusal = Path(self._directory.name) / "resume.rtf"
+        refusal.write_bytes(b"{\\rtf1 not a supported format}")
+        self.store.save_profile(PROFILE)
+
+        app, dialog = self.import_resume(refusal)
+
+        self.assertIsNone(dialog, "no review screen may open for a file that was refused")
+        self.assertIn("Resume not imported", MESSAGES.titles("showerror"))
+        self.assertIn("not changed", MESSAGES.text("showerror"))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertNotIn("Resume import saved", app.status.get())
+
+    def test_the_review_screen_shows_every_proposal_before_anything_is_saved(self):
+        self.store.save_profile(PROFILE)
+        path = self.write_docx()
+
+        app, dialog = self.import_resume(path)
+
+        self.assertIsNotNone(dialog)
+        self.assertTrue(self.parsed.proposals, "the fixture must produce proposals")
+        shown = self.shown_text()
+        for proposal in self.parsed.proposals:
+            self.assertIn(proposal.value, shown, "the proposed value must be visible before saving")
+            self.assertIn(proposal.evidence, shown, "the evidence for a proposal must be visible")
+            self.assertIn(proposal.confidence.value, shown, "the confidence must be visible")
+        self.assertEqual(self.store.get_profile(), PROFILE, "opening the review screen must not save")
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+
+    def test_only_confident_proposals_start_selected(self):
+        self.store.save_profile(PROFILE)
+        path = self.write_docx()
+
+        _app, dialog = self.import_resume(path)
+
+        self.assertIsNotNone(dialog)
+        confidences = {proposal.confidence for proposal in self.parsed.proposals}
+        self.assertIn(resume.ProposalConfidence.NEEDS_REVIEW, confidences, "the fixture needs an uncertain value")
+        checked = {proposal.key: self.selection(proposal.key).get() for proposal in self.parsed.proposals}
+        self.assertEqual(
+            checked,
+            {proposal.key: proposal.confidence is resume.ProposalConfidence.CONFIDENT
+             for proposal in self.parsed.proposals},
+            "only a value the parser is confident about may start selected",
+        )
+
+    def test_an_uncertain_value_is_not_saved_unless_it_is_selected(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        CONFIG["Save these values?"] = True
+
+        BUTTONS.by_text["Save selected values"]()
+
+        # The document says 2028 and the saved profile says 2027; only a deliberate choice may move it.
+        self.assertEqual(self.store.get_profile().graduation_year, PROFILE.graduation_year)
+        self.assertIn("Resume import result", MESSAGES.titles("showinfo"))
+
+    def test_accepted_values_are_saved_and_unselected_ones_keep_the_saved_profile(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        CONFIG["Save these values?"] = True
+        self.selection("skills").set(False)          # confident, but the person says no
+        self.selection("graduation_year").set(True)  # uncertain, but the person says yes
+
+        BUTTONS.by_text["Save selected values"]()
+
+        stored = self.store.get_profile()
+        self.assertEqual(stored.graduation_year, 2028)
+        self.assertEqual(stored.degree_discipline, "Electronics and Communication Engineering")
+        self.assertEqual(set(stored.skills), set(PROFILE.skills), "an unselected value must keep the saved one")
+        self.assertEqual(stored.candidate_country, PROFILE.candidate_country)
+        self.assertEqual(stored.experience_years, PROFILE.experience_years)
+        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertIn("Not saved (not selected): Skills", MESSAGES.text("showinfo"))
+        self.assertIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertIn("saved", app.status.get().lower())
+        self.assertEqual(app.profile_vars["graduation_year"].get(), "2028")
+        self.assertEqual(app.profile_vars["skills"].get(), desktop.profile_form_values(PROFILE)["skills"])
+
+    def test_cancelling_the_review_changes_nothing(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        BUTTONS.by_text["Cancel"]()
+
+        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertEqual(app.profile_vars["skills"].get(), desktop.profile_form_values(PROFILE)["skills"])
+        self.assertIn("cancelled", app.status.get())
+        self.assertEqual(MESSAGES.titles("showinfo"), [])
+
+    def test_declining_the_confirmation_saves_nothing(self):
+        self.store.save_profile(PROFILE)
+        _app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        CONFIG["Save these values?"] = False
+
+        BUTTONS.by_text["Save selected values"]()
+
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertFalse(getattr(dialog, "destroyed", False), "the review screen must stay open")
+
+    def test_selecting_nothing_is_refused_without_saving(self):
+        self.store.save_profile(PROFILE)
+        _app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        for button in RecordingCheckbutton.created:
+            button.variable.set(False)
+
+        BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Nothing selected", MESSAGES.titles("showinfo"))
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertFalse(getattr(dialog, "destroyed", False))
+
+    def test_a_value_that_fails_validation_is_refused_without_writing(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+
+        saved, message = app._apply_accepted_profile_values({"experience": "lots"})
+
+        self.assertFalse(saved)
+        self.assertIn("Nothing was saved", message)
+        self.assertEqual(self.store.get_profile(), PROFILE)
+
+    def test_a_save_that_fails_validation_never_reports_success(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        app.profile_vars["experience"].set("lots")
+
+        BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertFalse(getattr(dialog, "destroyed", False))
+
+    def test_a_database_failure_is_reported_and_the_previous_profile_survives(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        with mock.patch.object(
+            self.store, "save_profile", side_effect=sqlite3.OperationalError("database is locked")
+        ):
+            BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertIn("database is locked", MESSAGES.text("showerror"))
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertIn("nothing was saved", app.status.get().lower())
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertFalse(getattr(dialog, "destroyed", False))
+
+    def test_a_stored_profile_that_does_not_match_is_reported_as_failed(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        with mock.patch.object(
+            self.store, "get_profile", return_value=CandidateProfile(skills=frozenset({"Rust"}))
+        ):
+            BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertIn("does not match", MESSAGES.text("showerror"))
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertNotIn("Verified in the local database", MESSAGES.text())
+
+    def test_missing_and_unsupported_values_are_reported_without_being_stored(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        shown = self.shown_text()
+        self.assertIn("Not found in this document (your saved values are kept)", shown)
+        self.assertIn("Country", shown)
+        self.assertIn("Present in the document but not stored", shown)
+        self.assertIn("ada.placeholder@example.invalid", shown, "an unmapped value is shown as informational")
+
+        CONFIG["Save these values?"] = True
+        BUTTONS.by_text["Save selected values"]()
+
+        stored = repr(self.store.get_profile())
+        self.assertNotIn("placeholder", stored, "a value the profile cannot store must not be written")
+        self.assertNotIn("@", stored)
+
+    def test_the_document_text_is_never_copied_into_a_message_the_status_or_the_profile(self):
+        self.store.save_profile(PROFILE)
+        path = self.write_docx(paragraphs=RESUME_LINES + (LONG_PROSE,))
+        app, dialog = self.import_resume(path)
+        self.assertIsNotNone(dialog)
+
+        self.assertNotIn(PROSE_FRAGMENT, self.shown_text())
+        CONFIG["Save these values?"] = True
+        BUTTONS.by_text["Save selected values"]()
+
+        form_after = {key: variable.get() for key, variable in app.profile_vars.items()}
+        for blob in (MESSAGES.text(), app.status.get(), repr(self.store.get_profile()), repr(form_after)):
+            self.assertNotIn(PROSE_FRAGMENT, blob)
+
+    def test_the_review_screen_shows_the_file_name_but_not_the_folder(self):
+        self.store.save_profile(PROFILE)
+        _app, dialog = self.import_resume(self.write_docx(name="ada-resume.docx"))
+        self.assertIsNotNone(dialog)
+
+        shown = self.shown_text()
+        self.assertIn("ada-resume.docx", shown)
+        self.assertNotIn(self._directory.name, shown, "the folder a document lives in is not displayed")
+
+    def test_the_selected_file_is_not_copied_or_modified(self):
+        self.store.save_profile(PROFILE)
+        path = self.write_docx(name="ada-resume.docx")
+        before = path.read_bytes()
+
+        _app, dialog = self.import_resume(path)
+        self.assertIsNotNone(dialog)
+        CONFIG["Save these values?"] = True
+        BUTTONS.by_text["Save selected values"]()
+
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(
+            sorted(item.name for item in Path(self._directory.name).glob("*.docx")), ["ada-resume.docx"],
+            "importing must not leave a copy of the document behind",
+        )
+
+    def test_table_text_is_read_locally_and_offered_like_paragraph_text(self):
+        self.store.save_profile(PROFILE)
+        path = self.write_docx(
+            paragraphs=("Ada Placeholder", "Skills"),
+            tables=((("Python", "SQL"), ("Machine Learning", "Git")),),
+        )
+
+        app, dialog = self.import_resume(path)
+
+        self.assertIsNotNone(dialog)
+        self.assertIn("Python, SQL, Machine Learning, Git", self.shown_text())
+        self.assertEqual(self.store.get_profile(), PROFILE)
+
+    def test_a_document_with_nothing_recognisable_still_reports_honestly(self):
+        self.store.save_profile(PROFILE)
+        _app, dialog = self.import_resume(self.write_docx(paragraphs=("A short note about nothing in particular.",)))
+        self.assertIsNotNone(dialog)
+
+        self.assertIn("No supported profile value was found", self.shown_text())
+
+        BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Nothing selected", MESSAGES.titles("showinfo"))
+        self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+
+    def test_the_review_screen_offers_keyboard_cancel_and_confirm(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        self.assertIn("<Escape>", dialog.bindings, "the dialog must be cancellable from the keyboard")
+        self.assertIn("<Return>", dialog.bindings, "the dialog must be confirmable from the keyboard")
+        self.assertIn("Cancel", BUTTONS.by_text)
+        self.assertIn("Save selected values", BUTTONS.by_text)
+
+        dialog.bindings["<Escape>"](None)
+
+        self.assertTrue(getattr(dialog, "destroyed", False))
+        self.assertEqual(self.store.get_profile(), PROFILE)
+        self.assertIn("cancelled", app.status.get(), "Escape must say what the Cancel button says")
 
 
 if __name__ == "__main__":

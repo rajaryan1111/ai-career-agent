@@ -31,9 +31,13 @@ The dependency-free Python domain core in `career_agent/` provides:
 - A fail-closed source permission gate: no source runs without recorded permission evidence and a
   passed source-quality gate, and a legitimate empty result is never confused with a blocked,
   partial, challenged, or failed run.
-- No network access, resume parsing, candidate-data transfer, form filling, or application submission.
+- Local résumé import: a PDF or DOCX you pick is read on this device and offered as proposals for you
+  to review; nothing reaches the profile until you select values and confirm. The extracted text is
+  discarded, never stored and never sent anywhere. See
+  [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
+- No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -71,6 +75,60 @@ even when the chosen file already existed, and it refuses to write through a sym
 cannot redirect candidate data into another file. If the permissions cannot be applied, the export is
 not kept and the app says so instead of writing readable data. A synced or shared destination folder
 can still expose the file, so export to a folder only you can access.
+
+## Import a résumé (PDF or DOCX)
+
+Open the **Candidate Profile** tab and press **Import resume (PDF/DOCX)**. The file is read on this
+device — no upload, no cloud OCR, no external parser, no network request — and the import itself writes
+nothing to your profile. A review window then shows, for every proposed value:
+
+- the profile field and the value that was found;
+- a short quotation of the document text it came from, so you can judge it yourself;
+- a confidence label (`confident` or `needs review`), where only `confident` values start ticked;
+- what the document did **not** mention, and what it contained that the profile has no field for (a name,
+  an email address or a phone number, for example — shown as information, never stored).
+
+Tick or untick each value, then press **Save selected values** and confirm. A value you did not tick
+keeps the value already in the form (and in your saved profile), so an import cannot silently overwrite
+what you entered. Saving goes through exactly the same validation as the Save button, and the app
+re-reads the stored profile and compares it field by field before it reports that the save succeeded.
+
+What is parsed, and what is deliberately not:
+
+- **Supported today:** skills, degree/discipline, graduation year, study status, country, work
+  authorization, and years of experience when the document states a figure.
+- **Never guessed:** a keyword is not a qualification, a bare year is not treated as a graduation year,
+  and nothing is inferred about eligibility, work authorization, location or study status. Study status
+  and work authorization are always `needs review`; a field the document is silent about is reported as
+  missing, never as a confirmed "no".
+- Values with no matching profile field (name, contact details, institutions, employers, employment
+  dates) are listed as "present in the document but not stored" — the database schema is not extended to
+  hold them.
+
+Limits and failure handling — oversized or unreadable files are refused with an explanation, never
+silently truncated:
+
+- At most 10 MB per file, at most 40 PDF pages, and a cap on how much text is accepted; a DOCX's
+  declared uncompressed size is checked before it is read.
+- Encrypted, damaged, empty and textless/scanned PDFs each get their own message. **A scanned PDF with no
+  text layer cannot be read by this feature and is not pretended to be readable:** the app says so and
+  asks you to type the values in. OCR is **not** implemented.
+- A legacy `.doc`, an unsupported format, or a DOCX carrying macros is refused, or has the macro part
+  reported and ignored — embedded content is never executed. The document is treated as untrusted input:
+  this is text extraction, **not** a malware scanner, and no parsing is risk-free.
+- The file you selected is read in place; no copy of it is kept anywhere.
+
+**PDF support is an optional third-party library.** DOCX import uses the standard library alone. For PDF
+text extraction, install [pypdf](https://pypi.org/project/pypdf/) (BSD-3-Clause, no mandatory
+dependencies, Python 3.9+):
+
+```bash
+python -m pip install pypdf
+```
+
+Without it, everything else in the app — including DOCX import — works unchanged, and choosing a PDF
+produces a clear "PDF support is not installed" message instead of a crash. The library is imported only
+when a PDF is actually read.
 
 ## Back up and restore your data
 
@@ -153,7 +211,9 @@ The tool intentionally does not invent a direct-link validity percentage; the ex
 
 ## Run tests
 
-Python 3.10+; no third-party packages are required.
+Python 3.10+; no third-party packages are required to run the suite. (The PDF import path uses the
+optional `pypdf` library when it is installed; the tests that need it skip themselves with a reason when
+it is absent, and everything else — including DOCX import — still runs.)
 
 ```bash
 python -m unittest discover -s tests -v
@@ -161,11 +221,19 @@ python -m unittest discover -s tests -v
 
 The suite covers the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
 the source permission gates and run-outcome rules, the Tk-free desktop logic (form mapping, save
-planning, database-path resolution, stored-timestamp rendering), the status chooser's option set against
+planning, database-path resolution, stored-timestamp rendering, profile read-back comparison), local
+résumé import (PDF and DOCX text extraction including DOCX tables, encrypted, damaged, empty, oversized
+and textless files, the refusal to invent values, and the socket-blocked local-only guarantee), the status
+chooser's option set against
 the state machine, unrecognised stored statuses and the refusal paths they trigger, version reporting and
 start-up diagnostics (including path redaction), verified backup and restore (including corruption,
 schema-version and permission failures, WAL and side-file handling, and the command-line front end), and
-the desktop handlers exercised through widget stubs. It also checks the SQLite resource
+the desktop handlers exercised through widget stubs — including the résumé review screen: proposals shown
+with evidence before anything is saved, per-value accept and reject, cancellation and declined
+confirmation writing nothing, validation and database failures never reported as success, and no document
+text reaching a message, the status line or the database. The résumé fixtures are synthetic documents
+built in the test process; no real candidate data and no network access are involved. It also checks the
+SQLite resource
 lifecycle: no test may leave a connection open (the whole suite is re-run in a child process that
 counts them, because Python 3.10/3.11 never emit the `ResourceWarning: unclosed database` that
 macOS reported), and `with sqlite3.connect(...)` — which manages the transaction, not the
@@ -180,7 +248,9 @@ remains outstanding and is tracked in
 There is no installer and no packaged build, and nothing in this repository claims one. What exists today:
 
 - The app runs from a source checkout with `python -m career_agent` and needs the standard library plus
-  Tkinter, nothing else.
+  Tkinter. Reading PDF résumés additionally needs the optional `pypdf` library; every other feature,
+  including DOCX résumé import, works without it. A packaged build would need a decision on whether to
+  bundle that library (see below).
 - `career_agent.__version__` is the single source of truth the checkout reports.
   `python -m career_agent --version` prints it with the database schema version and works with no
   packaging metadata, no display, and no third-party tools.

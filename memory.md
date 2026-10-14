@@ -964,3 +964,59 @@ watch, which names the three leaked connections) — all caught, files restored 
 Verification: full suite 394 OK, also with the socket-blocking shim; `compileall` exit 0; `tabnanny`
 exit 0; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`. The Mac database was never
 accessed, `main` was not touched, and PR #2 stays open and unmerged.
+
+## 2026-10-14 (later) — Local-first PDF/DOCX résumé import with a review step
+
+**Task.** Implement local-only résumé import: native file picker → local text extraction → proposals
+restricted to fields the existing `CandidateProfile` schema already holds → a review screen showing every
+proposal (value, evidence, confidence) → per-value accept/reject → the accepted values validated and saved
+through the existing persistence path → a truthful result naming saved and skipped fields. The profile must
+never be overwritten straight after parsing, nothing may leave the machine, and no schema field may be
+invented.
+
+**What was built.** New module `career_agent/resume.py` (Tk-free): `extract_text`/`extract_pdf`/`extract_docx`
+and `parse_resume`/`parse_resume_text`, with `FieldProposal` (key, label, value, confidence, evidence),
+`UnmappedItem`, `ResumeParseResult`, and the error taxonomy `ResumeImportError` → `ResumeTooLarge`,
+`ResumeUnreadable`, `ResumeEncrypted`, `ResumeNoText`. DOCX extraction is standard-library `zipfile` +
+`xml.etree.ElementTree` (DTD refused, macro part reported and ignored, declared uncompressed size checked
+before decompression); PDF extraction uses the **optional** `pypdf` library, imported lazily, with a clear
+"PDF support is not installed" refusal when it is absent. Limits: 10 MB per file, 32 MB declared DOCX
+uncompressed size, 40 PDF pages, 400k extracted characters — every limit refuses rather than truncating, and
+no error message carries document text. `career_agent/desktop.py` gained *Import resume (PDF/DOCX)* on the
+Candidate Profile tab, `_import_resume` (pick, parse, honest refusal, no profile change), `_review_resume`
+(dialog: per-proposal tickboxes that start ticked **only** for `confident` proposals, evidence and confidence
+shown, missing-field list, "present in the document but not stored" list, notes, Escape/Return bindings,
+Cancel and Save selected values), and `_apply_accepted_profile_values` (merge accepted over the current form
+→ the shared `build_candidate_profile` validation → `save_profile` → `get_profile` read-back compared
+field-by-field with `desktop_logic.profile_fields_not_matching`; success is reported only after that
+comparison passes). Cancelling, declining the confirmation, selecting nothing, and every failure path leave
+the stored profile exactly as it was. No schema change, no migration, no new mandatory dependency, no
+network call anywhere in the path.
+
+**Never guessed.** Only six keys are ever proposed: skills (from an explicit Skills section), degree (only
+with a subject), graduation year (only from an explicit phrase; a bare year is `needs review`, two years or
+none are not proposed), study status and country (explicit/labelled text only, always `needs review`), work
+authorization (quoted, always `needs review`), and experience years (never derived from employment dates).
+Name, email, phone, institutions and dates have no profile field, so they surface as informational
+`UnmappedItem`s — the schema was not extended for them.
+
+**Two defects found and fixed while building (both by tests, before any commit).** (1) The first DOCX walker
+searched a paragraph element for paragraph/table *children*, so every real DOCX produced zero lines and the
+import refused every file; it was rewritten as the recursive `_docx_lines_for`. (2) `pypdf` logs structural
+complaints about a damaged file — with fragments of it — straight to stderr; the `pypdf` logger now has a
+`NullHandler` and `propagate = False`, and a test asserts the captured stderr of a damaged-PDF import is
+empty.
+
+**Evidence.** `python3 -m unittest discover -s tests` (no `pypdf`) → **475 tests, OK, 11 skipped**, and the
+same suite with `pypdf` 6.20.1 installed → **475 tests, OK** (394 before this task, +81 tests).
+Targeted: `tests/test_resume.py` 55 tests in both interpreters; `tests/test_desktop_handlers.py` 128 (20
+new résumé-review handler tests); `tests/test_desktop_logic.py` 38 (6 new read-back comparison tests). The
+new handler tests run the real handlers, the real parser and a real SQLite file through widget stubs —
+rendering itself is still not tested here. Teeth: eight controlled mutations of the new code were applied
+to a scratch copy — auto-applying the extracted values before review, skipping the review dialog entirely,
+reporting a failed save as success, removing the read-back verification, starting every tickbox checked,
+cancelling and saving anyway, dropping unselected form values, and leaving a copy of the chosen file next to
+the database — each was caught by the intended test(s) (the copy mutation by exactly one test, with the
+extra file named in the failure). Automated tests do **not** cover GUI
+rendering (no display or `tkinter` in this sandbox), and CI installs nothing, so the 11 PDF tests skip with a
+reason there; they were run locally with `pypdf` 6.20.1 (BSD-3-Clause, no mandatory dependencies).

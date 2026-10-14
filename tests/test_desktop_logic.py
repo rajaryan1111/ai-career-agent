@@ -11,7 +11,8 @@ from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.desktop_logic import (
     DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED, JobSaveMode,
     build_candidate_profile, build_job_listing, career_agent_data_root, default_database_path,
-    format_stored_timestamp, form_values, job_form_values, plan_job_save, profile_form_values,
+    format_stored_timestamp, form_values, job_form_values, plan_job_save, profile_fields_not_matching,
+    profile_form_values,
 )
 
 
@@ -283,6 +284,67 @@ class StoredTimestampFormattingTests(unittest.TestCase):
         rendered = format_stored_timestamp("2026-10-14T14:32:09+00:00")
         for word in ("posted", "published", "updated by", "source", "employer"):
             self.assertNotIn(word, rendered.lower())
+
+
+class ProfileReadBackComparisonTests(unittest.TestCase):
+    """A save may only be reported as saved after the stored profile is compared with what was asked for.
+
+    The comparison is semantic, because a form renders a multi-value field sorted and an integer field
+    as text; a textual comparison would report a failure for a value that was stored correctly, and a
+    false failure is as unhelpful as a false success.
+    """
+
+    def test_a_profile_holding_every_expected_value_matches(self):
+        profile = CandidateProfile(
+            candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2028, experience_years=0.5, work_authorization="authorized_without_sponsorship",
+            skills=frozenset({"Python", "RAG"}), preferred_locations=frozenset({"Bengaluru"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}),
+        )
+        expected = {
+            "country": "India", "degree": "ECE", "study_status": "undergraduate",
+            "graduation_year": "2028", "experience": "0.5",
+            "work_authorization": "authorized_without_sponsorship", "skills": "Python, RAG",
+            "locations": "Bengaluru", "work_modes": "remote", "role_types": "internship",
+        }
+
+        self.assertEqual(profile_fields_not_matching(profile, expected), ())
+
+    def test_a_text_field_is_compared_without_regard_to_case_or_spacing(self):
+        profile = CandidateProfile(candidate_country="India")
+
+        self.assertEqual(profile_fields_not_matching(profile, {"country": "  india "}), ())
+        self.assertEqual(profile_fields_not_matching(profile, {"country": "Canada"}), ("country",))
+        self.assertEqual(profile_fields_not_matching(profile, {"country": ""}), ("country",))
+
+    def test_a_multi_value_field_is_compared_as_a_set(self):
+        profile = CandidateProfile(skills=frozenset({"Python", "RAG"}))
+
+        self.assertEqual(profile_fields_not_matching(profile, {"skills": "RAG, python"}), ())
+        self.assertEqual(profile_fields_not_matching(profile, {"skills": "Python"}), ("skills",))
+
+    def test_a_number_is_compared_as_a_number_not_as_text(self):
+        profile = CandidateProfile(graduation_year=2028, experience_years=0.5)
+
+        self.assertEqual(
+            profile_fields_not_matching(profile, {"graduation_year": "2028", "experience": "0.50"}), ()
+        )
+        self.assertEqual(profile_fields_not_matching(profile, {"graduation_year": "2027"}), ("graduation_year",))
+        self.assertEqual(profile_fields_not_matching(profile, {"experience": "1.5"}), ("experience",))
+
+    def test_a_value_the_profile_does_not_hold_is_reported(self):
+        profile = CandidateProfile()
+
+        self.assertEqual(profile_fields_not_matching(profile, {"graduation_year": "2028"}), ("graduation_year",))
+        self.assertEqual(profile_fields_not_matching(profile, {"experience": "lots"}), ("experience",))
+
+    def test_one_mismatch_does_not_hide_the_others(self):
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE")
+
+        self.assertEqual(
+            profile_fields_not_matching(profile, {"country": "Canada", "degree": "ECE", "skills": "Python"}),
+            ("country", "skills"),
+        )
 
 
 if __name__ == "__main__":
