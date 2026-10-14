@@ -1097,13 +1097,21 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   over dozens of heading names or layouts), including DOCX tables and sidebar-style absolute-positioned
   PDFs; unselected or absent fields still leave the saved profile as it was.
 
-- Defect 3 (misleading restore refusal). Pointing a restore at a folder reported "the current database
+- Defect 3 (a second restore inside one second was refused, for the wrong reason). The pre-restore
+  snapshot name is timestamped to the second, and `create_backup` never overwrites an existing file, so
+  the second restore in a scripted pair was refused with "the current database could not be preserved" —
+  which described the wrong problem, since the only obstacle was that the first restore had already used
+  that second's name. `_snapshot_path` now keeps each restore's copy under the next free name
+  (`…backup-<stamp>-2`), raising a clear refusal only in the practically unreachable case of no free name;
+  nothing is overwritten. Regression test: `test_a_second_restore_in_the_same_second_keeps_its_own_copy`.
+
+- Defect 4 (misleading restore refusal). Pointing a restore at a folder reported "the current database
   could not be preserved", which is true of nothing; it now refuses with "is a folder, not a database
   file" before any staging file exists. Two more restore shapes were probed and are now tested: a symbolic
   link in place of the live database is refused with its target left byte-identical, and an ordinary
   confirmed restore still keeps a verified copy of what it replaced.
 
-- Defect 4 (confirmation-evidence floor). `is_substantive_confirmation_evidence` refused bare placeholders
+- Defect 5 (confirmation-evidence floor). `is_substantive_confirmation_evidence` refused bare placeholders
   but accepted a phrase about testing the feature ("This is a test"), which could then be recorded as the
   evidence for `confirmed`. The whole-value list now covers those phrases; a sentence that merely contains
   such a word is still accepted, and both the domain and storage tests list the new cases.
@@ -1118,12 +1126,14 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   syntax trees and refuses a `CareerStore(...)` with no path, and any call to the default-path functions
   that would resolve this machine's real folder, so the suite cannot open the candidate's database.
 
-- Evidence. Suite 483 → **525 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and **525 OK,
-  no skips** with pypdf 6.20.1; targeted runs green (backup 54, CLI 14, resume, store/core/validation,
-  desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases
-  (round trip, 2000-row file, garbage, truncated, empty, symlink, directory, newer schema, missing table,
-  dangling tracker row, read-only folder, unreadable file — every refusal left the live database
-  byte-identical). URL probe 42/42; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`;
+- Evidence. Suite 483 → **526 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and **526 OK,
+  no skips** with pypdf 6.20.1; targeted runs green (backup 55, CLI 14, resume, store/core/validation,
+  desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases, 19/19
+  checks: a round trip restoring the same schema and rows with the replaced data kept in a verified
+  snapshot, a 2000-row database, and every malformed or mis-shaped input (missing, empty, not a database,
+  truncated, a folder, a symlink, a newer schema, a missing table, read-only folder, unreadable file,
+  bytes damaged in a place SQLite still calls intact) refused or installed with the previous rows
+  preserved — never with data lost. URL probe 42/42; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`;
   `compileall` and `tabnanny` exit 0. No test or script opens the default database, and no candidate data,
   database file, secret or temporary artifact entered the commit.
 

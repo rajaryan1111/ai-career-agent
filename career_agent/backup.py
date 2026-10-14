@@ -305,6 +305,29 @@ def _copy_bytes(source: Path, destination: Path) -> None:
             writer.write(chunk)
 
 
+def _snapshot_path(database_path: Path, timestamp: datetime | None) -> Path:
+    """The pre-restore snapshot path, made unique when that second's name is already taken.
+
+    The automatic name is timestamped to the second, so two restores inside one second - two scripted
+    command-line restores, or a restore right after something wrote that second's automatic name -
+    would otherwise collide, and the second restore was refused with a message about preserving the
+    current database. That was misleading: the only problem was the file name, and it is fixed here by
+    keeping each restore's copy under the next free name. Nothing is ever overwritten, and a folder
+    that cannot offer a free name refuses rather than guesses.
+    """
+    snapshot = automatic_backup_path(database_path, timestamp)
+    if not snapshot.exists():
+        return snapshot
+    for attempt in range(2, 1000):
+        candidate = snapshot.with_name(f"{snapshot.name}-{attempt}")
+        if not candidate.exists():
+            return candidate
+    raise BackupError(
+        f"There is no free name left for a copy of the current database beside {database_path}, so "
+        "the restore was refused. Nothing was changed; move or delete old backups first."
+    )
+
+
 def _preserve_current_database(database_path: Path, timestamp: datetime | None) -> tuple[Path | None, bool]:
     """Snapshot the current database before it is replaced.
 
@@ -316,7 +339,7 @@ def _preserve_current_database(database_path: Path, timestamp: datetime | None) 
     """
     if not database_path.exists():
         return None, False
-    snapshot = automatic_backup_path(database_path, timestamp)
+    snapshot = _snapshot_path(database_path, timestamp)
     try:
         validate_app_database(database_path)
     except DatabaseInUse as busy:

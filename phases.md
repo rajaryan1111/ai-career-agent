@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 525 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
+implemented, with 526 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
 compilation checks, and the research-CSV audit. The suite also holds the safety properties an audit
 turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
 the form and can never make an experience requirement pass, no test may resolve this machine's real

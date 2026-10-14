@@ -562,6 +562,27 @@ class RestoreTests(BackupTestCase):
         self.assertEqual(live.read_bytes(), before)
         self.assert_no_leftovers(live)
 
+    def test_a_second_restore_in_the_same_second_keeps_its_own_copy(self):
+        """Two restores inside one second must both work, each keeping its own pre-restore copy.
+
+        The automatic snapshot name is timestamped to the second. The second same-second restore used
+        to be refused with "the current database could not be preserved", which described the wrong
+        problem: the only obstacle was that the first restore had already used that second's name.
+        """
+        live, chosen = self.prepare()
+        first = restore_backup(chosen, live, timestamp=STAMP)
+        with CareerStore(str(live)) as store:
+            store.save_job(sample_job("changed-again"))
+
+        second = restore_backup(chosen, live, timestamp=STAMP)
+
+        self.assertNotEqual(first.pre_restore_backup, second.pre_restore_backup)
+        self.assertEqual(validate_app_database(first.pre_restore_backup).job_count, 1)
+        self.assertEqual(validate_app_database(second.pre_restore_backup).job_count, 2,
+                         "the second restore must keep the data it actually replaced")
+        self.assertEqual(validate_app_database(live).job_count, 1)
+        self.assert_no_leftovers(live)
+
     def test_a_symbolic_link_where_the_database_is_expected_is_refused_untouched(self):
         """A link in place of the live database must not be replaced, and its target must not change.
 
