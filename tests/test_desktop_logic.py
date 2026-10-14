@@ -244,6 +244,34 @@ class DatabasePathTests(unittest.TestCase):
                 xdg,
             )
 
+    def test_a_relative_environment_override_is_ignored(self):
+        # The XDG Base Directory Specification requires these variables to be absolute and says a
+        # relative one "should" be considered invalid and ignored. Resolving it against the current
+        # working directory would move the person's database - and so their profile - between
+        # launches, so the documented per-user default is used instead.
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            self.assertEqual(
+                career_agent_data_root(system="Linux", environ={"XDG_DATA_HOME": "relative/data"}, home=home),
+                home / ".local" / "share",
+            )
+            self.assertEqual(
+                career_agent_data_root(system="Windows", environ={"LOCALAPPDATA": "relative\\appdata"}, home=home),
+                home / "AppData" / "Local",
+            )
+            self.assertEqual(
+                career_agent_data_root(system="Linux", environ={"XDG_DATA_HOME": ""}, home=home),
+                home / ".local" / "share",
+            )
+
+    def test_a_relative_override_never_reaches_the_database_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            path = default_database_path(system="Linux", environ={"XDG_DATA_HOME": "relative/data"}, home=home)
+
+            self.assertEqual(path, home / ".local" / "share" / "ai-career-agent" / DATABASE_FILE_NAME)
+            self.assertNotIn("relative", str(path))
+
     def test_default_database_path_is_outside_the_repository_and_creates_its_folder(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

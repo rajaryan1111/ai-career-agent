@@ -85,6 +85,22 @@ def form_values(variables: Mapping[str, object]) -> dict[str, str]:
     return {key: variable.get() for key, variable in variables.items()}  # type: ignore[attr-defined]
 
 
+def _absolute_root(value: str | None) -> Path | None:
+    """An environment-provided data root, or ``None`` when it cannot name a stable location.
+
+    The XDG Base Directory Specification requires these variables to hold absolute paths, and says an
+    implementation "should consider the path invalid and ignore it" when one does not. A relative root
+    is resolved against whatever directory the app happened to be started from, so the person's own
+    database would appear to move (and their profile with it) between launches; the documented
+    per-user default is used instead. The same rule is applied to the Windows variable, because a
+    relative value there has exactly the same problem.
+    """
+    if not value:
+        return None
+    candidate = Path(value)
+    return candidate if candidate.is_absolute() else None
+
+
 def career_agent_data_root(
     *,
     system: str | None = None,
@@ -95,6 +111,9 @@ def career_agent_data_root(
 
     Parameters are injectable so each operating-system branch can be tested without
     being on that operating system.
+
+    A relative value in ``XDG_DATA_HOME`` or ``LOCALAPPDATA`` is ignored, per the XDG Base Directory
+    Specification, so the database path never depends on the current working directory.
     """
     resolved_system = platform.system() if system is None else system
     environment = os.environ if environ is None else environ
@@ -102,8 +121,8 @@ def career_agent_data_root(
     if resolved_system == "Darwin":
         return resolved_home / "Library" / "Application Support"
     if resolved_system == "Windows":
-        return Path(environment.get("LOCALAPPDATA") or (resolved_home / "AppData" / "Local"))
-    return Path(environment.get("XDG_DATA_HOME") or (resolved_home / ".local" / "share"))
+        return _absolute_root(environment.get("LOCALAPPDATA")) or (resolved_home / "AppData" / "Local")
+    return _absolute_root(environment.get("XDG_DATA_HOME")) or (resolved_home / ".local" / "share")
 
 
 #: Shown when a record carries no usable timestamp. Never replaced with an invented time.
