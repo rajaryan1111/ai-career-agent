@@ -195,6 +195,13 @@ class SupportedEnvironmentTests(unittest.TestCase):
         self.assertIn(f'"{OLDEST_SUPPORTED}"', workflow, "CI must run the oldest interpreter the metadata allows")
         self.assertIsNotNone(re.search(r"python-version:\s*\[", workflow), "the CI matrix must stay explicit")
 
+    def test_the_doctor_checks_the_same_interpreter_floor_the_metadata_declares(self):
+        """``--doctor`` repeats the floor so it can check it without packaging metadata; keep them equal."""
+        self.assertEqual(
+            ".".join(str(part) for part in cli.MINIMUM_PYTHON), OLDEST_SUPPORTED,
+            "--doctor would warn about an interpreter the package says it supports (or stay silent about one it does not)",
+        )
+
     def test_the_installed_package_holds_only_the_application_package(self):
         data = load_pyproject()
 
@@ -248,6 +255,7 @@ class ContinuousIntegrationTests(unittest.TestCase):
             "python -m build --wheel",
             "pip install --quiet dist/*.whl",
             "career-agent --version",
+            "career-agent --doctor",
             "career-agent --database",
         ):
             self.assertIn(required, job, f"the installed-package job should run: {required}")

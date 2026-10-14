@@ -90,6 +90,8 @@ jobs:
           PY
           career-agent --version
           career-agent --help > /dev/null
+          # The doctor must work from an installed copy, find no database yet, and create nothing.
+          career-agent --doctor
           python - <<'PY'
           from career_agent import ApplicationTracker, Availability, JobListing
           from career_agent.store import CareerStore
@@ -104,3 +106,5 @@ jobs:
           PY
           career-agent --database alpha.sqlite3 --backup-to alpha-backup.sqlite3
           career-agent --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes
+          # After the restore the doctor must actually read that database, not merely not crash.
+          career-agent --database alpha.sqlite3 --doctor | grep -q "^Database: readable"

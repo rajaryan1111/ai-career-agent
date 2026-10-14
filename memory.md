@@ -1609,3 +1609,53 @@ does — the last is what surfaced that the panel's delete summary had to read a
 **Still missing.** Reminders, notifications, interview/follow-up scheduling, and any email or calendar
 integration (Phase F) — the log records dates but nothing acts on them. The panel shows entries for the
 selected application only; there is no filtering or search across the history yet.
+
+## 2026-10-15 — One rule for the database path, and a read-only `--doctor`
+
+**Decision.** Which database file a run uses is now decided in exactly one place,
+`career_agent.config.resolve_settings`: an explicit path (`--database`), then the `CAREER_AGENT_DATABASE`
+setting (absolute paths only), then `<data folder>/career_agent.sqlite3`. The data folder is
+`CAREER_AGENT_HOME` plus the app's folder name when that setting is absolute, and the platform's per-user
+application-data folder otherwise. `career_agent.desktop_logic.career_agent_data_root` gained the
+`CAREER_AGENT_HOME` branch; everything else about platform resolution (the XDG rule that a relative
+`XDG_DATA_HOME` or `LOCALAPPDATA` is ignored) is unchanged.
+
+**Why.** Three front ends previously resolved the path by two different rules: the window called
+`default_database_path()` (which ignores `CAREER_AGENT_DATABASE`), the command line called
+`default_database_path()` unless `--database` was given, and there was no way to ask "which file is this
+app actually using?" without opening a window. A person who keeps their data on an encrypted volume had
+to pass `--database` on every launch, and a backup could name a different file than the app would open.
+
+**What is deliberate about it.** Resolving settings has no side effects — no folder is created, nothing
+is read — so the doctor can report what *would* be used. The single side effect is that
+`config.database_path_for_run()` creates the *default* folder, because SQLite cannot open a database in a
+folder that does not exist and a first run would otherwise fail before the window appeared. A path named
+explicitly is used exactly as given and no folders are created for it: a mistyped path reports a missing
+folder instead of quietly becoming a real one. A relative value in either setting is ignored and carried
+in `Settings.notes`, which the doctor prints; silently resolving it against the working directory would
+let a person's profile and history appear to move between launches.
+
+**`--doctor`** (`python -m career_agent --doctor`, or the installed `career-agent --doctor`) reports the
+version, the interpreter and platform, the resolved path *and the rule that chose it*, whether the data
+folder exists and is writable, and what the database contains — using the same read-only
+`backup.validate_app_database` the restore dialog uses, so a damaged, empty, or too-new file is reported
+with the same refusal the app itself would show. It creates nothing, changes nothing, repairs nothing,
+needs no display, and exits `1` when it finds a problem (distinct from the refusal code `2`). It is
+mutually exclusive with `--backup-to`/`--restore-from`, since asking for a report and an action in one
+command would be two answers to one question.
+
+**Also changed:** the backup and restore commands now use the same rule, so `CAREER_AGENT_DATABASE`
+moves all three front ends at once, and the window no longer reaches for `default_database_path()`
+directly.
+
+**How it was checked.** 24 new tests in `tests/test_config.py` (three path rules, the ignored-setting
+notes, "resolving creates nothing", the single folder side effect, the doctor's exit codes and wording
+for a missing, readable, older-schema, newer-schema, damaged, empty and unwritable-folder case, the
+mutual exclusion with the backup command, and a subprocess check that `--doctor` never imports
+`tkinter`). Three teeth checks confirmed the tests bite: dropping the
+relative-path guard failed 2 tests, making the doctor always return success failed 4, and creating the
+data folder inside the doctor failed 2 (all restored afterwards). The full suite caught two real
+regressions this change introduced — a CLI test that patched `__main__.default_database_path` (rewritten
+to point the *setting* at a different database and assert the backup's own row counts), and a new test of
+mine that opened a connection in a `with` statement, which `tests/test_resource_lifecycle.py` refuses.
+Suite: 695 OK (13 skipped). The suite's own guards are the reason both were caught rather than shipped.

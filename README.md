@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -57,6 +57,7 @@ python -m pip install ".[pdf]"   # the same, plus optional PDF résumé reading
 career-agent                     # open the desktop window
 career-agent --version           # print the version and database schema version
 career-agent --database "/path/to/career-agent.sqlite3"
+career-agent --doctor            # where is my data, and can this app read it?
 ```
 
 ```bash
@@ -69,6 +70,36 @@ installed metadata and the app cannot disagree. Installing adds the `career_agen
 maintenance tools in `scripts/` (the CSV audit and the tracker-record correction tool) stay in the
 checkout and are run from there. There is still no installer, no signed desktop bundle, and no bundled
 interpreter: see [Packaging status](#packaging-status) for what that means and what is missing.
+
+### Where the app keeps its data
+
+One rule decides the database file, and the window, the database commands and the doctor all follow it,
+so they can never disagree about which file is in use:
+
+1. `--database PATH` for one run;
+2. otherwise the `CAREER_AGENT_DATABASE` setting, which must be an absolute path;
+3. otherwise `<data folder>/career_agent.sqlite3`.
+
+The data folder is `CAREER_AGENT_HOME` followed by the app's folder name (`ai-career-agent` on Linux,
+`AI Career Agent` on macOS and Windows) when that setting holds an absolute path, and the platform's
+per-user application-data folder otherwise. A *relative* value in either setting is ignored rather than
+resolved against the working directory, because the profile and the history would otherwise appear to
+move between launches depending on where the app was started from; the doctor prints which setting was
+ignored and why. Only the default location is created automatically — a path you name is used exactly
+as given, so a mistyped path reports a missing folder instead of quietly becoming a real one.
+
+```bash
+career-agent --doctor                 # version, Python, data paths, and whether the database is readable
+python -m career_agent --doctor       # the same, from a checkout
+```
+
+`--doctor` is read-only: it creates nothing, changes nothing, repairs nothing, and needs no display, so
+it is safe to run when the app will not start. It reports the version and the Python it is running on,
+the resolved database path *and which rule chose it*, whether the data folder exists and is writable,
+and what the database contains (or the exact refusal the app itself would show if the file is damaged,
+empty, or written for a newer schema). It exits `1` when it finds a problem and `0` when it does not,
+which makes it usable from a launcher or a script. Its report lists file locations, so remove them
+before sharing it; the start-up note described below is the redacted one.
 
 If the window cannot open, the message says what happened and what to do next instead of showing a raw
 traceback. A short, sanitised note is kept as `logs/startup-diagnostics.log` in the application-data
@@ -185,7 +216,9 @@ If you installed the package, drop the `python -m career_agent` prefix and use `
 same options.
 
 Add `--database PATH` to either command to work on a database outside the per-user application-data
-folder. Restoring replaces candidate data, so it asks you to confirm: interactively it requires typing
+folder, or point `CAREER_AGENT_DATABASE` at an absolute path to make that choice once; both commands
+resolve the path by the same rule as the window (see [Where the app keeps its data](#where-the-app-keeps-its-data)),
+so a backup always names the file the app itself would open. Restoring replaces candidate data, so it asks you to confirm: interactively it requires typing
 `restore`, and in a script it requires `--yes`. Refusals exit with status `2` and say what to do next.
 
 **What a backup guarantees**

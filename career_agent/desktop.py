@@ -22,9 +22,10 @@ from .core import (
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationStatus, ApplicationTracker, Availability,
     Decision, evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
+from .config import database_path_for_run
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
-    default_database_path, format_stored_timestamp, form_values, job_form_values, plan_job_save,
+    format_stored_timestamp, form_values, job_form_values, plan_job_save,
     profile_fields_not_matching, profile_form_values,
 )
 from . import resume
@@ -64,7 +65,10 @@ class CareerAgentApp:
         self.root.title("AI Career Agent — Local Workspace")
         self.root.geometry("1120x760")
         self.root.minsize(900, 600)
-        self.db_path = Path(database_path) if database_path else default_database_path()
+        # One rule decides this file for the window, the command line and the doctor: an explicit
+        # path, then CAREER_AGENT_DATABASE, then the platform's per-user folder. Keeping it in one
+        # place is what stops the app from opening a different database than the doctor reports.
+        self.db_path = database_path_for_run(database_path)
         self.store = CareerStore(self.db_path)
         self.selected_job_id = None
         self.job_save_mode = JobSaveMode.NEW

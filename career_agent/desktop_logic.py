@@ -25,6 +25,10 @@ from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
 
 APPLICATION_FOLDER_NAME = "AI Career Agent"
+
+#: Overrides the platform's per-user data root for this application only, so the database and the
+#: start-up note follow it. Absolute values only; see :func:`career_agent_data_root`.
+CAREER_AGENT_HOME_ENV = "CAREER_AGENT_HOME"
 DATABASE_FILE_NAME = "career_agent.sqlite3"
 
 #: Fields that can change whether a listing is treated as currently open and
@@ -115,12 +119,18 @@ def career_agent_data_root(
     Parameters are injectable so each operating-system branch can be tested without
     being on that operating system.
 
-    A relative value in ``XDG_DATA_HOME`` or ``LOCALAPPDATA`` is ignored, per the XDG Base Directory
-    Specification, so the database path never depends on the current working directory.
+    ``CAREER_AGENT_HOME`` overrides everything when it holds an absolute path, so someone who keeps
+    their data somewhere else (an encrypted volume, a backed-up folder) can say so once instead of
+    passing ``--database`` every time. A relative value in ``CAREER_AGENT_HOME``, ``XDG_DATA_HOME`` or
+    ``LOCALAPPDATA`` is ignored, per the XDG Base Directory Specification, so the database path never
+    depends on the current working directory; the doctor reports an ignored setting and why.
     """
     resolved_system = platform.system() if system is None else system
     environment = os.environ if environ is None else environ
     resolved_home = Path.home() if home is None else Path(home)
+    override = _absolute_root(environment.get(CAREER_AGENT_HOME_ENV))
+    if override is not None:
+        return override
     if resolved_system == "Darwin":
         return resolved_home / "Library" / "Application Support"
     if resolved_system == "Windows":

@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 671 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 695 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -135,6 +135,17 @@ dialog and a delete confirmation, and the JSON export carries the log as stored 
 version cannot label instead of blocking the export). An entry is deliberately not evidence: it cannot
 change a status, create a tracker record, or satisfy the confirmation floor — each of those is a test.
 Reminders and notifications that would build on the dates are not implemented (Phase F).
+
+Configuration and diagnostics are implemented for the local alpha: `career_agent.config` resolves the
+database path from one rule (an explicit path, then the `CAREER_AGENT_DATABASE` setting, then the data
+folder chosen by `CAREER_AGENT_HOME` or the platform), creates nothing while resolving, creates only the
+default folder when a run needs it, and reports an ignored relative setting instead of resolving it
+against the working directory. The window, the backup/restore commands and `--doctor` all use it, so the
+file they name cannot differ. `python -m career_agent --doctor` reports the version, the interpreter,
+the resolved path and the rule that chose it, whether the data folder is writable, and what the database
+contains — or the same refusal the app would show for a damaged, empty, or too-new file — without a
+display, without writing anything, and with exit status 1 when it finds a problem. Structured rotating
+logs, a log viewer, and a version/data-compatibility policy for releases are still planned.
 
 Schema versioning and safe updates are implemented. `career_agent.store` holds an ordered list of
 schema steps (version 1 created the profile/job/tracker tables; version 2 adds the application activity

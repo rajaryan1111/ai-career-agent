@@ -26,6 +26,7 @@ from unittest import mock
 
 from career_agent import __main__ as cli
 from career_agent.backup import validate_app_database
+from career_agent.config import DATABASE_ENV
 from career_agent.core import ApplicationTracker, Availability, CandidateProfile, JobListing
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore
@@ -169,17 +170,24 @@ class BackupCommandTests(CommandLineTestCase):
         self.assertFalse(destination.exists(), "a refused backup must not leave a file behind")
 
     def test_the_backup_command_uses_the_database_it_was_given(self):
-        """An explicit --database must be the only database the command looks at."""
+        """An explicit --database must win, and the database named by the setting must not be used.
+
+        The setting is pointed at a different database that holds different rows, so the backup's own
+        contents say which file was read: a backup taken from the setting's file would carry its
+        single listing instead of the two in the file named on the command line.
+        """
+        from_the_setting = populate(self.directory / "from-the-setting.sqlite3", listing_ids=("other",))
         destination = self.directory / "explicit-only.sqlite3"
 
-        with mock.patch.object(
-            cli, "default_database_path",
-            side_effect=AssertionError("the default path must not be resolved when --database is given"),
-        ):
+        with mock.patch.dict(os.environ, {DATABASE_ENV: str(from_the_setting)}):
             code, _out, _err = self.run_command(["--backup-to", str(destination)])
 
         self.assertEqual(code, cli.EXIT_OK)
         self.assertTrue(destination.is_file())
+        self.assertEqual(
+            row_counts(destination)[1], 2, "the backup must hold the database named on the command line",
+        )
+        self.assertNotEqual(row_counts(from_the_setting)[1], 2)
 
 
 class RestoreConfirmationTests(CommandLineTestCase):

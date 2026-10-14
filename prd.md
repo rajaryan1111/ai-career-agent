@@ -111,6 +111,15 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - No transmission of resume data to an external AI service without explicit consent.
 - Recoverable task state and safe retries.
 - Clear logs without unnecessary sensitive personal data.
+  **Implemented (local alpha):** one rule resolves the database path for the window, the backup/restore
+  commands and a read-only `--doctor` report (an explicit path, then `CAREER_AGENT_DATABASE`, then the
+  per-user data folder, which `CAREER_AGENT_HOME` moves when it holds an absolute path), so the three
+  cannot disagree about which file is in use; a relative setting is ignored and reported rather than
+  resolved against the working directory. `--doctor` prints the version, the paths, and what the
+  database contains — or the same refusal the app itself would give — without a display, creating or
+  changing nothing, and exits non-zero when it finds a problem. Start-up failures are explained in
+  plain language with local paths redacted, plus one bounded owner-only local note. **Planned:**
+  structured rotating logs and a log viewer; a version/data-compatibility policy for released builds.
 - Data export and deletion.
 - Accessible, understandable user interface.
 - Cross-platform distribution to be evaluated before commitment.
