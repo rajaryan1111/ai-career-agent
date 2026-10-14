@@ -63,6 +63,10 @@ BACKUP_SUFFIX = ".sqlite3"
 #: ``scripts/correct_tracker_record.py`` uses the same convention for the same purpose).
 AUTOMATIC_BACKUP_INFIX = ".backup-"
 
+#: How many names the search for a free automatic-snapshot name will try before giving up and saying
+#: so, rather than proposing a name it cannot promise is free.
+_MAX_AUTOMATIC_BACKUP_NAMES = 1000
+
 #: How long SQLite waits for a lock before reporting the database as busy. Kept short so a refusal
 #: arrives as a message rather than an apparently frozen window.
 LOCK_TIMEOUT_SECONDS = 2.0
@@ -165,6 +169,32 @@ def automatic_backup_path(database_path: str | Path, timestamp: datetime | None 
     """Where the pre-restore snapshot of ``database_path`` is written: same folder, timestamped."""
     database = Path(database_path)
     return database.with_name(f"{database.name}{AUTOMATIC_BACKUP_INFIX}{_utc_stamp(timestamp)}")
+
+
+def next_automatic_backup_path(database_path: str | Path, timestamp: datetime | None = None) -> Path:
+    """The first free automatic-snapshot name beside ``database_path``.
+
+    Used for both automatic copies - the one taken before a restore replaces the database, and the one
+    taken before a schema update changes it. The timestamp in the name has one-second resolution and
+    backups are never overwritten, so two copies taken in the same second would otherwise collide,
+    which is what a retry after a failed attempt, or two scripted commands in a row, actually does. Each
+    copy describes the database as it is *at that moment*, so an existing file is never reused for a
+    later one: the next free name is used instead. The search is bounded, and it only proposes a name -
+    ``create_backup`` still refuses to overwrite anything, so a race between two processes ends in a
+    refusal rather than a lost or overwritten copy.
+    """
+    base = automatic_backup_path(database_path, timestamp)
+    if not base.exists():
+        return base
+    for attempt in range(2, _MAX_AUTOMATIC_BACKUP_NAMES + 1):
+        candidate = base.with_name(f"{base.name}-{attempt}")
+        if not candidate.exists():
+            return candidate
+    raise BackupError(
+        f"There is no free name left for an automatic copy of {Path(database_path).name} beside it, "
+        f"after {_MAX_AUTOMATIC_BACKUP_NAMES} names. Nothing was changed; move or delete some of the "
+        "existing copies first."
+    )
 
 
 def _staged_path(database_path: Path, timestamp: datetime | None) -> Path:
@@ -389,29 +419,6 @@ def _copy_bytes(source: Path, destination: Path) -> None:
             writer.write(chunk)
 
 
-def _snapshot_path(database_path: Path, timestamp: datetime | None) -> Path:
-    """The pre-restore snapshot path, made unique when that second's name is already taken.
-
-    The automatic name is timestamped to the second, so two restores inside one second - two scripted
-    command-line restores, or a restore right after something wrote that second's automatic name -
-    would otherwise collide, and the second restore was refused with a message about preserving the
-    current database. That was misleading: the only problem was the file name, and it is fixed here by
-    keeping each restore's copy under the next free name. Nothing is ever overwritten, and a folder
-    that cannot offer a free name refuses rather than guesses.
-    """
-    snapshot = automatic_backup_path(database_path, timestamp)
-    if not snapshot.exists():
-        return snapshot
-    for attempt in range(2, 1000):
-        candidate = snapshot.with_name(f"{snapshot.name}-{attempt}")
-        if not candidate.exists():
-            return candidate
-    raise BackupError(
-        f"There is no free name left for a copy of the current database beside {database_path}, so "
-        "the restore was refused. Nothing was changed; move or delete old backups first."
-    )
-
-
 def _preserve_current_database(database_path: Path, timestamp: datetime | None) -> tuple[Path | None, bool]:
     """Snapshot the current database before it is replaced.
 
@@ -423,7 +430,7 @@ def _preserve_current_database(database_path: Path, timestamp: datetime | None) 
     """
     if not database_path.exists():
         return None, False
-    snapshot = _snapshot_path(database_path, timestamp)
+    snapshot = next_automatic_backup_path(database_path, timestamp)
     try:
         validate_app_database(database_path)
     except DatabaseInUse as busy:

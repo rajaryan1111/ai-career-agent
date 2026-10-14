@@ -121,6 +121,10 @@
 - Treat AI Career Agent as a real product, not a demo-only deliverable. Every milestone should deliver working behavior or measurable verification, not documentation alone.
 - Design shared capabilities for many professions. Do not hardcode one resume, degree, geography, career stage, or AI/ML skill vocabulary as the universal candidate model. Use extensible occupation-specific configuration with evidence-backed matching.
 - Report capability status honestly: planned, implemented, experimental, permission-gated, pilot-validated, or production-supported. Never call a mock a live integration.
+- Never change a database that already holds someone's data without a verified copy of it beside the
+  file first. A migration step can be committed and only then discovered to be wrong, and rollback cannot
+  reach it after the commit; the copy is the recovery path. Refuse the update if the copy cannot be
+  written, and never reuse an existing snapshot as if it were this attempt's.
 - Define acceptance criteria before implementation; include failure cases, recovery, data migration, privacy, security, and accessibility as appropriate. Run tests and inspect the final repository state before claiming completion.
 - The intended discovery cadence is 00:00 and 12:00 Asia/Kolkata. Laptop-off operation requires a verified always-on worker; do not claim it based only on desktop scheduling or an untested free tier.
 - Measure quality, not volume alone: extraction correctness on critical fields, top-ranked job relevance, eligibility false positives, duplicate prevention, direct application-route validity, evidence-backed status, scheduler recovery, and user outcomes. Do not promise selection.

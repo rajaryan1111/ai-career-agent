@@ -63,6 +63,7 @@ EVENTS: tuple[str, ...] = (
     "database.opened",
     "database.migrated",
     "database.migration_failed",
+    "database.upgrade_snapshot",
     "profile.saved",
     "profile.deleted",
     "job.saved",

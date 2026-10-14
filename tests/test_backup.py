@@ -24,8 +24,10 @@ from career_agent import (
 )
 from career_agent import backup as backup_module
 from career_agent.__main__ import main as cli_main
+import career_agent.backup as backup_module
 from career_agent.backup import (
-    BackupError, automatic_backup_path, create_backup, restore_backup, suggested_backup_name,
+    BackupError, automatic_backup_path, create_backup, next_automatic_backup_path, restore_backup,
+    suggested_backup_name,
     validate_app_database,
 )
 from career_agent.store import SCHEMA_TABLES, SCHEMA_TABLES_BY_VERSION, SCHEMA_VERSION, CareerStore
@@ -301,6 +303,50 @@ class BackupCreationTests(BackupTestCase):
 
         self.assertIn("owner-only", str(caught.exception))
         self.assertFalse(destination.exists(), "candidate data must not be left readable")
+
+
+class AutomaticBackupNameTests(BackupTestCase):
+    """Naming an automatic copy: one per attempt, never overwritten, and the search is bounded.
+
+    The name carries a timestamp with one-second resolution, and both automatic copies - before a
+    restore replaces the database and before a schema update changes it - are written through it. Two
+    attempts inside one second are ordinary (a retry after a failure, two scripted commands in a row),
+    so the second one must not be refused with a message about the database being unusable.
+    """
+
+    def test_the_first_free_name_is_used_and_then_the_next_one(self):
+        live = populate(self.directory / "career_agent.sqlite3")
+
+        first = next_automatic_backup_path(live, STAMP)
+        self.assertEqual(first, automatic_backup_path(live, STAMP))
+        first.write_bytes(b"an earlier copy that must not be overwritten")
+
+        second = next_automatic_backup_path(live, STAMP)
+
+        self.assertNotEqual(second, first)
+        self.assertEqual(second.name, f"{first.name}-2")
+        self.assertEqual(first.read_bytes(), b"an earlier copy that must not be overwritten")
+
+    def test_the_search_is_bounded_and_refuses_rather_than_guessing(self):
+        live = populate(self.directory / "career_agent.sqlite3")
+        with mock.patch.object(backup_module, "_MAX_AUTOMATIC_BACKUP_NAMES", 3):
+            base = automatic_backup_path(live, STAMP)
+            for name in (base.name, f"{base.name}-2", f"{base.name}-3"):
+                (self.directory / name).write_bytes(b"taken")
+
+            with self.assertRaises(BackupError) as caught:
+                next_automatic_backup_path(live, STAMP)
+
+        message = str(caught.exception)
+        self.assertIn("no free name left", message)
+        self.assertIn("Nothing was changed", message)
+
+    def test_a_copy_written_through_it_is_a_verified_database(self):
+        live = populate(self.directory / "career_agent.sqlite3", job_ids=("j1", "j2"))
+
+        create_backup(live, next_automatic_backup_path(live, STAMP))
+
+        self.assertEqual(validate_app_database(automatic_backup_path(live, STAMP)).job_count, 2)
 
 
 class BackupValidationTests(BackupTestCase):

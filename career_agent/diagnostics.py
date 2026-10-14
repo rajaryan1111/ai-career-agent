@@ -19,8 +19,8 @@ import re
 import sqlite3
 
 from .store import (
-    PrivateWriteError, SchemaMigrationError, SchemaTooNewError, UnrecognisedDatabaseError,
-    write_private_text_file,
+    PrivateWriteError, SchemaMigrationError, SchemaTooNewError, SchemaUpgradeRefused,
+    UnrecognisedDatabaseError, write_private_text_file,
 )
 
 #: One diagnostic keeps at most this many characters, so a pathological exception text cannot grow
@@ -272,6 +272,14 @@ def describe_startup_failure(
             f"application did not start.\n\n{message}\n\n"
             f"{_RECOVERY_HINT} The previous database is never deleted by this attempt: its file is "
             "still on disk exactly as it was."
+        )
+    if isinstance(exc, SchemaUpgradeRefused):
+        return (
+            "The local database needed an update to keep working with this version of the app, and "
+            "that update was not started because a safety copy of the database could not be written "
+            f"first.\n\n{message}\n\nYour data is untouched: the app did not begin, and the database "
+            "file on disk is exactly as it was. Free some space (or check that the folder holding the "
+            "database can be written to), then start the app again."
         )
     if isinstance(exc, SchemaTooNewError):
         return (

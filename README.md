@@ -106,8 +106,8 @@ before sharing it; the start-up note described below is the redacted one.
 The application writes one line per event to `logs/application.log`, beside the database it describes
 (so `--database /somewhere/else.sqlite3` keeps its log in `/somewhere/else/logs/`). The file answers
 "what has this app been doing?" without anyone having to remember: the version starting up, a database
-being opened and migrated (and which step from which version), a migration that failed, profile, job,
-tracker and activity writes, résumé imports, exports, backups and restores — including each refusal, so a
+being opened and migrated (and which step from which version), the safety copy taken before an existing
+database is updated, a migration that failed, profile, job, tracker and activity writes, résumé imports, exports, backups and restores — including each refusal, so a
 backup that never happened cannot look like one that did.
 
 ```bash
@@ -286,6 +286,14 @@ so a backup always names the file the app itself would open. Restoring replaces 
 
 **What an update to the database schema guarantees**
 
+- An existing database at an older version is copied first: a verified, owner-only snapshot is written
+  beside it *before* the first step runs, and the log records the copy immediately before the migration
+  it precedes. A new database and one already at the current version are not copied. If that copy cannot
+  be written, the update does not start at all, and the message names the version on disk and the version
+  it was going to become.
+- Each copy describes the state the attempt started from, so an existing file is never reused for a later
+  attempt, and snapshots are never overwritten. This is the recovery path for the case a rollback cannot
+  reach: a step that succeeded, was committed, and only afterwards turned out to be wrong.
 - The schema is updated one recorded step at a time, each in a single transaction that ends by writing
   the version it reached, so a database can never claim a version whose tables are missing or hold
   tables at a version it does not claim.
@@ -357,7 +365,9 @@ start-up diagnostics (including path redaction), verified backup and restore (in
 schema-version and permission failures, version-aware acceptance of an older backup, the migration
 framework (a version-1 database updated in place with its rows intact, a step that fails leaving the
 version and structure untouched, a partly applied step reported honestly rather than as "nothing
-changed", refusals by type for a newer or unrecognised file), WAL and side-file handling, and the
+changed", a verified copy taken before an existing database is updated - not for a new one, not for a
+current one, and not an existing copy reused - with a refused copy leaving the update unstarted and the
+file byte-identical, refusals by type for a newer or unrecognised file), WAL and side-file handling, and the
 command-line front end —
 its exit codes, its refusals, the confirmation it requires before replacing a database, and the
 fact that it never imports the GUI toolkit), and
@@ -427,7 +437,8 @@ Missing pieces, in the order they are needed, for a packaged desktop alpha:
    backup/restore rehearsal on each supported operating system from the packaged build.
 4. A written version and data-compatibility policy for released builds: what a version number promises
    and how someone upgrades. The database half of that story exists — schema steps are recorded, applied
-   one at a time in a transaction, rolled back on failure and reported honestly, and an older backup is
+   one at a time in a transaction, copied to a verified snapshot before an existing file is updated,
+   rolled back on failure and reported honestly, and an older backup is
    accepted and updated when it is opened (see "What a restore guarantees") — but nothing yet promises
    what a release number means across versions. (Until that exists, an installed copy is a development
    build of the same "local alpha".)

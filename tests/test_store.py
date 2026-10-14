@@ -13,9 +13,10 @@ from career_agent import ApplicationStatus, ApplicationTracker, Availability, Ca
 from career_agent.core import ActivityKind, ApplicationActivity
 import career_agent.store as store_module
 from career_agent.core import duplicate_key
+from career_agent.backup import BackupError, validate_app_database
 from career_agent.store import (
     SCHEMA_TABLES_BY_VERSION, SCHEMA_VERSION, CareerStore, PrivateWriteError, SchemaMigrationError,
-    SchemaTooNewError, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
+    SchemaTooNewError, SchemaUpgradeRefused, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
     UnrecognisedDatabaseError, create_private_file, require_owner_only, write_private_text_file,
 )
 
@@ -1015,6 +1016,126 @@ class SchemaMigrationTests(unittest.TestCase):
         self.addCleanup(store.close)
 
         self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+
+
+class PreUpgradeSnapshotTests(unittest.TestCase):
+    """An update never starts without a verified copy of what it is about to change.
+
+    The steps themselves are transactional (see ``SchemaMigrationTests``), but a rollback is not a
+    backup: a step that is applied, committed and only then found to be wrong cannot be undone by the
+    transaction that applied it, and a disk that fills mid-copy is beyond a transaction's reach. These
+    tests pin the copy, and pin the refusal when the copy cannot be written.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.folder = Path(self._directory.name)
+        self.path = self.folder / "career_agent.sqlite3"
+
+    def _job(self, listing_id="kept"):
+        return JobListing(
+            listing_id=listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=f"https://jobs.example/role/{listing_id}", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+        )
+
+    def _build_version_one_database(self, listing_ids=("kept",)):
+        """A real version-1 database holding rows, built by the real first step alone."""
+        steps = tuple(step for step in store_module._MIGRATIONS if step[0] == 1)
+        with mock.patch.object(store_module, "_MIGRATIONS", steps):
+            with CareerStore(self.path) as store:
+                for listing_id in listing_ids:
+                    store.save_job(self._job(listing_id))
+        return self.snapshots()
+
+    def snapshots(self):
+        """Every pre-upgrade copy in the folder, recognised by the name ``backup`` writes."""
+        return sorted(path for path in self.folder.iterdir() if ".backup-" in path.name)
+
+    def test_updating_an_older_database_keeps_a_verified_copy_of_it(self):
+        self._build_version_one_database(("kept", "also-kept"))
+
+        with CareerStore(self.path) as store:
+            listing_ids = [job.listing_id for job in store.list_jobs()]
+
+        copies = self.snapshots()
+        self.assertEqual(len(copies), 1, "one update, one copy")
+        info = validate_app_database(copies[0])
+        self.assertEqual(info.schema_version, 1, "the copy holds the version the update started from")
+        self.assertEqual(info.job_count, 2, "the copy holds the rows the update was about to change")
+        self.assertEqual(listing_ids, ["also-kept", "kept"])
+        self.assertEqual(validate_app_database(self.path).schema_version, SCHEMA_VERSION)
+        self.assertIn(
+            f"event=database.upgrade_snapshot detail=version=1 file={copies[0].name}",
+            (self.folder / "logs" / "application.log").read_text(encoding="utf-8"),
+            "the log says which file holds the copy",
+        )
+        self.assertIn("event=backup.written", (self.folder / "logs" / "application.log").read_text(encoding="utf-8"))
+
+    def test_a_brand_new_database_is_not_copied(self):
+        with CareerStore(self.path):
+            pass
+
+        self.assertEqual(self.snapshots(), [], "a new file has nothing to preserve")
+
+    def test_a_database_that_is_already_current_is_not_copied(self):
+        with CareerStore(self.path):
+            pass
+        with CareerStore(self.path):
+            pass
+
+        self.assertEqual(self.snapshots(), [], "opening a current database is not an update")
+
+    def test_the_update_does_not_start_when_the_copy_cannot_be_written(self):
+        self._build_version_one_database()
+        before = self.path.read_bytes()
+
+        def refuse(*args, **kwargs):
+            raise BackupError("simulated: the safety copy could not be written")
+
+        with mock.patch("career_agent.backup.create_backup", refuse):
+            with self.assertRaises(SchemaUpgradeRefused) as caught:
+                CareerStore(self.path)
+
+        self.assertIn("still at schema version 1", str(caught.exception))
+        self.assertIn("Nothing was changed", str(caught.exception))
+        self.assertEqual(self.path.read_bytes(), before, "the file must be untouched")
+        self.assertEqual(validate_app_database(self.path).schema_version, 1)
+        self.assertEqual(self.snapshots(), [], "no half-written copy may be left behind")
+        self.assertNotIn("event=database.migrated detail=from=1 to=2",
+                         (self.folder / "logs" / "application.log").read_text(encoding="utf-8"))
+
+    def test_a_step_that_fails_leaves_the_copy_available_and_the_data_intact(self):
+        """The moment the copy matters most is the moment the update goes wrong."""
+        self._build_version_one_database()
+
+        def broken_step(connection):
+            connection.execute("CREATE TABLE half_applied (value TEXT)")
+            raise RuntimeError("simulated failure inside the step")
+
+        with mock.patch.object(store_module, "_MIGRATIONS", store_module._MIGRATIONS[:1] + (
+            (2, "a step that fails", broken_step),
+        )):
+            with self.assertRaises(SchemaMigrationError):
+                CareerStore(self.path)
+
+        copies = self.snapshots()
+        self.assertEqual(len(copies), 1, "the copy the failed attempt took is kept, not discarded")
+        self.assertEqual(validate_app_database(copies[0]).job_count, 1)
+        self.assertEqual(validate_app_database(copies[0]).schema_version, 1)
+        self.assertEqual(validate_app_database(self.path).schema_version, 1)
+
+        # A later attempt takes its own copy of the state it sees, even within the same second: a copy
+        # describes the database at the moment it was made, so an older one is never reused for it.
+        with CareerStore(self.path) as store:
+            self.assertEqual([job.listing_id for job in store.list_jobs()], ["kept"])
+
+        all_copies = self.snapshots()
+        self.assertEqual(len(all_copies), 2)
+        for copy in all_copies:
+            self.assertEqual(validate_app_database(copy).schema_version, 1)
+        self.assertEqual(validate_app_database(self.path).schema_version, SCHEMA_VERSION)
 
 
 class DatabaseFilePermissionTests(unittest.TestCase):

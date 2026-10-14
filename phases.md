@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 695 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 743 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -165,7 +165,12 @@ data-modifying statements only) nor `executescript` (it commits any open transac
 script) is used, because either would let a partly applied step be committed with no way to roll it back;
 a regression test asserts that a step which fails after creating an object leaves nothing behind. A failing step is rolled back and reported
 through `SchemaMigrationError` with the version **re-read from the file** afterwards, so "nothing changed"
-is only claimed when the file confirms it; a database recording a newer version
+is only claimed when the file confirms it. An existing database at an older version is copied to a
+verified, owner-only snapshot beside itself *before* the first step runs (never for a new file, never for
+a file already current, and never by reusing an existing copy), because a step that succeeds and is only
+later found to be wrong has already been committed and cannot be rolled back; if that copy cannot be
+written the update does not start and `SchemaUpgradeRefused` says so, naming both versions. The event log
+records the copy before the migration for each update; a database recording a newer version
 (`SchemaTooNewError`) or holding tables with no recorded version at all (`UnrecognisedDatabaseError`) is
 refused untouched, by type, and `diagnostics` explains each of those three cases in plain language.
 `backup.validate_app_database` now validates a candidate file against the tables of the version that file

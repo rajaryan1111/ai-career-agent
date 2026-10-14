@@ -1707,3 +1707,65 @@ write failure escape failed 2; moving the activity event before the write failed
 creates no side files" and "a cancelled backup writes nothing" both noticed the new `logs` folder, and
 both were rewritten to compare the folder's contents before and after the action (the first now also
 checks every pre-existing neighbour's bytes and mode) instead of being weakened into passing.
+
+## 2026-10-15 — A copy before the schema is changed, not only before a restore
+
+**What changed.** `career_agent/store.py` now takes a verified safety copy of an existing database
+*before* the first migration step runs. `_snapshot_before_upgrade` is called from the migration loop when
+the file records a version between 1 and the current one and actually holds this application's tables;
+the copy is written through the same `backup.create_backup` the desktop and command-line backups use
+(verified by reading it back, owner-only where the platform supports it) and is reported as
+`backup.written`. If it cannot be written the update does not start: `SchemaUpgradeRefused` names the
+version on disk and the version it was going to become, says nothing was changed, and
+`diagnostics.describe_startup_failure` explains the situation and the next step in plain language. On
+success the event log records `database.upgrade_snapshot detail=version=<old> file=<name>` immediately
+before `database.migrated from=<old> to=<new>`, so the copy and the update are visible in the history in
+the order they happened. `backup.next_automatic_backup_path` names the copy: `<db>.backup-<UTC second
+stamp>Z`, then `-2` … `-1000`, the first free name beside the database.
+
+**Why.** The migration steps were already one explicit transaction each, rolled back and re-read from the
+file when they fail, so a step that fails is not the dangerous case. The dangerous case is a step that
+*succeeds*: it is committed, the application is usable, and only afterwards is it found to be the wrong
+step — a wrong value, a mis-set status, a column that should have stayed. Rollback cannot help after a
+commit, and the schema-2 change (the activity log) was the project's first real upgrade of data someone
+may have been keeping for weeks. Copying the file first turns that into "restore the copy".
+
+**The rules this keeps, each one a test.** *Only existing databases*: a new file and a file already at
+the current version are not copied (2 tests), so the ordinary first run does not leave a snapshot of an
+empty database beside it. *A refused copy refuses the update*: with the copy forced to fail, the open
+raises `SchemaUpgradeRefused` and a byte-comparison test shows the file is unchanged and still records
+version 1 — the update never begins. *A failed step keeps its copy*: when the next step then fails, the
+first copy is still there, at the version it saw, with the rows it saw, and the live file is left where
+the failure left it (`store` re-reads the recorded version; the copy is what makes recovery possible).
+*Each copy describes its own moment*: an existing name is never reused, because a retry after a failure
+would otherwise overwrite the evidence of the state the first attempt started from. *A verification of
+the copy, not an assumption*: the snapshot goes through `create_backup`, so it is read back and validated
+before the update proceeds.
+
+**Why a shared name-finder rather than a second copy of the same code.** The pre-restore snapshot already
+needed "the next free timestamped name", with its own `-2` … `-999` search, and this increment needed the
+same search with a refusal message that says the update was not started. Two searches would have drifted.
+`next_automatic_backup_path` is now that one search with one message; `restore_backup` calls it and so
+does the upgrade path, and the previous `_snapshot_path` helper is gone (nothing else called it — verified
+by grep, and the restore tests, including the pre-existing same-second retry test, pass unchanged). It
+only *proposes* a name: `create_backup` still refuses to overwrite, so two processes racing on the same
+second produce a safe refusal rather than one of them losing a copy.
+
+**Evidence.** The focused run `python3 -B -m unittest tests.test_store tests.test_backup` is 166 OK; the
+full suite is 743 OK (13 skipped without the optional `pypdf`); `python3 -m compileall -q career_agent
+scripts tests` is clean. Before the tests, an end-to-end script upgraded a real version-1 database with a
+saved job: the folder gained `career_agent.sqlite3.backup-<stamp>Z`, `backup.validate_app_database` read
+that copy back as schema 1 with the job intact, the live file became schema 2, and the log read
+`backup.written` → `database.upgrade_snapshot detail=version=1 file=…Z` → `database.migrated from=1 to=2`.
+
+**Teeth checks.** Making a failed safety copy non-fatal failed 1 test (the byte-comparison one that
+requires the update never to start); removing the call before the update failed 3 tests in
+`tests/test_store.py`; reusing the timestamped name instead of searching for a free one failed 2 tests
+and errored 1 in `tests/test_backup.py`. All three were restored afterwards, and the focused and the full
+suite were re-run to confirm the restore was complete.
+
+**Found while writing it.** The first version reused the timestamped name unconditionally, and the honest
+test — open, fail the step, open again in the same second — was refused with "a file already exists at …
+Backups are never overwritten". That was the code being wrong, not the test: the second attempt was a
+*different* moment and deserved its own copy. The fix is `next_automatic_backup_path`; nothing in
+`create_backup`'s refusal was relaxed to make the test pass.

@@ -209,6 +209,30 @@ class SchemaMigrationError(RuntimeError):
         )
 
 
+class SchemaUpgradeRefused(RuntimeError):
+    """An update was stopped before it started because no safety copy of the database could be written.
+
+    A step that fails is rolled back whole (see :class:`SchemaMigrationError`), but a rollback is not a
+    backup: a step can be applied, committed, and only *then* found to have been the wrong step, and a
+    disk that fills while a copy is being taken is not something a transaction can help with. The
+    database is therefore copied first, and if that copy cannot be made the update does not begin. The
+    message says which versions are involved and that nothing was changed, because that is what a person
+    needs in order to decide between freeing space, copying the file by hand, or restoring a backup.
+    """
+
+    def __init__(self, target_version: int, from_version: int, cause: BaseException) -> None:
+        self.target_version = target_version
+        self.from_version = from_version
+        self.cause = cause
+        super().__init__(
+            f"The database was not updated from schema version {from_version} to version "
+            f"{target_version} because a safety copy of it could not be written first ({cause}). "
+            "Nothing was changed: the database is still at schema version "
+            f"{from_version}. Free some space or check that the folder is writable, then try again - "
+            "or make a copy of the database file yourself and update a copy of it."
+        )
+
+
 class PrivateWriteError(OSError):
     """A private (owner-only) file write could not be completed safely.
 
@@ -577,11 +601,40 @@ class CareerStore:
                 "verified backup of your own database."
             )
         current = version
+        if 0 < current < _SCHEMA_VERSION and self._holds_tables():
+            # An existing database of an older version is about to be changed, so it is copied first.
+            # A brand-new file has nothing to preserve, and neither has a file that already records the
+            # current version, so neither is copied.
+            self._snapshot_before_upgrade(current)
         for target, description, apply_migration in _MIGRATIONS:
             if target <= current:
                 continue
             self._apply_migration(target, description, apply_migration, current)
             current = target
+
+    def _snapshot_before_upgrade(self, from_version: int) -> Path:
+        """Copy the database beside itself and verify the copy, before the first step changes it.
+
+        The copy goes through the same verified, owner-only backup path the Data safety tab uses, so
+        what it guarantees is exactly what that path guarantees - read back, checked, and kept rather
+        than overwritten - and the file name says which version it holds. A copy that cannot be written
+        stops the update (:class:`SchemaUpgradeRefused`) instead of changing a database nobody has a
+        second copy of.
+        """
+        # Local import: ``backup`` imports this module's write primitives, so a module-level import
+        # here would be circular.
+        from .backup import BackupError, create_backup, next_automatic_backup_path
+
+        # A fresh name every time: the copy has to describe the database as it is *now*, so a copy left
+        # by an earlier attempt is never reused, and the second-resolution timestamp alone would make two
+        # attempts in the same second collide (which is what a retry after a failed step does).
+        target = next_automatic_backup_path(self.database_path)
+        try:
+            create_backup(self.database_path, target)
+        except BackupError as exc:
+            raise SchemaUpgradeRefused(_SCHEMA_VERSION, from_version, exc) from exc
+        self._record("database.upgrade_snapshot", f"version={from_version} file={target.name}")
+        return target
 
     def _holds_tables(self) -> bool:
         """Whether the database file holds any table of its own (SQLite's internal ones do not count)."""
