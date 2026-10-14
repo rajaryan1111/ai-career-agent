@@ -91,6 +91,12 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Retry safely without duplicate submissions.
 - Record errors and recovery attempts.
 - Support manual status updates and optional authorized email integrations.
+- **Implemented (local alpha):** status states with guarded transitions, confirmed-status evidence, and a
+  dated per-application activity history that the candidate writes themselves (applied, employer
+  replied, interview, assessment, followed up, note), each row also recording when this app wrote it. The
+  history is not evidence and cannot change a status. **Planned/gated:** reminders, interview and
+  follow-up scheduling, and any email or calendar integration (each needs its own permission, privacy and
+  failure handling).
 
 ### Scheduling
 - Default discovery schedule: 00:00 and 12:00 Asia/Kolkata.

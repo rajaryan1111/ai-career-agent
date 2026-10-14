@@ -46,6 +46,7 @@
 - A form filled out is not proof of submission.
 - An attempted submission is not a confirmed application.
 - Record status evidence, timestamps, source URL, and errors.
+- An activity entry the candidate writes is their own dated record, not employer evidence: it must not change an application status, create a tracker record, or satisfy the confirmation requirement.
 - Do not retry an ambiguous submission until checking whether it may already have succeeded.
 - Prevent duplicates across sources and repeated scheduled runs.
 - Ask about sensitive declarations, unfamiliar questions, assessments, or missing information.

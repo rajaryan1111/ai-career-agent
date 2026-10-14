@@ -26,6 +26,12 @@ The dependency-free Python domain core in `career_agent/` provides:
   non-sensitive start-up failure report that names a next step without exposing paths, credentials or
   candidate data.
 - Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
+- A dated **activity history** per application, kept beside the tracker status rather than inside it:
+  each entry records what the person says happened (applied, employer replied, interview, assessment,
+  followed up, note) on the day it happened, plus when this app wrote the row. An entry never changes a
+  status, never creates a tracker record, and is never accepted as confirmation evidence, so a note
+  cannot become proof. Entries are shown oldest first, are deleted with their listing, and one entry can
+  be deleted explicitly.
 - Validation of manually entered links as public http(s) addresses only (no credentials, no
   localhost/private/internal targets) and display-time redaction of credentials in older rows.
 - A fail-closed source permission gate: no source runs without recorded permission evidence and a
@@ -37,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -280,7 +286,11 @@ it is absent, and everything else — including DOCX import — still runs.)
 python -m unittest discover -s tests -v
 ```
 
-The suite covers the distribution metadata and entry point (the version literal setuptools reads, the
+The suite covers the activity history (domain validation, storage order and boundaries, the append-only
+write path, deletion, cascade with its listing, unreadable rows refused by name on the read path while
+the export still carries them, the status never being touched by an entry, and the desktop panel: adding
+through the real dialog, refusals that write nothing, delete confirmation and its cancelled and
+already-gone paths, and a cleared panel when no application is selected), the distribution metadata and entry point (the version literal setuptools reads, the
 declared dependency surface, the console-script target, and the declared Python floor matching the CI
 matrix — the wheel itself is built and installed by the `installed-package` CI job, not by these tests), the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
 the source permission gates and run-outcome rules, the Tk-free desktop logic (form mapping, save

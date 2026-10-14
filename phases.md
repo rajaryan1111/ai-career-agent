@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 628 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 671 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -126,6 +126,15 @@ transaction and never closes the connection. They do not cover widget
 rendering, a real Tk session, PDF extraction without the optional `pypdf` library, or any
 operating-system integration, so the manual GUI smoke test —
 including macOS/Apple Silicon — remains outstanding.
+
+The application activity log is implemented end to end: schema version 2 adds
+`application_activity`, `ApplicationActivity`/`ActivityKind` define a dated entry whose detail is
+validated at the domain *and* storage boundaries, the store appends, lists oldest-first and deletes
+entries and cascades them with their listing, the desktop Tracker tab has an activity panel with an add
+dialog and a delete confirmation, and the JSON export carries the log as stored (marking a kind this
+version cannot label instead of blocking the export). An entry is deliberately not evidence: it cannot
+change a status, create a tracker record, or satisfy the confirmation floor — each of those is a test.
+Reminders and notifications that would build on the dates are not implemented (Phase F).
 
 Schema versioning and safe updates are implemented. `career_agent.store` holds an ordered list of
 schema steps (version 1 created the profile/job/tracker tables; version 2 adds the application activity

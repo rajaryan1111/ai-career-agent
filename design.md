@@ -46,6 +46,13 @@ States: Discovered, Shortlisted, Prepared, Awaiting user, Submission attempted, 
 
 Show evidence for confirmed status where available. Unknown must not silently become confirmed.
 
+The alpha adds a dated **activity history** beside the status rather than inside it: the person records
+what happened and when (applied, employer replied, interview, assessment, followed up, note) and the app
+records when it wrote the row. The two are kept apart on purpose — an entry is the person's own account,
+not employer evidence, so it cannot satisfy the confirmation floor, cannot move the status, and cannot
+create a tracker record. Entries are shown oldest first, one can be deleted explicitly, and deleting the
+listing takes its history with it.
+
 ## 7. Exception handling
 
 Pause when candidate information is missing/conflicting; a sensitive declaration is needed; a mandatory requirement cannot be verified; an assessment/custom response is required; CAPTCHA/OTP or another unsupported step appears; platform policy/workflow is unclear; or submission result is ambiguous.

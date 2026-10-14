@@ -1554,3 +1554,58 @@ table: the domain type, storage API, export and desktop surface are the next com
 
 **Still missing.** Encryption at rest, portability, a written release/upgrade policy (what a version number
 promises), and everything that consumes the new table.
+
+## 2026-10-15 — Application activity log: the dated history the tracker was missing
+
+**What changed.** Schema version 2's table now has a product surface. `career_agent.core` gained
+`ActivityKind` (a closed set: applied, response, interview, assessment, follow-up, note),
+`ACTIVITY_KIND_LABELS`, and the frozen `ApplicationActivity` (kind, `occurred_on`, detail, plus the
+`activity_id` and `recorded_at` the store assigns); the store gained `add_activity`, `list_activity`,
+`list_activity_raw` and `delete_activity`; `desktop_logic` gained `build_activity` and
+`activity_form_values`; the Tracker tab gained an activity panel with an add dialog and a delete
+confirmation; and the JSON export carries the log.
+
+**Decisions and reasons.**
+
+- **The log sits beside the status, not inside it.** An entry is the person's own account of what
+  happened, so it must not be able to move a status, create a tracker record, or satisfy the
+  confirmation floor — a note such as "I applied" is exactly what someone might expect to double as
+  proof, and it is refused as evidence at the *storage* boundary, not only in the dialog. Three tests
+  name those properties directly.
+- **Two dates, never conflated.** `occurred_on` is the day the person says it happened;
+  `recorded_at` is when this application wrote the row. The panel shows them in separate columns and the
+  list is ordered by `occurred_on` then `activity_id`, so "they replied on the 20th" cannot be confused
+  with "this app heard about it on the 22nd".
+- **A typed date is never guessed at.** The field accepts exactly `YYYY-MM-DD`: the shape is matched
+  before parsing, because `date.fromisoformat` also reads basic (`20261012`) and ISO-week (`2026-W41-1`)
+  forms, and a field that promises one shape should not quietly accept three. A blank date is refused
+  rather than defaulted to today; the dialog pre-fills today so the common case is one keystroke.
+- **The neutral default is deliberate.** A new entry starts as `note`, not `applied`: the one entry a
+  person could save by accident must not be the one that claims an application was sent.
+- **Refusals are reportable, not silent.** An entry for a listing that does not exist is refused before a
+  dialog opens; a database failure during a save is reported and never as success; deleting an entry that
+  is already gone says "already gone" instead of claiming a deletion; and a stored row this version cannot
+  read (`kind` or `occurred_on` written by a later version) is refused by name on the read path, reported
+  in the window, and still exportable through `list_activity_raw` — the export marks it
+  `kind_recognised: false` rather than blocking the whole file.
+- **Entries cascade with their listing.** Deleting a job deletes its history (foreign key, verified by a
+  test that counts rows afterwards), which is the same explicit-delete behaviour the rest of the store has.
+
+**Evidence.** `tests/test_core.py` (7 tests: labels, trimming, blank/over-long detail boundaries,
+impossible and out-of-range dates, a `datetime` where a date is meant, a future date allowed because an
+interview can be scheduled, string-kind normalisation, unknown kind refused by name);
+`tests/test_store.py` `ActivityLogTests` (12 tests: round-trip with both dates, oldest-first ordering
+regardless of write order, no tracker row created, not usable as confirmation evidence, unsaved listing
+refused, storage-boundary re-validation, durability across reopen, single delete, delete-not-there,
+cascade, unreadable rows on the read path with the raw read still working); `tests/test_desktop_logic.py`
+(8 tests: defaults, offered kinds, trimming, strict date shape, impossible date, missing date, unknown
+kind, blank detail); `tests/test_desktop_handlers.py` `ActivityHistoryTests` (13 tests through the real
+handlers) and two export tests. Full suite 671 OK (13 skipped without `pypdf`), `compileall` exit 0, CSV
+audit exit 0 with the hash unchanged, leak-watch 1391 connections created / 0 never closed. As part of
+this work the widget stub in `tests/test_desktop_handlers.py` was made more faithful: inserted rows now
+appear in `get_children()`, deleted rows leave it, and `item(id, "values")` coerces item ids the way Tcl
+does — the last is what surfaced that the panel's delete summary had to read a real item id.
+
+**Still missing.** Reminders, notifications, interview/follow-up scheduling, and any email or calendar
+integration (Phase F) — the log records dates but nothing acts on them. The panel shows entries for the
+selected application only; there is no filtering or search across the history yet.
