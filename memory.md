@@ -1086,15 +1086,16 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
 
 - Defect 2 (résumé skills sections discarded). The parser dropped the skills value when a heading shared a
   line with its list — exactly what real PDF extraction produces (`SKILLS Python, SQL`, `SKILLS: Python`);
-  a 31-layout synthetic probe found 24 layouts that produced no proposal, and 7 real pypdf layouts showed
-  the same shape. `resume.py` now keeps column gaps as a separator instead of collapsing them, recognises a
+  a 31-layout synthetic probe found 24 layouts that produced no proposal, and 7 synthetic PDFs read
+  through pypdf showed the same shape. `resume.py` now keeps column gaps as a separator instead of collapsing them, recognises a
   much wider heading vocabulary (Technical/Key/Core/Software/Soft skills, Skillset, Areas of Expertise,
   Competencies, Technologies, Tech Stack, Tools & …), tolerates decoration, letter-spacing and
   same-line/merged-column headings, treats a category label inside a block as a label rather than a skill,
   and reports "no skills heading recognised" separately from "heading found, no list followed". Probe
   24/31 → 2/31 failures, and the 2 that remain are correct refusals (text hidden under a summary heading;
-  content extracted before its heading). ~20 regression tests in `test_resume.py`, including DOCX tables and
-  sidebar-style absolute-positioned PDFs; unselected or absent fields still leave the saved profile as it was.
+  content extracted before its heading). 13 new test methods in `test_resume.py` (several of them looping
+  over dozens of heading names or layouts), including DOCX tables and sidebar-style absolute-positioned
+  PDFs; unselected or absent fields still leave the saved profile as it was.
 
 - Defect 3 (misleading restore refusal). Pointing a restore at a folder reported "the current database
   could not be preserved", which is true of nothing; it now refuses with "is a folder, not a database
