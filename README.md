@@ -232,7 +232,9 @@ and textless files, the refusal to invent values, and the socket-blocked local-o
 chooser's option set against
 the state machine, unrecognised stored statuses and the refusal paths they trigger, version reporting and
 start-up diagnostics (including path redaction), verified backup and restore (including corruption,
-schema-version and permission failures, WAL and side-file handling, and the command-line front end), and
+schema-version and permission failures, WAL and side-file handling, and the command-line front end —
+its exit codes, its refusals, the confirmation it requires before replacing a database, and the
+fact that it never imports the GUI toolkit), and
 the desktop handlers exercised through widget stubs — including the résumé review screen: proposals shown
 with evidence before anything is saved, per-value accept and reject, cancellation and declined
 confirmation writing nothing, validation and database failures never reported as success, and no document
@@ -244,8 +246,11 @@ built in the test process; no real candidate data and no network access are invo
 SQLite resource
 lifecycle: no test may leave a connection open (the whole suite is re-run in a child process that
 counts them, because Python 3.10/3.11 never emit the `ResourceWarning: unclosed database` that
-macOS reported), and `with sqlite3.connect(...)` — which manages the transaction, not the
-connection — is refused by a source scan. It
+macOS reported), `with sqlite3.connect(...)` — which manages the transaction, not the
+connection — is refused by a source scan, and a test may not resolve the machine's own database path,
+so the suite cannot open the candidate's real database. Closing the window is covered too: the
+registered `WM_DELETE_WINDOW` handler closes the store, destroys the window, and writes none of the
+form's unsaved values. It
 requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
 behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
 remains outstanding and is tracked in

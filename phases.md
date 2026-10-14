@@ -94,8 +94,13 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 483 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
-compilation checks, and the research-CSV audit. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
+implemented, with 525 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
+compilation checks, and the research-CSV audit. The suite also holds the safety properties an audit
+turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
+the form and can never make an experience requirement pass, no test may resolve this machine's real
+database path, every malformed or mis-shaped restore target is refused with the current database left
+byte-identical, the window-closing path writes nothing, and the confirmation-evidence floor refuses
+phrases that describe trying the feature rather than what an employer showed. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
 floor and the backed-up record-correction tool, owner-only export
 permissions, stale-selection handling, the status chooser's option set measured against the state machine, unrecognised stored statuses and the refusal paths they trigger, stored-timestamp rendering (missing, offset-less and unparseable values), version reporting and start-up diagnostics (including path redaction), backup and restore (verified snapshots, corruption and
 schema-version refusals, POSIX permissions, WAL and side-file handling, the command-line front end),

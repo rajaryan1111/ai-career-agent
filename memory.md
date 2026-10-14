@@ -1062,3 +1062,77 @@ bug restored as well, showing the option assertion catches it even without the v
 scratch files were verified restored by SHA-256. Rendering itself is still not tested here (no display,
 no tkinter in the sandbox), and steps 24-31 of
 research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS retest for this fix.
+
+### 2026-10-14 — End-to-end audit of PR #2 (branch, code, gates, docs)
+
+- Scope: an autonomous audit of the whole working branch — profile persistence and validation, PDF/DOCX
+  extraction, parsing, review, cancellation and selective saving, SQLite connections/transactions/
+  schema/backup/restore, listing validation and provenance, the source-quality gate, eligibility and
+  fail-closed shortlisting, tracker transitions and confirmation evidence, GUI error handling/
+  cancellation/scrolling/shutdown, sensitive-data handling, malformed input, resource limits, CLI,
+  diagnostics — with every verified defect fixed under a regression test. Nothing was enabled: no
+  adapter, no network, no automatic submission, and `main` was not touched.
+
+- Defect 1 (fail-open shortlisting). `validation.optional_float` accepted `nan`, `inf` and `1e400`, so a
+  profile or listing could store a non-finite value — and `NaN` is not valid JSON, so the stored payload
+  was unreadable to a strict parser. Worse, a listing whose `minimum_experience_years` was `nan`
+  evaluated `experience_years: pass`, giving `Decision.PASS` and `can_be_ranked_as_eligible = True`.
+  Fixed in `validation.py` (finite check with a user-facing message) and, in depth, in `core.py`
+  (`_is_real_number` guard that returns UNKNOWN for a non-finite candidate value or bound, covering rows
+  written before the guard existed). Tests: `test_optional_float_refuses_values_that_are_not_real_numbers`,
+  `test_the_largest_ordinary_numbers_are_still_accepted`, `test_a_non_finite_experience_value_is_never_a_pass`,
+  `test_a_non_finite_job_experience_bound_is_never_a_pass`, `test_an_ordinary_experience_range_still_passes_and_still_fails`,
+  plus two form-level cases in `test_desktop_logic.py`.
+
+- Defect 2 (résumé skills sections discarded). The parser dropped the skills value when a heading shared a
+  line with its list — exactly what real PDF extraction produces (`SKILLS Python, SQL`, `SKILLS: Python`);
+  a 31-layout synthetic probe found 24 layouts that produced no proposal, and 7 real pypdf layouts showed
+  the same shape. `resume.py` now keeps column gaps as a separator instead of collapsing them, recognises a
+  much wider heading vocabulary (Technical/Key/Core/Software/Soft skills, Skillset, Areas of Expertise,
+  Competencies, Technologies, Tech Stack, Tools & …), tolerates decoration, letter-spacing and
+  same-line/merged-column headings, treats a category label inside a block as a label rather than a skill,
+  and reports "no skills heading recognised" separately from "heading found, no list followed". Probe
+  24/31 → 2/31 failures, and the 2 that remain are correct refusals (text hidden under a summary heading;
+  content extracted before its heading). ~20 regression tests in `test_resume.py`, including DOCX tables and
+  sidebar-style absolute-positioned PDFs; unselected or absent fields still leave the saved profile as it was.
+
+- Defect 3 (misleading restore refusal). Pointing a restore at a folder reported "the current database
+  could not be preserved", which is true of nothing; it now refuses with "is a folder, not a database
+  file" before any staging file exists. Two more restore shapes were probed and are now tested: a symbolic
+  link in place of the live database is refused with its target left byte-identical, and an ordinary
+  confirmed restore still keeps a verified copy of what it replaced.
+
+- Defect 4 (confirmation-evidence floor). `is_substantive_confirmation_evidence` refused bare placeholders
+  but accepted a phrase about testing the feature ("This is a test"), which could then be recorded as the
+  evidence for `confirmed`. The whole-value list now covers those phrases; a sentence that merely contains
+  such a word is still accepted, and both the domain and storage tests list the new cases.
+
+- Coverage added where the audit found none: `tests/test_cli_backup_restore.py` (14 tests) drives the real
+  argument parser and exit codes for `--backup-to`/`--restore-from` — refusals leave files untouched, a
+  restore without a terminal or without `--yes` is refused, a confirmed restore keeps the previous
+  database as a verified copy, the two actions cannot be combined, and the database commands never import
+  the desktop module. `WindowShutdownTests` (3 tests) builds the app through its real `__init__` against
+  the validating stubs and proves the `WM_DELETE_WINDOW` handler closes the store, destroys the window and
+  writes none of the form's unsaved values. `RealDatabaseSafetyTests` (3 tests) reads the test files as
+  syntax trees and refuses a `CareerStore(...)` with no path, and any call to the default-path functions
+  that would resolve this machine's real folder, so the suite cannot open the candidate's database.
+
+- Evidence. Suite 483 → **525 tests, OK** (12 skips without pypdf: the PDF-extraction cases) and **525 OK,
+  no skips** with pypdf 6.20.1; targeted runs green (backup 54, CLI 14, resume, store/core/validation,
+  desktop handlers, resource lifecycle). Backup/restore probed end-to-end on disposable databases
+  (round trip, 2000-row file, garbage, truncated, empty, symlink, directory, newer schema, missing table,
+  dangling tracker row, read-only folder, unreadable file — every refusal left the live database
+  byte-identical). URL probe 42/42; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`;
+  `compileall` and `tabnanny` exit 0. No test or script opens the default database, and no candidate data,
+  database file, secret or temporary artifact entered the commit.
+
+- Gate status unchanged. `SOURCE_QUALITY_GATE_PASSED` stays `False`: `enabled_discovery_sources()` is
+  still empty, the acceptance evidence (≥20 unique relevant currently-available vacancies, a measured
+  direct-link validity with a defensible denominator, the eligibility/applicant-country audit, and
+  per-source permission) is still unmet, and `open` is still not treated as verified availability. A unit
+  test asserts the constant is `False`, so nothing can flip it to make a build pass.
+
+- Limitations. No display and no tkinter in this environment, so widget rendering, window behaviour and
+  macOS-specific behaviour still rest on the manual smoke-test checklist; the audit changed behaviour only
+  where a probe or a test could demonstrate it, and the two remaining skills-layout failures are documented
+  instead of papered over.
