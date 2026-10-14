@@ -20,8 +20,13 @@ Safety properties:
     with the same error the application would give. There is no direct SQL write path here.
   * ``--reason`` is mandatory and becomes the new evidence text: the corrected record must say why
     it is being corrected. The reason is never fabricated by this tool.
-  * Only the named record is touched, and the result is re-read and verified before success is
-    reported. A verification failure exits non-zero and leaves the backup in place.
+  * Only the named record is touched, and the result is re-read and verified field by field - status,
+    evidence, confirmation flag and listing id - before success is reported. A verification failure
+    exits non-zero and leaves the backup in place.
+  * The write is conditional on the row this run read (``save_tracker(..., expected=...)``): if the
+    record changed in the meantime, the tool refuses and nothing is written, rather than overwriting
+    evidence or a confirmation it never saw. Comparing transition rules alone cannot catch that, since
+    a forward move usually leaves the intended transition permitted.
 
 Usage (single correction):
     python scripts/correct_tracker_record.py --database "<path>/career_agent.sqlite3" \
@@ -38,6 +43,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +163,49 @@ def corrected_tracker(row: dict, target: ApplicationStatus, reason: str, clear_c
     )
 
 
+def expected_fields(row: dict) -> dict:
+    """The fields a correction was decided from, for the conditional write in :meth:`save_tracker`.
+
+    Read paths in this module are deliberately short-lived, so the row is read once, validated, and
+    then written minutes later when ``--apply`` follows a review. Passing these fields makes the write
+    compare-and-set: a record another writer moved on - even to a status this transition also permits,
+    with evidence or a confirmation this run never saw - matches no row and is refused instead of
+    being overwritten by a stale decision.
+    """
+    return {
+        "status": row["status"],
+        "status_evidence": row["status_evidence"],
+        "candidate_confirmed": bool(row["candidate_confirmed"]),
+    }
+
+
+def describe_mismatch(verified: dict | None, intended: ApplicationTracker, listing_id: str) -> str | None:
+    """Compare a written row with the intended correction, field by field; ``None`` means it matches.
+
+    Every field the tool set is checked, not only the status: a write that reached the intended status
+    while dropping the evidence, the confirmation flag, or the identity of the record would still be a
+    lost correction, and reporting it as success would be wrong. ``updated_at`` is checked by its
+    documented meaning - when the app last wrote this record locally - so it must be a parseable
+    ISO-8601 instant; no particular value is ever expected.
+    """
+    if verified is None:
+        return f"no tracker row exists for {listing_id!r} after the write"
+    checks = (
+        ("listing_id", verified.get("listing_id"), intended.listing_id),
+        ("status", verified.get("status"), intended.status.value),
+        ("status_evidence", verified.get("status_evidence"), intended.status_evidence),
+        ("candidate_confirmed", bool(verified.get("candidate_confirmed")), intended.candidate_confirmed),
+    )
+    for name, found, wanted in checks:
+        if found != wanted:
+            return f"{name} is {found!r}, expected {wanted!r}"
+    try:
+        datetime.fromisoformat(str(verified.get("updated_at")))
+    except (TypeError, ValueError):
+        return f"updated_at is {verified.get('updated_at')!r}, which is not an ISO-8601 timestamp"
+    return None
+
+
 def apply_to_copy(database_path: Path, listing_id: str, target: ApplicationStatus, reason: str,
                   clear_confirmation: bool) -> tuple[bool, str]:
     """Validate the intended change on a throwaway copy so the original is never touched."""
@@ -167,10 +216,12 @@ def apply_to_copy(database_path: Path, listing_id: str, target: ApplicationStatu
             row = read_row(copy_path, listing_id)
             if row is None:
                 raise Refused("The record disappeared from the validation copy.")
-            store.save_tracker(corrected_tracker(row, target, reason, clear_confirmation))
+            intended = corrected_tracker(row, target, reason, clear_confirmation)
+            store.save_tracker(intended, expected=expected_fields(row))
             verified = read_row(copy_path, listing_id)
-        if verified is None or verified["status"] != target.value:
-            return False, "the validation copy did not hold the corrected status"
+        mismatch = describe_mismatch(verified, intended, listing_id)
+        if mismatch is not None:
+            return False, f"the validation copy did not hold the correction ({mismatch})"
         return True, "the change is permitted and was reproduced on a throwaway copy"
 
 
@@ -215,11 +266,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Contents: {snapshot.summary()}")
 
         with CareerStore(str(database_path)) as store:
-            store.save_tracker(corrected)
+            # Conditional on the row this run read and validated: see ``expected_fields``.
+            store.save_tracker(corrected, expected=expected_fields(row))
 
         verified = read_row(database_path, args.listing_id)
-        if verified is None or verified["status"] != target.value:
-            print("VERIFICATION FAILED: the written record does not match the intended change.", file=sys.stderr)
+        mismatch = describe_mismatch(verified, corrected, args.listing_id)
+        if mismatch is not None:
+            print(f"VERIFICATION FAILED: the written record does not match the intended change "
+                  f"({mismatch}).", file=sys.stderr)
             print(f"The backup is still intact at {backup_path}", file=sys.stderr)
             return EXIT_UNEXPECTED
         print("Corrected record:")

@@ -263,5 +263,101 @@ class ApplyTests(CorrectionTestCase):
         ]
 
 
+class ConcurrentChangeTests(CorrectionTestCase):
+    """The record can change between this tool reading it and writing the correction.
+
+    Re-reading the transition rules cannot catch that: a forward move normally leaves the intended
+    transition permitted (``confirmed -> withdrawn`` is allowed, exactly as ``submitted_unverified ->
+    withdrawn`` was), so a stale correction would overwrite evidence and a confirmation it never saw
+    and then report success. The write is therefore conditional on the row that was read.
+
+    The first two tests below fail against the code before this change (they end in exit 0: a
+    reported success over an overwritten record, and a verification that passed while the intended
+    evidence was missing). The deleted-row test guards a property the earlier code already had, and is
+    kept as a guard rather than as a reproduction.
+    """
+
+    def apply_arguments(self):
+        """The arguments a real --apply correction uses."""
+        return [*self.base_arguments("--clear-confirmation"), "--apply"]
+
+    def test_a_record_moved_on_after_it_was_read_is_refused_and_not_overwritten(self):
+        real_backup = correction.create_backup
+
+        def backup_then_another_writer_commits(database_path, destination, **kwargs):
+            snapshot = real_backup(database_path, destination, **kwargs)
+            with CareerStore(str(database_path)) as store:
+                # A genuine, app-written change: the row this tool read is replaced by a newer one
+                # whose status keeps the intended transition legal (confirmed -> withdrawn).
+                with store._connection:
+                    store._connection.execute(
+                        "UPDATE application_tracker SET status=?, status_evidence=?, "
+                        "candidate_confirmed=1, updated_at=? WHERE listing_id=?",
+                        (ApplicationStatus.CONFIRMED.value,
+                         "Genuine: the employer confirmed the interview.",
+                         "2026-10-14T18:30:00+00:00", LISTING_ID),
+                    )
+            return snapshot
+
+        with mock.patch.object(correction, "create_backup", backup_then_another_writer_commits):
+            code, _output, error = run(self.apply_arguments())
+
+        self.assertEqual(code, correction.EXIT_REFUSED, error)
+        self.assertIn("changed after it was read", error)
+        self.assertIn("Nothing was written", error)
+        row = self.read_row()
+        self.assertEqual(row["status"], ApplicationStatus.CONFIRMED.value, "the newer status must win")
+        self.assertEqual(row["status_evidence"], "Genuine: the employer confirmed the interview.")
+        self.assertEqual(row["candidate_confirmed"], 1, "the newer confirmation must survive")
+        self.assertEqual(len(self.backups()), 1, "the verified backup stays available for recovery")
+
+    def test_verification_compares_every_written_field_not_only_the_status(self):
+        """A write that reached the right status while losing the evidence is not a success."""
+        real_read_row = correction.read_row
+
+        def read_row_then_spoil_the_verification(database_path, listing_id):
+            row = real_read_row(database_path, listing_id)
+            if row is not None and row["status"] == ApplicationStatus.WITHDRAWN.value:
+                # Only ever true on the post-write read, so the spoiling cannot affect the tool's own
+                # read or its decision to proceed: it makes the check itself lie about one field.
+                return {**row, "status_evidence": "something else entirely"}
+            return row
+
+        with mock.patch.object(correction, "read_row", read_row_then_spoil_the_verification):
+            code, _output, error = run(self.apply_arguments())
+
+        self.assertEqual(code, correction.EXIT_UNEXPECTED, error)
+        self.assertIn("VERIFICATION FAILED", error)
+        self.assertIn("status_evidence", error)
+        self.assertIn("backup is still intact", error)
+        on_disk = real_read_row(self.database, LISTING_ID)
+        self.assertEqual(on_disk["status"], ApplicationStatus.WITHDRAWN.value, "the write itself happened")
+        self.assertEqual(on_disk["status_evidence"], REASON)
+
+    def test_a_deleted_row_is_refused_rather_than_recreated(self):
+        """A row that vanished after the read must not come back from the stale decision.
+
+        Two rules refuse this and either is enough: the state machine will not create a record in any
+        state but the first one, and the conditional update matches no row. What matters here is the
+        outcome - refused, and the record is not resurrected from arguments read before it vanished.
+        """
+        real_backup = correction.create_backup
+
+        def backup_then_delete_the_row(database_path, destination, **kwargs):
+            snapshot = real_backup(database_path, destination, **kwargs)
+            with CareerStore(str(database_path)) as store:
+                with store._connection:
+                    store._connection.execute(
+                        "DELETE FROM application_tracker WHERE listing_id=?", (LISTING_ID,))
+            return snapshot
+
+        with mock.patch.object(correction, "create_backup", backup_then_delete_the_row):
+            code, _output, error = run(self.apply_arguments())
+
+        self.assertEqual(code, correction.EXIT_REFUSED, error)
+        self.assertIn("Nothing was written", error)
+        self.assertIsNone(self.read_row(), "a conditional write must not recreate a deleted record")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
