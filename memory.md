@@ -7,7 +7,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
 - Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented; resume parsing, source adapters and remote worker remain gated or pending.
-- Last updated: 2026-10-14.
+- Last updated: 2026-10-15.
 
 ## Confirmed user decisions
 
@@ -1419,3 +1419,61 @@ that can be done without a Mac.
   reproduces Tk's option validation (``unknown option "-wraplength"`` is raised by the stub exactly as real ttk
   raised it), which is what guards the macOS regression, but the harness is not Tk and the manual checklist stays
   outstanding. Python 3.14 on macOS remains unverified here.
+
+## 2026-10-15 — Installable package: PEP 621 metadata, one version, and a build verified in CI
+
+**What changed.** The README's packaging gap #1 ("distribution metadata plus a build verified in CI") is
+now implemented rather than planned. Added `pyproject.toml` with PEP 621 metadata: project name
+`ai-career-agent`, `requires-python = ">=3.10"`, **no required runtime dependency**, an optional `pdf`
+extra (`pypdf>=4.3`), and a `career-agent` console script bound to `career_agent.__main__:main` — the same
+callable `python -m career_agent` runs. Only the `career_agent` package is packaged; `tests/` and
+`scripts/` stay in the checkout, so the maintenance tooling (`audit_job_source_csv.py`,
+`correct_tracker_record.py`) is deliberately not importable from an installed environment.
+
+**Decisions and reasons.**
+
+- **The version stays a literal, and setuptools reads it instead of a second copy.** `pyproject.toml`
+  declares `dynamic = ["version"]` with `version = {attr = "career_agent.__version__"}`, so the installed
+  metadata and `--version` come from the same string and cannot drift. `tests/test_packaging.py` parses
+  `career_agent/__init__.py` with `ast` and requires exactly one module-level `__version__` assignment
+  whose value is a `str` constant — a computed version would break the build rather than silently record
+  something else.
+- **No required dependency.** The application, the tests and the CLI tools all run on the standard
+  library, and Tkinter ships with CPython. PDF résumé reading is the single optional capability and is
+  declared as the `pdf` extra; `pypdf` is imported lazily and its absence is reported in the app. A
+  required dependency would change what an install pulls in for everyone, so it needs a deliberate
+  decision, not a default.
+- **The declared `pypdf` floor is measured, not guessed.** The PDF tests were run against pypdf 4.3.1,
+  5.9.0 and 6.20.1 in disposable virtual environments (`tests.test_resume`: 78 tests OK on each), so
+  `pypdf>=4.3` describes releases actually exercised here. 6.20.1 is the version the macOS report used.
+- **`requires-python = ">=3.10"` matches the CI matrix**, and a test refuses the metadata drifting away
+  from the oldest CI leg, because a floor nobody tests is a claim rather than coverage.
+- **CI verifies the artefact, not just the source tree.** A second job (`installed-package`) builds the
+  wheel with `python -m build`, asserts the wheel contains only modules under `career_agent/` and no
+  `tests/` or `scripts/`, installs it into a clean environment, and — from outside the checkout — checks
+  the metadata version against `career_agent.__version__`, refuses any required dependency, and runs
+  `career-agent --version`, `--help`, a throwaway database write, a backup and a restore. Those
+  assertions mirror `tests/test_packaging.py`, which is why one interpreter is enough for the job.
+- **The usage line now names how the program was invoked.** `career_agent.__main__` reports
+  `career-agent` when that is what was typed and `python -m career_agent` otherwise (the module form's
+  `sys.argv[0]` is `__main__.py`, which is not something to show a person). Configuration, exit codes,
+  the redaction rules and every failure path are untouched.
+- **`tomllib` is a 3.11+ module, so the metadata tests skip with a stated reason on 3.10** and the CI
+  job covers the same properties there; no dependency was added just to read the file in the suite.
+
+**Evidence.** `python -m unittest tests.test_packaging` → 12 tests OK. Full suite at this state: 604 OK
+(13 skipped without `pypdf`). `python -m pip wheel . --no-deps --no-build-isolation` and
+`python -m build --wheel` both produce `ai_career_agent-0.1.0-py3-none-any.whl` with 12 modules, all
+under `career_agent/`, and metadata `Requires-Python: >=3.10`, `Requires-Dist: pypdf (>=4.3) ; extra ==
+'pdf'`, and `career-agent = career_agent.__main__:main`. In a throwaway virtual environment the wheel
+installs with no dependencies, `career-agent --version` prints `career-agent 0.1.0 (database schema
+version 1)` (exit 0) and the module form still prints `python -m career_agent 0.1.0 (database schema
+version 1)`; a disposable database written through the *installed* package survived
+`--backup-to`/`--restore-from --yes` with exit 0; `tests`, `scripts` and `correct_tracker_record` are not
+importable after installation. `compileall` exit 0, the research-CSV audit exit 0 and the CSV SHA-256
+unchanged, and the source-quality gate still `False` with an empty `enabled_discovery_sources()`.
+
+**Still missing (unchanged product claim).** No installer, no signed/notarised desktop bundle, no bundled
+interpreter, no published release, and no version/data-compatibility policy yet; nothing was published to
+any package index. `README.md` and `phases.md` were updated so the installation instructions, the
+packaging status and the test count describe what actually exists.

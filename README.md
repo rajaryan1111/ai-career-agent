@@ -4,7 +4,7 @@ AI Career Agent is being built as a local-first desktop assistant for job discov
 
 ## Current implementation
 
-The project now includes a small offline desktop alpha launched with `python -m career_agent`. It uses Python's standard-library Tkinter UI and local SQLite. It is not yet packaged for end users, and GUI smoke testing is still required on supported operating systems.
+The project now includes a small offline desktop alpha, launched with `python -m career_agent` or the installed `career-agent` command. It uses Python's standard-library Tkinter UI and local SQLite, and it installs with no required third-party dependency. It is not yet a signed packaged desktop release, and GUI smoke testing is still required on supported operating systems.
 
 The dependency-free Python domain core in `career_agent/` provides:
 
@@ -41,15 +41,28 @@ The local alpha supports manual candidate-profile entry, manual job entry, eligi
 
 ## Run the desktop app
 
-Python 3.10+ with Tkinter available:
+Python 3.10+ with Tkinter available. The project is not published to any package index, so install it
+from the checkout itself if you want a `career-agent` command; the source checkout runs the identical
+program with no installation at all.
 
 ```bash
-python -m career_agent            # open the desktop window
-python -m career_agent --version  # print the version and schema version of this checkout
+python -m pip install .          # from the repository root; adds the `career-agent` command
+python -m pip install ".[pdf]"   # the same, plus optional PDF résumé reading
+career-agent                     # open the desktop window
+career-agent --version           # print the version and database schema version
+career-agent --database "/path/to/career-agent.sqlite3"
 ```
 
-`--version` needs no display and no packaging metadata: it reports the version recorded in the source.
-The app has no installer yet — see [Packaging status](#packaging-status) for the exact missing pieces.
+```bash
+python -m career_agent --version # the source-checkout form; no metadata needed
+```
+
+Both spellings run the same `main()`. `--version` needs no display and no packaging metadata: it reports
+`career_agent.__version__`, which is also where the packaged build takes its version from, so the
+installed metadata and the app cannot disagree. Installing adds the `career_agent` package only — the
+maintenance tools in `scripts/` (the CSV audit and the tracker-record correction tool) stay in the
+checkout and are run from there. There is still no installer, no signed desktop bundle, and no bundled
+interpreter: see [Packaging status](#packaging-status) for what that means and what is missing.
 
 If the window cannot open, the message says what happened and what to do next instead of showing a raw
 traceback. A short, sanitised note is kept as `logs/startup-diagnostics.log` in the application-data
@@ -162,6 +175,9 @@ python -m career_agent --backup-to "$HOME/Documents/career-agent-backup.sqlite3"
 python -m career_agent --restore-from "$HOME/Documents/career-agent-backup.sqlite3" --yes
 ```
 
+If you installed the package, drop the `python -m career_agent` prefix and use `career-agent` with the
+same options.
+
 Add `--database PATH` to either command to work on a database outside the per-user application-data
 folder. Restoring replaces candidate data, so it asks you to confirm: interactively it requires typing
 `restore`, and in a script it requires `--yes`. Refusals exit with status `2` and say what to do next.
@@ -248,7 +264,9 @@ it is absent, and everything else — including DOCX import — still runs.)
 python -m unittest discover -s tests -v
 ```
 
-The suite covers the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
+The suite covers the distribution metadata and entry point (the version literal setuptools reads, the
+declared dependency surface, the console-script target, and the declared Python floor matching the CI
+matrix — the wheel itself is built and installed by the `installed-package` CI job, not by these tests), the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
 the source permission gates and run-outcome rules, the Tk-free desktop logic (form mapping, save
 planning, database-path resolution, stored-timestamp rendering, profile read-back comparison), local
 résumé import (PDF and DOCX text extraction including DOCX tables, encrypted, damaged, empty, oversized
@@ -282,8 +300,23 @@ remains outstanding and is tracked in
 
 ## Packaging status
 
-There is no installer and no packaged build, and nothing in this repository claims one. What exists today:
+There is no installer, no signed desktop bundle, and no bundled interpreter, and nothing in this
+repository claims one. What exists today:
 
+- **An installable package.** `pyproject.toml` carries the PEP 621 metadata: name `ai-career-agent`,
+  `requires-python = ">=3.10"`, **no required third-party dependency**, the optional `pdf` extra
+  (`pypdf>=4.3`) for PDF résumé reading, and a `career-agent` console script that points at the same
+  `career_agent.__main__:main` the module form runs. Only `career_agent/` is packaged: `tests/` and
+  `scripts/` stay in the checkout and are not importable from an installed environment.
+- **One version, one source.** `career_agent.__version__` is a plain literal and `pyproject.toml` reads it
+  with `version = {attr = "career_agent.__version__"}`, so the installed metadata and what `--version`
+  prints cannot drift apart. A test pins that the assignment stays statically readable: if it ever became
+  computed, the build would fail rather than quietly record a different version.
+- **A build and install exercised in CI.** The `installed-package` job builds the wheel, checks that it
+  contains the application package and nothing else, installs it into a clean environment, and runs the
+  installed command from *outside* the checkout — version report, `--help`, a throwaway database, backup,
+  restore. Its assertions mirror the ones `tests/test_packaging.py` makes from the source tree, which is
+  why it needs one interpreter rather than the whole matrix.
 - The app runs from a source checkout with `python -m career_agent` and needs the standard library plus
   Tkinter. Reading PDF résumés additionally needs the optional `pypdf` library; every other feature,
   including DOCX résumé import, works without it. A packaged build would need a decision on whether to
@@ -302,17 +335,19 @@ There is no installer and no packaged build, and nothing in this repository clai
 
 Missing pieces, in the order they are needed, for a packaged desktop alpha:
 
-1. Distribution metadata (`pyproject.toml` with PEP 621 project metadata, `requires-python`, and a
-   `console_scripts` entry point) plus a build verified in CI, so the version comes from one source
-   instead of a literal that could drift from a packaged build.
-2. Per-platform launch artefacts, code signing and notarisation (macOS `.app`, Windows installer), with
+1. Per-platform launch artefacts, code signing and notarisation (macOS `.app`, Windows installer), with
    the icon, identity, and update story that implies.
-3. A decision on bundling the interpreter (PyInstaller/Briefcase-style) versus requiring a system Python
+2. A decision on bundling the interpreter (PyInstaller/Briefcase-style) versus requiring a system Python
    with Tkinter — including the size, update, and Tk-availability consequences of each choice.
-4. A release checklist that runs this repository's suite, the manual desktop checklist, and a
+3. A release checklist that runs this repository's suite, the manual desktop checklist, and a
    backup/restore rehearsal on each supported operating system from the packaged build.
+4. A written version and data-compatibility policy for released builds: what a version number promises,
+   when the database schema version changes, what happens to an existing database then, and how someone
+   upgrades. (Until that exists, an installed copy is a development build of the same "local alpha".)
 
-Until those exist, "local alpha from a source checkout" is the accurate description.
+Nothing is published to a package index and no release archive is attached anywhere, so "install from
+this checkout into your own Python environment, or run it from the checkout directly" is the accurate
+description — not a downloadable product, and not a packaged desktop app.
 
 ## Safety and product principles
 
@@ -327,4 +362,4 @@ Until those exist, "local alpha from a source checkout" is the accurate descript
 
 ## Project status
 
-The local-only desktop alpha is implemented and source research continues in parallel. It is not yet a packaged production release; follow the manual GUI smoke-test checklist before claiming desktop acceptance. This does **not** mean the source-quality gate has passed or that live discovery/application workflows are ready. See [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md) and [the current source-quality gate assessment](research/source-quality-gate-assessment-2026-10-14.md).
+The local-only desktop alpha is implemented, installable from this checkout, and source research continues in parallel. It is not yet a packaged or signed production release; follow the manual GUI smoke-test checklist before claiming desktop acceptance. This does **not** mean the source-quality gate has passed or that live discovery/application workflows are ready. See [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md) and [the current source-quality gate assessment](research/source-quality-gate-assessment-2026-10-14.md).

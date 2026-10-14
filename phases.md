@@ -94,8 +94,10 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 566 tests passing locally and a Python 3.10–3.12 CI workflow running the suite,
-compilation checks, and the research-CSV audit. The suite also holds the safety properties an audit
+implemented, with 604 tests passing locally (13 skip without the optional `pypdf` library) and a
+Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
+second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
+the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
 turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
 the form and can never make an experience requirement pass, no test may resolve this machine's real
 database path, every malformed or mis-shaped restore target is refused with the current database left
@@ -125,10 +127,15 @@ rendering, a real Tk session, PDF extraction without the optional `pypdf` librar
 operating-system integration, so the manual GUI smoke test —
 including macOS/Apple Silicon — remains outstanding.
 
-Distribution and packaging remain unimplemented: there is no installer, no `pyproject.toml`, and no
-bundled interpreter, so the app is a source-checkout alpha. The source records its version
-(`career_agent.__version__`, reported by `python -m career_agent --version`) and explains a start-up
-failure in plain language with a sanitised local note, but the packaging steps listed in the README's
-packaging status are still open work rather than accomplished facts.
+Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
+name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra
+(`pypdf>=4.3`), and a `career-agent` console script pointing at the same `career_agent.__main__:main`
+that `python -m career_agent` runs; only `career_agent/` is packaged, not `tests/` or `scripts/`. The
+version stays a single literal in `career_agent.__version__` that setuptools reads statically, so the
+installed metadata and `--version` cannot drift (a test refuses a computed version). The build and the
+installed command are exercised in CI, and `tests/test_packaging.py` holds the metadata invariants from
+the source tree. Still missing: per-platform launch artefacts, code signing/notarisation, a decision on
+bundling the interpreter, a release checklist, and a written version/data-compatibility policy — so
+this is an installable alpha, not a packaged desktop release.
 
 Résumé import is local and text-only: there is no OCR, so a scanned PDF with no text layer is refused with an explanation rather than guessed at, and PDF reading needs the optional `pypdf` library (DOCX import uses the standard library alone). A remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.
