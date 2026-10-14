@@ -27,7 +27,7 @@ from career_agent import (
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
-from career_agent.store import CareerStore, StoredRecordError
+from career_agent.store import CareerStore, StoredRecordError, UnavailableStore
 from datetime import datetime, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
@@ -2348,6 +2348,81 @@ class DatabaseRestoreHandlerTests(HandlerTestCase):
 
         with self.assertRaises(sqlite3.ProgrammingError):
             replacement.list_jobs()  # SQLite refuses to work on a closed connection
+
+    def test_a_restore_whose_database_cannot_be_reopened_is_not_reported_as_complete(self):
+        """A restore that replaced the file but cannot be used must not claim success.
+
+        Reproduced before this test existed: the app reported ``Restore complete``, kept the status
+        line ``Restored from ...``, and left the *closed* connection as its store, so the next action
+        raised ``ProgrammingError: Cannot operate on a closed database`` out of a Tk callback.
+        """
+        with mock.patch.object(desktop, "CareerStore", side_effect=sqlite3.OperationalError("simulated refusal")):
+            self.app._restore_database()
+
+        self.assertNotIn("Restore complete", MESSAGES.titles(), "a failed reopen is not a completed restore")
+        self.assertIn("Database unavailable", MESSAGES.titles())
+        self.assertTrue(any("cannot be opened" in title for title in MESSAGES.titles()),
+                        f"no dialog said the restored database could not be opened: {MESSAGES.titles()}")
+        error_text = MESSAGES.text("showerror")
+        self.assertIn("nothing in this window can read or write candidate data", error_text)
+        self.assertIn(str(self.chosen), MESSAGES.text("showinfo") + MESSAGES.text("showerror"))
+        self.assertNotIn("Restored from", self.app.status.get())
+        self.assertIn("could not be opened", self.app.status.get())
+        self.assertIn("Restart", self.app.status.get())
+        # The file was really replaced; only the connection failed. The backup of the old database is
+        # named in the message so the person can find it.
+        self.assertEqual(self.listing_ids(), ["j1"])
+        self.assertIn("preserved at", MESSAGES.text("showerror"))
+
+    def test_the_store_a_failed_reopen_installed_refuses_clearly_instead_of_raising(self):
+        """The window must stay usable enough to explain itself, and ``close()`` must still be safe."""
+        with mock.patch.object(desktop, "CareerStore", side_effect=sqlite3.OperationalError("simulated refusal")):
+            self.app._restore_database()
+
+        self.assertIsInstance(self.app.store, UnavailableStore)
+        for handler in ("_refresh_jobs", "_refresh_tracker", "_select_job", "_evaluate", "_load_profile"):
+            self.app.__dict__.pop(handler, None)  # bind the real handler, not the fixture's no-op
+        export_target = Path(self._directory.name) / "export.json"
+        FILEDIALOG.path = str(export_target)
+        for handler in ("_refresh_jobs", "_refresh_tracker", "_select_job", "_evaluate", "_load_profile", "_export"):
+            with self.subTest(handler=handler):
+                MESSAGES.reset()
+                self.app.status.set("")
+                getattr(self.app, handler)()
+        self.assertIn("could not be read", self.app.status.get())
+        self.assertIn("Local database unavailable", MESSAGES.titles())
+        self.assertFalse(export_target.exists(), "an export from an unusable database must write nothing")
+        self.app.close()  # must not raise: the guard object has no connection to close
+
+    def test_a_refresh_after_a_failed_reopen_reports_instead_of_raising_a_raw_sqlite_error(self):
+        """The concrete defect: a Tk callback must never surface ``ProgrammingError`` to the user."""
+        with mock.patch.object(desktop, "CareerStore", side_effect=sqlite3.OperationalError("simulated refusal")):
+            self.app._restore_database()
+
+        app = self.app
+        app.__dict__.pop("_refresh_jobs", None)
+        app.tracker_tree.selected = ()
+
+        app._refresh_jobs()  # the real handler, which must handle the failure itself
+
+        self.assertIn("Local database unavailable", MESSAGES.titles())
+        self.assertIn("nothing was changed", self.app.status.get())
+
+    def test_a_failed_restore_that_leaves_nothing_open_says_the_app_must_be_restarted(self):
+        with mock.patch("career_agent.desktop.restore_backup", side_effect=BackupError("simulated failure")), \
+                mock.patch.object(desktop, "CareerStore", side_effect=sqlite3.OperationalError("simulated refusal")):
+            self.app._restore_database()
+
+        self.assertIn("Restore failed", MESSAGES.titles())
+        self.assertNotIn("Restore complete", MESSAGES.titles())
+        self.assertIn("could not reopen", MESSAGES.text("showerror"))
+        self.assertIn("Restart the app", self.app.status.get())
+        self.assertIsInstance(self.app.store, UnavailableStore)
+        for handler in ("_refresh_jobs", "_refresh_tracker", "_evaluate", "_load_profile"):
+            self.app.__dict__.pop(handler, None)
+        for handler in ("_refresh_jobs", "_refresh_tracker", "_evaluate", "_load_profile"):
+            with self.subTest(handler=handler):
+                getattr(self.app, handler)()  # must not raise
 
     def test_a_backup_with_dangling_tracker_rows_is_reported_in_the_confirmation(self):
         foreign = Path(self._directory.name) / "dangling.sqlite3"

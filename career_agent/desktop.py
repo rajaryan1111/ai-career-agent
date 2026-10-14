@@ -27,7 +27,13 @@ from .desktop_logic import (
 )
 from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
-from .store import CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file
+from .store import (
+    CareerStore,
+    PrivateWriteError,
+    StoredRecordError,
+    UnavailableStore,
+    write_private_text_file,
+)
 from .urls import redact_url_credentials
 
 
@@ -274,15 +280,34 @@ class CareerAgentApp:
         try:
             result = restore_backup(source, self.db_path)
         except BackupError as exc:
-            self._reopen_store()
+            reopened = self._reopen_store()
             messagebox.showerror(
                 "Restore failed",
-                f"{exc}\n\nThe app has reopened the local database; the message above says what it holds.",
+                f"{exc}\n\n" + ("The app has reopened the local database; the message above says what "
+                                 "it holds." if reopened else
+                                 "The app could not reopen the local database, so this window cannot use "
+                                 "it. Restart the app once the problem is resolved."),
                 parent=self.root,
             )
-            self.status.set("Restore failed; see the message for what the database holds now.")
+            self.status.set("Restore failed; see the message for what the database holds now."
+                            if reopened else
+                            "Restore failed and the local database could not be reopened. Restart the app.")
             return
-        self._reopen_store()
+        if not self._reopen_store():
+            # The file was replaced but cannot be used. Reporting "Restore complete" here would tell
+            # the person the opposite of what happened, so the success dialog is not shown at all.
+            previous = (f"The database that was replaced is preserved at:\n{result.pre_restore_backup}"
+                        if result.pre_restore_backup is not None
+                        else "There was no previous database to preserve.")
+            messagebox.showerror(
+                "Restore finished, but the restored database cannot be opened",
+                f"The file at {self.db_path} was replaced with a copy of:\n{source}\n\n"
+                f"The app could not reopen it, so nothing in this window can read or write candidate "
+                f"data. Restart the app once the problem is resolved.\n\n{previous}",
+                parent=self.root,
+            )
+            self.status.set("Restore finished, but the restored database could not be opened. Restart the app.")
+            return
         detail = f"Restored from:\n{result.restored_from}\n\nNow in use: {result.info.summary()}."
         if result.pre_restore_backup is not None:
             quality = "verified copy" if result.pre_restore_verified else "raw copy (it could not be read as a database)"
@@ -295,29 +320,41 @@ class CareerAgentApp:
             parent=self.root,
         )
 
-    def _reopen_store(self):
-        """Reopen the database after a restore and resynchronise the views."""
+    def _reopen_store(self) -> bool:
+        """Reopen the database after a restore and resynchronise the views.
+
+        Returns whether the database is usable. On failure the closed connection is replaced by
+        :class:`~career_agent.store.UnavailableStore` rather than being left in place: leaving it made
+        the next action raise ``ProgrammingError: Cannot operate on a closed database`` from a Tk
+        callback (a raw traceback) or report a write failure where the real problem was that nothing
+        had been opened at all.
+        """
         try:
             self.store = CareerStore(self.db_path)
         except Exception as exc:  # reported, never hidden: the app cannot work without the store
+            self.store = UnavailableStore(self.db_path, f"{type(exc).__name__}: {exc}")
             messagebox.showerror(
                 "Database unavailable",
                 f"The local database could not be reopened ({exc}). Restart the app once the problem "
                 "is resolved; do not keep working in this window.",
                 parent=self.root,
             )
-            self.status.set("The local database could not be reopened.")
-            return
+            self.status.set("The local database could not be reopened. Restart the app.")
+            return False
         self.selected_job_id = None
         self._load_profile()
         self._refresh_jobs()
         self._refresh_tracker()
+        return True
 
     def _load_profile(self):
         try:
             profile = self.store.get_profile()
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         if not profile:
             return
@@ -696,6 +733,9 @@ class CareerAgentApp:
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
         for item in self.jobs_tree.get_children():
             self.jobs_tree.delete(item)
         for job in jobs:
@@ -715,6 +755,9 @@ class CareerAgentApp:
             job = self.store.get_job(selection[0])
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         if not job:
             return
@@ -771,6 +814,18 @@ class CareerAgentApp:
             parent=self.root,
         )
 
+    def _report_database_unavailable(self, error):
+        """Report a failure that is about the connection itself, not about one saved record.
+
+        Reached when the database cannot be read at all: after a restore that replaced the file but
+        could not be reopened, or when SQLite refuses a connection for any other reason. The lists are
+        left as they are and the message says nothing was changed, so a dead connection never looks
+        like an empty database (which would read as "your data is gone").
+        """
+        self._report(str(error))
+        self.status.set("The local database could not be read; nothing was changed.")
+        messagebox.showerror("Local database unavailable", str(error), parent=self.root)
+
     def _report_unreadable_record(self, error):
         """Explain a saved record this version cannot read, and change nothing.
 
@@ -792,6 +847,9 @@ class CareerAgentApp:
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
         if job is None:
             # Stale selection: report and resync rather than evaluating a listing that is gone.
             self._report_stale_selection(listing_id)
@@ -800,6 +858,9 @@ class CareerAgentApp:
             profile = self.store.get_profile()
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
@@ -825,6 +886,9 @@ class CareerAgentApp:
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
         if job is None:
             # Same guard as _evaluate: a vanished selection must never reach the eligibility
             # check, and must never create a tracker record.
@@ -834,6 +898,9 @@ class CareerAgentApp:
             profile = self.store.get_profile()
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
@@ -899,6 +966,9 @@ class CareerAgentApp:
             jobs = self.store.list_jobs()
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         for item in self.tracker_tree.get_children():
             self.tracker_tree.delete(item)
@@ -1086,8 +1156,15 @@ class CareerAgentApp:
         try:
             profile = self.store.get_profile()
             jobs = self.store.list_jobs()
+            # Read every tracker row here, inside the same guard: a connection that dies midway through
+            # the loop below would otherwise raise out of a Tk callback, and the file must not be
+            # half-written either way.
+            tracker_rows = {job.listing_id: self.store.get_tracker_raw(job.listing_id) for job in jobs}
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         payload = {"format_version": 1, "profile": asdict(profile) if profile else None, "jobs": [],
                    "privacy_note": "Export may contain personal information; store securely."}
@@ -1105,7 +1182,7 @@ class CareerAgentApp:
             # version does not recognise can still be taken out of the app instead of blocking the
             # whole export. ``status_recognised: false`` marks that value; it is only added when this
             # version did not understand the stored status, so the format is unchanged otherwise.
-            stored_status = self.store.get_tracker_raw(job.listing_id)
+            stored_status = tracker_rows[job.listing_id]
             if stored_status is None:
                 record["application_tracker"] = None
             else:
