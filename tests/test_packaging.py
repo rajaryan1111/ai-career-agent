@@ -18,6 +18,7 @@ import importlib.metadata
 import io
 import re
 import sys
+import textwrap
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -30,6 +31,13 @@ try:  # Python 3.11+
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - exercised by the 3.10 CI leg
     tomllib = None
+
+#: The pattern the workflow must not contain: comparing installed requirement metadata to a literal
+#: string. How a requirement is spelled in the metadata depends on the build backend's version -
+#: ``python -m build`` writes ``pypdf>=4.3; extra == "pdf"`` while an older setuptools wrote
+#: ``pypdf (>=4.3) ; extra == 'pdf'`` - so a byte-exact comparison passes on one build and fails on
+#: another while proving nothing about the property that matters. It failed in CI exactly that way.
+_EXACT_REQUIREMENT_COMPARISON = re.compile(r"metadata\.requires\([^)\n]*\)[^\n]*==")
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPOSITORY_ROOT / "pyproject.toml"
@@ -193,6 +201,56 @@ class SupportedEnvironmentTests(unittest.TestCase):
         self.assertEqual(data["tool"]["setuptools"]["packages"], ["career_agent"])
         for excluded in ("tests", "scripts"):
             self.assertNotIn(excluded, data["tool"]["setuptools"]["packages"])
+
+
+class ContinuousIntegrationTests(unittest.TestCase):
+    """What the workflow claims to verify has to be verifiable in the workflow itself."""
+
+    def test_the_workflow_never_compares_requirement_metadata_to_a_literal_string(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        match = _EXACT_REQUIREMENT_COMPARISON.search(text)
+
+        self.assertIsNone(
+            match,
+            f"normalise before comparing (the build backend decides the spelling): {match.group(0) if match else ''}",
+        )
+
+    def test_that_check_catches_the_form_it_refuses(self):
+        """Non-vacuous: the regression that reached CI is caught, and the fixed form is not flagged."""
+        regressed = 'assert metadata.requires("ai-career-agent") == ["pypdf (>=4.3) ; extra == \'pdf\'"]'
+        fixed = (
+            'requirements = metadata.requires("ai-career-agent") or []\n'
+            'compact = requirements[0].replace(" ", "")\n'
+            'assert len(requirements) == 1'
+        )
+
+        self.assertIsNotNone(_EXACT_REQUIREMENT_COMPARISON.search(regressed))
+        self.assertIsNone(_EXACT_REQUIREMENT_COMPARISON.search(fixed))
+
+    def test_every_embedded_workflow_script_is_valid_python(self):
+        """A broken inline script fails the whole job; catch it here instead of on the runner."""
+        text = WORKFLOW.read_text(encoding="utf-8")
+        blocks = re.findall(r"python - <<'PY'\n(.*?)\n\s*PY", text, re.DOTALL)
+
+        self.assertGreaterEqual(len(blocks), 3, "the installed-package job should still exercise real code")
+        for index, block in enumerate(blocks, start=1):
+            with self.subTest(block=index):
+                ast.parse(textwrap.dedent(block))
+
+    def test_the_installed_package_job_builds_installs_and_runs_the_command(self):
+        """The README claims a build and install is verified in CI; this holds that claim to a job."""
+        text = WORKFLOW.read_text(encoding="utf-8")
+        marker = "installed-package:"
+        self.assertIn(marker, text)
+        job = text[text.index(marker):]
+
+        for required in (
+            "python -m build --wheel",
+            "pip install --quiet dist/*.whl",
+            "career-agent --version",
+            "career-agent --database",
+        ):
+            self.assertIn(required, job, f"the installed-package job should run: {required}")
 
 
 if __name__ == "__main__":

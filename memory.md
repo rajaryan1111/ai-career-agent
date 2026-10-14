@@ -1473,6 +1473,23 @@ version 1)`; a disposable database written through the *installed* package survi
 importable after installation. `compileall` exit 0, the research-CSV audit exit 0 and the CSV SHA-256
 unchanged, and the source-quality gate still `False` with an empty `enabled_discovery_sources()`.
 
+**Defect found and fixed the same day: a CI assertion pinned the build backend's spelling.** The first
+CI run on the packaging commit failed in the new `installed-package` job. The assertion compared
+`metadata.requires("ai-career-agent")` to the byte-exact string `pypdf (>=4.3) ; extra == 'pdf'` — which
+is what `pip wheel` with setuptools 66 writes, while `python -m build` (the modern backend CI uses)
+writes `pypdf>=4.3; extra == "pdf"`. Reproduced by extracting the workflow step and running it against a
+wheel built the way CI builds it: `AssertionError: the install must pull in nothing`, exit 1. Fixed by
+asserting the properties instead — exactly one declared requirement, it names `pypdf`, and it carries an
+`extra == "pdf"` marker, so nothing installs unconditionally — after normalising spaces and quote style.
+The step now exits 0 locally against the CI-built wheel, and the three regressions it exists to catch (a
+required dependency appears, the wrong library is declared, a second requirement appears) are each still
+caught. What let it through: the local metadata check had been run against a `pip wheel` artefact with an
+older setuptools while the contents check used `python -m build`; the fix to the process is to run the CI
+step verbatim against an artefact built the way CI builds it. `tests/test_packaging.py` now refuses a
+literal comparison of `metadata.requires(...)` in the workflow (and is itself checked against the exact
+regressed line, so the guard is not vacuous), refuses an embedded workflow script that is not valid
+Python, and holds the `installed-package` job to actually building, installing and running the command.
+
 **Still missing (unchanged product claim).** No installer, no signed/notarised desktop bundle, no bundled
 interpreter, no published release, and no version/data-compatibility policy yet; nothing was published to
 any package index. `README.md` and `phases.md` were updated so the installation instructions, the

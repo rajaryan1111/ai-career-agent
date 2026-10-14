@@ -77,8 +77,16 @@ jobs:
 
           declared = metadata.version("ai-career-agent")
           assert declared == career_agent.__version__, (declared, career_agent.__version__)
-          assert metadata.requires("ai-career-agent") == ["pypdf (>=4.3) ; extra == 'pdf'"], "the install must pull in nothing"
-          print(f"installed {declared} with no required dependencies")
+
+          # Assert the properties, not the exact spelling: how a requirement is written into the
+          # metadata (``pypdf>=4.3; extra == "pdf"`` versus ``pypdf (>=4.3) ; extra == 'pdf'``)
+          # depends on the build backend's version and is not this project's to pin.
+          requirements = metadata.requires("ai-career-agent") or []
+          assert len(requirements) == 1, requirements
+          compact = requirements[0].replace(" ", "").replace("'", '"')
+          assert compact.startswith("pypdf"), requirements[0]
+          assert 'extra=="pdf"' in compact, f"the only requirement must stay optional: {requirements[0]}"
+          print(f"installed {declared}; its only declared requirement is optional: {requirements[0]}")
           PY
           career-agent --version
           career-agent --help > /dev/null
