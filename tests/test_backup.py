@@ -718,6 +718,45 @@ class RestoreTests(BackupTestCase):
             self.assertEqual(store.get_tracker("j1").status, ApplicationStatus.DISCOVERED,
                              "the restored row, not the discarded write")
 
+    def test_where_the_platform_cannot_replace_an_open_file_the_guard_is_released_before_the_swap(self):
+        """The guard cannot be held across the swap on Windows: its own handle blocks the replacement.
+
+        SQLite opens its database files without ``FILE_SHARE_DELETE``, so ``os.replace`` on a database
+        this process is holding open fails with a sharing violation there - which would break every
+        restore. The guard is therefore released immediately before the swap on such a platform, and
+        this test pins that: inside the replacement the database must be writable again, and the
+        restore must still complete. The counterpart test above pins the opposite on a platform where
+        the guard can be kept, so neither behaviour can regress into the other unnoticed.
+        """
+        live, chosen = self.prepare()
+        with CareerStore(str(live)) as store:
+            store.save_job(sample_job("added-after-backup"))
+        real_replace = backup_module.os.replace
+        unlocked_during_the_swap = []
+
+        def replace_after_probing_the_lock(source, destination):
+            probe = sqlite3.connect(str(live), isolation_level=None, timeout=0.2)
+            try:
+                probe.execute("BEGIN IMMEDIATE")  # only possible if no guard is still held
+                probe.execute("ROLLBACK")
+                unlocked_during_the_swap.append(True)
+            except sqlite3.Error as exc:
+                unlocked_during_the_swap.append(f"still locked: {exc}")
+            finally:
+                probe.close()
+            return real_replace(source, destination)
+
+        with mock.patch.object(backup_module, "_CAN_REPLACE_AN_OPEN_FILE", False), \
+                mock.patch.object(backup_module.os, "replace", replace_after_probing_the_lock):
+            result = restore_backup(chosen, live, timestamp=STAMP)
+
+        self.assertEqual(unlocked_during_the_swap, [True],
+                         "the guard must be released before the replacement on such a platform")
+        self.assertEqual(result.info.job_count, 1)
+        self.assert_no_leftovers(live)
+        with CareerStore(str(live)) as store:
+            self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
+
     def test_an_idle_connection_is_not_detected_and_sqlite_refuses_its_next_write(self):
         """Documents the limit of the coordination rather than claiming what it cannot establish.
 
@@ -852,6 +891,56 @@ class RestoreTests(BackupTestCase):
             self.assertEqual(preserved.read_bytes(), payload)
         with CareerStore(str(live)) as store:
             self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
+
+    def test_an_opener_before_the_side_files_are_removed_never_sees_the_old_rows(self):
+        """The ordering (snapshot, swap, then remove) must not expose the previous database's rows.
+
+        The snapshot needs the old side files, so they can only be removed after the replacement - and
+        that leaves an instant in which the new main file sits beside the old database's ``-wal``. An
+        opener arriving exactly there must still see the restored data, never a row that only existed
+        in the previous database. What delivered that in this run is SQLite itself: the stale ``-wal``
+        records a change counter that no longer matches the replaced file, so SQLite discards it
+        (measured during the review; ``test_stale_wal_side_files_do_not_survive_a_restore`` covers the
+        removal this module is responsible for). The test is kept as a guard on the ordering: if a
+        future change removes the side files before the snapshot, or stops removing them, this is where
+        it should surface.
+        """
+        live, chosen = self.prepare()
+        with CareerStore(str(live)) as store:
+            store.save_job(sample_job("added-after-backup"))
+        writer = subprocess.run(
+            [sys.executable, "-c", (
+                "import os, sqlite3, sys\n"
+                "conn = sqlite3.connect(sys.argv[1])\n"
+                "conn.execute('PRAGMA journal_mode=WAL')\n"
+                "conn.execute(\"INSERT INTO job_listings VALUES ('in-the-wal', '{}', 'k', '2026-01-01', '2026-01-01')\")\n"
+                "conn.commit()\n"
+                "print('committed', flush=True)\n"
+                "os._exit(9)\n"
+            ), str(live)],
+            capture_output=True, text=True, cwd=str(Path(__file__).resolve().parents[1]),
+        )
+        self.assertEqual(writer.stdout.strip(), "committed", writer.stderr)
+        self.assertTrue((self.directory / "career_agent.sqlite3-wal").exists(), "precondition: a -wal is present")
+        seen = {}
+        real_remove = backup_module._remove_sidecars
+
+        def remove_after_a_concurrent_opener_looks(database_path):
+            opener = sqlite3.connect(str(database_path))
+            try:
+                seen["rows"] = sorted(row[0] for row in opener.execute("SELECT listing_id FROM job_listings"))
+            finally:
+                opener.close()
+            return real_remove(database_path)
+
+        with mock.patch.object(backup_module, "_remove_sidecars", remove_after_a_concurrent_opener_looks):
+            result = restore_backup(chosen, live, timestamp=STAMP)
+
+        self.assertEqual(seen.get("rows"), ["j1"],
+                         "an opener in that window saw rows that do not exist in the restored database")
+        self.assertNotIn("in-the-wal", seen.get("rows") or [])
+        self.assertEqual(result.info.job_count, 1)
+        self.assert_no_leftovers(live)
 
     def test_side_file_cleanup_removes_and_reports_every_side_file(self):
         live = populate(self.directory / "career_agent.sqlite3")

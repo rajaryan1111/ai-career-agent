@@ -72,6 +72,18 @@ LOCK_TIMEOUT_SECONDS = 2.0
 _SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
 _COPY_CHUNK_BYTES = 1024 * 1024
 
+#: Whether this operating system lets a process replace a file it currently holds open.
+#:
+#: POSIX does, so the exclusive guard can stay open across ``os.replace`` and keep refusing any writer
+#: that appears during the swap. Windows does not: SQLite opens its database files with
+#: ``FILE_SHARE_READ | FILE_SHARE_WRITE`` and never ``FILE_SHARE_DELETE``, so ``MoveFileEx`` - what
+#: ``os.replace`` calls - fails with a sharing violation (WinError 32) while the guard is open, which
+#: would make the replacement itself fail. The guard is released immediately before the swap there.
+#: That loses nothing on Windows: the operating system refuses to replace a file any other handle has
+#: open, so a second copy of the app blocks the swap and the restore refuses with the current database
+#: untouched. The only remaining window is the instant between releasing the guard and the swap.
+_CAN_REPLACE_AN_OPEN_FILE = os.name != "nt"
+
 
 class BackupError(Exception):
     """A backup or restore was refused or failed. The message is written to be shown to the user."""
@@ -317,6 +329,11 @@ def _lock_for_swap(database_path: Path) -> sqlite3.Connection | None:
     once SQLite notices the file it has open is no longer the one at the path. That is SQLite
     refusing, not this module; the stale connection can still read the rows it had before the swap.
 
+    Keeping the guard open is what refuses the competing writer, so it is held for the swap only
+    where the platform allows replacing an open file (see ``_CAN_REPLACE_AN_OPEN_FILE``); on Windows
+    the caller releases it immediately before the replacement, because the replacement itself would
+    otherwise fail, and the operating system then provides the refusal for any other open connection.
+
     Returns ``None`` when the file cannot be opened as a database at all - the state a restore
     usually exists to fix - because there is no writer to coordinate with and the caller has already
     preserved the bytes. The caller owns the returned connection and must close it.
@@ -433,8 +450,14 @@ def _remove_sidecars(database_path: Path) -> tuple[Path, ...]:
     """Remove leftover side files and report which were removed.
 
     Called only after the current database has been snapshotted and the file has been replaced, so
-    nothing that is still needed is deleted. A stale ``-wal`` replayed onto a replaced database
-    silently discards the restored data; a stale hot ``-journal`` can roll back the new file.
+    nothing that is still needed is deleted. Side files left beside a replaced database belong to the
+    *previous* database, and whether SQLite applies them to the new file is SQLite's judgement rather
+    than this module's: measured while this was reviewed, SQLite discarded a stale ``-wal`` because the
+    change counter it recorded no longer matched the replaced file, while a stale hot ``-journal`` can
+    in other circumstances roll the new file back. Removing them is what makes the replacement
+    self-contained instead of depending on that judgement. Ordering matters for the same reason: the
+    snapshot needs the old side files, the replacement must not leave them behind, so removal happens
+    after the swap and a failure to remove is reported rather than ignored (see ``restore_backup``).
     """
     removed = []
     for sidecar in _existing_sidecars(database_path):
@@ -571,6 +594,13 @@ def restore_backup(backup_path: str | Path, database_path: str | Path, *,
         # write, so this is the window that has to be closed (see ``_lock_for_swap``).
         lock = _lock_for_swap(database)
         try:
+            if lock is not None and not _CAN_REPLACE_AN_OPEN_FILE:
+                # Windows: the guard's own open handle is a sharing violation for the replacement, so
+                # it cannot be held across the swap. It has still just proved that nobody was writing,
+                # and from here the operating system refuses to replace a database another handle has
+                # open at all, so an idle second copy of the app makes this refuse rather than lose data.
+                lock.close()
+                lock = None
             os.replace(staged, database)
         except OSError as exc:
             preserved = (f"it is preserved at {pre_backup}" if pre_backup is not None
