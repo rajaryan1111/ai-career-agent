@@ -151,7 +151,8 @@ can write a verified backup of it and restore from one, entirely on the local ma
 
 In the app, open the **Data safety** tab: *Back up database* writes a timestamped file to a location you
 choose, and *Restore from backup* validates the file you pick, copies the current database aside,
-replaces the database, then reopens and verifies it.
+replaces the database, then reopens and verifies it. If the replaced file cannot be reopened, the window
+says exactly that and stops reading and writing candidate data instead of reporting a completed restore.
 
 The same two operations work without opening the window, which is what you need when the database is
 damaged enough that the app cannot start:
@@ -189,10 +190,12 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
 - The current database is preserved first: a verified snapshot when it is readable, and a raw
   owner-only copy (reported honestly as unverified) when it is not — that unreadable case is often why
   a restore is needed at all. If it cannot be preserved at all, the restore is refused.
-- The restore refuses while another connection holds the database open, replaces the file in one atomic
-  step, removes stale SQLite side files (a stale `-wal` left beside a replaced database silently
-  discards the restored data), and reopens and verifies the result. If that final check fails, the
-  previous database is put back.
+- The restore refuses while another connection is active in a transaction, holds the database's
+  exclusive lock across the replacement, replaces the file in one atomic step, removes stale SQLite side
+  files (a stale `-wal` left beside a replaced database silently discards the restored data), and reopens
+  and verifies the result. Holding the lock across the swap is what keeps a competing write from being
+  *accepted and then thrown away* by the replacement: while the swap is happening that writer is told the
+  database is busy instead. If that final check fails, the previous database is put back.
 - A newer or older schema version is refused rather than migrated or downgraded.
 
 **Limitations**
@@ -205,10 +208,16 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
   open, in which case the restore fails with a message and the original is untouched.
 - `PRAGMA integrity_check` detects the damage SQLite can detect. It cannot prove a backup is complete or
   untouched by every byte-level change, so keep more than one backup if the data matters.
-- An exclusive-access check turns "another copy of the app has the database open" into a refusal with a
+- An exclusive-access check turns "another copy of the app is writing the database" into a refusal with a
   message instead of an apparently frozen window. A writer that takes the database between that check
   and the copy itself can still make a backup wait, because the standard library retries while SQLite
   reports the source busy; nothing is written until the copy succeeds.
+- An **idle** connection cannot be detected: a program that has the database open without being in a
+  transaction holds no SQLite lock at all, so the restore neither refuses nor waits for it. That
+  connection may keep reading the rows it had before the replacement, and its next write fails with
+  SQLite's own "attempt to write a readonly database" once SQLite notices the file has moved. The
+  replacement itself cannot be coordinated with it on any platform, which is why the app closes its
+  connection for the swap and why restoring is safest with other copies of the app closed.
 - Old backups are never pruned automatically, and nothing is uploaded anywhere: backups are files you
   place yourself.
 

@@ -1302,3 +1302,47 @@ research/local-alpha-manual-smoke-test-checklist-2026-10-14.md are the macOS ret
   folder that does not exist - and now stated in its docstring rather than only implied by a test) are
   documented instead of papered over. A note keeps prose from an exception message that is not a location:
   the redaction promise covers filesystem locations, not content the module cannot classify.
+
+## 2026-10-14 (later) — Review of restore concurrency, tracker correction and the reopen path
+
+Three defects were reported for review on branch `arena/351e052d-ai-career-agent` (PR #2) and each one was first
+reproduced against disposable databases, then fixed at the smallest point that removes it, then covered by a test
+that fails without the fix.
+
+- **A restore could report success while the window was unusable.** ``_restore_database`` installed the new store
+  only on success; after a failed reopen the *closed* connection stayed as ``self.store``, the next refresh raised
+  ``ProgrammingError: Cannot operate on a closed database`` out of a Tk callback, and the app still showed
+  "Restore complete" and the status line "Restored from …". Reproduced with the handler harness (mock
+  ``CareerStore`` raising) before any change. Now a failed reopen installs ``store.UnavailableStore``, which refuses
+  every use with ``StoreUnavailable`` and a plain message; the success dialog and the "Restored from" status are
+  not shown at all in that case, the real reason is reported, and ``close()`` stays safe. The silent list
+  refreshes (``_refresh_jobs``/``_refresh_tracker``), ``_select_job``, ``_evaluate`` and ``_load_profile`` now also
+  report a dead connection instead of letting ``sqlite3.Error`` escape as a raw traceback.
+- **A competing write could be accepted and then silently discarded by the swap.** ``create_backup`` refused while
+  another connection held a lock, but the window between that check and ``os.replace`` was open: a second
+  connection could begin *and commit* a transaction there, and the replacement then threw the committed file away.
+  Reproduced by patching ``os.replace``. ``_lock_for_swap`` now holds the database's exclusive lock across the
+  replacement, so the competing writer is told the database is busy instead of winning and being erased. An
+  *idle* connection still cannot be detected on any platform (it holds no SQLite lock) — the restore proceeds,
+  the idle connection keeps its old view, and its next write fails with SQLite's own ``SQLITE_READONLY``. That
+  limit is now documented in the README and covered by a test that asserts the behaviour rather than claiming a
+  detection that does not exist.
+- **A tracker correction could overwrite newer data and report success.** ``save_tracker`` re-checked only the
+  transition rules, which a forward move normally leaves permitted, so ``scripts/correct_tracker_record.py`` could
+  replace a record's newer evidence and confirmation flag; its verification also compared only the status.
+  ``save_tracker(..., expected=...)`` now performs one conditional UPDATE comparing the fields the caller decided
+  from and raises ``StaleTrackerRecord`` when no row matches, and the tool verifies listing id, status, evidence,
+  confirmation flag and that ``updated_at`` is a parseable ISO-8601 write time. The conditional write is committed
+  before ``rowcount`` is interpreted — without that, a write whose verification happens on another connection would
+  look like it never happened (this was caught by the tool's own dry-run test).
+- Local verification: ``python -m unittest discover -s tests`` → **582 tests, OK (skipped=12)** on a tree whose
+  unmodified tip (``c7bb081``) runs 567, so the fifteen added tests are the difference; ``python -m compileall -q
+  career_agent scripts tests`` → exit 0; ``python scripts/audit_job_source_csv.py`` → exit 0 with the unchanged CSV
+  SHA-256 ``0356b093…f414``. Each change was also run against the pre-fix code (a throwaway worktree) and the new
+  tests failed there: the tracker tests ended in a reported success over an overwritten record and a verification
+  that passed with the intended evidence missing; the restore test recorded the competing write as *accepted*; the
+  desktop tests showed "Restore complete" after "Database unavailable" and the raw ``ProgrammingError``.
+- Still unverified after this pass: the reviewer's résumé-import and export/persistence checklists were reviewed
+  against the code and the existing tests (78 résumé tests OK, including the notice-heading regression that keeps
+  the skills proposal at exactly ``Python, SQL, Git``) but no new defect was reproduced there; the gate remains
+  **NOT PASSED** and live discovery stays disabled.
