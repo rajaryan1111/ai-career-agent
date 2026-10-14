@@ -562,6 +562,46 @@ class RestoreTests(BackupTestCase):
         self.assertEqual(live.read_bytes(), before)
         self.assert_no_leftovers(live)
 
+    def test_a_symbolic_link_where_the_database_is_expected_is_refused_untouched(self):
+        """A link in place of the live database must not be replaced, and its target must not change.
+
+        Restoring "through" a link would replace whatever the link points at - which may be a file the
+        user never chose - so the restore must refuse and name the link.
+        """
+        live, chosen = self.prepare()
+        real = self.directory / "real.sqlite3"
+        populate(real, job_ids=("kept",))
+        link = self.directory / "linked.sqlite3"
+        os.symlink(real, link)
+        before = real.read_bytes()
+
+        with self.assertRaises(BackupError) as caught:
+            restore_backup(chosen, link, timestamp=STAMP)
+
+        self.assertIn("symbolic link", str(caught.exception))
+        self.assertTrue(link.is_symlink(), "the restore must not replace the link with a file")
+        self.assertEqual(real.read_bytes(), before, "the link's target must be untouched")
+        self.assertEqual(validate_app_database(real).job_count, 1)
+        self.assertEqual(validate_app_database(live).job_count, 1)
+        self.assert_no_leftovers(live)
+
+    def test_a_folder_where_the_database_is_expected_is_refused_with_a_clear_message(self):
+        """Pointing a file dialog at the application's data folder must not create anything."""
+        live, chosen = self.prepare()
+        folder = self.directory / "the-data-folder.sqlite3"
+        folder.mkdir()
+
+        with self.assertRaises(BackupError) as caught:
+            restore_backup(chosen, folder, timestamp=STAMP)
+
+        message = str(caught.exception)
+        self.assertIn("is a folder, not a database file", message)
+        self.assertNotIn("could not be preserved", message)
+        self.assertEqual(list(folder.iterdir()), [], "nothing may be created inside the folder")
+        self.assertTrue(folder.is_dir())
+        self.assertEqual(validate_app_database(live).job_count, 1)
+        self.assert_no_leftovers(live)
+
     def test_an_incompatible_backup_is_refused_and_the_current_database_is_untouched(self):
         live, _chosen = self.prepare()
         newer = self.directory / "newer.sqlite3"

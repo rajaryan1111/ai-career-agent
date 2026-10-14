@@ -458,6 +458,13 @@ def restore_backup(backup_path: str | Path, database_path: str | Path, *,
         raise BackupError(f"{database} is a symbolic link. Refusing to replace it; use the real path.")
     if not database.parent.is_dir():
         raise BackupError(f"The folder {database.parent} does not exist.")
+    if database.is_dir():
+        # Checked here, before any staging file is created: a folder is a common mistake when a file
+        # dialog is pointed at the application's data folder, and the later preservation step would
+        # otherwise report it as a database that "could not be preserved" - true of nothing.
+        raise BackupError(
+            f"{database} is a folder, not a database file. Choose the database file itself."
+        )
     staged = _staged_path(database, timestamp)
     try:
         descriptor = create_private_file(staged, exclusive=True)

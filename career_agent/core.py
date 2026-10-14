@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import math
 import re
 
 
@@ -198,7 +199,14 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
                       "Graduation cohort or candidate graduation year is missing.")
 
     if job.minimum_experience_years is not None or job.maximum_experience_years is not None:
-        if profile.experience_years is None:
+        if not (_is_real_number(profile.experience_years) and _is_real_number(job.minimum_experience_years)
+                and _is_real_number(job.maximum_experience_years)):
+            # A stored value that is not a real number (an old or hand-edited row holding nan or
+            # infinity) cannot be compared with anything: nan is false against every bound, so
+            # comparing it would fall through to "within the stated range" and pass a requirement
+            # that was never actually satisfied. Unknown is the honest answer.
+            results.append(RequirementResult("experience_years", Decision.UNKNOWN, "The stated experience range or the candidate experience value is not a real number, so it cannot be evaluated."))
+        elif profile.experience_years is None:
             results.append(RequirementResult("experience_years", Decision.UNKNOWN, "Required experience range cannot be checked because candidate experience is missing."))
         elif job.minimum_experience_years is not None and profile.experience_years < job.minimum_experience_years:
             results.append(RequirementResult("experience_years", Decision.FAIL, "Candidate experience is below the stated minimum."))
@@ -210,6 +218,21 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     decisions = {r.decision for r in results}
     overall = Decision.FAIL if Decision.FAIL in decisions else Decision.UNKNOWN if Decision.UNKNOWN in decisions else Decision.PASS
     return EligibilityReport(overall, tuple(results))
+
+
+def _is_real_number(value: object) -> bool:
+    """True when ``value`` is ``None`` (not stated) or a finite number.
+
+    Guards the experience comparison against a stored ``nan`` or ``inf``: ``nan`` is false against
+    every bound, so an unguarded comparison reaches the "within range" branch and reports a pass for
+    a requirement nobody satisfied.
+    """
+    if value is None:
+        return True
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _check_membership(
@@ -288,6 +311,12 @@ _PLACEHOLDER_EVIDENCE_VALUES = frozenset(
         "", "-", "--", "...", "?", "n/a", "na", "none", "nil", "null", "todo", "tbd", "tbc",
         "fixme", "placeholder", "evidence", "note", "notes", "text", "unknown", "asdf", "test",
         "testing", "confirmed", "yes", "no",
+        # A phrase about trying the feature is not a record of what an employer showed either. These
+        # are whole values, like the list above, so an honest note that merely contains a word such as
+        # "test" or "sample" is still accepted; only the bare phrase is refused.
+        "this is a test", "this is only a test", "just a test", "just testing", "test only",
+        "testing only", "for testing", "test text", "sample", "sample text", "example",
+        "example text", "dummy", "lorem ipsum",
     }
 )
 

@@ -104,6 +104,20 @@ class FormMappingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Maximum experience must be a number"):
             build_job_listing(job_form(max_exp="lots"), listing_id="new-id")
 
+    def test_an_experience_range_that_is_not_a_real_number_is_refused(self):
+        """A form is an entry point into an eligibility gate, so it refuses what cannot be compared.
+
+        ``nan`` reached the listing before this was refused, and ``nan`` is false against every bound,
+        so the range check fell through to "within the stated range" and passed a requirement nobody
+        had satisfied.
+        """
+        for value in ("nan", "inf", "Infinity", "1e400"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "real, finite number"):
+                    build_job_listing(job_form(min_exp=value), listing_id="new-id")
+                with self.assertRaisesRegex(ValueError, "real, finite number"):
+                    build_job_listing(job_form(min_exp="0", max_exp=value), listing_id="new-id")
+
     def test_availability_must_be_a_known_status(self):
         with self.assertRaisesRegex(ValueError, "Availability must be one of"):
             build_job_listing(job_form(availability="probably open"), listing_id="new-id")
@@ -133,6 +147,12 @@ class FormMappingTests(unittest.TestCase):
             build_candidate_profile({"graduation_year": "final year"})
         with self.assertRaisesRegex(ValueError, "Experience must be a number"):
             build_candidate_profile({"experience": "four years"})
+
+    def test_a_profile_experience_value_that_is_not_a_real_number_is_refused(self):
+        for value in ("nan", "NaN", "inf", "-inf", "1e400"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "real, finite number"):
+                    build_candidate_profile({"experience": value})
 
 
 class JobSavePlanTests(unittest.TestCase):

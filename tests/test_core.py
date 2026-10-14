@@ -97,6 +97,47 @@ class EligibilityTests(unittest.TestCase):
         self.assertEqual(mismatch.decision, Decision.FAIL)
 
 
+    def test_a_non_finite_experience_value_is_never_a_pass(self):
+        """``nan`` is false against every bound, so an unguarded range check used to pass it.
+
+        The desktop form refuses to store ``nan`` or ``inf`` at all; this covers the value arriving
+        some other way (an older row, a hand-edited database, a future importer) and proves the
+        eligibility gate stays fail-closed for it.
+        """
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(candidate_experience=value):
+                report = evaluate_eligibility(
+                    sample_profile(experience_years=value), sample_job(minimum_experience_years=5)
+                )
+                self.assertEqual(report.decision, Decision.UNKNOWN)
+                self.assertFalse(report.can_be_ranked_as_eligible)
+                self.assertIn("experience_years", {r.requirement for r in report.unknown_requirements})
+
+    def test_a_non_finite_job_experience_bound_is_never_a_pass(self):
+        for bound in (float("nan"), float("inf")):
+            with self.subTest(bound=bound):
+                report = evaluate_eligibility(
+                    sample_profile(experience_years=0), sample_job(minimum_experience_years=bound)
+                )
+                self.assertEqual(report.decision, Decision.UNKNOWN)
+                self.assertFalse(report.can_be_ranked_as_eligible)
+
+    def test_an_ordinary_experience_range_still_passes_and_still_fails(self):
+        # The guard above must not turn a normal range into "unknown".
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=1), sample_job(minimum_experience_years=1, maximum_experience_years=2)).decision,
+            Decision.PASS,
+        )
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=3), sample_job(minimum_experience_years=1, maximum_experience_years=2)).decision,
+            Decision.FAIL,
+        )
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=0), sample_job(minimum_experience_years=1)).decision,
+            Decision.FAIL,
+        )
+
+
 class RequirementNormalizationTests(unittest.TestCase):
     """Formatting differences must not change a hard requirement's decision."""
 
@@ -228,7 +269,8 @@ class ApplicationTrackerTests(unittest.TestCase):
                 self.assertFalse(tracker.candidate_confirmed)
 
     def test_confirmation_refuses_whitespace_placeholders_and_template_markers(self):
-        for text in ("   ", "\t\n", "n/a", "TODO", "tbd", "yes", "placeholder", "<your evidence here>"):
+        for text in ("   ", "\t\n", "n/a", "TODO", "tbd", "yes", "placeholder", "<your evidence here>",
+                     "This is a test", "just testing", "sample", "lorem ipsum"):
             with self.subTest(text=text):
                 tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
                 with self.assertRaises(ValueError):

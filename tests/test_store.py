@@ -340,6 +340,7 @@ class TrackerInvariantTests(unittest.TestCase):
         before = self._raw_row()
         for text in (None, "", "   ", "\t\n", "n/a", "N/A", "todo", "TBD", "test", "testing",
                      "placeholder", "yes", "evidence", "<your evidence here>",
+                     "This is a test", "just testing", "sample text",
                      "A confirmed application requires evidence. An attempt or timeout is not proof."):
             with self.subTest(text=text):
                 with self.assertRaises(ValueError):
