@@ -101,7 +101,10 @@ The intended audience is cross-industry and cross-experience: students, interns,
 ### Scheduling
 - Default discovery schedule: 00:00 and 12:00 Asia/Kolkata.
 - Let users configure schedules.
-- Clearly report missed runs, offline periods, partial failures, and retries.
+- Clearly report missed runs, offline periods, partial failures, and retries. (Partially implemented:
+  the durable record of scheduled occurrences, attempts, retries, refusals and interruptions exists in
+  the database, with a run history per task; the report a person reads, the worker loop, and missed-run
+  catch-up are not built yet.)
 - The desktop scheduler must report sleep/offline periods accurately. To meet the laptop-independent requirement, the product needs an optional or separately deployed always-on worker/scheduler; desktop-only execution cannot run while the computer is powered off or asleep. Any hosted/remote component must disclose cost, uptime limits, and what candidate data leaves the device.
 
 ## 7. Non-functional requirements

@@ -128,4 +128,8 @@
 - Define acceptance criteria before implementation; include failure cases, recovery, data migration, privacy, security, and accessibility as appropriate. Run tests and inspect the final repository state before claiming completion.
 - The intended discovery cadence is 00:00 and 12:00 Asia/Kolkata. Laptop-off operation requires a verified always-on worker; do not claim it based only on desktop scheduling or an untested free tier.
 - Measure quality, not volume alone: extraction correctness on critical fields, top-ranked job relevance, eligibility false positives, duplicate prevention, direct application-route validity, evidence-backed status, scheduler recovery, and user outcomes. Do not promise selection.
+- Background work is identified by the occurrence it serves, not by when it started. A scheduled
+  occurrence has an identity that survives restarts, and a retry serves the occurrence it owes; never
+  let a retry, a restart or a second process turn one occurrence into two executions or none. Record a
+  refusal as a refusal (a rule said no) rather than as a failure, and never retry it.
 - A source's public availability, API endpoint, or rendered form is not proof of permission. Discovery and submission are reviewed separately for each provider and workflow.

@@ -284,11 +284,14 @@ class StoreEventTests(unittest.TestCase):
         self.open_store()
 
         self.assertEqual(
-            event_names(self.log), ["database.migrated", "database.migrated", "database.opened"],
+            event_names(self.log),
+            ["database.migrated", "database.migrated", "database.migrated", "database.opened"],
+            "one line per step the new database needed, then the one that says it opened",
         )
         text = self.log.read_text(encoding="utf-8")
         self.assertIn("detail=from=0 to=1", text)
         self.assertIn("detail=from=1 to=2", text)
+        self.assertIn("detail=from=2 to=3", text)
 
     def test_an_already_current_database_records_only_that_it_was_opened(self) -> None:
         self.open_store()

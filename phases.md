@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 743 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 817 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -178,6 +178,18 @@ records, so restoring an older backup works again — installs it exactly as val
 when the app opens it, reporting that in the window and on the command line — while a newer file is still
 refused rather than downgraded. Encryption at rest, a written release/upgrade policy, and the desktop
 surface for the new activity log remain outstanding.
+
+Background execution is partially implemented. Schema version 3 stores what may run and what
+happened when it did: a task definition with times in a named zone (default 00:00 and 12:00
+Asia/Kolkata), one run row per scheduled occurrence *and attempt* - the uniqueness of that triple is
+the duplicate-run protection, so two processes cannot both execute one occurrence - a retry rule that
+serves the occurrence a failed attempt still owes, a heartbeat that separates "in progress" from "the
+worker is gone", crash recovery that closes a stale attempt as *interrupted* and re-plans it, and a
+worker lease that refuses a second scheduler over one database while taking over a lease whose
+heartbeat has gone stale. Refusals (a rule saying no, such as the closed source-quality gate) are
+recorded as refusals, not failures, and are never retried. Nothing executes yet: the worker loop, the
+command line and the window surface for these tables, the missed-run report, and laptop-off operation
+remain to be built, so no background execution is claimed.
 
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra

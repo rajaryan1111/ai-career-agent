@@ -79,6 +79,17 @@ EVENTS: tuple[str, ...] = (
     "backup.refused",
     "restore.completed",
     "restore.refused",
+    # The background scheduler: what it was told to do, what it did, and who was allowed to do it.
+    "task.scheduled",
+    "task.deleted",
+    "task.run_started",
+    "task.run_succeeded",
+    "task.run_failed",
+    "task.run_refused",
+    "task.run_interrupted",
+    "worker.lease_taken",
+    "worker.lease_refused",
+    "worker.lease_released",
 )
 
 #: Characters that would break the one-line-per-event rule, or that a terminal could act on.

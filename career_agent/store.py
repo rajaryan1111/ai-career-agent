@@ -14,6 +14,7 @@ import errno
 import json
 import os
 import sqlite3
+import uuid
 from pathlib import Path
 
 from .core import (
@@ -22,8 +23,12 @@ from .core import (
     is_allowed_tracker_transition, require_confirmation_evidence, validate_activity_detail,
     validate_activity_date,
 )
+from .tasks import (
+    RunState, ScheduledTask, TaskRun, TaskValidationError, WorkerLease, WorkerLeaseHeld,
+    clean_detail, next_run_after, plan_after_run, slot_key,
+)
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -34,6 +39,8 @@ _SCHEMA_VERSION = 2
 SCHEMA_TABLES_BY_VERSION = {
     1: ("application_tracker", "candidate_profile", "job_listings"),
     2: ("application_activity", "application_tracker", "candidate_profile", "job_listings"),
+    3: ("application_activity", "application_tracker", "candidate_profile", "job_listings",
+        "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -46,9 +53,50 @@ def schema_tables(version: int) -> tuple[str, ...] | None:
 #: Owner read/write only: the database holds candidate PII and should not be group/world readable.
 _OWNER_ONLY_MODE = 0o600
 
+#: The single worker lease a database can have. One name, because "two schedulers over one database"
+#: is exactly what the lease exists to prevent.
+_LEASE_NAME = "scheduler"
+
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso(value: datetime) -> str:
+    """One instant in the form the scheduler columns hold: UTC, ISO-8601, second precision.
+
+    Seconds are enough for a schedule and make the stored text sort chronologically, which is what
+    lets "the next task that is due" be one indexed comparison instead of a table scan.
+    """
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _instant_or_none(value: object, noun: str, field: str) -> datetime | None:
+    """A stored instant, as an aware UTC datetime, or a named problem with the stored text."""
+    if value is None or value == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise StoredRecordError(
+            noun, f"its {field} time {value!r} is not a reading this version understands"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise StoredRecordError(noun, f"its {field} time {value!r} carries no timezone offset")
+    return parsed.astimezone(timezone.utc)
+
+
+def _stored_int(value: object, noun: str, field: str) -> int:
+    """One stored whole number, reported as a named problem when it is not one."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        try:
+            return int(str(value))
+        except (TypeError, ValueError) as exc:
+            raise StoredRecordError(
+                noun, f"its {field} is {value!r} rather than a whole number"
+            ) from exc
+    return value
 
 
 class TrackerStatusError(ValueError):
@@ -97,6 +145,16 @@ class StoredRecordError(ValueError):
             f"The saved {noun} could not be read ({detail}). It was not changed. Use the export tool or "
             "restore a verified backup if the record is wrong."
         )
+
+
+class TaskRunConflict(ValueError):
+    """A run cannot be changed the way the caller asked - it is missing, or already finished.
+
+    Raised when a finish or a heartbeat does not match a run that is still running, which is what a
+    second worker, a restarted process, or a duplicate claim looks like from the store's side. Nothing
+    is written: the first outcome is the real one, and a later writer overwriting it would turn a
+    record of what happened into a record of what somebody guessed afterwards.
+    """
 
 
 class StoreUnavailable(sqlite3.Error):
@@ -533,6 +591,87 @@ def _migration_to_v2(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v3(connection: sqlite3.Connection) -> None:
+    """Schema 3: the durable side of the background scheduler.
+
+    Three tables, all additive:
+
+    * ``scheduled_task`` - one row per task definition plus the bookkeeping the scheduler maintains
+      (when it is next due, whether it is holding an occurrence that still has attempts left, and what
+      happened last time).
+    * ``task_run`` - one row per attempt at one scheduled occurrence. The uniqueness of
+      ``(task_id, slot_key, attempt)`` is the duplicate-run protection: it is a property of the data
+      rather than a convention, so two workers, a retry after a crash and a restarted process all
+      resolve to "exactly one row, so exactly one execution".
+    * ``worker_lease`` - one row proving which worker may execute tasks for this database, refreshed by
+      a heartbeat. A fresh lease held by another worker is a refusal; a stale one is taken over, since
+      the alternative is a database that can never be scheduled again.
+
+    Nothing here changes the candidate tables: this step only adds objects.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS scheduled_task (
+               task_id TEXT PRIMARY KEY,
+               name TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               timezone TEXT NOT NULL,
+               schedule_times TEXT NOT NULL,
+               enabled INTEGER NOT NULL,
+               timeout_seconds INTEGER NOT NULL,
+               max_attempts INTEGER NOT NULL,
+               retry_backoff_seconds INTEGER NOT NULL,
+               next_run_at TEXT,
+               pending_slot_at TEXT,
+               pending_attempt INTEGER,
+               last_run_at TEXT,
+               last_outcome TEXT,
+               last_error TEXT,
+               consecutive_failures INTEGER NOT NULL DEFAULT 0,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_scheduled_task_due
+               ON scheduled_task(enabled, next_run_at)"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS task_run (
+               run_id TEXT PRIMARY KEY,
+               task_id TEXT NOT NULL REFERENCES scheduled_task(task_id) ON DELETE CASCADE,
+               slot_key TEXT NOT NULL,
+               slot_at TEXT NOT NULL,
+               attempt INTEGER NOT NULL,
+               state TEXT NOT NULL,
+               worker_id TEXT,
+               timeout_seconds INTEGER NOT NULL,
+               created_at TEXT NOT NULL,
+               started_at TEXT,
+               finished_at TEXT,
+               heartbeat_at TEXT,
+               detail TEXT NOT NULL DEFAULT '',
+               error TEXT,
+               UNIQUE (task_id, slot_key, attempt)
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_task_run_task
+               ON task_run(task_id, created_at DESC)"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_task_run_state
+               ON task_run(state, heartbeat_at)"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS worker_lease (
+               lease_name TEXT PRIMARY KEY,
+               worker_id TEXT NOT NULL,
+               acquired_at TEXT NOT NULL,
+               heartbeat_at TEXT NOT NULL
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -540,6 +679,7 @@ def _migration_to_v2(connection: sqlite3.Connection) -> None:
 _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
     (1, "create the profile, job listing and application tracker tables", _migration_to_v1),
     (2, "add the application activity log", _migration_to_v2),
+    (3, "add the background task scheduler tables", _migration_to_v3),
 )
 
 
@@ -891,6 +1031,550 @@ class CareerStore:
             )
         except ValueError as exc:
             raise StoredRecordError(noun, f"its detail is not one this version can read ({exc})") from exc
+
+    # ------------------------------------------------------------------ background tasks
+    #
+    # The scheduler's persistence layer. Two properties are enforced here rather than by convention,
+    # because they are the ones a process crash would otherwise break:
+    #
+    # * One run per scheduled occurrence and attempt. The uniqueness of (task_id, slot_key, attempt) is
+    #   what makes that true; a second claimer gets an IntegrityError and is told nothing was claimed.
+    # * Only the worker that claimed a run may finish it, and only while it is still running. The first
+    #   outcome recorded is the one that stands, so a restarted or duplicated process cannot rewrite
+    #   what happened.
+
+    def save_scheduled_task(self, task: ScheduledTask, *,
+                            now: datetime | None = None) -> ScheduledTask:
+        """Store a task definition and return what the database holds afterwards.
+
+        Only the definition is taken from the argument. The bookkeeping columns - when the task is next
+        due, whether it is holding an occurrence with attempts left, and what happened last time - are
+        the scheduler's record of reality, so saving a definition again cannot rewind a due task,
+        duplicate a retry, or clear a failure that has not been dealt with.
+
+        Only the *schedule-defining* fields - the times and the zone - move the next occurrence, and
+        moving it drops any occurrence the task was holding, because the occurrence it owed was
+        defined by the schedule that changed. Renaming a task, pointing it at a different handler, or
+        changing its timeout and attempt limits leaves the timing exactly as it was: a person editing a
+        task's name at 12:00:30 should not silently skip the noon occurrence that is already due.
+        Enabling a disabled task computes a fresh next occurrence rather than replaying the ones that
+        were missed while it was off.
+        """
+        if not isinstance(task, ScheduledTask):
+            raise ValueError("A scheduled task must be a ScheduledTask.")
+        previous = self.get_scheduled_task(task.task_id)
+        moment = now or datetime.now(timezone.utc)
+        schedule_defining = (task.times, task.timezone)
+        previous_schedule_defining = None if previous is None else (previous.times, previous.timezone)
+        recompute = (previous is None or previous_schedule_defining != schedule_defining
+                     or previous.next_run_at is None)
+
+        if not task.enabled:
+            # A disabled task keeps any occurrence it was holding (the schedule is not lost, it is
+            # paused) but is never due.
+            next_run_at = None
+            pending_slot_at = None if previous is None else previous.pending_slot_at
+            pending_attempt = None if previous is None else previous.pending_attempt
+        elif recompute:
+            next_run_at = next_run_after(task, moment)
+            pending_slot_at = None
+            pending_attempt = None
+        else:
+            assert previous is not None  # recompute covers the only case where it could be None
+            next_run_at = previous.next_run_at
+            pending_slot_at = previous.pending_slot_at
+            pending_attempt = previous.pending_attempt
+
+        stamp = _iso(moment)
+        created_at = stamp if previous is None or previous.created_at is None else _iso(previous.created_at)
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO scheduled_task(
+                       task_id, name, kind, timezone, schedule_times, enabled, timeout_seconds,
+                       max_attempts, retry_backoff_seconds, next_run_at, pending_slot_at,
+                       pending_attempt, last_run_at, last_outcome, last_error, consecutive_failures,
+                       created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(task_id) DO UPDATE SET
+                       name=excluded.name, kind=excluded.kind, timezone=excluded.timezone,
+                       schedule_times=excluded.schedule_times, enabled=excluded.enabled,
+                       timeout_seconds=excluded.timeout_seconds, max_attempts=excluded.max_attempts,
+                       retry_backoff_seconds=excluded.retry_backoff_seconds,
+                       next_run_at=excluded.next_run_at, pending_slot_at=excluded.pending_slot_at,
+                       pending_attempt=excluded.pending_attempt, updated_at=excluded.updated_at""",
+                (
+                    task.task_id, task.name, task.kind, task.timezone,
+                    json.dumps(list(task.times)), int(task.enabled), task.timeout_seconds,
+                    task.max_attempts, task.retry_backoff_seconds,
+                    None if next_run_at is None else _iso(next_run_at),
+                    None if pending_slot_at is None else _iso(pending_slot_at),
+                    pending_attempt,
+                    None if previous is None or previous.last_run_at is None else _iso(previous.last_run_at),
+                    None if previous is None or previous.last_outcome is None else previous.last_outcome.value,
+                    None if previous is None else previous.last_error,
+                    0 if previous is None else previous.consecutive_failures,
+                    created_at, stamp,
+                ),
+            )
+        stored = self.get_scheduled_task(task.task_id)
+        assert stored is not None  # just written, so it must read back
+        self._record("task.scheduled",
+                     f"id={stored.task_id} kind={stored.kind} enabled={int(stored.enabled)} "
+                     f"times={','.join(stored.times)} zone={stored.timezone}")
+        return stored
+
+    def get_scheduled_task(self, task_id: str) -> ScheduledTask | None:
+        """One task as stored, or ``None`` when it is not there."""
+        row = self._connection.execute(
+            "SELECT * FROM scheduled_task WHERE task_id = ?", (str(task_id),)
+        ).fetchone()
+        return None if row is None else self._decode_scheduled_task(row)
+
+    def list_scheduled_tasks(self) -> tuple[ScheduledTask, ...]:
+        """Every stored task, in a stable order (by task id)."""
+        rows = self._connection.execute("SELECT * FROM scheduled_task ORDER BY task_id").fetchall()
+        return tuple(self._decode_scheduled_task(row) for row in rows)
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        """Remove a task and its run history; return whether a row was deleted."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM scheduled_task WHERE task_id = ?", (str(task_id),)
+            )
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("task.deleted", f"id={str(task_id)}")
+        return removed
+
+    def next_due_task(self, now: datetime | None = None) -> ScheduledTask | None:
+        """The next task that is due, or ``None``. Read-only: nothing is claimed by asking."""
+        stamp = _iso(now or datetime.now(timezone.utc))
+        row = self._connection.execute(
+            """SELECT * FROM scheduled_task
+                WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at, task_id LIMIT 1""",
+            (stamp,),
+        ).fetchone()
+        return None if row is None else self._decode_scheduled_task(row)
+
+    def claim_due_run(self, *, worker_id: str, now: datetime | None = None) -> TaskRun | None:
+        """Claim the next due occurrence for ``worker_id``, or return ``None`` if there is none.
+
+        One transaction covers the read and the write, so two workers calling this at the same moment
+        cannot both take the same occurrence: the second one's insert violates the uniqueness of
+        ``(task, slot, attempt)`` and is answered with ``None`` - "nothing was claimed", not "a run
+        exists", which is the distinction a caller needs to decide whether to keep looking.
+
+        The task's bookkeeping is deliberately *not* advanced here. It is advanced when the attempt
+        finishes, by :meth:`finish_run`, so a process that dies between claiming and finishing leaves
+        exactly one visible trace: a run row that is still running, which
+        :meth:`recover_stale_runs` then closes and re-plans.
+        """
+        name = str(worker_id).strip()
+        if not name:
+            raise ValueError("A claim needs a worker id.")
+        moment = now or datetime.now(timezone.utc)
+        stamp = _iso(moment)
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                """SELECT * FROM scheduled_task
+                    WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+                    ORDER BY next_run_at, task_id LIMIT 1""",
+                (stamp,),
+            ).fetchone()
+            if row is None:
+                self._connection.execute("COMMIT")
+                return None
+            task = self._decode_scheduled_task(row)
+            slot_at = task.pending_slot_at or task.next_run_at
+            assert slot_at is not None  # the query requires a next_run_at, and pending wins over it
+            attempt = task.pending_attempt or 1
+            run = self._insert_running_run(task, slot_at, attempt, name, moment)
+            self._connection.execute("COMMIT")
+        except BaseException:
+            self._roll_back_quietly()
+            raise
+        if run is not None:
+            self._record("task.run_started",
+                         f"id={task.task_id} attempt={attempt} slot={_iso(slot_at)} worker={name}")
+        return run
+
+    def finish_run(
+        self, run_id: str, state: RunState, *, detail: str = "", error: str | None = None,
+        worker_id: str | None = None, now: datetime | None = None,
+    ) -> TaskRun:
+        """Record a run's outcome and move the task on, in one transaction.
+
+        Refuses - with :class:`TaskRunConflict` and no write - a run that is missing, one that already
+        finished, and one claimed by a different worker. The refusal is the point: a duplicated or
+        restarted process must not be able to replace the record of what actually happened.
+        """
+        outcome = RunState(state) if not isinstance(state, RunState) else state
+        if not outcome.is_terminal:
+            raise ValueError(f"A run finishes in a terminal state, not {outcome.value!r}.")
+        moment = now or datetime.now(timezone.utc)
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                "SELECT * FROM task_run WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if row is None:
+                raise TaskRunConflict(f"No run {run_id!r} was found, so nothing was recorded.")
+            run = self._decode_task_run(row)
+            if run.state is not RunState.RUNNING:
+                raise TaskRunConflict(
+                    f"Run {run.run_id} already finished as {run.state.value}, so it was not changed."
+                )
+            if worker_id is not None and run.worker_id is not None and run.worker_id != worker_id:
+                raise TaskRunConflict(
+                    f"Run {run.run_id} was claimed by {run.worker_id}, not by {worker_id}, so it was "
+                    "not changed."
+                )
+            task_row = self._connection.execute(
+                "SELECT * FROM scheduled_task WHERE task_id = ?", (run.task_id,)
+            ).fetchone()
+            if task_row is None:
+                raise TaskRunConflict(
+                    f"The task {run.task_id!r} for run {run.run_id} is gone, so nothing was recorded."
+                )
+            task = self._decode_scheduled_task(task_row)
+            update = plan_after_run(task, outcome, run.attempt, run.slot_at, moment)
+            finished = _iso(moment)
+            cleaned_detail = clean_detail(detail)
+            cleaned_error = clean_detail(error) or None
+            changed = self._connection.execute(
+                """UPDATE task_run SET state = ?, finished_at = ?, heartbeat_at = ?, detail = ?, error = ?
+                    WHERE run_id = ? AND state = ?""",
+                (outcome.value, finished, finished, cleaned_detail, cleaned_error, run.run_id,
+                 RunState.RUNNING.value),
+            ).rowcount
+            if changed != 1:
+                raise TaskRunConflict(
+                    f"Run {run.run_id} was changed by another process while this one was finishing it."
+                )
+            self._connection.execute(
+                """UPDATE scheduled_task
+                      SET next_run_at = ?, pending_slot_at = ?, pending_attempt = ?, last_run_at = ?,
+                          last_outcome = ?, last_error = ?, consecutive_failures = ?, updated_at = ?
+                    WHERE task_id = ?""",
+                (
+                    _iso(update.next_run_at),
+                    None if update.pending_slot_at is None else _iso(update.pending_slot_at),
+                    update.pending_attempt, finished, update.last_outcome.value, cleaned_error,
+                    update.consecutive_failures, finished, task.task_id,
+                ),
+            )
+            self._connection.execute("COMMIT")
+        except BaseException:
+            self._roll_back_quietly()
+            raise
+        updated = self.get_task_run(run_id)
+        assert updated is not None  # just written, so it must read back
+        # Each outcome is written out as its own call site on purpose: the event vocabulary guard in
+        # the tests reads the shipped source and refuses a declared event that no call site uses, so an
+        # event reached through a lookup table would be a name nothing appears to record.
+        base_detail = (f"id={updated.task_id} attempt={updated.attempt} "
+                       f"seconds={int(updated.duration_seconds or 0)}")
+        if outcome is RunState.SUCCEEDED:
+            self._record("task.run_succeeded", base_detail)
+        elif outcome is RunState.REFUSED:
+            self._record("task.run_refused", base_detail)
+        elif outcome is RunState.INTERRUPTED:
+            self._record("task.run_interrupted", base_detail)
+        else:
+            # A failed attempt and one that ran out of time are both failures of the attempt; the state
+            # is in the detail, so the log says which without needing the table beside it.
+            self._record("task.run_failed", f"{base_detail} state={outcome.value}")
+        return updated
+
+    def get_task_run(self, run_id: str) -> TaskRun | None:
+        """One run as stored, or ``None`` when it is not there."""
+        row = self._connection.execute(
+            "SELECT * FROM task_run WHERE run_id = ?", (str(run_id),)
+        ).fetchone()
+        return None if row is None else self._decode_task_run(row)
+
+    def heartbeat_run(self, run_id: str, *, worker_id: str | None = None,
+                      now: datetime | None = None) -> bool:
+        """Say that a running attempt is still being worked on; return whether a row was touched.
+
+        The heartbeat is what separates "this work is in progress" from "the process that claimed this
+        is gone", so it is written on every poll while an attempt runs. It never changes anything else
+        about the run.
+        """
+        moment = now or datetime.now(timezone.utc)
+        statement = "UPDATE task_run SET heartbeat_at = ? WHERE run_id = ? AND state = ?"
+        parameters: list[object] = [_iso(moment), str(run_id), RunState.RUNNING.value]
+        if worker_id is not None:
+            statement += " AND worker_id = ?"
+            parameters.append(worker_id)
+        with self._connection:
+            cursor = self._connection.execute(statement, tuple(parameters))
+        return cursor.rowcount == 1
+
+    def running_runs(self, *, worker_id: str | None = None) -> tuple[TaskRun, ...]:
+        """Attempts that are still marked as running, oldest first."""
+        statement = "SELECT * FROM task_run WHERE state = ?"
+        parameters: list[object] = [RunState.RUNNING.value]
+        if worker_id is not None:
+            statement += " AND worker_id = ?"
+            parameters.append(worker_id)
+        statement += " ORDER BY created_at, attempt"
+        rows = self._connection.execute(statement, tuple(parameters)).fetchall()
+        return tuple(self._decode_task_run(row) for row in rows)
+
+    def list_task_runs(self, *, task_id: str | None = None,
+                       limit: int = 50) -> tuple[TaskRun, ...]:
+        """Run history, newest first - the view that answers \"what has this task been doing?\"."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("The run-history limit must be a positive whole number.")
+        if task_id is None:
+            rows = self._connection.execute(
+                """SELECT * FROM task_run ORDER BY created_at DESC, attempt DESC, run_id DESC
+                    LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                """SELECT * FROM task_run WHERE task_id = ?
+                    ORDER BY created_at DESC, attempt DESC, run_id DESC LIMIT ?""",
+                (str(task_id), limit),
+            ).fetchall()
+        return tuple(self._decode_task_run(row) for row in rows)
+
+    def recover_stale_runs(self, stale_before: datetime, *,
+                           now: datetime | None = None) -> tuple[TaskRun, ...]:
+        """Close attempts whose worker stopped, and re-plan their occurrences.
+
+        A run that is still marked as running while nothing has refreshed its heartbeat for longer than
+        ``stale_before`` means the process that claimed it is gone: it cannot be reported as successful
+        (nobody saw it finish) and must not be left running forever, because the task would never be due
+        again. It is recorded as ``interrupted`` - the honest description - and the occurrence it served
+        is then re-planned by the same rule as a failure, so the work gets its remaining attempts or the
+        task returns to its schedule. Each recovery is decided by the store, in one transaction, so two
+        workers starting at once cannot both re-plan the same run.
+        """
+        threshold = stale_before.astimezone(timezone.utc)
+        rows = self._connection.execute(
+            """SELECT run_id, attempt, heartbeat_at, created_at FROM task_run
+                WHERE state = ? AND (heartbeat_at IS NULL OR heartbeat_at < ?)
+                ORDER BY created_at, attempt""",
+            (RunState.RUNNING.value, _iso(threshold)),
+        ).fetchall()
+        recovered: list[TaskRun] = []
+        for row in rows:
+            last_seen = row["heartbeat_at"] or row["created_at"]
+            try:
+                recovered.append(self.finish_run(
+                    str(row["run_id"]), RunState.INTERRUPTED,
+                    detail=f"no heartbeat since {last_seen}; the worker that claimed this attempt stopped",
+                    now=now,
+                ))
+            except TaskRunConflict:
+                # Another worker recovered it between the read and the finish. Not an error: the
+                # outcome is recorded exactly once, which is what matters.
+                continue
+        return tuple(recovered)
+
+    def acquire_worker_lease(self, worker_id: str, *, now: datetime | None = None,
+                             stale_before: datetime | None = None) -> WorkerLease:
+        """Take the right to execute this database's tasks, or refuse because another worker has it.
+
+        Refusing is the safe default: two schedulers over one database would each run work the other
+        claimed and each believe it was alone. A lease whose heartbeat has gone stale is taken over
+        rather than honoured, because the previous holder is gone and a database that can never be
+        scheduled again is not a safe outcome either - and the take-over is recorded, so it is visible
+        afterwards rather than silent.
+        """
+        name = str(worker_id).strip()
+        if not name:
+            raise ValueError("A worker lease needs a worker id.")
+        moment = now or datetime.now(timezone.utc)
+        stamp = _iso(moment)
+        taken_over_from: str | None = None
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                "SELECT * FROM worker_lease WHERE lease_name = ?", (_LEASE_NAME,)
+            ).fetchone()
+            if row is not None:
+                held = self._decode_worker_lease(row)
+                if held.worker_id != name:
+                    fresh = stale_before is None or held.heartbeat_at >= stale_before.astimezone(timezone.utc)
+                    if fresh:
+                        self._roll_back_quietly()
+                        self._record("worker.lease_refused",
+                                     f"holder={held.worker_id} asked_by={name}")
+                        raise WorkerLeaseHeld(held)
+                    taken_over_from = held.worker_id
+                    self._connection.execute(
+                        """UPDATE worker_lease SET worker_id = ?, acquired_at = ?, heartbeat_at = ?
+                            WHERE lease_name = ?""",
+                        (name, stamp, stamp, _LEASE_NAME),
+                    )
+                else:
+                    self._connection.execute(
+                        "UPDATE worker_lease SET heartbeat_at = ? WHERE lease_name = ?",
+                        (stamp, _LEASE_NAME),
+                    )
+            else:
+                self._connection.execute(
+                    """INSERT INTO worker_lease(lease_name, worker_id, acquired_at, heartbeat_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (_LEASE_NAME, name, stamp, stamp),
+                )
+            self._connection.execute("COMMIT")
+        except BaseException:
+            self._roll_back_quietly()
+            raise
+        lease = self.get_worker_lease()
+        assert lease is not None  # just written, so it must read back
+        self._record("worker.lease_taken",
+                     f"worker={name}" + (f" took_over_from={taken_over_from}" if taken_over_from else ""))
+        return lease
+
+    def heartbeat_worker_lease(self, worker_id: str, *, now: datetime | None = None) -> WorkerLease | None:
+        """Refresh the lease if this worker holds it; ``None`` when it does not."""
+        moment = now or datetime.now(timezone.utc)
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE worker_lease SET heartbeat_at = ? WHERE lease_name = ? AND worker_id = ?",
+                (_iso(moment), _LEASE_NAME, str(worker_id)),
+            )
+        if cursor.rowcount != 1:
+            return None
+        return self.get_worker_lease()
+
+    def get_worker_lease(self) -> WorkerLease | None:
+        """The current lease, whoever holds it, or ``None`` when no worker is scheduled."""
+        row = self._connection.execute(
+            "SELECT * FROM worker_lease WHERE lease_name = ?", (_LEASE_NAME,)
+        ).fetchone()
+        return None if row is None else self._decode_worker_lease(row)
+
+    def release_worker_lease(self, worker_id: str) -> bool:
+        """Give up the lease; return whether this worker held it. Only the holder can release it."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM worker_lease WHERE lease_name = ? AND worker_id = ?",
+                (_LEASE_NAME, str(worker_id)),
+            )
+        released = cursor.rowcount == 1
+        if released:
+            self._record("worker.lease_released", f"worker={worker_id}")
+        return released
+
+    def _insert_running_run(self, task: ScheduledTask, slot_at: datetime, attempt: int,
+                            worker_id: str, now: datetime) -> TaskRun | None:
+        """Insert the row that claims one attempt; ``None`` when another worker already has it.
+
+        Called inside the caller's transaction. The uniqueness of ``(task, slot, attempt)`` is what
+        makes this safe, so an insert that violates it is answered - after checking that this is what
+        the violation actually was - with "not claimed" rather than an exception the caller would have
+        to interpret.
+        """
+        stamp = _iso(now)
+        run = TaskRun(
+            run_id=uuid.uuid4().hex, task_id=task.task_id,
+            slot_key=slot_key(task.task_id, slot_at), slot_at=slot_at, attempt=attempt,
+            state=RunState.RUNNING, timeout_seconds=task.timeout_seconds, worker_id=worker_id,
+            created_at=now, started_at=now, heartbeat_at=now,
+        )
+        try:
+            self._connection.execute(
+                """INSERT INTO task_run(run_id, task_id, slot_key, slot_at, attempt, state, worker_id,
+                                        timeout_seconds, created_at, started_at, heartbeat_at, detail)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')""",
+                (run.run_id, run.task_id, run.slot_key, _iso(run.slot_at), run.attempt,
+                 run.state.value, worker_id, run.timeout_seconds, stamp, stamp, stamp),
+            )
+        except sqlite3.IntegrityError as exc:
+            existing = self._connection.execute(
+                "SELECT 1 FROM task_run WHERE task_id = ? AND slot_key = ? AND attempt = ?",
+                (run.task_id, run.slot_key, run.attempt),
+            ).fetchone()
+            if existing is None:
+                raise  # a different integrity problem is not this one, and must not be hidden
+            return None
+        return run
+
+    def _roll_back_quietly(self) -> None:
+        """Undo an open transaction if one is still open; the caller re-raises the real error."""
+        try:
+            self._connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            # SQLite may already have unwound it (a full disk, for example). The exception the caller
+            # is about to raise is what matters, and this must not replace it.
+            pass
+
+    def _decode_scheduled_task(self, row: sqlite3.Row) -> ScheduledTask:
+        noun = "scheduled task"
+        try:
+            times = json.loads(row["schedule_times"])
+        except json.JSONDecodeError as exc:
+            raise StoredRecordError(noun, "its schedule is not readable") from exc
+        if not isinstance(times, list):
+            raise StoredRecordError(noun, "its schedule is not a list of times")
+        try:
+            return ScheduledTask(
+                task_id=_stored_text(row["task_id"], noun, "task id"),
+                name=_stored_text(row["name"], noun, "name"),
+                kind=_stored_text(row["kind"], noun, "kind"),
+                times=tuple(_stored_text_values(times, noun, "schedule times")),
+                timezone=_stored_text(row["timezone"], noun, "timezone"),
+                enabled=bool(row["enabled"]),
+                timeout_seconds=_stored_int(row["timeout_seconds"], noun, "timeout"),
+                max_attempts=_stored_int(row["max_attempts"], noun, "attempt limit"),
+                retry_backoff_seconds=_stored_int(row["retry_backoff_seconds"], noun, "retry delay"),
+                next_run_at=_instant_or_none(row["next_run_at"], noun, "next run"),
+                pending_slot_at=_instant_or_none(row["pending_slot_at"], noun, "pending slot"),
+                pending_attempt=(None if row["pending_attempt"] is None
+                                 else _stored_int(row["pending_attempt"], noun, "pending attempt")),
+                last_run_at=_instant_or_none(row["last_run_at"], noun, "last run"),
+                last_outcome=row["last_outcome"],
+                last_error=row["last_error"],
+                consecutive_failures=_stored_int(row["consecutive_failures"], noun,
+                                                 "consecutive-failure count"),
+                created_at=_instant_or_none(row["created_at"], noun, "created"),
+                updated_at=_instant_or_none(row["updated_at"], noun, "updated"),
+            )
+        except TaskValidationError as exc:
+            raise StoredRecordError(noun, f"it could not be read as a task ({exc})") from exc
+
+    def _decode_task_run(self, row: sqlite3.Row) -> TaskRun:
+        noun = "background task run"
+        try:
+            return TaskRun(
+                run_id=_stored_text(row["run_id"], noun, "id"),
+                task_id=_stored_text(row["task_id"], noun, "task id"),
+                slot_key=_stored_text(row["slot_key"], noun, "scheduled occurrence"),
+                slot_at=_instant_or_none(row["slot_at"], noun, "scheduled instant"),
+                attempt=_stored_int(row["attempt"], noun, "attempt"),
+                state=row["state"],
+                timeout_seconds=_stored_int(row["timeout_seconds"], noun, "timeout"),
+                worker_id=row["worker_id"],
+                created_at=_instant_or_none(row["created_at"], noun, "created"),
+                started_at=_instant_or_none(row["started_at"], noun, "started"),
+                finished_at=_instant_or_none(row["finished_at"], noun, "finished"),
+                heartbeat_at=_instant_or_none(row["heartbeat_at"], noun, "heartbeat"),
+                detail=row["detail"] or "",
+                error=row["error"],
+            )
+        except TaskValidationError as exc:
+            raise StoredRecordError(noun, f"it could not be read as a run ({exc})") from exc
+
+    def _decode_worker_lease(self, row: sqlite3.Row) -> WorkerLease:
+        noun = "worker lease"
+        try:
+            return WorkerLease(
+                lease_name=_stored_text(row["lease_name"], noun, "name"),
+                worker_id=_stored_text(row["worker_id"], noun, "worker"),
+                acquired_at=_instant_or_none(row["acquired_at"], noun, "acquired"),
+                heartbeat_at=_instant_or_none(row["heartbeat_at"], noun, "heartbeat"),
+            )
+        except TaskValidationError as exc:
+            raise StoredRecordError(noun, f"it could not be read as a lease ({exc})") from exc
 
     def _check_tracker_invariants(self, tracker: ApplicationTracker, stored: ApplicationTracker | None) -> None:
         """Refuse tracker writes that contradict the domain state machine.

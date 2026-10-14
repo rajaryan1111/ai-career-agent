@@ -1769,3 +1769,64 @@ test — open, fail the step, open again in the same second — was refused with
 Backups are never overwritten". That was the code being wrong, not the test: the second attempt was a
 *different* moment and deserved its own copy. The fix is `next_automatic_backup_path`; nothing in
 `create_backup`'s refusal was relaxed to make the test pass.
+
+## 2026-10-15 — Durable task storage: one run per occurrence, and a lease per database
+
+**What changed.** Schema version 3 adds the storage half of the background scheduler.
+`career_agent/tasks.py` holds the domain - a task definition with its schedule
+(:class:`ScheduledTask`), the arithmetic that turns a schedule into its next instant
+(:func:`next_run_after`), the identity of one occurrence (:func:`slot_key`), the retry rule
+(:func:`retry_delay_seconds`, :func:`plan_after_run`) and the states a run moves through
+(:class:`RunState`) - with no SQLite and no network code. `career_agent/store.py` adds three tables
+(`scheduled_task`, `task_run`, `worker_lease`), the migration step that creates them, and the
+operations: save/list/delete a task, `claim_due_run`, `finish_run`, `heartbeat_run`,
+`recover_stale_runs`, `running_runs`, `list_task_runs`, and
+`acquire`/`heartbeat`/`release`/`get_worker_lease`. The event vocabulary grew by ten names
+(`task.scheduled`, `task.deleted`, `task.run_started|succeeded|failed|refused|interrupted`,
+`worker.lease_taken|refused|released`).
+
+**Why this shape.** The failure that matters for a scheduler is not "it crashed" - it is "it ran the
+same thing twice", "it never ran what it owed", or "it silently moved a run". Each of those is
+answered by data rather than by careful code:
+
+*One run per occurrence* holds because a run is keyed by ``(task, slot, attempt)`` where the slot is
+the instant the schedule named, not the moment execution started. Two workers, a retry after a crash,
+and a restart all compute the same key, so the uniqueness constraint decides which of them runs it -
+the loser is told "nothing was claimed" rather than being handed the run (a test proves this with two
+connections to one file). *An occurrence is never lost* holds because the task keeps the occurrence it
+owes: a failure with attempts left sets ``pending_slot_at``/``pending_attempt`` and comes back after
+the backoff to serve *that* instant, and a process that dies mid-attempt leaves a run row whose
+heartbeat goes stale, which `recover_stale_runs` closes as ``interrupted`` and re-plans by the same
+rule as a failure. *A run cannot be rewritten* holds because `finish_run` refuses a run that already
+finished, a run claimed by a different worker, and a run that is not there - each with
+`TaskRunConflict` and no write - so the first recorded outcome is the one that stands.
+
+**The states are deliberately not just "failed".** `REFUSED` means a rule said no (the closed
+source-quality gate, for instance) and is not a malfunction: it is not retried, and it does not count
+towards anything. `TIMED_OUT` and `FAILED` mean the attempt ran and did not work; `INTERRUPTED` means
+nobody observed an outcome at all because the process stopped. Reporting a refusal as a failure, or an
+interruption as a success, would each be a false claim about what the machine did.
+
+**Time is wall-clock in a named zone.** The default cadence is 00:00 and 12:00 in `Asia/Kolkata`
+(confirmed user decision), and the arithmetic works in the task's own zone and converts to UTC only for
+storage, so a machine whose own clock zone differs cannot move a run (a test asks the same question
+from three zones). Two DST cases are decided rather than inherited: a local time inside the
+spring-forward gap is *skipped* for that day (moving it to 01:30 or 03:30 would silently run a task at
+an hour nobody chose), and a local time that occurs twice uses the first occurrence only, so a daily
+task cannot run twice that day.
+
+**Found while writing it (a design flaw the test caught).** The first version recomputed the next
+occurrence whenever *any* definition field changed, so renaming a task at 12:00:30 - after its noon
+occurrence was due but before it ran - silently skipped that occurrence. Only the times and the zone
+move a schedule now; renaming a task, pointing it at another handler, or changing its timeout leaves
+the timing exactly as it was, and a test renames a due task and then claims the occurrence it owed.
+
+**Not implied by this.** The store schedules nothing and runs nothing: no worker loop exists yet, no
+command line or window exposes it, and the discovery schedule still cannot run live sources (the gate
+is closed). Laptop-off operation remains unimplemented and is not claimed.
+
+**Evidence.** Full suite 817 tests OK (13 skipped without the optional `pypdf`), with
+`tests/test_tasks.py` (35 tests: schedule arithmetic including both DST cases, retry planning,
+validation, slot identity) and `tests/test_store_tasks.py` (39 tests: upgrade to schema 3 keeping
+existing rows and taking the pre-upgrade copy, claim/finish/heartbeat/recovery, duplicate claims from
+two connections, lease refusal and stale take-over, and damaged rows reported as themselves).

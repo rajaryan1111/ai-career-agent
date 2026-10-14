@@ -839,13 +839,13 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 2)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(SCHEMA_VERSION, 3)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 3)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[2]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[3]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS

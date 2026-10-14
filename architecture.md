@@ -70,7 +70,15 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
 
 ## 8. Scheduling and deployment boundary
 
-Default discovery schedule is 00:00 and 12:00 Asia/Kolkata. The requirement to operate while the laptop is off means desktop-only scheduling is insufficient. Evaluate an always-on worker as a separate deployable component with durable queues, idempotent run keys, bounded retries, health/last-run reporting, missed-run catch-up, and alertable failures. A remote worker must not silently receive resumes or email contents: minimize data, encrypt transport/storage, document retention/location, and make remote processing opt-in. A free tier is not a reliability guarantee; disclose sleep, quota, cold-start, and uptime limitations. Never claim background operation until the deployed worker is actually verified.
+Default discovery schedule is 00:00 and 12:00 Asia/Kolkata. Implemented so far is the durable half of
+the local scheduler: task definitions stored with their schedule in a named zone, one run row per
+scheduled occurrence and attempt (the uniqueness constraint is the duplicate-run protection, so a
+restart, a retry or a second process cannot execute one occurrence twice), bounded exponential retries
+that serve the occurrence a failed attempt still owes, heartbeats with stale-attempt recovery recorded
+as *interrupted* rather than guessed at, and a worker lease that refuses a second scheduler over the
+same database. The worker loop itself, the user-visible surfaces (command line, window, missed-run and
+health reporting) and any always-on deployment are still to come. The requirement to operate while the
+laptop is off means desktop-only scheduling is insufficient. Evaluate an always-on worker as a separate deployable component with durable queues, idempotent run keys, bounded retries, health/last-run reporting, missed-run catch-up, and alertable failures. A remote worker must not silently receive resumes or email contents: minimize data, encrypt transport/storage, document retention/location, and make remote processing opt-in. A free tier is not a reliability guarantee; disclose sleep, quota, cold-start, and uptime limitations. Never claim background operation until the deployed worker is actually verified.
 
 ## 9. Security considerations
 
