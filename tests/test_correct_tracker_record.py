@@ -6,14 +6,17 @@ make no network calls. They verify dry-run behavior, backups, refusal paths, and
 is durable and does not touch anything else.
 """
 import io
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, JobListing
+from career_agent.backup import validate_app_database
 from career_agent.store import CareerStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -221,6 +224,43 @@ class ApplyTests(CorrectionTestCase):
             stored = store.get_tracker(LISTING_ID)
             with self.assertRaises(ValueError):
                 store.save_tracker(stored.transition(ApplicationStatus.SUBMITTED_UNVERIFIED, evidence="undo"))
+
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_the_snapshot_written_before_a_change_is_owner_only(self):
+        """The snapshot holds the whole database, so it must not be readable by other accounts."""
+        code, _out, _err = run(self.apply_arguments())
+        self.assertEqual(code, correction.EXIT_OK)
+        backups = self.backups()
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+
+    def test_the_snapshot_is_verified_before_the_change_is_attempted(self):
+        code, out, _err = run(self.apply_arguments())
+        self.assertEqual(code, correction.EXIT_OK)
+        self.assertIn("written and verified", out)
+        snapshot = validate_app_database(self.backups()[0])
+        self.assertEqual(snapshot.job_count, 1, "the snapshot must be a readable database with the listing")
+
+    def test_an_existing_snapshot_is_never_overwritten(self):
+        """A second run in the same second must refuse rather than destroy the earlier snapshot."""
+        taken = self.directory / f"{self.database.name}.backup-taken"
+        taken.write_text("an earlier snapshot that must survive", encoding="utf-8")
+        with mock.patch.object(correction, "automatic_backup_path", return_value=taken):
+            code, _out, err = run(self.apply_arguments())
+
+        self.assertEqual(code, correction.EXIT_REFUSED)
+        self.assertIn("already exists", err)
+        self.assertEqual(taken.read_text(encoding="utf-8"), "an earlier snapshot that must survive")
+        self.assertEqual(correction.read_row(self.database, LISTING_ID)["status"], "confirmed",
+                         "a refused backup must leave the record untouched")
+
+    def apply_arguments(self):
+        """The arguments a real --apply correction uses (dry run unless --apply is present)."""
+        return [
+            "--database", str(self.database), "--listing-id", LISTING_ID, "--to", "withdrawn",
+            "--reason", REASON, "--clear-confirmation", "--apply",
+        ]
 
 
 if __name__ == "__main__":

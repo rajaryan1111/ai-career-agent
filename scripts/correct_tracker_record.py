@@ -12,8 +12,10 @@ so every domain and storage invariant still applies. It cannot create, delete, o
 Safety properties:
   * Dry run by default: nothing is written unless ``--apply`` is given. The dry run validates the
     intended change on a throwaway copy of the database so it cannot touch the original.
-  * ``--apply`` first writes a timestamped backup copy next to the database (SQLite's own backup
-    API, so the snapshot is consistent), and prints its path.
+  * ``--apply`` first writes a timestamped backup next to the database through
+    :func:`career_agent.backup.create_backup`, so the snapshot is consistent, owner-only where the
+    file system supports POSIX permissions, verified before the change is attempted, and never
+    overwrites an existing file. Its path is printed.
   * The change goes through ``CareerStore``, so an invalid or impermissible transition is refused
     with the same error the application would give. There is no direct SQL write path here.
   * ``--reason`` is mandatory and becomes the new evidence text: the corrected record must say why
@@ -36,7 +38,6 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,7 @@ from career_agent.core import (  # noqa: E402  (imports need the repository root
     is_allowed_tracker_transition,
     is_substantive_confirmation_evidence,
 )
+from career_agent.backup import BackupError, automatic_backup_path, create_backup  # noqa: E402
 from career_agent.store import CareerStore  # noqa: E402
 
 EXIT_OK = 0
@@ -201,12 +203,16 @@ def main(argv: list[str] | None = None) -> int:
             print("Nothing was written. Re-run with --apply to make this change.")
             return EXIT_OK if ok else EXIT_REFUSED
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = database_path.with_name(f"{database_path.name}.backup-{timestamp}")
-        with sqlite3.connect(str(database_path)) as source:
-            with sqlite3.connect(str(backup_path)) as destination:
-                source.backup(destination)
-        print(f"\nBackup written: {backup_path}")
+        # One shared implementation: verified, owner-only, never overwrites an existing snapshot.
+        backup_path = automatic_backup_path(database_path)
+        try:
+            snapshot = create_backup(database_path, backup_path)
+        except BackupError as exc:
+            print(f"REFUSED: the database could not be backed up before the change ({exc})", file=sys.stderr)
+            print("Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
+        print(f"\nBackup written and verified: {backup_path}")
+        print(f"Contents: {snapshot.summary()}")
 
         with CareerStore(str(database_path)) as store:
             store.save_tracker(corrected)

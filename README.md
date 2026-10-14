@@ -45,13 +45,82 @@ python scripts/correct_tracker_record.py --database "<your database path>" --lis
 ```
 
 See [the smoke-test diagnosis](research/tracker-confirmation-smoke-test-diagnosis-2026-10-14.md) for
-the full explanation and the exact recovery steps. To use the core tests in a headless environment, no display is required.
+the full explanation and the exact recovery steps. Its `--apply` snapshot goes through the same
+verified, owner-only backup path described below. To use the core tests in a headless environment, no display is required.
 
 The JSON export is written owner-only (`0600`) on systems that support POSIX permissions, tightened
 even when the chosen file already existed, and it refuses to write through a symbolic link so a link
 cannot redirect candidate data into another file. If the permissions cannot be applied, the export is
 not kept and the app says so instead of writing readable data. A synced or shared destination folder
 can still expose the file, so export to a folder only you can access.
+
+## Back up and restore your data
+
+The database holds the candidate profile, every saved listing and the whole application history. The app
+can write a verified backup of it and restore from one, entirely on the local machine.
+
+In the app, open the **Data safety** tab: *Back up database* writes a timestamped file to a location you
+choose, and *Restore from backup* validates the file you pick, copies the current database aside,
+replaces the database, then reopens and verifies it.
+
+The same two operations work without opening the window, which is what you need when the database is
+damaged enough that the app cannot start:
+
+```bash
+python -m career_agent --backup-to "$HOME/Documents/career-agent-backup.sqlite3"
+python -m career_agent --restore-from "$HOME/Documents/career-agent-backup.sqlite3" --yes
+```
+
+Add `--database PATH` to either command to work on a database outside the per-user application-data
+folder. Restoring replaces candidate data, so it asks you to confirm: interactively it requires typing
+`restore`, and in a script it requires `--yes`. Refusals exit with status `2` and say what to do next.
+
+**What a backup guarantees**
+
+- It is taken through SQLite's own backup API, so it is a consistent snapshot even while the app is
+  running, and rows committed into a `-wal` file are included rather than skipped (a plain file copy
+  loses them — measured, not assumed).
+- It is created owner-only (`0600`) on POSIX filesystems, before any data is written, and a symbolic
+  link is never followed, so a link cannot redirect a backup into another file.
+- An existing file is never overwritten: choose another name, or move the old file first.
+- Success is reported only after the new file has been read back and verified (SQLite integrity check,
+  schema version, required tables). A failed backup removes its own partial file and reports the
+  failure; it never reports success for something unverified.
+- Every backup is one self-contained file in the classic rollback-journal format, with no `-wal`/`-shm`
+  side files, so it stays usable wherever it is copied or archived.
+
+**What a restore guarantees**
+
+- The chosen file is validated *before* anything local is touched. A file that is unreadable, damaged,
+  written for a different schema version, or missing an expected table is refused with a message, and
+  the current database is left exactly as it was.
+- It is copied into a staging file beside the database and validated again, so the file that is
+  installed is the file that was checked. The backup you chose is never modified or consumed.
+- The current database is preserved first: a verified snapshot when it is readable, and a raw
+  owner-only copy (reported honestly as unverified) when it is not — that unreadable case is often why
+  a restore is needed at all. If it cannot be preserved at all, the restore is refused.
+- The restore refuses while another connection holds the database open, replaces the file in one atomic
+  step, removes stale SQLite side files (a stale `-wal` left beside a replaced database silently
+  discards the restored data), and reopens and verifies the result. If that final check fails, the
+  previous database is put back.
+- A newer or older schema version is refused rather than migrated or downgraded.
+
+**Limitations**
+
+- Backups are **not encrypted**. Owner-only permissions keep other local accounts out, not someone using
+  your unlocked account or a copy of the file; a synced or shared folder can still expose it. Store
+  backups somewhere only you can reach.
+- Owner-only permissions are a POSIX capability. On Windows the file is written without that protection
+  and the app does not claim otherwise; Windows also refuses to replace a database another program has
+  open, in which case the restore fails with a message and the original is untouched.
+- `PRAGMA integrity_check` detects the damage SQLite can detect. It cannot prove a backup is complete or
+  untouched by every byte-level change, so keep more than one backup if the data matters.
+- An exclusive-access check turns "another copy of the app has the database open" into a refusal with a
+  message instead of an apparently frozen window. A writer that takes the database between that check
+  and the copy itself can still make a backup wait, because the standard library retries while SQLite
+  reports the source busy; nothing is written until the copy succeeds.
+- Old backups are never pruned automatically, and nothing is uploaded anywhere: backups are files you
+  place yourself.
 
 
 ## Audit research data
@@ -73,8 +142,10 @@ python -m unittest discover -s tests -v
 ```
 
 The suite covers the domain rules, SQLite persistence, the CSV audit tool, untrusted-URL validation,
-the source permission gate and run-outcome rules, the Tk-free desktop logic (form mapping, save
-planning, database-path resolution), and the desktop handlers exercised through widget stubs. It
+the source permission gates and run-outcome rules, the Tk-free desktop logic (form mapping, save
+planning, database-path resolution), verified backup and restore (including corruption, schema-version
+and permission failures, WAL and side-file handling, and the command-line front end), and the desktop
+handlers exercised through widget stubs. It
 requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
 behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
 remains outstanding and is tracked in

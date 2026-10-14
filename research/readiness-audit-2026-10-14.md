@@ -269,3 +269,33 @@ Explicitly **not** in this phase: adapters, submission, scheduling, resume parsi
 - Corrupt-body behaviour was probed inconclusively (section M2) and is reported as such.
 - No performance, memory, or large-database testing was done; the largest real corpus is the 83-row
   research CSV, and the job store has not been exercised at scale.
+
+## 11. Status update, same day (2026-10-14, later)
+
+The findings above are kept as they were recorded. Three of them have since been implemented on the
+`arena/351e052d-ai-career-agent` branch (PR #2, still open and unmerged), each with reproduction before
+the change and regression tests afterwards:
+
+- **B1 (export permissions)** and **H1 (stale-selection crash)** — implemented in the phase described in
+  `memory.md`; a third, unreported defect found while reproducing B1 (an export through a symbolic link
+  followed the link and overwrote the target file) was fixed at the same time.
+- **B3 (backup/restore)** — implemented as `career_agent/backup.py`, the desktop *Data safety* tab, and
+  the `--backup-to` / `--restore-from` command-line actions. Backups use SQLite's backup API into a
+  pre-created owner-only file, are never overwritten, are verified (integrity, schema version, required
+  tables) before success is reported, and are normalised to single-file classic format. Restore validates
+  the chosen file, stages and re-validates a copy, preserves the current database (verified, or raw and
+  owner-only when it cannot be read), refuses while another connection holds the database, replaces the
+  file atomically, removes stale SQLite side files, reopens and verifies the result, and puts the previous
+  database back if that final check fails. The correction tool's pre-change snapshot now goes through the
+  same path; measured before the change, that snapshot was written `0o644` and was never verified.
+- Tests went from 243 to 312; corruption, incompatible-schema, permission, no-overwrite, symlink, WAL,
+  side-file, in-use and failure-path cases are covered, plus the command-line front end and the GUI
+  confirmation/cancellation behaviour. 14 controlled mutations were applied and all 14 were caught.
+
+**Still open from this audit:** B2 (packaging, `__version__`, install/diagnostics/error reporting), M2/M4
+(corrupt-body detection and the pre-migration backup story), H2 (status combobox offers illegal
+transitions), H3 (freshness/last-checked display), P4 (Escape/Return bindings and a final `except
+Exception` in `main`), P5's packaging/README items, desktop statement coverage (83.4% at audit time), and
+the manual GUI smoke checklist, which still needs recording on a real desktop. Nothing in the "must
+remain disabled" section has changed: the source-quality gate is still **NOT PASSED**, and no adapters,
+submission, scheduling, resume parsing or external data transmission were added.

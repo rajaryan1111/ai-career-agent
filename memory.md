@@ -784,3 +784,69 @@ These are proposed targets. Do not report them as measured results.
 - Test-teeth check: six controlled mutations were applied and **all six were caught** (plain `write_text`; symlink pre-check disabled; post-write verification disabled; mode applied after writing instead of before; each stale-selection guard removed), with every mutated file restored byte-identically (SHA-256 verified). The first sweep missed one mutation — the symlink pre-check was redundant on POSIX because `O_NOFOLLOW` already refuses — so a test was added for platforms where that flag is unavailable.
 - Verification: `python -m unittest discover -s tests -v` → **243 tests, OK** (twice, stable); `python -m compileall -q career_agent scripts tests` → exit 0; `python -m tabnanny career_agent scripts tests` → exit 0; `python scripts/audit_job_source_csv.py` → exit 0 with the unchanged CSV SHA-256 `0356b093…f414`; the network-blocked suite → 243 OK. No dependency, adapter, scheduler, submission path, or external transmission was added; the source-quality gate remains **NOT PASSED**.
 - Deliberately **not** done here (separate phases per the audit): backup/restore, packaging/version/error reporting, the status-combobox filtering (H2), freshness display (H3), and the remaining coverage gaps.
+
+## 2026-10-14 (later) — Secure local database backup and restore
+
+Task: "Implement Secure Local Database Backup and Restore" (the audit's B3 release blocker), on PR #2's
+branch, without touching the user's real Mac database, without new dependencies, and with PR #2 left
+open and unmerged.
+
+**Hazards measured before choosing an implementation** (disposable temp databases only; probes kept
+under `/tmp`):
+
+- A plain file copy of a *live* database is not a backup: with a WAL-format database the committed rows
+  live in the `-wal` sidecar, and the copy failed with `no such table: candidate_profile`; it also
+  inherited the umask (`0o644`) and silently destroyed an older backup; a copy onto a symbolic link
+  followed the link and overwrote the target file.
+- Replacing only the main file while a stale `-wal` remained beside it **silently discarded the restored
+  data** — after the "restore", reads returned the old data from the replayed WAL. This is why a restore
+  removes side files and why it reopens and verifies what is on disk.
+- `sqlite3.Connection.backup()` **blocks indefinitely** when the source connection has an open
+  transaction (measured: still blocked after 45 s), and its `progress` callback returning truthy does
+  **not** abort the retry loop (480 calls over 25 s). A pre-flight exclusive-lock check is therefore the
+  thing that turns the common "another connection holds the database" case into a refusal with a message
+  instead of an apparent freeze; the unbounded wait of the standard-library loop itself remains a
+  documented limitation.
+- Backing up a WAL-format source produces a WAL-marked copy, so every copy this module writes is
+  normalised with `PRAGMA journal_mode=DELETE`; opening a WAL-marked database later would create
+  `-wal`/`-shm` side files with ordinary (non-owner-only) permissions next to candidate data.
+- The correction tool's `--apply` snapshot was written `0o644` and was never verified or protected from
+  overwriting (reproduced by running the tool on a throwaway database).
+
+**Implementation.** New `career_agent/backup.py` (standard library only, no Tkinter, no network):
+`validate_app_database()` (read-only integrity check, exact schema-version match, required tables, row
+counts, foreign-key check), `create_backup()` (destination created owner-only with `O_EXCL` before any
+data is written, never overwritten, never through a symlink, copied through SQLite's backup API,
+normalised, verified, partial file removed and reported on any failure), and `restore_backup()`
+(validate → stage beside the database and re-validate → preserve the current database, verified when
+readable and raw-but-owner-only when not, refusing if it cannot be preserved at all → refuse while
+another connection holds the database → atomic `os.replace` → remove stale side files → reopen and
+verify, putting the previous database back if the final check fails). `store.py` grew the shared
+primitives (`create_private_file`, `require_owner_only`) so permission logic stays in one place, and
+exposes `SCHEMA_VERSION`/`SCHEMA_TABLES` so the backup contract cannot drift from the schema (a drift
+test compares them with a freshly initialised database). The desktop gained a **Data safety** tab with
+*Back up database* / *Restore from backup* (validate, confirm, close the connection, restore, reopen);
+`python -m career_agent --backup-to PATH` and `--restore-from PATH [--yes]` provide the same operations
+headless, which is what a database too damaged to open the window requires. `scripts/correct_tracker_record.py`
+now takes its pre-change snapshot through `create_backup`, which also fixed its unprotected `0o644`
+snapshot. `.gitignore` now covers backup, side-file and staging names, with a test that proves each
+generated name is ignored.
+
+**Guarantees and limits stated in the README.** Backups are verified before success, owner-only on POSIX,
+never overwritten, single self-contained files, never modified by a restore; restores validate first,
+coordinate with other connections, are atomic, and verify after. Backups are **not encrypted**; POSIX
+permissions do not apply on Windows; a synced/shared folder can still expose a file; SQLite's integrity
+check cannot detect every byte-level change; a concurrent writer can make the standard-library backup
+wait.
+
+**Evidence.** Reproduced each hazard above before the fix. Tests **243 → 312** (new `tests/test_backup.py`
+with 51 cases plus 12 GUI handler cases and 3 correction-tool cases). Test-teeth: **14 controlled
+mutations, all 14 caught**, each file restored SHA-256-identical (the first sweep missed two — an outer
+exclusive-lock check that the snapshot already performs, which was then removed as provably redundant,
+and one badly-anchored mutation, re-targeted and caught). Verification: full suite 312 OK (also with a
+socket-blocking `sitecustomize` shim, re-created at `/tmp/blocknet`), `compileall` exit 0, `tabnanny`
+exit 0, CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414` (83 records). No dependency,
+adapter, scheduler, submission path, or external transmission was added; the source-quality gate remains
+**NOT PASSED**; the Mac database was never accessed. Stated honestly rather than tested: no GUI was
+rendered here (no display, no tkinter in this sandbox), so the macOS checklist items added to
+`research/local-alpha-manual-smoke-test-checklist-2026-10-14.md` still need the user's manual run.

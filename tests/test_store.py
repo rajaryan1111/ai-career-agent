@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
-from career_agent.store import CareerStore, PrivateWriteError, write_private_text_file
+from career_agent.store import (
+    CareerStore, PrivateWriteError, create_private_file, require_owner_only, write_private_text_file,
+)
 
 #: Permitted path used by tests that need an already-advanced record.
 _PATH_TO_SUBMISSION = (
@@ -683,6 +685,49 @@ class PrivateFileWriteTests(unittest.TestCase):
                 self.assertEqual(reopened.list_jobs(), ())
 
 
+
+class PrivateFileCreationTests(unittest.TestCase):
+    """The shared primitives the export and backup paths use must fail closed.
+
+    ``create_private_file`` is what both callers build on, so its refusals carry the same guarantees:
+    an existing file is never touched in exclusive mode, and a file this call created is never left
+    behind unprotected.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.directory = Path(self._directory.name)
+
+    def test_an_exclusive_open_refuses_an_existing_file_and_leaves_it_alone(self):
+        existing = self.directory / "taken.sqlite3"
+        existing.write_text("existing content", encoding="utf-8")
+
+        with self.assertRaises(PrivateWriteError):
+            create_private_file(existing, exclusive=True)
+
+        self.assertEqual(existing.read_text(encoding="utf-8"), "existing content")
+
+    def test_an_exclusive_open_that_cannot_secure_the_mode_removes_the_file_it_created(self):
+        target = self.directory / "new.sqlite3"
+        with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
+            with self.assertRaises(PrivateWriteError) as caught:
+                create_private_file(target, exclusive=True)
+
+        self.assertIn("nothing was written", str(caught.exception))
+        self.assertFalse(target.exists(), "the file this call created must not be left behind")
+
+    def test_require_owner_only_reports_a_file_that_cannot_be_protected(self):
+        target = self.directory / "unprotected.sqlite3"
+        target.write_text("candidate data", encoding="utf-8")
+        fake_mode = mock.Mock()
+        fake_mode.st_mode = stat.S_IFREG | 0o644
+        with mock.patch.object(os, "lstat", return_value=fake_mode), mock.patch.object(os, "unlink") as unlink:
+            with self.assertRaises(PrivateWriteError) as caught:
+                require_owner_only(target, noun="backup")
+
+        self.assertIn("owner-only", str(caught.exception))
+        unlink.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

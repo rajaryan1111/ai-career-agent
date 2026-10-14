@@ -1,8 +1,9 @@
 """Local persistence for AI Career Agent; storage is local and has no network code.
 
 Holds the SQLite store and the owner-only file primitives shared with the desktop
-export: one place decides what "owner-only" means, so the database and exported
-candidate data cannot drift apart.
+export and with database backup/restore: one place decides what "owner-only" means and
+what the schema contract is, so the database, exported candidate data and backup files
+cannot drift apart.
 """
 from __future__ import annotations
 
@@ -21,6 +22,12 @@ from .core import (
 )
 
 _SCHEMA_VERSION = 1
+
+#: Public names for the schema contract. ``career_agent.backup`` validates a candidate backup file
+#: against these instead of repeating the schema, so the two can never disagree (a drift test in
+#: ``tests/test_backup.py`` compares them with a freshly initialised database).
+SCHEMA_VERSION = _SCHEMA_VERSION
+SCHEMA_TABLES = ("application_tracker", "candidate_profile", "job_listings")
 
 #: Owner read/write only: the database holds candidate PII and should not be group/world readable.
 _OWNER_ONLY_MODE = 0o600
@@ -68,60 +75,112 @@ def _restrict_to_owner(path: str) -> bool:
     return _apply_owner_only_mode(path)
 
 
+def _symlink_refusal(target: Path) -> PrivateWriteError:
+    """The refusal used whenever a write would be redirected through a symbolic link."""
+    return PrivateWriteError(
+        f"{target} is a symbolic link. Refusing to write through it because the link could "
+        "redirect the write to a different file. Choose a regular file."
+    )
+
+
+def create_private_file(path: str | Path, *, exclusive: bool = False) -> int:
+    """Create ``path`` owner-only and return its open descriptor; never follow a symbolic link.
+
+    The owner-only mode is applied through the descriptor *before* anything is written, so there is
+    no window in which candidate data exists in a group/world-readable file, and an existing file at
+    ``path`` is tightened rather than trusted (``umask`` can only remove bits, never add them).
+
+    ``exclusive=True`` additionally refuses to touch an existing file at all, which is how a backup
+    avoids overwriting something the user still needs. Raises :class:`PrivateWriteError` with a
+    user-facing message; the caller owns the returned descriptor and must close it.
+    """
+    target = Path(path)
+    if target.is_symlink():
+        # Checked before opening so the refusal also holds where O_NOFOLLOW is unavailable; the
+        # O_NOFOLLOW flag below additionally closes the race between this check and the open.
+        raise _symlink_refusal(target)
+
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= os.O_EXCL if exclusive else os.O_TRUNC
+    try:
+        descriptor = os.open(target, flags, _OWNER_ONLY_MODE)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise _symlink_refusal(target) from exc
+        raise PrivateWriteError(f"{target} could not be opened for writing: {exc.strerror or exc}.") from exc
+
+    if not _apply_owner_only_mode(descriptor):
+        os.close(descriptor)
+        if exclusive:
+            # This call created the file, so removing it leaves the folder exactly as it was found
+            # instead of an empty file that would then block a retry as "already exists".
+            try:
+                os.unlink(target)
+            except OSError:
+                pass
+            raise PrivateWriteError(
+                f"{target} could not be restricted to owner-only on this system, so nothing was "
+                "written and the new file was removed. Choose a location that supports file permissions."
+            )
+        raise PrivateWriteError(
+            f"{target} could not be restricted to owner-only on this system, so nothing was "
+            "written. Choose a location that supports file permissions."
+        )
+    return descriptor
+
+
+def require_owner_only(path: str | Path, *, noun: str = "file") -> None:
+    """Verify ``path`` is owner-only on POSIX, removing it and raising when that is impossible.
+
+    Re-applies the mode first (a writer may have replaced the file since it was created), then
+    checks the real mode bits. A filesystem that silently ignores the change must not be left
+    holding candidate data, so the file is removed where possible and the error says what happened.
+    Non-POSIX platforms have no POSIX mode bits to verify, so this is a no-op there and no
+    protection is claimed.
+    """
+    if os.name != "posix":
+        return
+    target = Path(path)
+    _apply_owner_only_mode(target)
+    try:
+        current_mode = os.lstat(target).st_mode & 0o777
+    except OSError as exc:
+        raise PrivateWriteError(
+            f"{target} was written but could not be checked for owner-only access: "
+            f"{exc.strerror or exc}. Delete the {noun}."
+        ) from exc
+    if current_mode & 0o077:
+        try:
+            os.unlink(target)
+            removed = f"the {noun} was removed"
+        except OSError:
+            removed = f"delete {target} manually"
+        raise PrivateWriteError(
+            f"{target} could not be kept owner-only on this filesystem (mode "
+            f"{oct(current_mode)}), so it was not kept: {removed}."
+        )
+
+
 def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
     """Write ``text`` to ``path`` so the file is owner-only from the moment it holds any data.
 
-    The file is created with the owner-only mode and the mode is re-applied through the open
-    descriptor *before* anything is written, so:
+    The file is created through :func:`create_private_file`, so a destination that already exists is
+    corrected rather than left at whatever mode and umask produced it, and a destination that is a
+    symbolic link is refused instead of followed.
 
-    * there is no window in which candidate data exists in a group/world-readable file, unlike
-      writing first and fixing the permissions afterwards;
-    * a destination that already exists is corrected rather than left at whatever mode and umask
-      produced it (``umask`` can only remove bits, never add them, so it cannot be relied on);
-    * a destination that is a symbolic link is refused instead of followed, so a link cannot
-      redirect the write into an unintended file such as the user's private keys.
-
-    Fail-safe by omission: when the mode cannot be applied or cannot be verified, no candidate
-    data is written, and any file left behind by the failed attempt is removed where possible. A
-    file that reaches disk but cannot be verified as owner-only is deleted before raising.
+    Fail-safe by omission: when the mode cannot be applied or cannot be verified, no candidate data
+    is written, and any file left behind by the failed attempt is removed where possible.
 
     Raises :class:`PrivateWriteError` (an ``OSError``) with a user-facing message. POSIX mode
     guarantees apply on POSIX systems; other platforms get the same write path without the
     permission guarantee, which is not claimed there.
     """
     target = Path(path)
-    if target.is_symlink():
-        # Checked before opening so the refusal also holds where O_NOFOLLOW is unavailable; the
-        # O_NOFOLLOW flag below additionally closes the race between this check and the open.
-        raise PrivateWriteError(
-            f"{target} is a symbolic link. Refusing to write through it because the link could "
-            "redirect the export to a different file. Choose a regular file."
-        )
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = create_private_file(target)
     try:
-        descriptor = os.open(target, flags, _OWNER_ONLY_MODE)
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise PrivateWriteError(
-                f"{target} is a symbolic link. Refusing to write through it because the link could "
-                "redirect the export to a different file. Choose a regular file."
-            ) from exc
-        raise PrivateWriteError(
-            f"{target} could not be opened for writing: {exc.strerror or exc}."
-        ) from exc
-
-    try:
-        if not _apply_owner_only_mode(descriptor):
-            raise PrivateWriteError(
-                f"{target} could not be restricted to owner-only on this system, so nothing was "
-                "written. Move the export to a location that supports file permissions."
-            )
         with os.fdopen(descriptor, "w", encoding=encoding) as handle:
             descriptor = None  # the file object owns the descriptor from here
             handle.write(text)
-    except PrivateWriteError:
-        raise
     except OSError as exc:
         raise PrivateWriteError(
             f"{target} could not be written: {exc.strerror or exc}. The export was not completed."
@@ -133,26 +192,7 @@ def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf
             except OSError:
                 pass
 
-    if os.name == "posix":
-        try:
-            current_mode = os.lstat(target).st_mode & 0o777
-        except OSError as exc:
-            raise PrivateWriteError(
-                f"{target} was written but could not be checked for owner-only access: "
-                f"{exc.strerror or exc}. Delete the export."
-            ) from exc
-        if current_mode & 0o077:
-            # A filesystem that silently ignores mode changes (some network/synced mounts). The
-            # file is on disk, so remove it rather than leave readable candidate data behind.
-            try:
-                os.unlink(target)
-                removed = "the file was removed"
-            except OSError:
-                removed = f"delete {target} manually"
-            raise PrivateWriteError(
-                f"{target} could not be kept owner-only on this filesystem (mode "
-                f"{oct(current_mode)}), so the export was not kept: {removed}."
-            )
+    require_owner_only(target, noun="export")
     return target
 
 

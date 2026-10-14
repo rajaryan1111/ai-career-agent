@@ -22,7 +22,12 @@ from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
     evaluate_eligibility,
 )
+from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent.store import CareerStore
+from datetime import datetime, timezone
+
+#: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
+RESTORE_STAMP = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
 
 
 class StringVar:
@@ -183,10 +188,17 @@ class ButtonRegistry:
 
 
 class FileDialog:
+    """Stands in for tkinter.filedialog; both dialogs return the configured path ("" = cancelled)."""
+
     def __init__(self):
         self.path = ""
+        self.opened = None
 
     def asksaveasfilename(self, **kwargs):
+        return self.path
+
+    def askopenfilename(self, **kwargs):
+        self.opened = self.path
         return self.path
 
 
@@ -293,12 +305,15 @@ class HandlerTestCase(unittest.TestCase):
         MESSAGES.reset()
         BUTTONS.clear()
         FILEDIALOG.path = ""
+        FILEDIALOG.opened = None
 
     def make_app(self, *, with_profile=False):
         """Build a real CareerAgentApp instance with stub widgets instead of a Tk root."""
         app = desktop.CareerAgentApp.__new__(desktop.CareerAgentApp)
         app.root = Widget()
         app.store = self.store
+        # The real __init__ resolves this before any handler runs, so the double must too.
+        app.db_path = Path(self.store.database_path)
         app.status = StringVar()
         app.job_mode = StringVar()
         app.selected_job_id = None
@@ -309,6 +324,7 @@ class HandlerTestCase(unittest.TestCase):
         app.profile_tab = Widget()
         app.jobs_tab = Widget()
         app.tracker_tab = Widget()
+        app.data_tab = Widget()
         selected_tabs = []
         app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
@@ -1474,6 +1490,168 @@ class ProfileAndDeletionTests(HandlerTestCase):
         self.assertEqual(payload["jobs"][0]["application_tracker"]["status_evidence"], "Employer email")
         self.assertIn("personal information", payload["privacy_note"])
         self.assertIn("Export complete", MESSAGES.titles())
+
+
+class DatabaseBackupHandlerTests(HandlerTestCase):
+    """The Data safety tab: a backup is verified, owner-only and never overwrites anything.
+
+    These run the real handlers with the stubbed dialogs against disposable databases. They verify
+    handler decisions and messages, not widget rendering or macOS behaviour.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_profile(PROFILE)
+        self.store.save_job(sample_job())
+        self.destination = Path(self._directory.name) / "backup.sqlite3"
+        FILEDIALOG.path = str(self.destination)
+        self.app = self.make_app(with_profile=True)
+
+    def test_backup_writes_a_verified_owner_only_copy_and_reports_it(self):
+        self.app._backup_database()
+
+        self.assertTrue(self.destination.is_file())
+        if os.name == "posix":
+            self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
+        info = validate_app_database(self.destination)
+        self.assertEqual((info.job_count, info.tracker_count, info.profile_present), (1, 0, True))
+        self.assertIn("Backup verified", MESSAGES.titles())
+        self.assertIn("Backup verified", self.app.status.get())
+
+    def test_backup_is_cancelled_without_writing_anything(self):
+        FILEDIALOG.path = ""  # the user closed the save dialog
+
+        self.app._backup_database()
+
+        self.assertEqual([path.name for path in Path(self._directory.name).iterdir()], ["handlers.sqlite3"])
+        self.assertEqual(MESSAGES.calls, [])
+        self.assertIn("cancelled", self.app.status.get())
+
+    def test_backup_refuses_an_existing_file_and_leaves_it_alone(self):
+        self.destination.write_text("an older backup the user still needs", encoding="utf-8")
+
+        self.app._backup_database()
+
+        self.assertIn("Backup not created", MESSAGES.titles())
+        self.assertEqual(self.destination.read_text(encoding="utf-8"), "an older backup the user still needs")
+
+    def test_backup_refuses_a_symbolic_link_destination(self):
+        victim = Path(self._directory.name) / "victim.txt"
+        victim.write_text("must survive", encoding="utf-8")
+        try:
+            FILEDIALOG.path = str(victim)
+            link = Path(self._directory.name) / "link.sqlite3"
+            os.symlink(victim, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links are unavailable here: {exc}")
+        FILEDIALOG.path = str(link)
+
+        self.app._backup_database()
+
+        self.assertIn("Backup not created", MESSAGES.titles())
+        self.assertEqual(victim.read_text(encoding="utf-8"), "must survive")
+
+    def test_a_backup_that_cannot_be_made_is_reported_and_claims_no_success(self):
+        FILEDIALOG.path = str(Path(self._directory.name) / "absent" / "backup.sqlite3")
+
+        self.app._backup_database()
+
+        self.assertIn("Backup not created", MESSAGES.titles())
+        self.assertNotIn("Backup verified", MESSAGES.titles())
+        self.assertIn("nothing was written", self.app.status.get())
+
+
+class DatabaseRestoreHandlerTests(HandlerTestCase):
+    """Restoring replaces candidate data, so it must confirm, validate and reopen deliberately."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_profile(PROFILE)
+        self.store.save_job(sample_job(listing_id="j1"))
+        self.chosen = Path(self._directory.name) / "chosen-backup.sqlite3"
+        create_backup(Path(self.store.database_path), self.chosen, timestamp=RESTORE_STAMP)
+        self.store.save_job(sample_job(listing_id="j2"))
+        self.store.save_job(sample_job(listing_id="j3"))
+        FILEDIALOG.path = str(self.chosen)
+        self.app = self.make_app(with_profile=True)
+
+    def listing_ids(self):
+        with CareerStore(self.app.db_path) as store:
+            return [job.listing_id for job in store.list_jobs()]
+
+    def test_cancelling_the_file_dialog_changes_nothing(self):
+        FILEDIALOG.path = ""
+
+        self.app._restore_database()
+
+        self.assertEqual(self.listing_ids(), ["j1", "j2", "j3"])
+        self.assertEqual(MESSAGES.calls, [])
+        self.assertIn("cancelled", self.app.status.get())
+
+    def test_cancelling_the_confirmation_changes_nothing_and_keeps_the_connection_open(self):
+        CONFIG["Replace the local database?"] = False
+
+        self.app._restore_database()
+
+        self.assertEqual(self.listing_ids(), ["j1", "j2", "j3"])
+        self.assertNotIn("Restore complete", MESSAGES.titles())
+        self.assertIs(self.app.store, self.store, "a cancelled restore must not close the connection")
+        self.assertEqual(self.store.list_jobs()[0].listing_id, "j1", "the existing connection still works")
+
+    def test_an_incompatible_file_is_refused_before_the_confirmation_is_even_asked(self):
+        corrupt = Path(self._directory.name) / "corrupt.sqlite3"
+        corrupt.write_text("not a database", encoding="utf-8")
+        FILEDIALOG.path = str(corrupt)
+
+        self.app._restore_database()
+
+        self.assertIn("Backup cannot be used", MESSAGES.titles())
+        self.assertNotIn("Replace the local database?", MESSAGES.titles())
+        self.assertEqual(self.listing_ids(), ["j1", "j2", "j3"])
+
+    def test_confirming_restores_the_data_reopens_the_database_and_reports_it(self):
+        self.app._restore_database()
+
+        self.assertEqual(self.listing_ids(), ["j1"])
+        self.assertIsNot(self.app.store, self.store, "the app must reconnect to the restored file")
+        self.assertEqual([job.listing_id for job in self.app.store.list_jobs()], ["j1"])
+        self.assertIn("Restore complete", MESSAGES.titles())
+        self.assertIn("Restored from", self.app.status.get())
+        # The handler uses the clock, so find the copy it made rather than assuming its name.
+        previous = sorted(Path(self._directory.name).glob(f"{Path(self.app.db_path).name}.backup-*"))
+        self.assertEqual(len(previous), 1, "exactly one previous-database copy must be kept")
+        self.assertEqual(validate_app_database(previous[0]).job_count, 3, "the copy must hold what was replaced")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_the_restored_database_is_owner_only(self):
+        self.app._restore_database()
+
+        self.assertEqual(Path(self.app.db_path).stat().st_mode & 0o777, 0o600)
+
+    def test_a_failed_restore_reopens_the_database_and_says_so(self):
+        with mock.patch("career_agent.desktop.restore_backup", side_effect=BackupError("simulated failure")):
+            self.app._restore_database()
+
+        self.assertIn("Restore failed", MESSAGES.titles())
+        self.assertNotIn("Restore complete", MESSAGES.titles())
+        self.assertEqual(self.listing_ids(), ["j1", "j2", "j3"], "the data must be what it was")
+        self.assertEqual([job.listing_id for job in self.app.store.list_jobs()], ["j1", "j2", "j3"])
+        self.assertIn("Restore failed", self.app.status.get())
+
+    def test_a_backup_with_dangling_tracker_rows_is_reported_in_the_confirmation(self):
+        foreign = Path(self._directory.name) / "dangling.sqlite3"
+        create_backup(Path(self.store.database_path), foreign, timestamp=RESTORE_STAMP)
+        connection = sqlite3.connect(str(foreign))
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("INSERT INTO application_tracker VALUES ('missing', 'discovered', NULL, 0, '2026-01-01')")
+        connection.commit()
+        connection.close()
+        FILEDIALOG.path = str(foreign)
+        CONFIG["Replace the local database?"] = False
+
+        self.app._restore_database()
+
+        self.assertIn("Replace the local database?", MESSAGES.titles())
 
 
 if __name__ == "__main__":

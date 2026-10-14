@@ -28,7 +28,7 @@ The decision is reversible. Validate Tk availability, accessibility, native look
 
 - UI/runtime: Python + Tkinter; launch with `python -m career_agent`.
 - Core logic: Python standard library.
-- Local database: SQLite; migrations, encryption-at-rest, backup, and portability remain Phase 2 work.
+- Local database: SQLite; verified local backup and restore are implemented (owner-only files, no overwrite, validated before and after replacement). Schema migrations, encryption-at-rest, and portability remain Phase 2 work.
 - Resume parsing: deferred from the first usable slice; later local PDF/DOCX extraction must include field-level confidence/review and must not upload candidate data.
 - Matching: deterministic eligibility rules plus transparent scoring; evaluate embeddings/LLMs only where they measurably improve results.
 - Scheduling: OS scheduler vs in-app scheduler; document behavior while sleeping/offline.
@@ -92,7 +92,7 @@ The [QaliAI/ai-job-agent review](research/open-source-ai-job-agent-review-2026-1
 
 
 ### Implemented local alpha — 2026-10-14
-The repository now includes a Python/Tkinter UI launched with `python -m career_agent`, deterministic eligibility evaluation, explainable skill overlap, conservative URL/requisition deduplication, separate source/application URL fields, optional exact-match work-authorization requirements, guarded application-state transitions, and standard-library SQLite persistence for profile/job/tracker records. The desktop app chooses a per-user application-data path and performs no network requests. This is an internal local alpha, not a packaged production release. Resume parsing, live source adapters, remote execution, autofill, and submission remain deferred or gated; GUI smoke tests and packaging/recovery work are still required.
+The repository now includes a Python/Tkinter UI launched with `python -m career_agent`, deterministic eligibility evaluation, explainable skill overlap, conservative URL/requisition deduplication, separate source/application URL fields, optional exact-match work-authorization requirements, guarded application-state transitions, and standard-library SQLite persistence for profile/job/tracker records. The desktop app chooses a per-user application-data path and performs no network requests. This is an internal local alpha, not a packaged production release. The store also has a verified local backup and restore path (desktop *Data safety* tab, or `python -m career_agent --backup-to/--restore-from`), so a database that cannot be read can be backed up or restored without opening the window. Resume parsing, live source adapters, remote execution, autofill, and submission remain deferred or gated; GUI smoke tests, packaging, and migrations remain outstanding.
 
 
 ## 12. Production product architecture and cross-industry extensibility

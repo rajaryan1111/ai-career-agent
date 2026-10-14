@@ -13,6 +13,10 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
+from .backup import (
+    BACKUP_SUFFIX, BackupError, create_backup, restore_backup, suggested_backup_name,
+    validate_app_database,
+)
 from .core import ApplicationStatus, ApplicationTracker, Availability, Decision, evaluate_eligibility, score_relevance
 from .desktop_logic import (
     JobSaveMode, build_candidate_profile, default_database_path, form_values,
@@ -44,14 +48,17 @@ class CareerAgentApp:
         self.profile_tab = ttk.Frame(self.tabs, padding=12)
         self.jobs_tab = ttk.Frame(self.tabs, padding=12)
         self.tracker_tab = ttk.Frame(self.tabs, padding=12)
+        self.data_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
+        self.tabs.add(self.data_tab, text="Data safety")
         self.profile_vars = {}
         self.job_vars = {}
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
+        self._build_data_safety()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
@@ -138,6 +145,133 @@ class CareerAgentApp:
             self.tracker_tree.column(col, width=width, anchor=W)
         self.tracker_tree.pack(fill=BOTH, expand=True)
         self.tracker_tree.bind("<<TreeviewSelect>>", self._select_tracker)
+
+    def _build_data_safety(self):
+        ttk.Label(
+            self.data_tab,
+            text="Local only: no account, no cloud service, and no network access. Keep backups on storage you control.",
+            wraplength=900,
+        ).grid(row=0, column=0, sticky=W, pady=(0, 8))
+        ttk.Button(self.data_tab, text="Back up database", command=self._backup_database).grid(row=1, column=0, sticky=W, pady=4)
+        ttk.Button(self.data_tab, text="Restore from backup", command=self._restore_database).grid(row=2, column=0, sticky=W, pady=4)
+        ttk.Label(
+            self.data_tab,
+            text=(
+                "A backup is one SQLite file holding the profile, listings and tracker history. It is "
+                "written owner-only where the file system supports POSIX permissions, and the app reads it "
+                "back and verifies it before reporting success. It is not encrypted, and a synced or shared "
+                "folder can still expose it. Restoring validates the chosen file, copies the current "
+                "database aside first, replaces the database in one step, then reopens and verifies it."
+            ),
+            wraplength=900,
+        ).grid(row=3, column=0, sticky=W, pady=(10, 0))
+
+    def _backup_database(self):
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Back up local database", initialfile=suggested_backup_name(),
+            defaultextension=BACKUP_SUFFIX,
+            filetypes=[("SQLite database", "*.sqlite3"), ("All files", "*.*")],
+        )
+        if not destination:
+            self.status.set("Backup cancelled; nothing was written.")
+            return
+        try:
+            info = create_backup(self.db_path, destination)
+        except BackupError as exc:
+            messagebox.showerror(
+                "Backup not created",
+                f"{exc}\n\nThe destination was left as it was.",
+                parent=self.root,
+            )
+            self.status.set("Backup not created; nothing was written.")
+            return
+        self.status.set(f"Backup verified: {info.summary()} · {destination}")
+        messagebox.showinfo(
+            "Backup verified",
+            f"Backup written and read back successfully:\n{destination}\n\n{info.summary()}.\n\n"
+            "The file is owner-only where the file system supports POSIX permissions. It is not "
+            "encrypted: keep it private and store it somewhere only you can reach.",
+            parent=self.root,
+        )
+
+    def _restore_database(self):
+        source = filedialog.askopenfilename(
+            parent=self.root, title="Choose a backup to restore",
+            filetypes=[("SQLite database", "*.sqlite3"), ("All files", "*.*")],
+        )
+        if not source:
+            self.status.set("Restore cancelled; the current database was not changed.")
+            return
+        try:
+            info = validate_app_database(source)
+        except BackupError as exc:
+            messagebox.showerror(
+                "Backup cannot be used",
+                f"{exc}\n\nThe current database was not changed.",
+                parent=self.root,
+            )
+            self.status.set("Restore refused; the current database was not changed.")
+            return
+        warning = ""
+        if info.foreign_key_violations:
+            warning = (
+                f"\n\nNote: {info.foreign_key_violations} tracker record(s) in this backup refer to listings "
+                "it does not contain, so they will not appear in the app."
+            )
+        if not messagebox.askyesno(
+            "Replace the local database?",
+            f"Restore from:\n{source}\n\nThis backup holds: {info.summary()}.{warning}\n\n"
+            "Your current database is copied aside before anything is replaced, and the restore is "
+            "refused if that copy cannot be made. The app then reopens and verifies the restored "
+            "database. Continue?",
+            parent=self.root,
+        ):
+            self.status.set("Restore cancelled; the current database was not changed.")
+            return
+        # Replacing the file cannot be coordinated with an open connection, so the app's own
+        # connection is closed for the swap and reopened afterwards whatever the outcome.
+        self.store.close()
+        try:
+            result = restore_backup(source, self.db_path)
+        except BackupError as exc:
+            self._reopen_store()
+            messagebox.showerror(
+                "Restore failed",
+                f"{exc}\n\nThe app has reopened the local database; the message above says what it holds.",
+                parent=self.root,
+            )
+            self.status.set("Restore failed; see the message for what the database holds now.")
+            return
+        self._reopen_store()
+        detail = f"Restored from:\n{result.restored_from}\n\nNow in use: {result.info.summary()}."
+        if result.pre_restore_backup is not None:
+            quality = "verified copy" if result.pre_restore_verified else "raw copy (it could not be read as a database)"
+            detail += f"\n\nPrevious database kept as a {quality}:\n{result.pre_restore_backup}"
+        self.status.set(f"Restored from {Path(source).name}: {result.info.summary()}.")
+        messagebox.showinfo(
+            "Restore complete",
+            f"{detail}\n\nThe restored database was reopened and verified. Keep the previous-database "
+            "copy until you have confirmed everything you need is present.",
+            parent=self.root,
+        )
+
+    def _reopen_store(self):
+        """Reopen the database after a restore and resynchronise the views."""
+        try:
+            self.store = CareerStore(self.db_path)
+        except Exception as exc:  # reported, never hidden: the app cannot work without the store
+            messagebox.showerror(
+                "Database unavailable",
+                f"The local database could not be reopened ({exc}). Restart the app once the problem "
+                "is resolved; do not keep working in this window.",
+                parent=self.root,
+            )
+            self.status.set("The local database could not be reopened.")
+            return
+        self.selected_job_id = None
+        self._load_profile()
+        self._refresh_jobs()
+        self._refresh_tracker()
 
     def _load_profile(self):
         profile = self.store.get_profile()
@@ -599,10 +733,10 @@ class CareerAgentApp:
         self.root.destroy()
 
 
-def main():
+def main(database_path=None):
     root = tk.Tk()
     try:
-        CareerAgentApp(root)
+        CareerAgentApp(root, database_path=database_path)
     except Exception as exc:
         messagebox.showerror("AI Career Agent could not start", str(exc), parent=root)
         root.destroy()
