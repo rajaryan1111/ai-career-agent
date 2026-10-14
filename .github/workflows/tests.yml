@@ -29,3 +29,70 @@ jobs:
         run: python -m compileall -q career_agent scripts tests
       - name: Audit research CSV integrity
         run: python scripts/audit_job_source_csv.py
+
+  # The metadata and the wheel can only be trusted if a real build and install is exercised: this job
+  # builds the distribution, installs it into a clean environment (no editable install, no repository
+  # on sys.path), and runs the installed command from outside the checkout. Its assertions mirror the
+  # ones tests/test_packaging.py makes from the source tree, which is why one interpreter is enough.
+  installed-package:
+    name: Installed package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet build
+          python -m build --wheel --outdir dist
+      - name: Check the wheel holds the application package and nothing else
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          assert len(wheels) == 1, wheels
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          modules = sorted(n for n in names if n.endswith(".py"))
+          assert modules, "the wheel contains no modules"
+          for name in modules:
+              assert name.startswith("career_agent/"), f"unexpected module in the wheel: {name}"
+          for unwanted in ("tests/", "scripts/"):
+              assert not any(n.startswith(unwanted) for n in names), f"the wheel ships {unwanted}"
+          print(f"{wheels[0]}: {len(modules)} modules, all under career_agent/")
+          PY
+      - name: Install the wheel into a clean environment
+        run: python -m pip install --quiet dist/*.whl
+      - name: Run the installed commands outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import career_agent
+
+          declared = metadata.version("ai-career-agent")
+          assert declared == career_agent.__version__, (declared, career_agent.__version__)
+          assert metadata.requires("ai-career-agent") == ["pypdf (>=4.3) ; extra == 'pdf'"], "the install must pull in nothing"
+          print(f"installed {declared} with no required dependencies")
+          PY
+          career-agent --version
+          career-agent --help > /dev/null
+          python - <<'PY'
+          from career_agent import ApplicationTracker, Availability, JobListing
+          from career_agent.store import CareerStore
+
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j1", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/1", employer_name="Example",
+                  role_title="AI Intern", availability_status=Availability.OPEN,
+              ))
+              store.save_tracker(ApplicationTracker("j1"))
+          PY
+          career-agent --database alpha.sqlite3 --backup-to alpha-backup.sqlite3
+          career-agent --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes

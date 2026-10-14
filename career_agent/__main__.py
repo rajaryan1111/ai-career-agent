@@ -30,10 +30,26 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 EXIT_UNEXPECTED = 3
 
+#: The name shown in ``--help`` and usage errors when this is run as a console script rather than as
+#: a module. Both spellings are documented in the README, and the usage line should name the one the
+#: person actually typed.
+CONSOLE_SCRIPT_NAME = "career-agent"
+
+
+def _program_name() -> str:
+    """What to call this program in usage text.
+
+    ``python -m career_agent`` reports ``__main__.py`` as ``sys.argv[0]``, which is not something to
+    show anyone; the installed console script reports its own name. Anything else (a test runner, an
+    embedding application) keeps the module form, so the usage line stays reproducible.
+    """
+    invoked = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else ""
+    return CONSOLE_SCRIPT_NAME if invoked == CONSOLE_SCRIPT_NAME else "python -m career_agent"
+
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="python -m career_agent",
+        prog=_program_name(),
         description="Local-first career workspace. With no action, the desktop window opens.",
         epilog=(
             "Backups are verified before success is reported and are never overwritten. Restoring "
