@@ -11,6 +11,7 @@ versions that never emit the warning.
 """
 from __future__ import annotations
 
+import ast
 import os
 import shutil
 import sqlite3
@@ -135,6 +136,91 @@ class ConnectionContextPatternTests(unittest.TestCase):
             offenders, [],
             "a connection opened in a `with` statement is never closed by it; use try/finally",
         )
+
+
+class RealDatabaseSafetyTests(unittest.TestCase):
+    """The suite must never open the candidate's own database.
+
+    The tests run from a source checkout on a machine that holds real data, so a test that let the
+    application choose its default database path would write into the real database - the exact accident
+    this project must not have. Every test passes an explicit path inside a temporary directory, and this
+    scan keeps it that way by reading the test files as syntax trees:
+
+    * ``CareerStore(...)`` must be given a path, because the store's own comment says no database is
+      created implicitly;
+    * the two functions that resolve the current machine's per-user folder must be given their inputs
+      instead of reading the real environment (a mocked string name such as ``mock.patch("...")`` is not
+      a call and stays allowed).
+    """
+
+    #: Written apart so this scanner's own text is not mistaken for a test that calls them.
+    STORE_NAME = "Career" + "Store"
+    UNAMBIGUOUS_PATH_FUNCTIONS = ("default_database_" + "path", "career_agent_" + "data_root")
+
+    def _test_sources(self):
+        for path in sorted((REPOSITORY_ROOT / "tests").rglob("*.py")):
+            yield path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    @staticmethod
+    def _callee_name(node):
+        """Return ``CareerStore`` or ``desktop_logic.default_database_path`` for a call target."""
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    def test_a_store_built_in_a_test_is_always_given_its_path(self):
+        offenders = []
+        for path, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if self._callee_name(node.func).split(".")[-1] != self.STORE_NAME:
+                    continue
+                given = bool(node.args) or bool(node.keywords)
+                if not given:
+                    offenders.append(
+                        f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}: {self.STORE_NAME}(...) "
+                        "with no path"
+                    )
+
+        self.assertEqual(
+            offenders, [],
+            "a store without a path would open the real candidate database; pass a temporary path",
+        )
+
+    def test_the_default_path_functions_are_never_called_with_the_real_environment(self):
+        offenders = []
+        for path, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = self._callee_name(node.func).split(".")[-1]
+                if name not in self.UNAMBIGUOUS_PATH_FUNCTIONS:
+                    continue
+                if not node.args and not node.keywords:
+                    offenders.append(
+                        f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}: {name}() resolves this "
+                        "machine's real folder"
+                    )
+
+        self.assertEqual(
+            offenders, [],
+            "pass home=, environ= or system= explicitly so the test cannot see the real machine",
+        )
+
+    def test_the_scan_sees_the_test_files_and_would_catch_a_violation(self):
+        """A scanner that matched nothing would pass silently; give it a known-bad sample."""
+        sample = ast.parse("store = CareerStore()\nroot = career_agent_data_root()\n")
+        calls = [node for node in ast.walk(sample) if isinstance(node, ast.Call)]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self._callee_name(calls[0].func), "CareerStore")
+        self.assertFalse(calls[0].args or calls[0].keywords)
+        self.assertIn("career_agent_data_root", self._callee_name(calls[1].func))
+        self.assertTrue(list(self._test_sources()))
 
 
 @unittest.skipIf(

@@ -872,6 +872,57 @@ class DatabaseErrorTests(HandlerTestCase):
         self.assertIsNone(self.store.get_tracker("j1"))
 
 
+class WindowShutdownTests(HandlerTestCase):
+    """Closing the window: the store is closed, the window is destroyed, nothing is written.
+
+    These build the app through its real ``__init__`` against the stub widgets, so the
+    ``WM_DELETE_WINDOW`` registration and the store the app owns are the real ones. Rendering and
+    macOS behaviour are still only checked by the manual smoke-test checklist; what is checked here
+    is what the application object does when the window manager tells it to close.
+    """
+
+    def build_app(self):
+        """Construct the real application object with its own disposable database."""
+        database = Path(self._directory.name) / "shutdown.sqlite3"
+        root = Widget()
+        app = desktop.CareerAgentApp(root, database_path=str(database))
+        self.addCleanup(app.store.close)  # idempotent, so it is safe after a test already closed it
+        return app, root, database
+
+    def test_the_window_manager_close_handler_closes_the_store_and_destroys_the_window(self):
+        app, root, _database = self.build_app()
+        handler = root.protocols["WM_DELETE_WINDOW"]
+
+        self.assertEqual(handler, app.close, "the window's close button must run the real close")
+        handler()
+
+        self.assertTrue(root.destroyed)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            app.store.get_profile()
+
+    def test_closing_the_window_does_not_save_unsaved_form_edits(self):
+        app, _root, database = self.build_app()
+        self.assertIsNone(app.store.get_profile())
+        app.profile_vars["country"].set("Somewhere that was never saved")
+        app.profile_vars["experience"].set("7")
+        app.profile_vars["skills"].set("Python, RAG")
+
+        app.close()
+
+        reopened = CareerStore(str(database))
+        self.addCleanup(reopened.close)
+        self.assertIsNone(reopened.get_profile(), "closing must not write the form's unsaved values")
+
+    def test_closing_the_window_is_not_an_application_action(self):
+        """No dialog, status claim, or message may appear when the window closes."""
+        app, _root, _database = self.build_app()
+
+        app.close()
+
+        self.assertEqual(MESSAGES.titles(), [])
+        self.assertEqual(MESSAGES.titles("showerror"), [])
+
+
 class MissingTrackerRowTests(HandlerTestCase):
     """A job without a tracker row: a refused change must not create one, a valid one must."""
 
