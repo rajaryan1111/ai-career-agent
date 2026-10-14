@@ -271,13 +271,18 @@ def _copy_through_sqlite(source: Path, destination: Path, *, source_read_only: b
 
 
 def _require_no_other_connection(database_path: Path) -> None:
-    """Refuse while another connection holds the database open.
+    """Refuse while another connection is *holding a lock* on the database.
 
-    Replacing a database file cannot be coordinated with a connection that stays open: SQLite keeps
-    the old file, so later writes land in a file nobody can see again. Taking an exclusive lock for
-    an instant proves no other connection is active, and turns the common cause (a second copy of the
-    app) into a clear refusal. A file that cannot be used as a database at all is not a locking
-    problem and is left to the caller, which is already handling an unreadable database.
+    Taking an exclusive lock for an instant proves no other connection is in a transaction right
+    now, and turns the common cause (a second copy of the app mid-write) into a clear refusal.
+
+    It does **not** prove the database is unused. An idle connection - open, no transaction - holds
+    no SQLite lock at all, so it is invisible here; replacing the file under it cannot be coordinated
+    and its next write ends in SQLite's own ``SQLITE_READONLY`` refusal once SQLite notices the file
+    has moved. This check therefore reports what it can establish (busy now) and no more; the
+    replacement itself is additionally protected by ``_lock_for_swap``. A file that cannot be used as
+    a database at all is not a locking problem and is left to the caller, which is already handling an
+    unreadable database.
     """
     connection = None
     try:
@@ -293,6 +298,45 @@ def _require_no_other_connection(database_path: Path) -> None:
     finally:
         if connection is not None:
             connection.close()
+
+
+def _lock_for_swap(database_path: Path) -> sqlite3.Connection | None:
+    """Hold the database's exclusive lock while the file is replaced, and return the holder.
+
+    Why the lock is *held* rather than only probed: ``BEGIN EXCLUSIVE`` alone proves only that no
+    other connection holds a lock at that instant. Releasing it before ``os.replace`` leaves a window
+    in which a second process can start a transaction, commit it, and have the swap throw that commit
+    away - silently, because the commit itself succeeded (reproduced in the suite's
+    ``test_a_write_that_wins_the_race_is_refused_rather_than_lost``). Keeping the lock until the
+    replacement is done means any connection that tries to begin a transaction during the swap is
+    told the database is busy instead of losing its work.
+
+    What this cannot do, on any platform: detect a connection that is *idle* (open, no transaction).
+    SQLite holds no lock for an idle connection, so the swap cannot be coordinated with it, and its
+    next write fails with SQLite's own ``SQLITE_READONLY`` ("attempt to write a readonly database")
+    once SQLite notices the file it has open is no longer the one at the path. That is SQLite
+    refusing, not this module; the stale connection can still read the rows it had before the swap.
+
+    Returns ``None`` when the file cannot be opened as a database at all - the state a restore
+    usually exists to fix - because there is no writer to coordinate with and the caller has already
+    preserved the bytes. The caller owns the returned connection and must close it.
+    """
+    if not database_path.exists():
+        return None  # a restore into a folder with no database yet; nothing to lock (and no file to create)
+    connection = None
+    try:
+        connection = sqlite3.connect(str(database_path), timeout=LOCK_TIMEOUT_SECONDS, isolation_level=None)
+        connection.execute("BEGIN EXCLUSIVE")
+    except sqlite3.DatabaseError as exc:
+        if connection is not None:
+            connection.close()
+        if _is_locking_failure(exc):
+            raise DatabaseInUse(
+                f"{database_path} is in use by another connection ({exc}). Close other copies of the "
+                "app, then try again."
+            ) from exc
+        return None  # not a locking problem and not usable as a database: proceed as preservation decided
+    return connection
 
 
 def _copy_bytes(source: Path, destination: Path) -> None:
@@ -470,7 +514,9 @@ def restore_backup(backup_path: str | Path, database_path: str | Path, *,
        exactly the file that was checked;
     3. preserve the current database (verified snapshot when readable, raw owner-only copy when it
        is not) and refuse the restore if it cannot be preserved;
-    4. refuse while another connection holds the database open;
+    4. hold the database's exclusive lock across the swap, refusing while another connection is
+       active in a transaction and keeping a competing write from being silently discarded by it
+       (an *idle* connection holds no lock and cannot be detected; see ``_lock_for_swap``);
     5. replace the file with an atomic ``os.replace`` and remove any stale SQLite side files;
     6. reopen and verify the installed database, putting the previous database back if that fails.
     """
@@ -521,13 +567,25 @@ def restore_backup(backup_path: str | Path, database_path: str | Path, *,
         raise
 
     try:
-        os.replace(staged, database)
-    except OSError as exc:
-        preserved = f"it is preserved at {pre_backup}" if pre_backup is not None else "there was nothing to preserve"
-        raise BackupError(
-            f"The database could not be replaced ({exc.strerror or exc}). The current database is "
-            f"unchanged, and {preserved}. {_discard(staged)}."
-        ) from exc
+        # Held across the replacement only: the swap is the operation that discards a competing
+        # write, so this is the window that has to be closed (see ``_lock_for_swap``).
+        lock = _lock_for_swap(database)
+        try:
+            os.replace(staged, database)
+        except OSError as exc:
+            preserved = (f"it is preserved at {pre_backup}" if pre_backup is not None
+                         else "there was nothing to preserve")
+            raise BackupError(
+                f"The database could not be replaced ({exc.strerror or exc}). The current database is "
+                f"unchanged, and {preserved}. {_discard(staged)}."
+            ) from exc
+        finally:
+            if lock is not None:
+                lock.close()
+    except DatabaseInUse:
+        # Refused at the last moment: the staged copy must not be left behind.
+        _discard(staged)
+        raise
 
     removed_sidecars = _remove_sidecars(database)
     try:

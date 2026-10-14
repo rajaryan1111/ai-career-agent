@@ -677,6 +677,73 @@ class RestoreTests(BackupTestCase):
         with CareerStore(str(live)) as store:
             self.assertEqual(len(store.list_jobs()), 2, "the current database is still the one in use")
 
+    def test_a_write_attempted_during_the_swap_is_refused_rather_than_silently_discarded(self):
+        """The window between the last readiness check and ``os.replace`` is the one that loses data.
+
+        Reproduced before this change: a second connection could begin *and commit* a transaction
+        inside that window; the commit reported success, and the replacement then discarded the file
+        holding it, so the write disappeared with no error anywhere. The swap now holds the database's
+        exclusive lock, so a competing writer is refused ("database is locked") instead of winning and
+        being erased. The restore itself still succeeds.
+        """
+        live, chosen = self.prepare()
+        with CareerStore(str(live)) as store:
+            store.save_job(sample_job("added-after-backup"))
+        real_replace = backup_module.os.replace
+        outcomes = []
+
+        def replace_while_a_writer_tries(source, destination):
+            writer = sqlite3.connect(str(live), isolation_level=None, timeout=0.2)
+            try:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute("UPDATE application_tracker SET status='shortlisted' WHERE listing_id='j1'")
+                writer.execute("COMMIT")
+                outcomes.append("accepted")
+            except sqlite3.Error as exc:
+                outcomes.append(f"refused: {exc}")
+            finally:
+                writer.close()
+            return real_replace(source, destination)
+
+        with mock.patch.object(backup_module.os, "replace", replace_while_a_writer_tries):
+            result = restore_backup(chosen, live, timestamp=STAMP)
+
+        self.assertEqual(len(outcomes), 1, "the writer must have been attempted exactly once")
+        self.assertTrue(outcomes[0].startswith("refused"),
+                        f"the competing write was not refused, so it was silently discarded: {outcomes[0]}")
+        self.assertEqual(result.info.job_count, 1)
+        self.assert_no_leftovers(live)
+        with CareerStore(str(live)) as store:
+            self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
+            self.assertEqual(store.get_tracker("j1").status, ApplicationStatus.DISCOVERED,
+                             "the restored row, not the discarded write")
+
+    def test_an_idle_connection_is_not_detected_and_sqlite_refuses_its_next_write(self):
+        """Documents the limit of the coordination rather than claiming what it cannot establish.
+
+        A connection that is open but idle holds **no** SQLite lock, so no check in this module can
+        find it and the restore is not refused (refusing here would be a claim the code cannot
+        support). What is verified is the resulting behaviour: the restore proceeds, the idle
+        connection keeps the view it had before the swap, and its next write is refused by SQLite
+        itself (``SQLITE_READONLY``) rather than silently landing in a file nobody can see again.
+        """
+        live, chosen = self.prepare()
+        idle = sqlite3.connect(str(live), isolation_level=None)
+        self.addCleanup(idle.close)
+        rows_before = idle.execute("SELECT listing_id FROM job_listings ORDER BY listing_id").fetchall()
+
+        result = restore_backup(chosen, live, timestamp=STAMP)  # not refused: an idle connection is invisible
+
+        self.assertEqual(result.info.job_count, 1)
+        self.assertEqual(idle.execute("SELECT listing_id FROM job_listings ORDER BY listing_id").fetchall(),
+                         rows_before, "the idle connection keeps its own view of the replaced file")
+        with self.assertRaises(sqlite3.OperationalError) as caught:
+            idle.execute("UPDATE application_tracker SET status='shortlisted' WHERE listing_id='j1'")
+        self.assertIn("readonly", str(caught.exception).lower(),
+                      "SQLite itself refuses the stale connection, which is the honest guarantee here")
+        with CareerStore(str(live)) as store:
+            self.assertEqual(store.get_tracker("j1").status, ApplicationStatus.DISCOVERED)
+
     def test_a_restore_is_refused_when_the_current_database_cannot_be_preserved(self):
         live, chosen = self.prepare()
         with CareerStore(str(live)) as store:
