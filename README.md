@@ -165,7 +165,11 @@ planning, database-path resolution, stored-timestamp rendering), the status choo
 the state machine, unrecognised stored statuses and the refusal paths they trigger, version reporting and
 start-up diagnostics (including path redaction), verified backup and restore (including corruption,
 schema-version and permission failures, WAL and side-file handling, and the command-line front end), and
-the desktop handlers exercised through widget stubs. It
+the desktop handlers exercised through widget stubs. It also checks the SQLite resource
+lifecycle: no test may leave a connection open (the whole suite is re-run in a child process that
+counts them, because Python 3.10/3.11 never emit the `ResourceWarning: unclosed database` that
+macOS reported), and `with sqlite3.connect(...)` — which manages the transaction, not the
+connection — is refused by a source scan. It
 requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
 behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
 remains outstanding and is tracked in

@@ -351,6 +351,7 @@ class HandlerTestCase(unittest.TestCase):
         app = desktop.CareerAgentApp.__new__(desktop.CareerAgentApp)
         app.root = Widget()
         app.store = self.store
+        self.addCleanup(self._close_store_the_handler_replaced, app)
         # The real __init__ resolves this before any handler runs, so the double must too.
         app.db_path = Path(self.store.database_path)
         app.status = StringVar()
@@ -379,6 +380,19 @@ class HandlerTestCase(unittest.TestCase):
     def fill_job_form(self, app, values):
         for key, value in values.items():
             app.job_vars[key].set(value)
+
+    def _close_store_the_handler_replaced(self, app):
+        """Close a connection a handler opened in place of the fixture's own store.
+
+        Restoring the database closes the fixture's connection and gives the app a new store. Closing
+        only the fixture's store left that new connection to the garbage collector, which is exactly
+        what raises ``ResourceWarning: unclosed database`` on the interpreters that report it, so
+        whatever the app holds when the test ends is closed here. Closing is idempotent, so a store
+        the handler left alone (or already closed) is unaffected.
+        """
+        store = getattr(app, "store", None)
+        if store is not None and store is not self.store:
+            store.close()
 
     def make_app_with_real_handlers(self, *names):
         """Build the double with the named handlers bound to the real methods.
@@ -2063,6 +2077,22 @@ class DatabaseRestoreHandlerTests(HandlerTestCase):
         self.assertEqual(self.listing_ids(), ["j1", "j2", "j3"], "the data must be what it was")
         self.assertEqual([job.listing_id for job in self.app.store.list_jobs()], ["j1", "j2", "j3"])
         self.assertIn("Restore failed", self.app.status.get())
+
+    def test_the_fixture_closes_the_store_a_restore_gave_the_app(self):
+        """A restore replaces the app's store, and that replacement must be closed, not collected.
+
+        Closing only the fixture's own store left the new connection to the garbage collector: that
+        is the ``ResourceWarning: unclosed database`` reported from macOS, and it also kept the
+        database file open for an unpredictable time on every platform.
+        """
+        self.app._restore_database()
+        replacement = self.app.store
+        self.assertIsNot(replacement, self.store, "the handler must have opened a new connection")
+
+        self._close_store_the_handler_replaced(self.app)
+
+        with self.assertRaises(sqlite3.ProgrammingError):
+            replacement.list_jobs()  # SQLite refuses to work on a closed connection
 
     def test_a_backup_with_dangling_tracker_rows_is_reported_in_the_confirmation(self):
         foreign = Path(self._directory.name) / "dangling.sqlite3"

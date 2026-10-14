@@ -228,10 +228,19 @@ class CareerStore:
     def __init__(self, database_path: str | Path):
         self.database_path = str(database_path)
         self._connection = sqlite3.connect(self.database_path)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._initialize()
-        _restrict_to_owner(self.database_path)
+        try:
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys = ON")
+            self._initialize()
+            _restrict_to_owner(self.database_path)
+        except BaseException:
+            # A store that failed to open must not keep its connection: nothing can reach this one
+            # (the caller only ever sees the exception), so leaving it to the garbage collector holds
+            # the database file open for an unpredictable time and raises an "unclosed database"
+            # ResourceWarning on interpreters that report it. ``close`` is idempotent, so the schema
+            # check closing first is harmless.
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         self._connection.close()

@@ -923,3 +923,44 @@ records). No dependency, adapter, scheduler, submission path, or external transm
 source-quality gate remains **NOT PASSED**; the Mac database was never accessed. Stated honestly rather
 than tested: no GUI was rendered here (no display, no tkinter in this sandbox), so the macOS checklist
 items added for the new UI behaviour still need the user's manual run.
+
+## 2026-10-14 (later) — SQLite connection lifecycle: the macOS `ResourceWarning`
+
+**Reported.** `python -m unittest discover -s tests` on macOS (after syncing `1ffe480`) passed but
+printed `ResourceWarning: unclosed database in <sqlite3.Connection object ...>`, located at
+`tests/test_desktop_handlers.py:34` — the body of the `StringVar` stub.
+
+**Measurement, not guesswork.** Python 3.11 (this sandbox) does not implement that warning at all: an
+unclosed connection collected by the garbage collector is completely silent (demonstrated directly), so
+the reported line is where the collector happened to run, not where the connection was created. The
+leak was therefore measured instead: every `sqlite3.connect` in the suite was tracked with its creation
+traceback and the test that was running. Result on the reported commit: **856 connections created, 4
+never closed** — three where `_restore_database` gave the app a new `CareerStore` and the test fixture
+only closed the store it started with (`desktop.py:282 → store.py:230`, in
+`DatabaseRestoreHandlerTests`), and one in `BackupValidationTests.test_a_truncated_database_is_refused`,
+where `with sqlite3.connect(...) as connection:` reads as if it closed the connection but only manages
+the transaction.
+
+**Fixes.** `CareerStore.__init__` closes its connection when opening or initialising fails (a store that
+cannot open used to hold the file until the collector ran, with no reference left to close it);
+`tests/test_backup.py` reads the page size in `try/finally`; `HandlerTestCase.make_app` registers a
+cleanup that closes whatever store the app holds when the test ends, so a handler that replaces the
+store cannot leak it. No behaviour, schema, permission or safeguard changed.
+
+**Regression tests.** New `tests/test_resource_lifecycle.py` (5 tests): a failed open closes its
+connection (unreadable file and newer schema) and a successful open still hands back a usable one; a
+source scan refuses `with sqlite3.connect(...)` anywhere in `career_agent/`, `scripts/` or `tests/`; and
+a child process re-runs the entire suite with `tests/leak_watch_sitecustomize.py` on its `PYTHONPATH`,
+failing if any connection is never closed (it also fails if the watch counted implausibly few
+connections, so a silently broken watch cannot pass). A handler-level test covers the replaced store.
+
+**Evidence.** Test count 388 → **394**, all passing; the required
+`python -W error::ResourceWarning -m unittest discover -s tests` passes (exit 0) — and on this
+interpreter that command cannot fail, which is why the leak watch exists. Measured with the committed
+watch: **before 4 never-closed connections, after 0**. Teeth: three controlled mutations — removing the
+failed-open close (caught by the store test), restoring the `with sqlite3.connect(...)` fixture (caught
+by both the source scan and the leak watch), and unregistering the fixture cleanup (caught by the leak
+watch, which names the three leaked connections) — all caught, files restored SHA-256-identical.
+Verification: full suite 394 OK, also with the socket-blocking shim; `compileall` exit 0; `tabnanny`
+exit 0; CSV audit exit 0 with the unchanged SHA-256 `0356b093…f414`. The Mac database was never
+accessed, `main` was not touched, and PR #2 stays open and unmerged.

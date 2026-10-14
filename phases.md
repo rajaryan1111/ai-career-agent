@@ -92,11 +92,15 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 ## Current implementation status
 
-The offline domain core, the SQLite persistence layer, verified local backup/restore, and the Tkinter local desktop alpha (`python -m career_agent`) are implemented, with 388 standard-library tests passing locally and a Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
+The offline domain core, the SQLite persistence layer, verified local backup/restore, and the Tkinter local desktop alpha (`python -m career_agent`) are implemented, with 394 standard-library tests passing locally and a Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit. The tests cover the domain rules, persistence (including file-backed restart durability), untrusted-URL validation, the fail-closed source permission gate and run-outcome rules, the tracker confirmation-evidence
 floor and the backed-up record-correction tool, owner-only export
 permissions, stale-selection handling, the status chooser's option set measured against the state machine, unrecognised stored statuses and the refusal paths they trigger, stored-timestamp rendering (missing, offset-less and unparseable values), version reporting and start-up diagnostics (including path redaction), backup and restore (verified snapshots, corruption and
 schema-version refusals, POSIX permissions, WAL and side-file handling, the command-line front end),
-the Tk-free desktop logic, and the desktop handlers through widget stubs; they do not cover widget
+the Tk-free desktop logic, and the desktop handlers through widget stubs. They also hold the SQLite
+resource lifecycle: a child process re-runs the whole suite counting connections that were never
+closed (the macOS `ResourceWarning: unclosed database` came from exactly that, and Python 3.10/3.11
+never emit the warning), and a source scan refuses `with sqlite3.connect(...)`, which manages the
+transaction and never closes the connection. They do not cover widget
 rendering, a real Tk session, or any operating-system integration, so the manual GUI smoke test —
 including macOS/Apple Silicon — remains outstanding.
 

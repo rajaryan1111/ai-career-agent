@@ -335,8 +335,14 @@ class BackupValidationTests(BackupTestCase):
 
     def test_a_truncated_database_is_refused(self):
         live = populate(self.directory / "career_agent.sqlite3")
-        with sqlite3.connect(str(live)) as connection:
+        connection = sqlite3.connect(str(live))
+        try:
             page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        finally:
+            # ``with connection`` manages the transaction, not the connection: it never closes, so the
+            # connection stayed open until the garbage collector ran (an "unclosed database"
+            # ResourceWarning on interpreters that report it). Read the page size, then close here.
+            connection.close()
         truncated = self.directory / "truncated.sqlite3"
         truncated.write_bytes(live.read_bytes()[: page_size * 2])  # valid header, missing pages
 
