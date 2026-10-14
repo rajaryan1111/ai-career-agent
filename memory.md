@@ -1375,13 +1375,26 @@ that can be done without a Mac.
   the change counter it records (9) no longer matches the restored file's (1). The docstring now says that
   rather than claiming the module is the thing preventing the loss, and a test guards the ordering
   (snapshot → swap → remove) that keeps that window safe.
-- **Verification completed without a Mac**: full suite **584 tests, OK** locally (582 at the reviewed head plus
-  the two tests above; 12 skipped only because the optional ``pypdf`` was absent); with ``pypdf 6.20.1``
-  installed in an isolated virtual environment the same suite runs **584 OK with nothing skipped**, so the PDF
+- **Verification completed without a Mac**: full suite **588 tests, OK** locally (582 at the reviewed head plus
+  the six added here; 12 skipped only because the optional ``pypdf`` was absent); with ``pypdf 6.20.1``
+  installed in an isolated virtual environment the same suite runs **588 OK with nothing skipped**, so the PDF
   extraction, scanned-encrypted-damaged rejection and sidebar-layout tests really execute rather than skip.
   ``compileall`` exit 0; ``scripts/audit_job_source_csv.py`` exit 0 with the unchanged CSV SHA-256
-  ``0356b093…f414``; ``--version`` and ``--help`` exit 0. The suite's own leak watch reports **1219 connections
+  ``0356b093…f414``; ``--version`` and ``--help`` exit 0. The suite's own leak watch reports **1260 connections
   created, 0 never closed** across the whole suite, which includes the new guard paths.
+- **The local-first promise gained two checks that can be automated** (``tests/test_local_only.py``). One reads
+  the shipped modules (``career_agent/``, ``scripts/``) and refuses any call that could transmit or resolve -
+  ``socket.socket``, ``getaddrinfo``, ``urlopen``, ``HTTPConnection``, ``webbrowser.open``, ``subprocess``
+  invoking curl/wget - or any import of a module whose purpose is remote communication (``requests``,
+  ``urllib.request``, ``http.client``, ``smtplib``, and the like), while explicitly allowing
+  ``urllib.parse`` and ``socket.inet_aton`` because both only read a string the user typed. The other runs the
+  documented ``--backup-to`` and ``--restore-from`` commands in a child interpreter whose ``sitecustomize``
+  makes socket creation raise, after first proving in that same child that the block is real; both commands
+  exit 0 with no socket available. Neither check is vacuous: planting ``import requests`` in a shipped module
+  fails the scan, and neutering the guard fails the runtime test with "the guard did not install, so this run
+  would prove nothing". Together with the existing résumé-import network test this is static-plus-runtime
+  evidence for a stated product guarantee; it still cannot prove that the desktop toolkit or a future
+  dependency never opens a socket, and the manual inspection step stays outstanding.
 - **Checklist steps 17, 18, 21, 22 and 23 were executed end to end at the CLI level** against a throwaway
   database in a temporary folder: a backup is written and verified; a second backup to the same path is refused
   with exit 2 and the earlier file is byte-identical (same hash and mtime); the backup file is ``-rw-------`` on
