@@ -18,7 +18,10 @@ import os
 import re
 import sqlite3
 
-from .store import PrivateWriteError, write_private_text_file
+from .store import (
+    PrivateWriteError, SchemaMigrationError, SchemaTooNewError, UnrecognisedDatabaseError,
+    write_private_text_file,
+)
 
 #: One diagnostic keeps at most this many characters, so a pathological exception text cannot grow
 #: the note without bound. Enough for a real message plus the recovery instructions.
@@ -260,6 +263,28 @@ def describe_startup_failure(
             f"{_RECOVERY_HINT}. If no backup is available, rename or move the unreadable database "
             "file and start again: the app will create a new empty database and leave the old file "
             "for you to inspect."
+        )
+    if isinstance(exc, SchemaMigrationError):
+        # The store already worked out what the database is at now; this adds what to do about it
+        # without repeating the version numbers as if they were the whole story.
+        return (
+            "The local database could not be updated to the schema version this app expects, so the "
+            f"application did not start.\n\n{message}\n\n"
+            f"{_RECOVERY_HINT} The previous database is never deleted by this attempt: its file is "
+            "still on disk exactly as it was."
+        )
+    if isinstance(exc, SchemaTooNewError):
+        return (
+            "The local database was written by a newer version of this application, so this version "
+            f"did not open it.\n\n{message}\n\nNothing was changed and no downgrade was attempted. "
+            "Update the application, or use the database commands (--backup-to, --restore-from) to "
+            "work with a different file."
+        )
+    if isinstance(exc, UnrecognisedDatabaseError):
+        return (
+            "The file this app was pointed at is a database, but not one this application created, so "
+            f"it was not opened or changed.\n\n{message}\n\nPoint the app at your own database file, "
+            "or start it without --database to use the default location."
         )
     if isinstance(exc, PermissionError):
         return (

@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .store import (
-    SCHEMA_TABLES, SCHEMA_VERSION, PrivateWriteError, create_private_file, require_owner_only,
+    SCHEMA_VERSION, PrivateWriteError, create_private_file, require_owner_only, schema_tables,
 )
 
 #: Default file name offered when the user chooses where to write a backup.
@@ -110,13 +110,20 @@ class DatabaseInfo:
     tracker_count: int
     foreign_key_violations: int
     size_bytes: int
+    #: Rows in the application activity log, or ``None`` when the file's own schema version has no
+    #: such table (an older backup). ``None`` means "not part of this file", never "empty".
+    activity_count: int | None = None
 
     def summary(self) -> str:
         """One factual line about the contents, used by the dialogs and the command line."""
         profile = "profile saved" if self.profile_present else "no profile"
         jobs = f"{self.job_count} job" + ("" if self.job_count == 1 else "s")
         trackers = f"{self.tracker_count} tracker record" + ("" if self.tracker_count == 1 else "s")
-        return f"{profile} · {jobs} · {trackers} · schema version {self.schema_version}"
+        parts = [profile, jobs, trackers]
+        if self.activity_count is not None:
+            parts.append(f"{self.activity_count} activity entr" + ("y" if self.activity_count == 1 else "ies"))
+        parts.append(f"schema version {self.schema_version}")
+        return " · ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -129,6 +136,16 @@ class RestoreResult:
     pre_restore_verified: bool
     removed_sidecars: tuple[Path, ...]
     info: DatabaseInfo
+
+    @property
+    def needs_schema_update(self) -> bool:
+        """Whether the installed file is an older schema, updated when this build opens it.
+
+        Restoring is deliberately not a migration: the file is installed exactly as it was validated,
+        and the next open updates it with the same recorded step the app uses for its own database.
+        Reporting it keeps that visible instead of leaving an older version number unexplained.
+        """
+        return self.info.schema_version < SCHEMA_VERSION
 
 
 def _utc_stamp(timestamp: datetime | None = None) -> str:
@@ -217,23 +234,28 @@ def validate_app_database(path: str | Path) -> DatabaseInfo:
                 f"(version {SCHEMA_VERSION}). Update the app, or use a backup written by this version. "
                 "Nothing was changed and no downgrade was attempted."
             )
-        if version != SCHEMA_VERSION:
+        expected_tables = schema_tables(version)
+        if expected_tables is None:
+            # Zero is SQLite's "no version recorded", which this application never writes, and a
+            # version between 1 and SCHEMA_VERSION is one of ours. Anything else is another program's
+            # file: reading it is attempted nowhere, because its tables mean nothing here.
             raise BackupError(
-                f"{target} uses schema version {version}, but this app supports exactly version "
-                f"{SCHEMA_VERSION}. Refusing to guess at or migrate a different schema."
+                f"{target} records schema version {version}, which this application does not recognise "
+                f"as one of its own (it writes and reads versions 1 to {SCHEMA_VERSION}). Refusing to "
+                "guess at a file this app did not write. Nothing was changed."
             )
         tables = {
             row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        missing = [name for name in SCHEMA_TABLES if name not in tables]
+        missing = [name for name in expected_tables if name not in tables]
         if missing:
             raise BackupError(
-                f"{target} is missing the expected table(s) {', '.join(sorted(missing))}, so it was not "
-                "written by this app."
+                f"{target} records schema version {version} but is missing the expected table(s) "
+                f"{', '.join(sorted(missing))}, so it was not written by this app."
             )
-        rows = {name: int(connection.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in SCHEMA_TABLES}
+        rows = {name: int(connection.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in expected_tables}
         violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
     except sqlite3.DatabaseError as exc:
         if _is_locking_failure(exc):
@@ -250,6 +272,7 @@ def validate_app_database(path: str | Path) -> DatabaseInfo:
         path=target, schema_version=version, profile_present=rows["candidate_profile"] > 0,
         job_count=rows["job_listings"], tracker_count=rows["application_tracker"],
         foreign_key_violations=violations, size_bytes=target.stat().st_size,
+        activity_count=rows.get("application_activity"),
     )
 
 

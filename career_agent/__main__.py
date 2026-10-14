@@ -131,6 +131,11 @@ def run_restore(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     print(f"Restored {database}\nfrom     {source}")
     print(f"Contents: {result.info.summary()}")
+    if result.needs_schema_update:
+        print(
+            f"The restored file was written by an older schema (version {result.info.schema_version}); "
+            f"opening the app updates it to schema version {SCHEMA_VERSION} and records that in the file."
+        )
     if result.pre_restore_backup is not None:
         quality = "verified copy" if result.pre_restore_verified else "raw copy (it could not be read as a database)"
         print(f"Previous database kept as a {quality}: {result.pre_restore_backup}")

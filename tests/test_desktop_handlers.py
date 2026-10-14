@@ -27,7 +27,8 @@ from career_agent import (
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
-from career_agent.store import CareerStore, StoredRecordError, UnavailableStore
+import career_agent.store as store_module
+from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 from datetime import datetime, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
@@ -2316,6 +2317,38 @@ class DatabaseRestoreHandlerTests(HandlerTestCase):
         previous = sorted(Path(self._directory.name).glob(f"{Path(self.app.db_path).name}.backup-*"))
         self.assertEqual(len(previous), 1, "exactly one previous-database copy must be kept")
         self.assertEqual(validate_app_database(previous[0]).job_count, 3, "the copy must hold what was replaced")
+
+    def test_restoring_a_backup_from_an_earlier_schema_reports_the_update(self):
+        """The dialog describes what was installed *and* what reopening it did to that file.
+
+        Leaving the older version number unexplained would read as a contradiction: the summary line
+        is built from the validated file, while the update is what this window recorded when it
+        reopened the database.
+        """
+        older = Path(self._directory.name) / "older-backup.sqlite3"
+        steps = tuple(step for step in store_module._MIGRATIONS if step[0] == 1)
+        with mock.patch.object(store_module, "_MIGRATIONS", steps):
+            with CareerStore(str(older)) as legacy:
+                legacy.save_job(sample_job(listing_id="only-in-the-older-backup"))
+        FILEDIALOG.path = str(older)
+
+        self.app._restore_database()
+
+        self.assertIn("Restore complete", MESSAGES.titles())
+        body = MESSAGES.text("showinfo")
+        self.assertIn("older schema (version 1)", body)
+        self.assertIn(f"updated to schema version {SCHEMA_VERSION}", body)
+        self.assertEqual(self.listing_ids(), ["only-in-the-older-backup"])
+        self.assertEqual(
+            self.app.store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION,
+            "the reopened database must record the updated schema",
+        )
+
+    def test_a_current_backup_does_not_mention_a_schema_update(self):
+        self.app._restore_database()
+
+        self.assertIn("Restore complete", MESSAGES.titles())
+        self.assertNotIn("older schema", MESSAGES.text("showinfo"))
 
     @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
     def test_the_restored_database_is_owner_only(self):

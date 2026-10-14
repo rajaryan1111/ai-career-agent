@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Callable
 import errno
 import json
 import os
@@ -21,13 +22,25 @@ from .core import (
     require_confirmation_evidence,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
-#: Public names for the schema contract. ``career_agent.backup`` validates a candidate backup file
-#: against these instead of repeating the schema, so the two can never disagree (a drift test in
-#: ``tests/test_backup.py`` compares them with a freshly initialised database).
+#: Every schema version this build can open, with the tables that version leaves behind. The lists are
+#: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
+#: version that file *records*, not against the newest list, because a backup written by an older
+#: build is restored as it is and updated when this build opens it. A drift test in
+#: ``tests/test_backup.py`` compares the newest list with a freshly initialised database, so the
+#: schema cannot grow without this contract being updated deliberately.
+SCHEMA_TABLES_BY_VERSION = {
+    1: ("application_tracker", "candidate_profile", "job_listings"),
+    2: ("application_activity", "application_tracker", "candidate_profile", "job_listings"),
+}
 SCHEMA_VERSION = _SCHEMA_VERSION
-SCHEMA_TABLES = ("application_tracker", "candidate_profile", "job_listings")
+SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
+
+
+def schema_tables(version: int) -> tuple[str, ...] | None:
+    """The tables schema ``version`` holds, or ``None`` for a version this build does not know."""
+    return SCHEMA_TABLES_BY_VERSION.get(version)
 
 #: Owner read/write only: the database holds candidate PII and should not be group/world readable.
 _OWNER_ONLY_MODE = 0o600
@@ -126,6 +139,73 @@ class UnavailableStore:
             )
 
         return refuse
+
+
+class SchemaTooNewError(RuntimeError):
+    """The file records a schema version newer than this build understands.
+
+    A distinct type so callers can say "update the application" instead of guessing from a message.
+    Nothing is written and no downgrade is attempted.
+    """
+
+    def __init__(self, version: int, supported: int) -> None:
+        self.version = version
+        self.supported = supported
+        super().__init__(
+            f"Database schema {version} is newer than supported schema {supported}. Update the "
+            "application; this version cannot read that database and did not modify it."
+        )
+
+
+class UnrecognisedDatabaseError(RuntimeError):
+    """The file holds tables but records no schema version, so this application did not write it.
+
+    Adopting it would add this application's tables to somebody else's file. The file is left exactly
+    as it was.
+    """
+
+
+class SchemaMigrationError(RuntimeError):
+    """A schema upgrade step failed; the database is left at the version that step started from.
+
+    The failure is reported as itself rather than as a raw SQLite error, because what the person
+    needs to know is which database they should be looking at and whether their data survived. The
+    version is re-read after the rollback and carried in the message, so the claim "nothing changed"
+    is only made when the database actually says so.
+    """
+
+    def __init__(self, target_version: int, description: str, from_version: int,
+                 observed_version: int | None, cause: BaseException) -> None:
+        self.target_version = target_version
+        self.description = description
+        self.from_version = from_version
+        self.observed_version = observed_version
+        self.cause = cause
+        if observed_version is None:
+            state = "The database's recorded schema version could not be read back afterwards."
+            advice = (
+                "Do not keep using this database. Restore a verified backup "
+                "(python -m career_agent --restore-from PATH --yes) and report this message."
+            )
+        elif observed_version == from_version:
+            state = f"The step was rolled back, so the database is still at schema version {from_version}."
+            advice = (
+                "Your data was not changed. Restore a verified backup if the app cannot start, or keep "
+                "this message and the sanitised start-up note for whoever is helping you."
+            )
+        else:
+            state = (
+                f"The database now records schema version {observed_version} rather than {from_version}, "
+                "so the step may have been applied only in part."
+            )
+            advice = (
+                "Do not keep using this database. Restore a verified backup "
+                "(python -m career_agent --restore-from PATH --yes) before anything else."
+            )
+        super().__init__(
+            f"The database could not be updated to schema version {target_version} ({description}). "
+            f"{state} SQLite reported: {cause}. {advice}"
+        )
 
 
 class PrivateWriteError(OSError):
@@ -322,6 +402,72 @@ def _stored_text_values(value: object, noun: str, field: str) -> list:
     return list(value)
 
 
+def _migration_to_v1(connection: sqlite3.Connection) -> None:
+    """Schema 1: the original profile, job listing and application tracker tables.
+
+    The statements are exactly the ones this application always created its schema with, so a database
+    written by an earlier build has the same objects at the same version. ``IF NOT EXISTS`` is
+    defensive: a file holding tables but recording no version is refused before any step runs (see
+    :meth:`CareerStore._initialize`), so today this step only ever runs against a file with no tables.
+    """
+    for statement in (
+        """CREATE TABLE IF NOT EXISTS candidate_profile (
+               profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
+               payload TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )""",
+        """CREATE TABLE IF NOT EXISTS job_listings (
+               listing_id TEXT PRIMARY KEY,
+               payload TEXT NOT NULL,
+               duplicate_key TEXT NOT NULL,
+               first_seen_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL
+           )""",
+        """CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key)""",
+        """CREATE TABLE IF NOT EXISTS application_tracker (
+               listing_id TEXT PRIMARY KEY REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               status TEXT NOT NULL,
+               status_evidence TEXT,
+               candidate_confirmed INTEGER NOT NULL DEFAULT 0,
+               updated_at TEXT NOT NULL
+           )""",
+    ):
+        connection.execute(statement)
+
+
+def _migration_to_v2(connection: sqlite3.Connection) -> None:
+    """Schema 2: an append-only log of what happened for each tracked application.
+
+    Additive: nothing existing is rewritten. The log is deleted with its listing (``ON DELETE
+    CASCADE``), and the index matches the only read order the application uses - one listing, oldest
+    date first. ``IF NOT EXISTS`` is defensive for the same reason as the first step.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS application_activity (
+               activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               occurred_on TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               detail TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_application_activity_listing
+               ON application_activity(listing_id, occurred_on, activity_id)"""
+    )
+
+
+#: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
+#: is the single definition of how a database reaches the current schema. A step is only ever
+#: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
+#: and the recorded version is what decides which steps still apply.
+_MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] = (
+    (1, "create the profile, job listing and application tracker tables", _migration_to_v1),
+    (2, "add the application activity log", _migration_to_v2),
+)
+
+
 class CareerStore:
     """Small explicit local store. Pass a path; no database is created implicitly."""
 
@@ -352,34 +498,66 @@ class CareerStore:
         self.close()
 
     def _initialize(self) -> None:
-        version = self._connection.execute("PRAGMA user_version").fetchone()[0]
+        """Bring the database to the schema this build expects, one recorded step at a time."""
+        version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
         if version > _SCHEMA_VERSION:
             self._connection.close()
-            raise RuntimeError(f"Database schema {version} is newer than supported schema {_SCHEMA_VERSION}.")
-        with self._connection:
-            self._connection.executescript("""
-                CREATE TABLE IF NOT EXISTS candidate_profile (
-                    profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS job_listings (
-                    listing_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    duplicate_key TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key);
-                CREATE TABLE IF NOT EXISTS application_tracker (
-                    listing_id TEXT PRIMARY KEY REFERENCES job_listings(listing_id) ON DELETE CASCADE,
-                    status TEXT NOT NULL,
-                    status_evidence TEXT,
-                    candidate_confirmed INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                );
-            """)
-            self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            raise SchemaTooNewError(version, _SCHEMA_VERSION)
+        if version == 0 and self._holds_tables():
+            # A file with tables that records no schema version was not written by this application.
+            # Adopting it would add our tables to somebody else's file, so it is refused untouched.
+            self._connection.close()
+            raise UnrecognisedDatabaseError(
+                "This file contains tables but records schema version 0, so it was not written by this "
+                "application. Nothing was changed; point the app at a different file or restore a "
+                "verified backup of your own database."
+            )
+        current = version
+        for target, description, apply_migration in _MIGRATIONS:
+            if target <= current:
+                continue
+            self._apply_migration(target, description, apply_migration, current)
+            current = target
+
+    def _holds_tables(self) -> bool:
+        """Whether the database file holds any table of its own (SQLite's internal ones do not count)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone() is not None
+
+    def _apply_migration(self, target: int, description: str, apply_migration, from_version: int) -> None:
+        """Run one schema step and record its version in the same transaction.
+
+        ``BEGIN IMMEDIATE`` is issued by hand instead of relying on the connection's implicit
+        transaction, which the sqlite3 module opens for data-modifying statements only: DDL would run
+        outside it, and ``executescript`` commits any open transaction before running its script. A
+        step whose statements partly succeeded would then be impossible to roll back. Steps execute
+        one statement at a time for the same reason, and ``PRAGMA user_version`` is written inside
+        the transaction, so the recorded version and the structure always move together - a database
+        can never claim a version whose objects are missing, or hold objects at a version it does not
+        claim.
+        """
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            apply_migration(self._connection)
+            self._connection.execute(f"PRAGMA user_version = {target}")
+            self._connection.execute("COMMIT")
+        except Exception as exc:
+            raise SchemaMigrationError(target, description, from_version,
+                                       self._roll_back_step(), exc) from exc
+
+    def _roll_back_step(self) -> int | None:
+        """Undo a failed schema step and report the version the database records afterwards."""
+        try:
+            self._connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            # SQLite may already have unwound the transaction (a full disk, for example). There is
+            # nothing to undo in that case, and the version read below is what settles it either way.
+            pass
+        try:
+            return int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        except sqlite3.Error:
+            return None
 
     def save_profile(self, profile: CandidateProfile) -> None:
         payload = json.dumps(asdict(profile), sort_keys=True, default=_json_default)

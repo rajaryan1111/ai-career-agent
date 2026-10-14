@@ -27,7 +27,8 @@ from unittest import mock
 from career_agent import __main__ as cli
 from career_agent.backup import validate_app_database
 from career_agent.core import ApplicationTracker, Availability, CandidateProfile, JobListing
-from career_agent.store import CareerStore
+import career_agent.store as store_module
+from career_agent.store import SCHEMA_VERSION, CareerStore
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -247,6 +248,47 @@ class RestoreCommandTests(CommandLineTestCase):
         self.assertEqual(len(preserved), 1)
         self.assertEqual(validate_app_database(preserved[0]).job_count, 3,
                          "the copy taken before the restore must hold what the restore replaced")
+
+    def test_restoring_a_backup_from_an_earlier_schema_reports_the_update_it_will_need(self):
+        """An older backup is a supported recovery path; the version it records must be visible.
+
+        Restoring installs the file exactly as validated - it is not migrated here - so the report
+        says what will happen the next time the app opens it instead of leaving an older version
+        number unexplained. The restored data is checked, not just the message.
+        """
+        older = self.directory / "older-backup.sqlite3"
+        steps = tuple(step for step in store_module._MIGRATIONS if step[0] == 1)
+        with mock.patch.object(store_module, "_MIGRATIONS", steps):
+            with CareerStore(str(older)) as store:
+                store.save_job(listing("only-in-the-older-backup"))
+                store.save_tracker(ApplicationTracker("only-in-the-older-backup"))
+
+        code, out, err = self.run_command(["--restore-from", str(older), "--yes"])
+
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual(err, "")
+        self.assertIn("older schema (version 1)", out)
+        self.assertIn(f"updates it to schema version {SCHEMA_VERSION}", out)
+        self.assertEqual(validate_app_database(older).schema_version, 1,
+                         "the chosen backup file itself is never migrated")
+        self.assertEqual(validate_app_database(self.database).schema_version, 1,
+                         "the installed file is the validated one, not a rewritten one")
+        with CareerStore(str(self.database)) as upgraded:
+            self.assertIsNotNone(upgraded.get_job("only-in-the-older-backup"))
+            self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0],
+                             SCHEMA_VERSION)
+        self.assertEqual(validate_app_database(self.database).schema_version, SCHEMA_VERSION,
+                         "opening it with this build is what records the update")
+
+    def test_restoring_a_current_backup_says_nothing_about_a_schema_update(self):
+        self.run_command(["--backup-to", str(self.directory / "snapshot.sqlite3")])
+
+        code, out, err = self.run_command(
+            ["--restore-from", str(self.directory / "snapshot.sqlite3"), "--yes"])
+
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual(err, "")
+        self.assertNotIn("older schema", out)
 
     def test_a_corrupt_backup_is_refused_and_the_database_is_untouched(self):
         corrupt = self.directory / "corrupt.sqlite3"

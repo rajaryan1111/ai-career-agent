@@ -23,7 +23,10 @@ from career_agent.diagnostics import (
     DIAGNOSTIC_FILE_NAME, MAX_DIAGNOSTIC_LENGTH, describe_startup_failure, diagnostic_log_path,
     record_startup_failure, redact_paths,
 )
-from career_agent.store import SCHEMA_VERSION, CareerStore, PrivateWriteError, TrackerStatusError
+from career_agent.store import (
+    SCHEMA_VERSION, CareerStore, PrivateWriteError, SchemaMigrationError, SchemaTooNewError,
+    TrackerStatusError, UnrecognisedDatabaseError,
+)
 
 
 class VersionReportingTests(unittest.TestCase):
@@ -334,6 +337,32 @@ class StartupFailureExplanationTests(unittest.TestCase):
 
         self.assertIn("no display is available", text)
         self.assertNotIn("$DISPLAY", text)
+
+    def test_a_database_from_a_newer_version_is_explained_as_an_update_not_damage(self):
+        """The store refuses it by type; the message must not suggest the file is damaged."""
+        text = self.explain(SchemaTooNewError(9, SCHEMA_VERSION))
+
+        self.assertIn("newer version of this application", text)
+        self.assertIn("Nothing was changed and no downgrade was attempted", text)
+        self.assertIn("--restore-from", text, "the database commands must still be named")
+        self.assertNotIn("damaged", text)
+
+    def test_a_failed_schema_update_names_the_backup_as_the_recovery(self):
+        failure = SchemaMigrationError(2, "add the application activity log", 1, 1,
+                                       sqlite3.OperationalError("disk I/O error"))
+        text = self.explain(failure)
+
+        self.assertIn("could not be updated to the schema version", text)
+        self.assertIn("still at schema version 1", text)
+        self.assertIn("--restore-from", text)
+        self.assertIn("still on disk exactly as it was", text)
+
+    def test_a_file_that_is_not_this_application_is_explained_as_such(self):
+        text = self.explain(UnrecognisedDatabaseError("tables but no schema version"))
+
+        self.assertIn("not one this application created", text)
+        self.assertIn("--database", text, "the flag that points the app elsewhere must be named")
+        self.assertNotIn("/home/someone", text, "no location may be quoted back")
 
     def test_an_unexpected_failure_is_still_reported_plainly(self):
         text = self.explain(ValueError("something nobody predicted"))

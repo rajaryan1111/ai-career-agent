@@ -28,7 +28,7 @@ from career_agent.backup import (
     BackupError, automatic_backup_path, create_backup, restore_backup, suggested_backup_name,
     validate_app_database,
 )
-from career_agent.store import SCHEMA_TABLES, SCHEMA_VERSION, CareerStore
+from career_agent.store import SCHEMA_TABLES, SCHEMA_TABLES_BY_VERSION, SCHEMA_VERSION, CareerStore
 
 PROFILE = CandidateProfile(
     candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
@@ -427,7 +427,8 @@ class BackupValidationTests(BackupTestCase):
         self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 99, "the file must not be modified")
         connection.close()
 
-    def test_an_older_or_unknown_schema_version_is_refused_rather_than_migrated(self):
+    def test_an_unknown_schema_version_is_refused_rather_than_adopted(self):
+        """A file with tables and no recorded schema version is somebody else's database."""
         foreign = self.directory / "foreign.sqlite3"
         connection = sqlite3.connect(str(foreign))
         connection.execute("CREATE TABLE something_else (value TEXT)")
@@ -437,7 +438,58 @@ class BackupValidationTests(BackupTestCase):
         with self.assertRaises(BackupError) as caught:
             validate_app_database(foreign)
 
-        self.assertIn("supports exactly version", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("does not recognise", message)
+        self.assertIn("version 0", message)
+        connection = sqlite3.connect(str(foreign))
+        self.assertEqual(
+            {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")},
+            {"something_else"}, "the file must not be modified")
+        connection.close()
+
+    def test_a_backup_written_by_an_earlier_schema_version_is_accepted(self):
+        """Restoring an older backup is the documented recovery path, so it must not be refused.
+
+        The file is validated against the tables of the version it records, and the version it
+        records is what decides that: the current schema's tables are not required of it, because an
+        older build never wrote them.
+        """
+        older = self.directory / "older.sqlite3"
+        connection = sqlite3.connect(str(older))
+        for statement in (
+            "CREATE TABLE candidate_profile (profile_id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE job_listings (listing_id TEXT PRIMARY KEY, payload TEXT NOT NULL, duplicate_key TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)",
+            "CREATE TABLE application_tracker (listing_id TEXT PRIMARY KEY REFERENCES job_listings(listing_id) ON DELETE CASCADE, status TEXT NOT NULL, status_evidence TEXT, candidate_confirmed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)",
+            f"PRAGMA user_version = {min(SCHEMA_TABLES_BY_VERSION)}",
+        ):
+            connection.execute(statement)
+        connection.commit()
+        connection.close()
+
+        info = validate_app_database(older)
+
+        oldest = min(SCHEMA_TABLES_BY_VERSION)
+        self.assertEqual(info.schema_version, oldest)
+        self.assertIsNone(info.activity_count, "a schema without an activity log must not report an empty one")
+        self.assertNotIn("activity", info.summary())
+
+    def test_an_older_backup_missing_a_table_of_its_own_version_is_refused(self):
+        """The version-aware check is not a blanket acceptance: the tables it does claim are required."""
+        older = self.directory / "older-partial.sqlite3"
+        connection = sqlite3.connect(str(older))
+        connection.execute(
+            "CREATE TABLE candidate_profile (profile_id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        connection.execute(f"PRAGMA user_version = {min(SCHEMA_TABLES_BY_VERSION)}")
+        connection.commit()
+        connection.close()
+
+        with self.assertRaises(BackupError) as caught:
+            validate_app_database(older)
+
+        message = str(caught.exception)
+        self.assertIn("records schema version", message)
+        self.assertIn("job_listings", message)
 
     def test_a_database_missing_a_required_table_is_refused(self):
         partial = self.directory / "partial.sqlite3"
@@ -468,6 +520,13 @@ class BackupValidationTests(BackupTestCase):
         finally:
             connection.close()
         self.assertEqual(tables, set(SCHEMA_TABLES))
+        newest = max(SCHEMA_TABLES_BY_VERSION)
+        self.assertEqual(newest, SCHEMA_VERSION, "the newest table list must describe the current schema")
+        for version, names in sorted(SCHEMA_TABLES_BY_VERSION.items()):
+            if version == min(SCHEMA_TABLES_BY_VERSION):
+                continue
+            previous = SCHEMA_TABLES_BY_VERSION[version - 1]
+            self.assertTrue(set(previous) < set(names), f"schema {version} must only add tables")
 
 
 class RestoreTests(BackupTestCase):

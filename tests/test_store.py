@@ -8,10 +8,12 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
+import career_agent.store as store_module
 from career_agent.core import duplicate_key
 from career_agent.store import (
-    CareerStore, PrivateWriteError, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
-    create_private_file, require_owner_only, write_private_text_file,
+    SCHEMA_TABLES_BY_VERSION, SCHEMA_VERSION, CareerStore, PrivateWriteError, SchemaMigrationError,
+    SchemaTooNewError, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
+    UnrecognisedDatabaseError, create_private_file, require_owner_only, write_private_text_file,
 )
 
 #: A fixed, clearly local timestamp so a test never depends on the clock.
@@ -621,7 +623,7 @@ class DurabilityTests(unittest.TestCase):
         self.assertEqual(tracker.status_evidence, "Employer email")
         self.assertTrue(tracker.candidate_confirmed)
         version = reopened._connection.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 1)
+        self.assertEqual(version, SCHEMA_VERSION)
 
     def test_deletion_survives_close_and_reopen(self):
         store = CareerStore(self.path)
@@ -641,7 +643,8 @@ class DurabilityTests(unittest.TestCase):
         for _ in range(2):
             reopened = CareerStore(self.path)
             self.assertEqual(len(reopened.list_jobs()), 1)
-            self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0],
+                             SCHEMA_VERSION)
             reopened.close()
 
     def test_newer_schema_is_refused_instead_of_overwritten(self):
@@ -656,6 +659,217 @@ class DurabilityTests(unittest.TestCase):
         missing_parent = Path(self._directory.name) / "absent-directory" / "career_agent.sqlite3"
         with self.assertRaises(sqlite3.Error):
             CareerStore(missing_parent)
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    """The schema contract: one recorded step at a time, and a failure that changes nothing.
+
+    The version-1 fixture is built by running the real first step alone, so it is the schema this
+    application actually shipped rather than a hand-copied approximation of it.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "career_agent.sqlite3"
+
+    def _open_at_version(self, version):
+        """A store whose schema stops at ``version`` (the older schema, built by the real steps)."""
+        steps = tuple(step for step in store_module._MIGRATIONS if step[0] <= version)
+        with mock.patch.object(store_module, "_MIGRATIONS", steps):
+            store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        return store
+
+    def _job(self, listing_id="j1"):
+        return JobListing(
+            listing_id=listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=f"https://jobs.example/role/{listing_id}", employer_name="Example",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+        )
+
+    def test_a_fresh_database_records_the_current_schema_version(self):
+        """The literal is pinned on purpose: bumping the schema is a deliberate act with a step."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+
+        self.assertEqual(SCHEMA_VERSION, 2)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 2)
+        tables = {
+            row[0] for row in store._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[2]))
+
+    def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
+        steps = store_module._MIGRATIONS
+
+        self.assertEqual([step[0] for step in steps], list(range(1, SCHEMA_VERSION + 1)))
+        for version, description, apply_migration in steps:
+            with self.subTest(version=version):
+                self.assertTrue(description.strip(), "a step with no description cannot be reported")
+                self.assertTrue(callable(apply_migration))
+                self.assertIn(version, SCHEMA_TABLES_BY_VERSION)
+        self.assertEqual(max(SCHEMA_TABLES_BY_VERSION), SCHEMA_VERSION)
+
+    def test_a_version_one_database_is_updated_when_it_is_opened(self):
+        older = self._open_at_version(1)
+        older.save_job(self._job())
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027)
+        older.save_profile(profile)
+        older._connection.execute("PRAGMA user_version = 1")
+        older._connection.commit()
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_job("j1"), self._job(), "the existing rows must survive the update")
+        self.assertEqual(upgraded.get_profile(), profile)
+        self.assertIn("application_activity", {
+            row[0] for row in upgraded._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        })
+
+    def test_reopening_an_already_current_database_runs_no_step(self):
+        CareerStore(self.path).close()
+        calls = []
+        steps = tuple(
+            (target, description, lambda connection, target=target: calls.append(target))
+            for target, description, _ in store_module._MIGRATIONS
+        )
+        with mock.patch.object(store_module, "_MIGRATIONS", steps):
+            store = CareerStore(self.path)
+        self.addCleanup(store.close)
+
+        self.assertEqual(calls, [], "an up-to-date database must not be migrated again")
+
+    def test_a_failed_step_leaves_the_version_and_the_structure_untouched(self):
+        """The reason steps run statement-by-statement inside one explicit transaction.
+
+        ``executescript`` would commit the transaction it finds before running its script, and the
+        sqlite3 module's implicit transaction covers data-modifying statements only, so a partly
+        applied step could not be rolled back. This holds the property directly: the table the step
+        created before failing must not survive, and the recorded version must not move.
+        """
+        def failing_step(connection):
+            connection.execute("CREATE TABLE half_applied (value TEXT)")
+            connection.execute("CREATE INDEX idx_half ON half_applied(value)")
+            raise sqlite3.OperationalError("no such table: missing_thing")
+
+        with mock.patch.object(store_module, "_MIGRATIONS",
+                               ((1, "create the base tables", store_module._migration_to_v1),
+                                (2, "a step that fails", failing_step))):
+            with self.assertRaises(SchemaMigrationError) as caught:
+                CareerStore(self.path)
+
+        error = caught.exception
+        self.assertEqual((error.target_version, error.from_version, error.observed_version), (2, 1, 1))
+        self.assertIn("still at schema version 1", str(error))
+        self.assertIn("no such table: missing_thing", str(error))
+        connection = sqlite3.connect(str(self.path))
+        try:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertNotIn("half_applied", {
+                row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }, "a rolled-back step must leave no object behind")
+        finally:
+            connection.close()
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.get_job("j1"), None, "the database is still usable after the failure")
+
+    def test_a_later_step_failing_keeps_the_earlier_one_applied(self):
+        """Each step commits on its own, so a database stops at the last version that succeeded."""
+        def failing_step(connection):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        with mock.patch.object(store_module, "_MIGRATIONS",
+                               ((1, "create the base tables", store_module._migration_to_v1),
+                                (2, "a step that fails", failing_step))):
+            with self.assertRaises(SchemaMigrationError) as caught:
+                CareerStore(self.path)
+
+        self.assertEqual(caught.exception.from_version, 1)
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+
+    def test_a_database_that_cannot_be_read_back_says_so_instead_of_claiming_nothing_changed(self):
+        """The failure message is re-read from the file; the reassuring half is not assumed."""
+        def failing_step(connection):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        with mock.patch.object(store_module, "_MIGRATIONS", ((2, "a step that fails", failing_step),)), \
+                mock.patch.object(CareerStore, "_roll_back_step", lambda self: None):
+            with self.assertRaises(SchemaMigrationError) as caught:
+                CareerStore(self.path)
+
+        message = str(caught.exception)
+        self.assertIn("could not be read back", message)
+        self.assertIn("Restore a verified backup", message)
+        self.assertNotIn("still at schema version", message)
+
+    def test_a_partly_applied_database_is_not_reported_as_unchanged(self):
+        """If the version moved, the message must say the step may have been applied in part."""
+        older = self._open_at_version(1)
+        older._connection.execute("PRAGMA user_version = 1")
+        older._connection.commit()
+        older.close()
+
+        def failing_step(connection):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        with mock.patch.object(store_module, "_MIGRATIONS", ((2, "a step that fails", failing_step),)), \
+                mock.patch.object(CareerStore, "_roll_back_step", lambda self: 2):
+            with self.assertRaises(SchemaMigrationError) as caught:
+                CareerStore(self.path)
+
+        message = str(caught.exception)
+        self.assertIn("now records schema version 2 rather than 1", message)
+        self.assertIn("may have been applied only in part", message)
+        self.assertNotIn("still at schema version", message)
+
+    def test_a_newer_schema_is_refused_by_type_and_leaves_the_file_alone(self):
+        connection = sqlite3.connect(str(self.path))
+        connection.execute("PRAGMA user_version = 99")
+        connection.commit()
+        connection.close()
+        before = self.path.read_bytes()
+
+        with self.assertRaises(SchemaTooNewError) as caught:
+            CareerStore(self.path)
+
+        self.assertEqual((caught.exception.version, caught.exception.supported), (99, SCHEMA_VERSION))
+        self.assertEqual(self.path.read_bytes(), before, "the refused file must be byte-identical")
+
+    def test_a_file_holding_tables_but_no_version_is_refused_by_type_and_left_alone(self):
+        """Adopting it would add this application's tables to somebody else's file."""
+        connection = sqlite3.connect(str(self.path))
+        connection.execute("CREATE TABLE someone_elses (value TEXT)")
+        connection.commit()
+        connection.close()
+        before = self.path.read_bytes()
+
+        with self.assertRaises(UnrecognisedDatabaseError) as caught:
+            CareerStore(self.path)
+
+        self.assertIn("records schema version 0", str(caught.exception))
+        self.assertEqual(self.path.read_bytes(), before)
+        connection = sqlite3.connect(str(self.path))
+        self.assertNotIn("job_listings", {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        })
+        connection.close()
+
+    def test_an_empty_file_is_treated_as_a_new_database(self):
+        self.path.write_bytes(b"")
+
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
 
 
 class DatabaseFilePermissionTests(unittest.TestCase):

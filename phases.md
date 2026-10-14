@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 604 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 628 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -126,6 +126,23 @@ transaction and never closes the connection. They do not cover widget
 rendering, a real Tk session, PDF extraction without the optional `pypdf` library, or any
 operating-system integration, so the manual GUI smoke test —
 including macOS/Apple Silicon — remains outstanding.
+
+Schema versioning and safe updates are implemented. `career_agent.store` holds an ordered list of
+schema steps (version 1 created the profile/job/tracker tables; version 2 adds the application activity
+log), and each step runs statement-by-statement inside one explicit transaction that records the version
+it reached in the same commit. Neither the sqlite3 module's implicit transaction (it covers
+data-modifying statements only) nor `executescript` (it commits any open transaction before running its
+script) is used, because either would let a partly applied step be committed with no way to roll it back;
+a regression test asserts that a step which fails after creating an object leaves nothing behind. A failing step is rolled back and reported
+through `SchemaMigrationError` with the version **re-read from the file** afterwards, so "nothing changed"
+is only claimed when the file confirms it; a database recording a newer version
+(`SchemaTooNewError`) or holding tables with no recorded version at all (`UnrecognisedDatabaseError`) is
+refused untouched, by type, and `diagnostics` explains each of those three cases in plain language.
+`backup.validate_app_database` now validates a candidate file against the tables of the version that file
+records, so restoring an older backup works again — installs it exactly as validated, then updates it
+when the app opens it, reporting that in the window and on the command line — while a newer file is still
+refused rather than downgraded. Encryption at rest, a written release/upgrade policy, and the desktop
+surface for the new activity log remain outstanding.
 
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra

@@ -199,8 +199,8 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
 **What a restore guarantees**
 
 - The chosen file is validated *before* anything local is touched. A file that is unreadable, damaged,
-  written for a different schema version, or missing an expected table is refused with a message, and
-  the current database is left exactly as it was.
+  written by a newer schema version than this build understands, or missing the tables its own recorded
+  version should hold, is refused with a message; the current database is left exactly as it was.
 - It is copied into a staging file beside the database and validated again, so the file that is
   installed is the file that was checked. The backup you chose is never modified or consumed.
 - The current database is preserved first: a verified snapshot when it is readable, and a raw
@@ -219,7 +219,23 @@ folder. Restoring replaces candidate data, so it asks you to confirm: interactiv
   therefore refuses with a message, and leaves the current database untouched, while another program holds
   the file open. (This platform's behaviour is reasoned from the operating system's documented file-sharing
   rules and SQLite's open flags; it is not covered by the tests here, which run on Linux.)
-- A newer or older schema version is refused rather than migrated or downgraded.
+- A backup written by an **older** schema version is accepted: it is validated against the tables its
+  own version holds and installed as it is, never rewritten by the restore. Opening the app then updates
+  it with the same recorded schema step used for the live database, and both the window and the command
+  line say so. A file written by a **newer** version is refused rather than downgraded.
+
+**What an update to the database schema guarantees**
+
+- The schema is updated one recorded step at a time, each in a single transaction that ends by writing
+  the version it reached, so a database can never claim a version whose tables are missing or hold
+  tables at a version it does not claim.
+- A step that fails is rolled back and reported with the version the database is actually at, re-read
+  from the file rather than assumed: "nothing changed" is only said when the file says so. The message
+  names the recovery path (a verified backup), and nothing in the database is deleted or rewritten to
+  work around a failure.
+- A database that records a *newer* schema version is refused, and so is a file that holds tables but
+  records no schema version at all — that file was not written by this application, and nothing is
+  added to it. Neither refusal modifies the file.
 
 **Limitations**
 
@@ -274,7 +290,11 @@ and textless files, the refusal to invent values, and the socket-blocked local-o
 chooser's option set against
 the state machine, unrecognised stored statuses and the refusal paths they trigger, version reporting and
 start-up diagnostics (including path redaction), verified backup and restore (including corruption,
-schema-version and permission failures, WAL and side-file handling, and the command-line front end —
+schema-version and permission failures, version-aware acceptance of an older backup, the migration
+framework (a version-1 database updated in place with its rows intact, a step that fails leaving the
+version and structure untouched, a partly applied step reported honestly rather than as "nothing
+changed", refusals by type for a newer or unrecognised file), WAL and side-file handling, and the
+command-line front end —
 its exit codes, its refusals, the confirmation it requires before replacing a database, and the
 fact that it never imports the GUI toolkit), and
 the desktop handlers exercised through widget stubs — including the résumé review screen: proposals shown
@@ -341,9 +361,12 @@ Missing pieces, in the order they are needed, for a packaged desktop alpha:
    with Tkinter — including the size, update, and Tk-availability consequences of each choice.
 3. A release checklist that runs this repository's suite, the manual desktop checklist, and a
    backup/restore rehearsal on each supported operating system from the packaged build.
-4. A written version and data-compatibility policy for released builds: what a version number promises,
-   when the database schema version changes, what happens to an existing database then, and how someone
-   upgrades. (Until that exists, an installed copy is a development build of the same "local alpha".)
+4. A written version and data-compatibility policy for released builds: what a version number promises
+   and how someone upgrades. The database half of that story exists — schema steps are recorded, applied
+   one at a time in a transaction, rolled back on failure and reported honestly, and an older backup is
+   accepted and updated when it is opened (see "What a restore guarantees") — but nothing yet promises
+   what a release number means across versions. (Until that exists, an installed copy is a development
+   build of the same "local alpha".)
 
 Nothing is published to a package index and no release archive is attached anywhere, so "install from
 this checkout into your own Python environment, or run it from the checkout directly" is the accurate

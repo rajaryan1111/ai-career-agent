@@ -1494,3 +1494,63 @@ Python, and holds the `installed-package` job to actually building, installing a
 interpreter, no published release, and no version/data-compatibility policy yet; nothing was published to
 any package index. `README.md` and `phases.md` were updated so the installation instructions, the
 packaging status and the test count describe what actually exists.
+
+## 2026-10-15 — Schema versioning: recorded steps, atomic updates, and older backups accepted again
+
+**What changed.** The database schema moved to version 2 and the store gained a migration framework.
+`career_agent/store.py` now holds `_MIGRATIONS`, an ordered list of `(version, description, step)`:
+version 1 creates the original profile/job/tracker tables (the very statements the schema was always
+created with, so a database written by an earlier build holds the same objects at the same version), and
+version 2 adds
+`application_activity`, the append-only log the tracker needs, with an index on
+`(listing_id, occurred_on, activity_id)`. No existing object is rewritten by either step.
+
+**Decisions and reasons.**
+
+- **One explicit transaction per step, statements executed one at a time.** Probed before writing the
+  framework: `PRAGMA user_version` and DDL roll back together, so the version can be recorded inside the
+  same transaction as the structure; but `executescript` **commits any open transaction before running its
+  script**, and the sqlite3 module's implicit transaction covers data-modifying statements only. A step
+  that applied three of four statements through `executescript` would therefore be committed,
+  half-applied, with no way back. The framework issues `BEGIN IMMEDIATE`/`COMMIT` by hand and applies
+  steps statement-by-statement; a test asserts that a step creating an index before failing leaves no
+  object behind and does not move the version, and that test fails when the hazard is reintroduced.
+- **"Nothing changed" is verified, not assumed.** After a failed step the version is re-read from the
+  file. `SchemaMigrationError` carries the version the step started from *and* the version observed
+  afterwards, and its message differs accordingly ("still at schema version 1" versus "now records
+  schema version 2 … may have been applied only in part"), including the case where the version cannot be
+  read back at all. Each branch has a test.
+- **Refusals are named types instead of a bare `RuntimeError`.** `SchemaTooNewError` (a newer schema) and
+  `UnrecognisedDatabaseError` (tables present, no recorded version, so the file was not written by this
+  application — adopting it would add our tables to somebody else's file) both leave the file
+  byte-identical, which the tests assert rather than assume.
+- **Backups from an earlier schema version are accepted again.** Bumping the version would otherwise have
+  broken the main recovery path ("back up, upgrade, restore"), because validation required
+  `version == SCHEMA_VERSION`. It now checks the candidate against the tables *of the version that file
+  records* (`SCHEMA_TABLES_BY_VERSION`), so a version-1 backup validates, is installed exactly as
+  validated, and is updated when the app opens it; a version the application has never written is still
+  refused. The restore report says the file was an older schema and what will update it: the desktop
+  dialog says which versions, the command line prints the same fact, and the validation of the *installed*
+  file afterwards proves the update was recorded.
+- **A new database is still created the same way, and an empty file is a new database.** A file holding
+  tables but no recorded version is now refused instead of being adopted, which is stricter than before
+  and is what stops a foreign SQLite file from acquiring this application's tables.
+
+**Evidence.** `tests/test_store.py` `SchemaMigrationTests` (11 tests: fresh database pins literal version
+2; the step list is 1..2 with descriptions and table contracts; a version-1 database updated in place with
+its job, profile and rows intact; an up-to-date database runs no step; the failed-step rollback and the
+no-object-left-behind property; a later step failing keeps the earlier one applied; the three failure
+messages; byte-identical refusals for newer and unrecognised files; an empty file treated as new);
+`tests/test_backup.py` (an older backup accepted with `activity_count` correctly `None` and no "activity"
+in the summary; an older backup missing a table of its own version still refused with the version named;
+the version contract checked to be cumulative); `tests/test_cli_backup_restore.py` (restoring an older
+backup reports the update, restores the data, and the file records the new version only after being
+opened; a current backup says nothing about an update); `tests/test_desktop_handlers.py` (the restore
+dialog describes both the installed version and the update, and a current backup does not mention one);
+`tests/test_diagnostics.py` (the three new failure classes explained, with no location quoted back).
+Full suite 628 OK (13 skipped without `pypdf`), `compileall` exit 0, CSV audit exit 0 with the hash
+unchanged, leak-watch 1363 connections created / 0 never closed. The activity log currently only has its
+table: the domain type, storage API, export and desktop surface are the next commit.
+
+**Still missing.** Encryption at rest, portability, a written release/upgrade policy (what a version number
+promises), and everything that consumes the new table.

@@ -28,6 +28,7 @@ from .desktop_logic import (
 from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
 from .store import (
+    SCHEMA_VERSION,
     CareerStore,
     PrivateWriteError,
     StoredRecordError,
@@ -309,6 +310,12 @@ class CareerAgentApp:
             self.status.set("Restore finished, but the restored database could not be opened. Restart the app.")
             return
         detail = f"Restored from:\n{result.restored_from}\n\nNow in use: {result.info.summary()}."
+        if result.needs_schema_update:
+            # The summary describes the file that was installed; the update below is what happened to
+            # it when this window reopened the database, so both version numbers are accounted for.
+            detail += (f"\n\nThe restored file was written by an older schema (version "
+                       f"{result.info.schema_version}) and was updated to schema version "
+                       f"{SCHEMA_VERSION} when it was reopened; that is recorded in the file.")
         if result.pre_restore_backup is not None:
             quality = "verified copy" if result.pre_restore_verified else "raw copy (it could not be read as a database)"
             detail += f"\n\nPrevious database kept as a {quality}:\n{result.pre_restore_backup}"
