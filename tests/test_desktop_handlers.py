@@ -32,6 +32,13 @@ from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
+
+# The acceptance harness owns the definitions the display-backed checks use - what counts as a scrolling
+# area, and which box a widget is judged against. Reusing them here keeps one reading of a window.
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+import desktop_acceptance as acceptance  # noqa: E402 - after the path is set
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -1059,6 +1066,87 @@ class StartupPathTests(unittest.TestCase):
         self.assertEqual(app.job_vars["scope"].get(), "unknown")
         self.assertEqual(app.db_path.name, "startup.sqlite3")
         self.assertTrue(app.root.destroyed)
+
+
+class TabLayoutPolicyTests(unittest.TestCase):
+    """What the window's own tabs *ask* for, checked where there is no display to ask Tk.
+
+    Neither test is a layout measurement, and neither claims to be one: whether Tk had room for a widget is
+    answered only by a real display with real fonts, which is why the display-backed harness asks it there.
+    What can be checked anywhere is what the window asks for in the first place, and that is what failed on
+    run 38820361412 (2026-10-16). The Linux job reported two labels of the Data safety tab 23 and 31 pixels
+    past the notebook page's right edge - wrapped at 900 pixels, in a page that is 878 pixels wide at the
+    window's own declared minimum - and the Tasks tree of the Background tasks tab 65 pixels below its tab,
+    whose content was taller than the page with nothing to scroll. Both were the window asking for more room
+    than it could be given.
+    """
+
+    def page_named(self, app, name):
+        """The tab's own frame, found by the label a person reads rather than by position."""
+        for frame, label in app.tabs.tabs:
+            if label == name:
+                return frame
+        raise AssertionError(f"the window has no tab named {name!r}; it has {app.tabs.labels()!r}")
+
+    def build_window(self, directory, name):
+        app = desktop.CareerAgentApp(Widget(), database_path=Path(directory) / name)
+        # Closed inside the block: a platform that will not delete a file another program holds open
+        # (Windows) otherwise fails the temporary folder's own cleanup and reports this as an error.
+        self.addCleanup(app.close)
+        return app
+
+    #: How wide a label drawn across a tab may ask to be wrapped, in pixels.
+    #:
+    #: The window declares 900 as its own minimum width. The notebook's page measured 878 pixels wide at
+    #: that size on the Linux job of run 38820361412 (2026-10-16), the tab's own padding takes 24 of those,
+    #: and the scrollbar a scrolling tab carries about 15 more. A label wrapped at more than this asks for
+    #: more width than its tab has, and Tk draws the difference outside the tab rather than short of it.
+    NARROWEST_TAB_TEXT_WIDTH = 900 - 22 - 24 - 15
+
+    def test_every_label_drawn_across_a_tab_wraps_inside_the_narrowest_tab(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self.build_window(directory, "wrap.sqlite3")
+            checked = 0
+            for page, label in app.tabs.tabs:
+                for widget in acceptance.descendants(page):
+                    if widget.winfo_class() not in ("TLabel", "Label"):
+                        continue
+                    if "wraplength" not in widget.options:
+                        continue
+                    checked += 1
+                    asked = float(widget.options["wraplength"])
+                    self.assertLessEqual(
+                        asked, self.NARROWEST_TAB_TEXT_WIDTH,
+                        f"a label of the {label!r} tab wraps at {asked:g} pixels, wider than the "
+                        f"{self.NARROWEST_TAB_TEXT_WIDTH} pixels the narrowest tab has: it asks for more "
+                        "width than the tab can give it, and Tk draws the difference outside the tab",
+                    )
+            # A walk that found nothing would pass this test while checking nothing at all.
+            self.assertGreaterEqual(checked, 12, "no label drawn across a tab was found to check")
+
+    def test_the_window_wraps_its_tab_text_at_the_width_those_tabs_have(self):
+        self.assertLessEqual(desktop._TAB_TEXT_WRAP, self.NARROWEST_TAB_TEXT_WIDTH)
+
+    def test_content_taller_than_its_tab_is_reachable_rather_than_clipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self.build_window(directory, "scroll.sqlite3")
+            page = self.page_named(app, "Background tasks")
+            for tree in (app.tasks_tree, app.task_runs_tree):
+                container = acceptance.layout_container(tree, page)
+                self.assertIsNot(
+                    container, page,
+                    f"{tree.winfo_class()} {tree} is judged against its tab: content taller than the tab "
+                    "is clipped by the notebook unless something scrolls it",
+                )
+                self.assertTrue(
+                    acceptance.is_scrolled_frame(container),
+                    f"{tree.winfo_class()} {tree} is not inside an area that scrolls",
+                )
+            # And a tab that holds no growing content is still judged against itself, so "scrolls" below
+            # cannot be a helper that answers yes for every widget in the window.
+            data_page = self.page_named(app, "Data safety")
+            for widget in acceptance.descendants(data_page):
+                self.assertIs(acceptance.layout_container(widget, data_page), data_page)
 
 
 class NewJobSaveTests(HandlerTestCase):

@@ -77,6 +77,20 @@ def stored_status_text(row: dict | None) -> str:
         return f"{row['status']} (not recognised by this version)"
 
 
+#: How wide text drawn right across a tab may wrap, in pixels.
+#:
+#: A label that wraps at more than the tab has room for asks for more width than the tab gives it, and Tk
+#: draws the difference outside the tab rather than short of it. Measured by the display-backed harness on
+#: run 38820361412 (2026-10-16): the notebook's page is 878 pixels wide when the window is at its own
+#: declared minimum of 900x600, and two of this window's own labels - wrapped at 900, as they were -
+#: reached 23 and 31 pixels past that page's right edge. 830 is the value the Work history and study tab
+#: has wrapped at since that tab gained a scrolling body: it leaves room for the vertical scrollbar a
+#: scrolling tab carries and for the padding inside the page, and every tab is at least that wide at the
+#: smallest size the window itself permits. A label standing in a narrow row beside a control is not part
+#: of this policy - it is wrapped to the width of the row it shares, which is smaller than any tab.
+_TAB_TEXT_WRAP = 830
+
+
 class CareerAgentApp:
     """Small local UI over the tested domain logic and SQLite store."""
     def __init__(self, root: tk.Tk, database_path: str | Path | None = None):
@@ -174,7 +188,7 @@ class CareerAgentApp:
                 "text is not kept. Privacy: no cloud sync, external AI API, or data transfer is "
                 "performed. Data stays in the local application-data folder."
             ),
-            wraplength=850,
+            wraplength=_TAB_TEXT_WRAP,
         ).grid(row=7, column=0, columnspan=4, sticky=W, pady=8)
         ttk.Label(
             self.profile_tab,
@@ -182,13 +196,13 @@ class CareerAgentApp:
                 "A resume is untrusted input: the import reads text only, never runs macros, and refuses "
                 "an encrypted or over-sized file. It is not a malware scanner."
             ),
-            wraplength=850,
+            wraplength=_TAB_TEXT_WRAP,
         ).grid(row=8, column=0, columnspan=4, sticky=W)
 
     def _build_jobs(self):
         for col in (1, 3, 5):
             self.jobs_tab.columnconfigure(col, weight=1)
-        ttk.Label(self.jobs_tab, text="Manual entry only. Leave unknown requirements blank; do not guess country eligibility or apply URLs.", wraplength=900).grid(row=0, column=0, columnspan=6, sticky=W, pady=(0, 8))
+        ttk.Label(self.jobs_tab, text="Manual entry only. Leave unknown requirements blank; do not guess country eligibility or apply URLs.", wraplength=_TAB_TEXT_WRAP).grid(row=0, column=0, columnspan=6, sticky=W, pady=(0, 8))
         fields = [
             ("Employer", "employer", 1, 0, None), ("Role title", "title", 1, 1, None), ("Source name", "source_name", 1, 2, None),
             ("Source listing URL", "source_url", 2, 0, None), ("Employer apply URL (verified)", "apply_url", 2, 1, None), ("Requisition ID", "requisition", 2, 2, None),
@@ -248,7 +262,7 @@ class CareerAgentApp:
                 "Activity history — your own record of what happened, with dates. An entry never "
                 "changes the status above and is never treated as proof that an employer replied."
             ),
-            wraplength=900,
+            wraplength=_TAB_TEXT_WRAP,
         ).pack(anchor=W, pady=(10, 4))
         actions = ttk.Frame(self.tracker_tab)
         actions.pack(fill=X, pady=(0, 4))
@@ -276,7 +290,7 @@ class CareerAgentApp:
         row.pack(fill=X, pady=(10, 0))
         self.progress_summary = tk.StringVar()
         ttk.Label(
-            self.tracker_tab, textvariable=self.progress_summary, wraplength=1000, justify="left",
+            self.tracker_tab, textvariable=self.progress_summary, wraplength=_TAB_TEXT_WRAP, justify="left",
         ).pack(anchor=W, pady=(6, 0))
         ttk.Button(row, text="Progress report", command=self._show_progress_report).pack(side="left")
         ttk.Label(
@@ -406,7 +420,7 @@ class CareerAgentApp:
         ttk.Label(
             self.data_tab,
             text="Local only: no account, no cloud service, and no network access. Keep backups on storage you control.",
-            wraplength=900,
+            wraplength=_TAB_TEXT_WRAP,
         ).grid(row=0, column=0, sticky=W, pady=(0, 8))
         ttk.Button(self.data_tab, text="Back up database", command=self._backup_database).grid(row=1, column=0, sticky=W, pady=4)
         ttk.Button(self.data_tab, text="Restore from backup", command=self._restore_database).grid(row=2, column=0, sticky=W, pady=4)
@@ -420,7 +434,7 @@ class CareerAgentApp:
                 "status is imported without that status (with the reason shown), and a file that is not "
                 "a valid export is refused before anything is read."
             ),
-            wraplength=900,
+            wraplength=_TAB_TEXT_WRAP,
         ).grid(row=4, column=0, sticky=W, pady=(10, 0))
         ttk.Label(
             self.data_tab,
@@ -431,7 +445,7 @@ class CareerAgentApp:
                 "folder can still expose it. Restoring validates the chosen file, copies the current "
                 "database aside first, replaces the database in one step, then reopens and verifies it."
             ),
-            wraplength=900,
+            wraplength=_TAB_TEXT_WRAP,
         ).grid(row=5, column=0, sticky=W, pady=(10, 0))
 
     # ------------------------------------------------------------------ background tasks
@@ -444,28 +458,39 @@ class CareerAgentApp:
     # same module, so the two cannot disagree about what is due.
 
     def _build_scheduler(self):
+        """The tab about what runs by itself: the labels, the controls and two lists of what it has done.
+
+        Its content is taller than the smallest page this window can be given - two six-row lists of scheduled
+        tasks and of recent attempts, each with its own heading, do not fit under the controls on a small
+        screen - so it is built inside the same scrolling body the Work history and study tab uses. Measured
+        by the display-backed harness on run 38820361412 (2026-10-16), before this existed: at the window's own
+        minimum size the Tasks tree reached 65 pixels below the tab on Linux and Windows, and 38 pixels below
+        it on macOS, where the notebook's page is shorter still. Content below the fold is drawn outside the
+        tab and, with nothing to scroll, could not be reached at all.
+        """
+        body = self._scrollable_body(self.scheduler_tab)
         ttk.Label(
-            self.scheduler_tab,
+            body,
             text=(
                 "Scheduled tasks run while the worker is running: python -m career_agent --worker "
                 "(Ctrl-C stops it). Nothing here runs while the worker is stopped, and nothing runs "
                 "while the computer is off or asleep. Every task runs locally; the source-quality gate "
                 "is closed, so a scheduled discovery run is recorded as a refusal and fetches nothing."
             ),
-            wraplength=900, justify=LEFT,
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
         ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
         self.scheduler_summary = tk.StringVar(value="Checking the schedule...")
-        ttk.Label(self.scheduler_tab, textvariable=self.scheduler_summary, wraplength=900,
+        ttk.Label(body, textvariable=self.scheduler_summary, wraplength=_TAB_TEXT_WRAP,
                   justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
-        ttk.Button(self.scheduler_tab, text="Add the default tasks",
+        ttk.Button(body, text="Add the default tasks",
                    command=self._add_default_tasks).grid(row=2, column=0, sticky=W, pady=4)
-        ttk.Button(self.scheduler_tab, text="Enable or disable the selected task",
+        ttk.Button(body, text="Enable or disable the selected task",
                    command=self._toggle_scheduled_task).grid(row=2, column=1, sticky=W, padx=(8, 0), pady=4)
-        ttk.Button(self.scheduler_tab, text="Refresh",
+        ttk.Button(body, text="Refresh",
                    command=self._refresh_scheduler).grid(row=2, column=2, sticky=W, padx=(8, 0), pady=4)
-        ttk.Label(self.scheduler_tab, text="Tasks").grid(row=3, column=0, columnspan=4, sticky=W, pady=(10, 2))
+        ttk.Label(body, text="Tasks").grid(row=3, column=0, columnspan=4, sticky=W, pady=(10, 2))
         task_columns = ("task", "name", "kind", "times", "zone", "next", "last")
-        self.tasks_tree = ttk.Treeview(self.scheduler_tab, columns=task_columns, show="headings", height=6)
+        self.tasks_tree = ttk.Treeview(body, columns=task_columns, show="headings", height=6)
         for column, heading, width in (
             ("task", "Task", 150), ("name", "What it is", 190), ("kind", "Kind", 140),
             ("times", "Runs at", 110), ("zone", "Zone", 120), ("next", "Next run (local)", 190),
@@ -474,10 +499,10 @@ class CareerAgentApp:
             self.tasks_tree.heading(column, text=heading)
             self.tasks_tree.column(column, width=width, anchor=W)
         self.tasks_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
-        ttk.Label(self.scheduler_tab, text="Recent attempts").grid(row=5, column=0, columnspan=4,
+        ttk.Label(body, text="Recent attempts").grid(row=5, column=0, columnspan=4,
                                                                   sticky=W, pady=(10, 2))
         run_columns = ("task", "attempt", "outcome", "when", "took", "note")
-        self.task_runs_tree = ttk.Treeview(self.scheduler_tab, columns=run_columns, show="headings",
+        self.task_runs_tree = ttk.Treeview(body, columns=run_columns, show="headings",
                                           height=6)
         for column, heading, width in (
             ("task", "Task", 150), ("attempt", "Attempt", 70), ("outcome", "Outcome", 110),
@@ -486,7 +511,7 @@ class CareerAgentApp:
             self.task_runs_tree.heading(column, text=heading)
             self.task_runs_tree.column(column, width=width, anchor=W)
         self.task_runs_tree.grid(row=6, column=0, columnspan=4, sticky="nsew")
-        self.scheduler_tab.columnconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
 
     def _build_history(self):
         """The employment and study records behind the profile's summary fields.
@@ -498,7 +523,7 @@ class CareerAgentApp:
         """
         body = self._scrollable_body(self.history_tab)
         ttk.Label(
-            body, wraplength=830, justify=LEFT,
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=("Your own record, in the order a CV reads: the current role first, then the most recent. "
                   "These are notes you keep, not verified facts, and nothing here is checked against any "
                   "employer or document. Blank fields stay unknown rather than being guessed."),
@@ -595,10 +620,10 @@ class CareerAgentApp:
         self.study_tree.bind("<<TreeviewSelect>>", self._select_education)
 
         self.history_summary = tk.StringVar()
-        ttk.Label(body, textvariable=self.history_summary, wraplength=830,
+        ttk.Label(body, textvariable=self.history_summary, wraplength=_TAB_TEXT_WRAP,
                   justify="left").pack(anchor=W, pady=(8, 0))
         ttk.Label(
-            body, wraplength=830, justify=LEFT,
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=("Deleting the saved profile deletes these records too, in one step, because they are the "
                   "detail behind it - the confirmation names how many. Nothing here is uploaded, and no "
                   "employer is contacted about any of it."),
@@ -934,13 +959,13 @@ class CareerAgentApp:
         ttk.Button(controls_row_two, text="Delete the selected record", command=self._delete_action_record
                    ).pack(side="left", padx=8)
         ttk.Label(
-            self.actions_tab, wraplength=900, justify=LEFT,
+            self.actions_tab, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=("Everything here is a plan you wrote: a preparation item, a round you recorded, or a "
                   "follow-up day. None of it changes an application's status, and no record here is an "
                   "employer's decision - only you move an application on, and only with your own evidence."),
         ).pack(anchor=W, pady=(0, 8))
         self.actions_summary = tk.StringVar()
-        ttk.Label(self.actions_tab, textvariable=self.actions_summary, wraplength=900,
+        ttk.Label(self.actions_tab, textvariable=self.actions_summary, wraplength=_TAB_TEXT_WRAP,
                   justify="left").pack(anchor=W, pady=(0, 8))
         columns = ("when", "what", "application", "detail")
         self.actions_tree = ttk.Treeview(self.actions_tab, columns=columns, show="headings", height=12)
@@ -1365,7 +1390,7 @@ class CareerAgentApp:
         ttk.Button(actions_row_two, text="Export to a calendar file",
                    command=self._export_follow_ups).pack(side="left", padx=8)
         ttk.Label(
-            self.follow_up_tab, wraplength=900,
+            self.follow_up_tab, wraplength=_TAB_TEXT_WRAP,
             text=("A follow-up is a day you plan to act on, not a status: setting one never moves the "
                   "application, and nothing here contacts anybody. The daily reminder task reads this "
                   "list and reports it in the run history; the calendar export writes a file on this "
@@ -1382,7 +1407,7 @@ class CareerAgentApp:
         self.follow_up_note = tk.StringVar()
         ttk.Entry(entry, textvariable=self.follow_up_note, width=48).pack(side="left", padx=4)
         self.follow_up_summary = tk.StringVar()
-        ttk.Label(self.follow_up_tab, textvariable=self.follow_up_summary, wraplength=900,
+        ttk.Label(self.follow_up_tab, textvariable=self.follow_up_summary, wraplength=_TAB_TEXT_WRAP,
                   justify="left").pack(anchor=W, pady=(0, 8))
         columns = ("employer", "role", "status", "day", "when", "note")
         self.follow_up_tree = ttk.Treeview(self.follow_up_tab, columns=columns, show="headings", height=10)

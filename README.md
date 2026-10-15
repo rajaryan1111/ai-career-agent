@@ -584,12 +584,13 @@ figure. The **Work history & study** tab is the record underneath it: each role 
 qualification you have. It is the CV-shaped list, in the order a CV reads, and it is written by you,
 stored on this machine, and used for nothing else.
 
-This is the one tab whose content grows with your career, so it is the one tab that scrolls: the form and the
-two lists share a scrolling area, and the form's fields are pinned to the width you can see, so a long employer
-name or note wraps instead of pushing the buttons off the edge. The add, save, select and delete controls sit in
+This is the tab whose content grows with your career, so it scrolls: the form and the two lists share a
+scrolling area, and the form's fields are pinned to the width you can see, so a long employer name or
+note wraps instead of pushing the buttons off the edge. **Background tasks** scrolls for the same reason -
+its two lists of what runs by itself do not fit under its controls on a small screen - and text drawn
+across any tab wraps inside the width the smallest window size gives it. The add, save, select and delete controls sit in
 two rows rather than one, on this tab and on the two tabs with the longest button rows (**Next actions** and
-**Follow-ups**), so nothing is squeezed or cut off at the smallest window size the app allows (900x600). The
-other tabs are fixed forms and lists that fit the window they are opened in.
+**Follow-ups**), so nothing is squeezed or cut off at the smallest window size the app allows (900x600).
 
 **Employment.** Employer, job title, employment type (full time, part time, contract, internship,
 apprenticeship, self-employed, unknown), a start date, an end date *if you know it*, an explicit **current

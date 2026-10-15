@@ -3104,3 +3104,31 @@ This records product intent only. It does not imply live discovery, account conn
 - design.md: onboarding, dashboard, status language, controls and failure UX.
 - phases.md: staged delivery sequence and release gates.
 - memory.md: durable product decisions, constraints and current-state caveats.
+
+**2026-10-16, this session — D33: two tabs were still asking for more room than they had.**
+The run that carried D32's fix (`38820361412` at `494d931`) measured workflow K again and failed it on the
+Linux display-backed job and on both cross-platform legs, for two reasons D32's fix had not reached. The
+first is a wrap width, not a height: seventeen labels drawn right across a tab were wrapped at a fixed 850, 900
+or 1000 pixels, and the widest a tab can be at the window's own minimum size is narrower than that - the
+notebook's page measured 878 pixels at 900x600, its padding takes 24 and a scrolling tab's scrollbar about 15
+more, and Tk does not shrink text to fit: it keeps the text and draws the difference outside the tab. That is
+what the two `Data safety` labels did, 23 and 31 pixels past the page's right edge. The second is the old
+height problem, in the last place it was still possible: `Background tasks` was the one tab still built
+outside a scrolling area, so its two six-row trees pushed the second tree 65 pixels below the Linux page and
+38 below the macOS one, where nothing could scroll to it. The fix is one constant - `_TAB_TEXT_WRAP = 830`,
+with the arithmetic and the run in the comment beside it - now the only wrap for text drawn across a tab (the
+read-only line helpers inside dialogs and the label standing beside the progress report button keep their own
+smaller numbers, for their own reasons), and `_build_scheduler` building its content into
+`_scrollable_body(self.scheduler_tab)` exactly as the history tab does. `scripts/desktop_acceptance.py` was
+not touched: its judging rule - measure against the tab, or against the frame a scrolling area scrolls - was
+already what K measured with, and the section 22 write-up records why it reads that way. Three tests in
+`tests/test_desktop_handlers.py::TabLayoutPolicyTests` pin what the window *asks for* without a display, and
+they are labelled as the structural checks they are: any label across a tab must wrap within the narrowest tab
+(against the window before this fix the walk reports `850.0 not less than or equal to 839 ... the 'Candidate
+profile' tab`), the constant must equal that limit, and both scheduler trees must be inside something that
+scrolls while a tab holding no growing content is still judged against itself. Written up as section 23 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`; `design.md` and the README now say which tabs
+scroll and how wide a tab's text may ask to be; `phases.md` moves to 1778 tests. Still open on the same run:
+`SuiteConnectionLeakTests` fails on all four macOS/Windows legs and is unchanged by this work. No local
+machine here has a display, so the real-display verdict for this fix is the CI run on the commit that carries
+it - the structural tests pin what the window asks for, not whether Tk had room.

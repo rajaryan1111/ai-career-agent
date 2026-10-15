@@ -858,3 +858,62 @@ process that counts never-closed connections found one or more connections left 
 green on every Linux leg of the matrix and in a local checkout, so it is platform-specific. It is the next item in this
 register rather than a footnote: the leak watch exists to catch exactly this, and a failure of it is not
 something to leave standing in a green matrix.
+
+## 23. D33 — two tabs still asked for more room than they had (run 38820361412 at `494d931`, 2026-10-16)
+
+**How it was found.** The run that carried D32's fix measured workflow K again, and it failed on the same three
+kinds of leg for two remaining reasons - both of them things D32's own fix had not reached:
+
+| Leg | What K reported | Numbers |
+| --- | --- | --- |
+| Linux (Xvfb 1280x1024), display-backed job | **K1 failed** (`RESULT: FAIL - 81 checks passed, 1 failed`) | against the notebook's 878x483 page at the window's own declared minimum of 900x600: two labels of `Data safety` (`.!notebook.!frame4.!label2` 889x53 and `.!label3` 897x70) 23 px and 31 px past the page's **right** edge, and `Background tasks`' Tasks `Treeview` (854x141 at 23,515) 65 px past its **bottom** edge |
+| macOS 3.10 and 3.13 | **K1/K2/K3 failed on 3.10; K2/K3 on 3.13**, and the connection-leak watch failed on both | the same two trees against a ~950x498 page: 38 px past the bottom; the labels fit on these legs, whose page is 950 px wide |
+| Windows 3.10 and 3.13 | **K1 failed on both**, and the connection-leak watch failed on both | the same two trees and the same two labels; the API truncates these annotations, so the earlier D32 run's Windows numbers (26-65 px, against a 1004x631 and an 876x482 page) are what is quotable from here |
+
+**The defects, and why they were two.** First, seventeen labels drawn right across a tab were wrapped at a fixed
+850, 900 or 1000 pixels, and the widest tab the window can be *shown* at is narrower than that: at 900x600 the
+page measures 878 px, the tab's own padding takes 24 of them and the scrollbar of a scrolling tab about 15
+more, leaving ~839. A label that asks for more width than its tab has does not shrink: Tk keeps the text and
+draws the difference outside the tab, which is exactly the two overhanging `Data safety` labels. Second, the
+`Background tasks` tab was the last tab still built outside a scrolling area, so its two six-row trees (plus a
+heading, five controls and two more headings) pushed the second tree below the fold - 65 px below on the Linux
+page and 38 px below on the macOS one - where nothing could scroll to it. This is the same class of defect as
+D32 and the same class as the theme D32 named; it is recorded separately because the evidence is a different
+run, the affected widgets are different, and one of the two causes (a wrap width larger than the tab) is not
+about height at all.
+
+**The fix.**
+
+* One constant, `_TAB_TEXT_WRAP = 830`, is now the only width text drawn across a tab wraps at; the seventeen
+  labels (candidate profile, jobs, tracker activity, tracker progress summary, data safety, scheduler, work
+  history, next actions, follow-ups) use it, and the comment beside it carries the arithmetic above. The
+  read-only line helpers inside dialogs keep their own 830 for their own reason - they are not tabs - and the
+  label standing in a narrow row beside the progress report button keeps its own smaller wrap, because it is
+  wrapped to the width of the row it shares with a button rather than to the width of a tab.
+* `_build_scheduler` now builds its content inside `_scrollable_body(self.scheduler_tab)`, the same helper the
+  Work history and study tab uses, so content taller than a page is reachable by scrolling instead of drawn
+  outside the tab. The two trees keep their own six-row heights and their own scrollbars.
+* `scripts/desktop_acceptance.py` was not changed by this fix: its judging rule (measure against the tab, or
+  against the frame a scrolling area scrolls when the content is reachable by scrolling) was already what
+  workflow K measured with, and D32's section 22 records why the rule reads that way.
+
+**Regression tests** (`tests/test_desktop_handlers.py`, class `TabLayoutPolicyTests`, three tests, no display
+needed - they are not layout measurements and do not claim to be):
+
+* `test_every_label_drawn_across_a_tab_wraps_inside_the_narrowest_tab` walks every tab of a window built with
+  the stand-in widgets and fails on any label asking for more than the 839 px the narrowest tab has. Against
+  the window as committed before this fix it fails with `850.0 not less than or equal to 839 ... the
+  'Candidate profile' tab` - the fail-before evidence, run on this machine on 2026-10-16.
+* `test_the_window_wraps_its_tab_text_at_the_width_those_tabs_have` pins the constant to that same limit, so
+  a future label cannot be given a larger number by writing one literal.
+* `test_content_taller_than_its_tab_is_reachable_rather_than_clipped` asserts, through the harness's own
+  `layout_container` and `is_scrolled_frame`, that both scheduler trees are in an area that scrolls - and that
+  a tab holding no growing content (Data safety) is still judged against itself, so the helper cannot be one
+  that answers "scrolls" for everything.
+
+**What is not established here.** No local machine in this session has a display or `tkinter`, so the
+real-display verdict for this fix is the CI run on the commit that carries it - the structural tests above pin
+what the window *asks for*, not whether Tk had room. The macOS pages are shorter than the 900x600 this
+application declares, and `judge_layout_at` reports both sizes and declines to judge a window below that
+minimum; on these legs it judged, so the fixed layout is being held to the same standard there. The
+`SuiteConnectionLeakTests` failure on all four macOS/Windows legs is unchanged by this work and remains open.
