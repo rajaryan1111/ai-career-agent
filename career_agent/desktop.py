@@ -1345,6 +1345,13 @@ class CareerAgentApp:
         self.follow_up_tree.bind("<<TreeviewSelect>>", self._select_follow_up)
         self.follow_up_tab.columnconfigure(0, weight=1)
 
+    def _selected_reminder_id(self) -> str | None:
+        """The listing id of the row selected on this tab, or ``None`` when no row is selected."""
+        if not hasattr(self, "follow_up_tree"):
+            return None
+        selection = self.follow_up_tree.selection()
+        return str(selection[0]) if selection else None
+
     def _selected_follow_up_id(self) -> str | None:
         """The listing id the day and note fields act on, or ``None`` when nothing is selected.
 
@@ -1355,11 +1362,7 @@ class CareerAgentApp:
         that some other means had recorded - and no other means exists in this application, which left
         the first follow-up day unsettable from anywhere in the product.
         """
-        if hasattr(self, "follow_up_tree"):
-            selection = self.follow_up_tree.selection()
-            if selection:
-                return str(selection[0])
-        return self._selected_job_id()
+        return self._selected_reminder_id() or self._selected_job_id()
 
     def _fill_follow_up_fields(self, listing_id: str | None) -> None:
         """Put one application's recorded day and note in the fields, so editing starts from the truth.
@@ -1387,8 +1390,17 @@ class CareerAgentApp:
         self.follow_up_note.set(tracker.follow_up_note or "")
 
     def _select_follow_up(self, _event=None):
-        """Put the selected reminder's own day and note in the fields, so editing starts from the truth."""
-        self._fill_follow_up_fields(self._selected_follow_up_id())
+        """Put the selected reminder's own day and note in the fields, so editing starts from the truth.
+
+        Only a row on this tab fills the fields. This runs whenever the list is rebuilt as well as when a
+        row is chosen, and a rebuild leaves no row selected: filling the fields from the application
+        selected on another tab then would put an unrelated application's day on screen - and, after a
+        reminder is cleared, would read as though the clear had not happened.
+        """
+        listing_id = self._selected_reminder_id()
+        if listing_id is None:
+            return
+        self._fill_follow_up_fields(listing_id)
 
     def _refresh_follow_ups(self):
         """Re-read the reminders; change nothing.

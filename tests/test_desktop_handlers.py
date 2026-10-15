@@ -4757,6 +4757,47 @@ class FollowUpTabTests(HandlerTestCase):
                           "no application record was invented for a selection that is gone")
         self.assertNotIn("Follow-up set", app.status.get())
 
+    def test_a_refreshed_list_does_not_refill_the_fields_from_another_application(self):
+        """The regression: clearing a reminder appeared not to have happened.
+
+        Every write here rebuilds the list, and a rebuilt list leaves no row selected - which is exactly
+        the moment the tab's own selection binding runs. Reading the subject from the application selected
+        on another tab at that moment put a *different* application's day back into the fields, so the
+        reminder that had just been cleared was still on screen, under the name of the application it did
+        not belong to. A test with stub widgets has to dispatch that binding itself: real Tk fires it when
+        the rows are deleted and re-inserted, and the stub tree models the rebuilt list, not Tk's events.
+        """
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=2, note="chase the reply")
+        self.add_application("j2", days=9, note="a different application's day")
+        app.jobs_tree.selected = ("j2",)
+        app.follow_up_tree.selected = ("j1",)
+        app._select_follow_up()
+        self.assertEqual(app.follow_up_day.get(), (date.today() + timedelta(days=2)).isoformat())
+
+        app._clear_follow_up()
+        app.follow_up_tree.selected = ()
+        app._select_follow_up()
+
+        self.assertIsNone(self.store.get_tracker("j1").follow_up_on)
+        self.assertEqual(app.follow_up_day.get(), "",
+                         "the fields show a day after the reminder was cleared")
+        self.assertEqual(app.follow_up_note.get(), "")
+
+    def test_the_buttons_still_fall_back_to_the_selected_application(self):
+        """What the fallback is for: the first reminder, on an application nothing has recorded yet."""
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+        app.follow_up_tree.selected = ()
+        app.jobs_tree.selected = ("j1",)
+
+        app.follow_up_day.set((date.today() + timedelta(days=5)).isoformat())
+        app._set_follow_up()
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertEqual(tracker.follow_up_on, date.today() + timedelta(days=5))
+
     def test_clearing_a_follow_up_asks_first_and_keeps_the_application(self):
         app = self.make_follow_up_app()
         self.add_application("j1", days=-1, note="chase them")
