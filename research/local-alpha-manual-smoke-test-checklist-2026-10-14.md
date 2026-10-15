@@ -2,6 +2,16 @@
 
 **Status:** Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 76 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
+**Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
+0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
+workflow G: a current role added through the form, an impossible period and an unparseable date refused with
+nothing stored, an ongoing qualification added, a contradictory one refused, a role's title loaded into an
+emptied form and saved over the record, and the current-role flag taken off again with an end date saved.
+That is **46 checks per leg** on the same five display-backed CI legs, run `38747830528` at `e939260`; six more
+steps (68–73) carry coverage lines citing it, and the earlier lines keep the numbers of the run that produced
+them. Two of those six are **partial**: the delete button's two answers (71) and the finished-qualification
+listing (72) are not driven by the run.
+
 **Update, 2026-10-15 (later the same day):** the numbered steps' verdicts are unchanged — 22 PASS, 76 BLOCKED, 0 FAIL — and **no box has been ticked**. What is new is 14 steps whose *functional* claim is now checked automatically, through the real window, on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26; CPython 3.10–3.13): each of those steps now carries an "Automated coverage" line naming the checks, the run and the commit. Nothing about layout, wording, focus order, accessibility, mouse-driven use or native feel is covered by those checks, which is what the remaining BLOCKED verdicts are about; see "Automated coverage of numbered steps" below.  
 **Date created:** 2026-10-14
 
@@ -71,7 +81,7 @@ This checklist is intentionally separate from unit tests. It requires a real des
     as evidence.** If a test record does end up confirmed in the real database, correct it with
     `scripts/correct_tracker_record.py` (dry run first) instead of editing SQL by hand.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; all four evidence cases, the ticked assertion and its preservation were executed directly.**
-    → **Automated coverage (2026-10-15): D6 (confirmed without the assertion is refused with an explanation and nothing is written) — **partial**: the pasted-guidance-text refusal and the in-place evidence rewrite are not driven here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
+    → **Automated coverage (2026-10-15): D6 (confirmed without the assertion is refused with an explanation and nothing is written) — **partial**: the pasted-guidance-text refusal and the in-place evidence rewrite are not driven here. The rest was driven through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 13. [ ] Export to a user-selected JSON file; verify it parses and contains the profile/jobs/tracker records. Confirm the UI warns that the file may contain personal data.
     → **BLOCKED — no display and no Tkinter in the acceptance environment for the warning line; the export itself ran from the terminal and the file was inspected.**
     → **Automated coverage (2026-10-15): E2 (the file parses, carries the profile, the listings, the application record that matches the database, the format version and the top-level history arrays, and the window says the file may hold personal data and to keep it private) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
@@ -324,7 +334,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     pick "You felt it went well", save, and confirm the outcome text appears in the row and that no status
     changed.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the round's day, its awaiting state, the recorded outcome and the unchanged status were all verified.**
-    → **Automated coverage (2026-10-15): D2–D3 (stage, day and mode chosen through the dialog; the round is stored as awaiting and the application's status is left alone) — **partial**: whether the round also appears in the other list views is not checked here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
+    → **Automated coverage (2026-10-15): D2–D3 (stage, day and mode chosen through the dialog; the round is stored as awaiting and the application's status is left alone) — **partial**: whether the round also appears in the other list views is not checked here. The rest was driven through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 64. [ ] Select a **follow-up** row and press **Delete the selected record**. It must explain that a follow-up
     day is cleared on the Follow-ups tab rather than deleted here, and nothing may change.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; clearing the plan was executed at the storage layer.**
@@ -350,26 +360,32 @@ is a plan the person wrote and nothing contacts an employer.
     reading `start - present`, that the summary line under the forms counts it, and that the status line
     names what was saved.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the current role was stored and read back.**
+    → **Automated coverage (2026-10-15): G4 (the role typed into the form, **This is my current role** pressed through the checkbox's own widget, stored as current with no end date, and the status line naming what was saved) and G8 (the row the list shows stops marking it current once the flag is unticked) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`. What was not checked here: whether the row's own text reads `start - present`, and whether the summary line counts the role as a person reads it.**
 69. [ ] Add an ended role with an end date before its start date. It must be refused with a dialog naming
     both dates, the list must not change, and the employment count must not move. Then add a role that has
     ended but whose end date you do not know: it must be accepted, list as `end date not recorded`, and the
     summary line must say that no duration is counted for it.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the refusal and the ended role's period were verified directly.**
+    → **Automated coverage (2026-10-15): G2 (an end date before its start is refused, the dialog names both dates, and the database does not move) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`. The ended-role-with-no-known-end-date half was verified directly at the storage layer, not in this run.**
 70. [ ] Add a role with a start date written as `1 April 2023`. It must be refused with a message naming the
     `YYYY-MM-DD` shape, and nothing may be written.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the form's date shape was checked directly (accepts YYYY-MM-DD, rejects '1 April 2023').**
+    → **Automated coverage (2026-10-15): G3 (`1 April 2023` is refused naming the `YYYY-MM-DD` shape and nothing is stored) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`.**
 71. [ ] Select the role you added, change its job title, press **Save changes to the selected role**, and
     confirm the list shows the new title. Then press **Delete the selected role**, answering **No** first
     (nothing may change) and then **Yes** (only that role may disappear, and the status line must say what
     was deleted).
     → **BLOCKED — no display and no Tkinter in the acceptance environment; editing and deleting a role were executed at the storage layer.**
+    → **Automated coverage (2026-10-15): G7 (the role is loaded into a form emptied first, so the values read back can only have come from the record, its title is changed and saved over it, and the record count does not move) and G8 (the current-role flag is unticked and an end date saved) drove the edit half of this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`. **partial**: the delete button and both answers to its confirmation are not driven by the acceptance run.**
 72. [ ] Add an education record ticking **Still studying** with no dates, and confirm it lists as
     `start not recorded - ongoing`. Then add one with a completion date and no start date, and confirm it
     lists `start not recorded - <date>` after the ongoing one.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the ongoing record's text and its place in the list were verified directly.**
+    → **Automated coverage (2026-10-15): G5 (a qualification with **Still studying** ticked and no dates is stored as ongoing with both dates unset and is listed as ongoing) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`. **partial**: the record with a completion date and no start date, and its place after the ongoing one, were verified directly rather than in this run.**
 73. [ ] Add an education record with a completion date while **Still studying** is ticked. It must be
     refused, and the list must not change.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the refusal was verified directly.**
+    → **Automated coverage (2026-10-15): G6 (a completion date with **Still studying** still ticked is refused, the window explains the contradiction, and nothing is stored) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 46 checks per leg, run `38747830528` at `e939260`.**
 74. [ ] Without the window open, run `python -m career_agent --history`. It must print the same records in
     the same order, state the months covered without calling them years of experience, and say the report
     is read-only.
@@ -727,11 +743,14 @@ that the workflows report BLOCKED with no display and that the stand-in developm
 both passed. The full record, including the defect below and the per-leg annotations, is section 14 of
 `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
 
-**Automated coverage of numbered steps.** 14 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10, 11,
-13, 32, 33, 34, 54, 78** are covered for the functional claim the step states, and **12 and 63 are covered in
-part** — step 12's pasted-guidance-text refusal and in-place evidence rewrite are not driven, and step 63's
-appearance in the other list views is not checked. Step 78 already passed by file inspection; its second half
-(the plan for an already-populated database, and the repeat import) is now checked automatically as well.
+**Automated coverage of numbered steps.** 20 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10, 11,
+13, 32, 33, 34, 54, 68, 69, 70, 73, 78** are covered for the functional claim the step states, and **12, 63, 71
+and 72 are covered in part** — step 12's pasted-guidance-text refusal and in-place evidence
+rewrite are not driven, step 63's appearance in the other list views is not checked, step 71's delete button and
+both answers to its confirmation are not driven, and step 72's record with a completion date and no start date,
+and its place after the ongoing one, were verified at the storage layer rather than in this run. Step 78 already
+passed by file inspection; its second half (the plan for an already-populated database, and the repeat import)
+is now checked automatically as well.
 
 **A defect that only a real display could show (D14).** The first display-backed run of these workflows
 (38734920175 at `115ad2a`) passed 35 of 36 checks; the failure was F4 reporting a cleanup that had worked,

@@ -821,18 +821,21 @@ The workflows themselves are driven the same way, in more depth:
 python scripts/desktop_acceptance.py
 ```
 
-Six workflows run against the real window and a disposable synthetic database: a profile (with a role and a
+Seven workflows run against the real window and a disposable synthetic database: a profile (with a role and a
 qualification) typed, saved, closed and read back; a listing whose source URL and blank apply URL stay separate
 fields and whose blank stays blank; a listing with no availability evidence evaluating to UNKNOWN and refusing
 to be shortlisted, then reaching PASS and being shortlisted once the evidence and requirements are stated; an
 application moved through its permitted statuses with a confirmation refused until the person asserts it, and a
 recorded interview round never counted as an application sent or as an outcome; an export that agrees with the
 database and says the file may hold personal data, imported into a second database, plus refusals (a malformed
-file, a damaged record, an unprotected target, a declined plan, a repeat import) that each write nothing; and
-cleanup that releases every window and connection, deletes its own folder and leaves the person's database
-byte-identical, including after a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports
-38 checks, and compares that number against the checks its own source declares so a check that stops running
-fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
+file, a damaged record, an unprotected target, a declined plan, a repeat import) that each write nothing; the
+work history and study forms, where a current role is added, an impossible period and a date written in another
+shape are refused with nothing stored, an ongoing qualification is added, a contradictory one is refused, a
+role's stored values are loaded into an emptied form and its title saved back over the record, and the
+current-role flag is taken off again with an end date saved; and cleanup that releases every window and
+connection, deletes its own folder and leaves the person's database byte-identical, including after a forced
+failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 46 checks, and compares that number
+against the checks its own source declares so a check that stops running fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
 the confirmation - and every one of them is recorded and reported. On a machine with no display,
 `--stand-in-tk` runs the same workflows against the test suite's stand-in widget module for development: it
 prints DEVELOPMENT RUN, never prints a pass or a failure, and exits 2, and CI has a step that requires exactly

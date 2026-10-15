@@ -343,12 +343,12 @@ Runs 38713190679 (`f38ac49`), 38716978550 (`76d0a3c`) and 38719357147 (`e803286`
 * Not that a BLOCKED line means a missing capability. It did not on 2026-10-15 (section 9).
 
 
-## 14. The six workflows, run through the real window on three platforms
+## 14. The seven workflows, run through the real window on three platforms
 
 **What was added.** `scripts/desktop_acceptance.py` drives the real `CareerAgentApp` through its own widgets
 and commands on a disposable synthetic database: it types into the real entries and choosers, presses the real
 buttons with Tk's `invoke`, answers the dialogs a person would answer (recording every one), and then checks the
-stored records and the window's own status line. Six workflows, 38 checks:
+stored records and the window's own status line. Seven workflows, 46 checks:
 
 | Workflow | The claim it checks | Checks |
 | --- | --- | --- |
@@ -357,35 +357,61 @@ stored records and the window's own status line. Six workflows, 38 checks:
 | C — eligibility safety | no availability evidence means UNKNOWN and a refused shortlist; with the requirements stated explicitly the same application reaches PASS and may be shortlisted | C1–C6 |
 | D — tracker and analytics | the status dialog offers exactly the statuses the domain permits, a confirmation is refused until the person asserts it, and a recorded interview round is never counted as an application sent or as an outcome | D1–D8 |
 | E — export, import and refusal | the export agrees with the database and warns that the file may hold personal data; a malformed file, a damaged record, an unprotected target and a declined plan all write nothing; a repeat import adds nothing | E1–E9 |
+| G — work history and study | a current role added through the form, an impossible period and a date in another shape refused with nothing stored, an ongoing qualification added and a contradictory one refused, a role's stored values loaded into an emptied form and its title saved back over the record, and the current-role flag taken off again with an end date saved | G1–G8 |
 | F — cleanup and lifecycle | every window and connection released, the disposable folder gone, the person's own database bit-identical, including after a forced failure | F1–F4 |
 
 The exit codes are the project's own: `0` for `RESULT: PASS`, `1` for `RESULT: FAIL`, `2` for BLOCKED — no
 `tkinter`, or no display, is never a pass. The run also compares the number of checks it performed against the
 number its own source declares, so a check that stops running fails the run instead of shrinking it.
 
-**Where it runs.** The display-backed Linux job runs it under Xvfb and requires `RESULT: PASS`, all six workflow
-headers and no failure line; a step with `DISPLAY` unset requires BLOCKED; a third step requires that the
+**Where it runs.** The display-backed Linux job runs it under Xvfb and requires `RESULT: PASS`, every workflow
+header the script declares and no failure line; a step with `DISPLAY` unset requires BLOCKED; a third step requires that the
 stand-in development run (`--stand-in-tk`, which drives the test suite's stand-in widget module) reports a
 DEVELOPMENT RUN, prints no pass or failure line and exits 2, so a stand-in result can never be CI evidence. The
 Windows and macOS legs run the same workflow script and tolerate only BLOCKED (a runner with no display
 session), and the same run of the suite on those legs re-runs it in a child interpreter.
 
-**The evidence: run 38739493727 at `a530029`, all 12 jobs successful, 38/38 checks on each leg below.**
+**The evidence: run 38747830528 at `e939260`, all 12 jobs successful, 46/46 checks on every leg below.**
+
+Every row was read from that run's own annotations, figures and all, so no row is carried over from an
+earlier run.
 
 | Leg | Interpreter and platform | Tk and screen | Acceptance run | Suite |
 | --- | --- | --- | --- | --- |
-| Desktop smoke (Linux, display-backed) | CPython 3.12 (system), ubuntu-latest | Tk 8.6 from `/usr/lib/python3.12/tkinter`; `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` | `RESULT: PASS — 38 checks passed` | — |
-| Cross-platform (windows-latest, 3.13) | 3.13.16, `Windows-2025Server-10.0.26100-SP0` | Tk 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (37 skipped) |
-| Cross-platform (windows-latest, 3.10) | 3.10.11, `Windows-10-10.0.26100-SP0` | Tk 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (44 skipped) |
-| Cross-platform (macos-latest, 3.13) | 3.13.15, `macOS-26.6.2-arm64-arm-64bit-Mach-O` | Tk 8.6; `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (13 skipped) |
-| Cross-platform (macos-latest, 3.10) | 3.10.11, `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6; same screen string | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (20 skipped) |
+| Desktop smoke (Linux, display-backed) | CPython 3.12 (system), ubuntu-latest | Tk 8.6, from `/usr/lib/python3.12/tkinter/__init__.py`; `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` | `RESULT: PASS — 46 checks passed` | — |
+| Cross-platform (windows-latest, 3.13) | 3.13.15, `C:\hostedtoolcache\windows\Python\3.13.15\x64\python.exe`, `Windows-2025Server-10.0.26100-SP0` | Tk 8.6 Tcl 8.6, from `…\Lib\tkinter\__init__.py`; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 46 checks passed` | 1642 tests, OK (37 skipped); 78 tests, OK |
+| Cross-platform (windows-latest, 3.10) | 3.10.11, `C:\hostedtoolcache\windows\Python\3.10.11\x64\python.exe`, `Windows-10-10.0.26100-SP0` | Tk 8.6 Tcl 8.6, from `…\lib\tkinter\__init__.py`; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 46 checks passed` | 1642 tests, OK (44 skipped); 78 tests, OK |
+| Cross-platform (macos-latest, 3.13) | 3.13.16, `/Library/Frameworks/Python.framework/Versions/3.13/bin/python`, `macOS-26.6.2-arm64-arm-64bit-Mach-O` | Tk 8.6 Tcl 8.6, from `…/3.13/lib/python3.13/tkinter/__init__.py`; `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` | `RESULT: PASS — 46 checks passed` | 1642 tests, OK (13 skipped); 78 tests, OK |
+| Cross-platform (macos-latest, 3.10) | 3.10.11, `/Library/Frameworks/Python.framework/Versions/3.10/bin/python`, `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6 Tcl 8.6, from `…/3.10/lib/python3.10/tkinter/__init__.py`; same screen string | `RESULT: PASS — 46 checks passed` | 1642 tests, OK (20 skipped); 78 tests, OK |
 
-The same workflows also ran green on run 38737533708 at `dbaa082` (37 checks) and run 38735309770 at `dfea62d`
-(36 checks); each number is what the script declared at that commit, and the count is checked against its own
-source, not against a number kept in CI. The Windows annotation prints the em dash as `�` — the runner's
+The same workflows also ran green on run 38739493727 at `a530029` (38 checks), run 38737533708 at `dbaa082`
+(37 checks) and run 38735309770 at `dfea62d` (36 checks); each number is what the script declared at that
+commit, and the count is checked against its own source, not against a number kept in CI. The Windows annotation prints the em dash as `�` — the runner's
 encoding, as recorded in section 2.1, not a different result.
 
-**A defect that only real Tk could show (D14).** The first display-backed run of these workflows (38734920175 at
+**Two more that only real Tk could show (D15, D16).** Run 38741309350 at `a7349e8` failed G7 on all five legs
+with `expected exactly one the current-role checkbox, found 0` — a lookup that had matched earlier in the same
+window, and a failure that said what was missing but not what was there instead. `linked_to` now compares a
+widget's binding against both spellings of the variable's name (`str(variable)` and `variable._name`) and reads
+a value Tk hands back as its own object through `str()`, and a failed lookup now names the variable it wanted
+and lists what every widget of that class is actually bound to (`describe_bindings`), which is what this
+write-up would have needed on the first failure. The same commit added G8, which then failed on run 38745335163
+at `8f6874d` with `the role was stored as current=True, end=None`: the save in G7 rebuilt the history list, and a
+rebuilt list deletes and re-inserts every row, which takes the selection away in a real window — so the step
+that pressed a button acting on the selected row, and the check that the form had been loaded, were reading a
+selection and a form that were no longer what they seemed. Both G steps now empty the form first, choose the
+row again, and check that the window did not have to ask for a selection that was made; the stand-in tree the
+unit tests use was corrected too, because it had kept a deleted row selected, which is how its own scheduler
+test came to rely on a selection a real refresh removes. Fixed in `e939260`.
+
+**A timing dependence in a unit test, not in the product.** The windows-3.13 leg of run 38741309350 also failed
+`test_updating_an_older_database_keeps_a_verified_copy_of_it` with `['kept', 'also-kept'] != ['also-kept', 'kept']`.
+`list_jobs` orders by `first_seen_at` and then by id, and `first_seen_at` is written at whole-second resolution,
+so two saves either side of a second boundary come back in the order they were saved: the case was asserting the
+runner's speed. Reproduced off-CI (`['kept', 'also-kept']` with the saves a second apart) and fixed in `c0314c2`
+by saving both rows through the store's own `observed_at` parameter, with the assertion unchanged.
+
+**An earlier defect that only real Tk could show (D14).** The first display-backed run of these workflows (38734920175 at
 `115ad2a`) reported 35 of 36 checks passing, and the failure was F4:
 `_tkinter.TclError: can't invoke "winfo" command: application has been destroyed`. After the run's root was
 destroyed, `winfo_exists` did not answer "gone" — it raised, and the check read that exception as the window

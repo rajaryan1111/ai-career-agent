@@ -360,14 +360,18 @@ summarised here with the evidence this audit produced:
    A scripted smoke entry point now also builds and drives the real window where a display exists
    (`scripts/desktop_smoke_test.py`, run under Xvfb for Linux in CI); that is window construction and
    programmatic interaction with a real Tk, not a person using it, so no checklist step moved to PASS.
-   **Narrowed further (2026-10-15):** a second entry point (`scripts/desktop_acceptance.py`) drives six
+   **Narrowed further (2026-10-15):** a second entry point (`scripts/desktop_acceptance.py`) drives seven
    end-to-end workflows through the real window - profile persistence, the two job URLs, eligibility safety,
-   tracker transitions and analytics, export/import and its refusals, and cleanup - and reports 38 checks on
-   five display-backed legs (Linux/Xvfb, Windows 2025, macOS 26; CPython 3.10-3.13) in run 38739493727 at
-   `a530029`. Fourteen checklist steps now record that their functional claim is covered this way, and two more
-   in part; no step's verdict changed and no box was ticked, because the remaining work is the part a machine
-   cannot judge: layout and clipping, dialog wording, keyboard-only navigation and focus order, screen-reader
-   behaviour, mouse-driven flows and native feel.
+   tracker transitions and analytics, export/import and its refusals, the work history and study forms and
+   cleanup - and reports 46 checks on five display-backed legs (Linux/Xvfb, Windows 2025, macOS 26; CPython
+   3.10-3.13) in run 38747830528 at `e939260`. Twenty checklist steps now record that their functional claim is
+   covered this way, and four of them in part; no step's verdict changed and no box was ticked, because the
+   remaining work is the part a machine cannot judge: layout and clipping, dialog wording, keyboard-only
+   navigation and focus order, screen-reader behaviour, mouse-driven flows and native feel. Three defects that
+   only a real window could show came out of these workflows (a cleanup check reading Tk's refusal as survival,
+   a widget lookup that could not read the name Tk answers with, and a step acting on a selection a list
+   refresh had taken away); each was fixed with regression tests, and the third exposed that the stand-in tree
+   the unit tests use kept a deleted row selected.
 5. **Partly closed (2026-10-15).** Windows and macOS legs run the suite, the installed-command rehearsal and
    a minimal Tk lifecycle, and a display-backed Linux leg runs the scripted desktop smoke test. The matrix is
    green as of run 38713190679 (`f38ac49`, 12 jobs), and the three states the Windows legs passed through on

@@ -357,3 +357,41 @@ Specifically:
 
 A limited release review is **not** justified yet: two thirds of the checklist cannot be executed here, and
 the four defects above were each found within the first execution of the steps that could be.
+
+---
+
+## 8. Later the same day: the window steps' functional claims, driven automatically
+
+Nothing in sections 1-7 changed. What changed is that the *functional* claim behind a number of the window
+steps is now executed on machines that do have a display, by the second entry point this project had to be
+added for the purpose (`scripts/desktop_acceptance.py`, section 14 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`).
+
+- **Seven workflows, 46 checks, on five display-backed CI legs** — Linux under Xvfb, Windows 2025 (3.10 and
+  3.13) and macOS 26 (3.10 and 3.13) — every leg `RESULT: PASS — 46 checks passed`, in run `38747830528` at
+  `e939260`, all 12 jobs successful. The whole suite is green on the same legs: 1642 tests,
+  `OK` (37, 44, 13 and 20 skipped by interpreter and platform).
+- **What the workflows drove**: a profile typed, saved, closed and read back; the two job URL fields kept
+  apart with the blank one still blank; a listing with no availability evidence staying UNKNOWN and refusing
+  shortlisting, then reaching PASS once the evidence and requirements were stated; an application moved
+  through its permitted statuses with a confirmation refused until the person asserted it and an interview
+  round never counted as an outcome; an export that agrees with the database and warns that the file may hold
+  personal data, imported into a second database, with three refusals writing nothing; the work history and
+  study forms, including their refusals and a role's stored values loaded back into an emptied form for
+  editing; and cleanup that releases every window and connection, deletes its own folder and leaves the
+  person's own database byte-identical, including after a forced failure.
+- **What this is still not.** No human has opened the window. Layout and clipping at normal and smaller
+  sizes, dialog wording, keyboard-only navigation and focus order, screen-reader behaviour, mouse-driven
+  flows and native feel are exactly as unverified as they were in section 7 — a machine driving widgets
+  through Tk's own dispatch cannot judge any of them. The checklist verdicts are unchanged: **22 PASS,
+  76 BLOCKED, 0 FAIL**, with no box ticked and 20 steps now carrying an "Automated coverage" line (four of
+  them in part).
+- **Three defects only a real display could show came out of this**, each fixed with regression tests:
+  D14 (a cleanup check read Tk's refusal to answer for a destroyed interpreter as the window having
+  survived, fixed in `dfea62d`), D15 (a widget lookup that could not read the name Tk answers a binding
+  with, and a failure that did not say what the widget was bound to instead, fixed in `8f6874d`), and D16
+  (two steps acting on a selection that a list refresh had taken away, and a stand-in tree that kept a
+  deleted row selected so the same mistake passed headlessly, fixed in `e939260`). A fourth finding was in a
+  unit test rather than the product: a pre-upgrade case asserted a listing order that depended on two saves
+  landing in the same second, fixed in `c0314c2` by pinning the observation time through the store's own
+  parameter.
