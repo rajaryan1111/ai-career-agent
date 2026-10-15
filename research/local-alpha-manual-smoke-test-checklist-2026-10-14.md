@@ -596,8 +596,12 @@ macOS legs' window checks, which publish `PASS: Tk 8.6 built a root, a frame and
 `RESULT: PASS — 14 checks passed. The window was built on a real display, its tabs and lists were read, its
 read-only refresh actions were invoked, and its disposable database was released.` They were first read here as
 reporting BLOCKED for the window; that was a defect in the widget-lifecycle check (D12), not a limit of those
-runners. **No numbered step moved.** A scripted window on five runners is not a person using it, and this entry
-still closes none of the 76 BLOCKED steps.
+runners. Each leg's annotation also carries what that runner says about itself — the interpreter, the platform
+string, the Tk version and the screen Tk answered with, e.g. `display: 1024x768 pixels from CG0.0 Apple AppKit
+2685.7 Mac OS X 1a0602` on macOS (Apple Silicon), `display: 1024x768 pixels from Windows 10.0 26100 Win64` on
+Windows and `display: 1280x1024 pixels from X11R0 The X.Org Foundation 12101011` under Xvfb on Linux; the
+values are tabulated in the evidence report, section 2.1. **No numbered step moved.** A scripted window on five
+runners is not a person using it, and this entry still closes none of the 76 BLOCKED steps.
 
 **Defects found by those runs, and fixed (each with a regression test that fails on the old behaviour).**
 

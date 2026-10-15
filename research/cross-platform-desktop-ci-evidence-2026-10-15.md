@@ -62,6 +62,27 @@ and a hard failure wearing a missing capability's words. Section 9 has the two d
 platform table in section 7 now reads what the runs actually said. The manual checklist steps stay BLOCKED:
 none of this is a person using the window.
 
+### 2.1 What each leg says about itself (run 38721856789 at `e70ee1e`, read from the API)
+
+The summary notice now carries the runner's own account of itself, so the platform, the interpreter, the Tk
+and the display behind a verdict are checkable without the log:
+
+| Leg | `platform:` | `tkinter:` | `display:` — Tk's own reply | suite | window |
+|---|---|---|---|---|---|
+| `windows-latest`, 3.10 | `Windows-10-10.0.26100-SP0` | Tk 8.6 / Tcl 8.6 | `1024x768 pixels from Windows 10.0 26100 Win64` | `Ran 1604 tests in 931.783s`, `OK (skipped=44)` | `PASS: Tk 8.6 built a root, a frame and a label and updated them` then `RESULT: PASS — 14 checks passed` |
+| `macos-latest`, 3.10 | `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6 / Tcl 8.6 | `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` | `Ran 1604 tests in 47.541s`, `OK (skipped=20)` | the same |
+| `ubuntu-latest`, system 3.12, under Xvfb | — (job `desktop-smoke-linux`) | `Tk 8.6, from /usr/lib/python3.12/tkinter/__init__.py` | `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` | (not this job's work) | the same |
+| `pdf-extra`, 3.13 | — | — | — | without `pypdf`: `Ran 78 tests … OK (skipped=12)`; with it: `OK`, no skips | — |
+
+The `display:` line is Tk answering (`winfo_screenwidth`, `winfo_screenheight`, `winfo_server`), not a
+variable this project sets — that is what makes "the window was built on a real display" a measurement rather
+than a claim. The Windows notices print `RESULT: PASS �` where the em dash belongs: those legs' Python
+writes the notes in the ANSI code page (D11), and the byte is not valid UTF-8 when it is read back. The macOS
+legs are Apple Silicon (`arm64`), so *scripted* window behaviour on Apple Silicon is measured now; what stays
+unmeasured there is a person using the window, and any packaged build. The `3.13` counterpart of each leg
+reports the same verdicts, with `OK (skipped=37)` on Windows and `OK (skipped=13)` on macOS — the difference
+between the legs is which platform-specific tests skip, and a skip always carries its reason.
+
 Earlier runs, kept because the fixes below were derived from them:
 
 | Run | Commit | Result | What it showed |
