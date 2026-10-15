@@ -31,6 +31,14 @@ says so rather than implying otherwise.
 database backup) into a database that does not already have those tasks, and leaves any task that
 exists exactly as the person configured it.
 
+``--preview-contact-csv`` reads one HR contact CSV that the person names and reports on it - how many
+rows, how many distinct email keys, how many rows share a key, and which rows need a person's eye - and
+stores nothing at all. It opens no database, writes no file, reaches no network, and prints no email
+address, name or company label from the file: the report is counts, flag names and line numbers, so it
+can be read or pasted anywhere without copying somebody's contact details. This build has no review
+screen and no import for these files yet; the command says so rather than implying a workflow that is
+not there.
+
 ``--integration-status``, ``--preview-calendar-export``, ``--draft-follow-up`` and ``--record-follow-up``
 are the email and calendar side of the same promise: a draft is not a send, a preview is not an action, and
 no integration is enabled in this build. ``--draft-follow-up`` writes a message from an application's own
@@ -63,7 +71,7 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, erasure, importer, preparation
+from . import analytics, contacts, erasure, importer, preparation
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -198,6 +206,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Show what --calendar-to PATH would write, without writing it (read-only).",
     )
     actions.add_argument(
+        "--preview-contact-csv", metavar="PATH",
+        help="Read an HR contact CSV and report counts and rows to review; stores nothing and prints no "
+             "contact value (read-only, no database).",
+    )
+    actions.add_argument(
         "--draft-follow-up", metavar="LISTING_ID",
         help="Write a follow-up email draft for LISTING_ID and print it; nothing is sent.",
     )
@@ -224,6 +237,19 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--save-draft", metavar="PATH", default=None,
         help="Also write the --draft-follow-up to a local file at PATH (refused if the file exists).",
+    )
+    parser.add_argument(
+        "--contact-email-column", metavar="NAME",
+        help="Read the email address from this column (with --preview-contact-csv; for a file with more "
+             "than one column that could hold it).",
+    )
+    parser.add_argument(
+        "--contact-name-column", metavar="NAME",
+        help="Read the person's name from this column (with --preview-contact-csv).",
+    )
+    parser.add_argument(
+        "--contact-company-column", metavar="NAME",
+        help="Read the company label from this column (with --preview-contact-csv).",
     )
     parser.add_argument(
         "--mock-ledger", metavar="PATH", default=None,
@@ -1101,12 +1127,53 @@ def run_add_study(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ------------------------------------------------------------------- HR contact CSV (offline)
+
+def _contact_columns(args: argparse.Namespace) -> dict[str, str]:
+    """The columns the person pinned by name. Naming one is how an ambiguous file is read at all."""
+    pinned = {}
+    for attribute, field in (("contact_email_column", "email"), ("contact_name_column", "name"),
+                             ("contact_company_column", "company")):
+        named = getattr(args, attribute, None)
+        if named:
+            pinned[field] = named
+    return pinned
+
+
+def run_preview_contact_csv(args: argparse.Namespace) -> int:
+    """Read a contact CSV and report on it, storing nothing and printing no value from the file.
+
+    Database-free on purpose: the file is the person's own export, and nothing about it belongs in this
+    application's database yet. No cell value reaches standard output - the report is counts, flag names
+    and line numbers - so it can be read, pasted into a report or attached to CI output without copying a
+    person's contact details anywhere. Syntax flags are heuristics about text, and the report says so
+    itself; nothing here claims a mailbox exists or that anybody agreed to be contacted.
+    """
+    columns = _contact_columns(args) or None
+    try:
+        preview = contacts.read_contact_csv(Path(args.preview_contact_csv).expanduser(), columns=columns)
+    except contacts.ContactImportError as exc:
+        # The same rule as every other refusal in this program (D31): a command that refuses has no
+        # report to begin, so nothing reaches standard output and the one sentence goes to standard error.
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"AI Career Agent {__version__} · HR contact CSV preview (offline, read-only, no database)")
+    for line in preview.describe():
+        print(line)
+    print("This command read one file you named. It did not import, store, match, draft, send or submit "
+          "anything, and it opened no database.")
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------------------- email and calendar
 
 #: Options that only mean something together with one of the integration commands. Using one on its own is
 #: refused rather than ignored: a dropped ``--recipient`` would look exactly like a message that went
 #: nowhere, and a dropped ``--at`` would silently turn an appointment into an all-day entry.
 _DEPENDENT_OPTIONS: tuple[tuple[str, str, str], ...] = (
+    ("contact_email_column", "--contact-email-column", "--preview-contact-csv"),
+    ("contact_name_column", "--contact-name-column", "--preview-contact-csv"),
+    ("contact_company_column", "--contact-company-column", "--preview-contact-csv"),
     ("recipient", "--recipient", "--draft-follow-up"),
     ("save_draft", "--save-draft", "--draft-follow-up"),
     ("at", "--at", "--record-follow-up"),
@@ -1591,6 +1658,8 @@ def main(argv: list[str] | None = None) -> int:
         if orphan is not None:
             print(f"REFUSED: {orphan} Nothing was written.", file=sys.stderr)
             return EXIT_REFUSED
+        if args.preview_contact_csv:
+            return run_preview_contact_csv(args)
         if args.follow_ups:
             return run_follow_ups(args)
         if args.next_actions:

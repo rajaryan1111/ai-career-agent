@@ -3033,3 +3033,33 @@ never-closed SQLite connections - failed on all four macOS and Windows legs whil
 leg and locally, and `gh run download` of the screenshot artifact fails with `EOF`, so the images cannot be
 fetched through that route. Both are recorded in section 22 rather than left as footnotes.
 
+**2026-10-16, this session — Phase 0 of the HR contact plan: an offline CSV preview that stores nothing.**
+`planning/arena-task-phase-0-hr-contact-csv-import-2026-10-16.md` asked for an offline, local-first contact
+CSV read/preview/cancel flow and allowed, in the same breath, shipping only a tested parser and preview
+contract if persistence or UI integration could not be done safely in one increment. That is what was
+shipped, and the difference is visible in the code rather than in a note: there is no write path at all.
+`career_agent/contacts.py` (new) reads one file the person names with the standard library's `csv`,
+handles a UTF-8 BOM, names a UTF-16 export as UTF-16, validates the header explicitly (blank names and two
+names differing only in case are refused; the names are printed so the person can see what the file has),
+matches a documented set of column spellings and reports every header it did not use, refuses two columns
+that could be the email address instead of choosing, keeps every source string exactly as written while
+computing the comparison key from the email alone (trim + case-fold), groups rows by that key, keeps
+conflicting company labels in first-seen order without ever combining them, and flags `email-missing`,
+`email-syntax`, `name-missing`, `duplicate-key` and `company-conflict` per row. Limits are 20 MB and 50,000
+rows, refused rather than truncated. `--preview-contact-csv PATH` prints counts, flags and **line numbers**
+and no cell value at all, opens no database (proved by pointing `--database` at a text file and getting exit
+0), writes no file, and refuses with one sentence on stderr, exit 2 and an empty stdout - the D31 rule.
+`tests/test_contacts.py`: 48 synthetic tests (6 classes) covering BOM, header validation, encodings, empty
+and malformed files, the parser's own field limit, normalization, duplicate groups, company conflicts,
+missing names, the five flags, counts that add up, the privacy assertions (no fixture value in the report,
+in a refusal, or in a log; the root logger must record nothing at all), and file bytes/mtime/folder listing
+unchanged after both a read and a refusal. Full suite 1775 tests, OK (skipped=13); compileall clean.
+Written up in `research/hr-contact-csv-preview-2026-10-16.md`, registered in `research/README.md`, with a
+`phases.md` row (1C, partially complete) and a `design.md` operational-state bullet; the README gained a
+"Preview an HR contact list CSV" section that states what is checked, what a syntax flag is not, and what is
+deliberately absent. Not claimed: the private exports' real headers have never been seen here, no real row
+was read, "re-import creates no duplicates" is untestable while nothing is stored, and no GUI or manual
+acceptance happened. Next smallest step: a store migration holding the key, the preserved strings, the
+provenance and a suppression state that survives re-import, then the review tab built on `_scrollable_body`
+with its steps in the desktop acceptance harness.
+

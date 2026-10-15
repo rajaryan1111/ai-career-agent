@@ -212,6 +212,11 @@ silently truncated:
   neither can reach the window as a raw error. The document is treated as untrusted input: this is text
   extraction, **not** a malware scanner, and no parsing is risk-free.
 - The file you selected is read in place; no copy of it is kept anywhere.
+- **A contact CSV can be previewed offline and nothing is stored.** `--preview-contact-csv PATH` reads one
+  HR contact CSV that you name and reports row/key/flag counts and the lines that need review, printing no
+  email address, name or company label and writing nothing anywhere (see
+  [Preview an HR contact list CSV](#preview-an-hr-contact-list-csv-offline-nothing-stored)). Import,
+  review screen, matching and outreach are **not implemented**; the command says so itself.
 
 **PDF support is an optional third-party library.** DOCX import uses the standard library alone. For PDF
 text extraction, install [pypdf](https://pypi.org/project/pypdf/) (BSD-3-Clause, no mandatory
@@ -224,6 +229,72 @@ python -m pip install pypdf
 Without it, everything else in the app — including DOCX import — works unchanged, and choosing a PDF
 produces a clear "PDF support is not installed" message instead of a crash. The library is imported only
 when a PDF is actually read.
+
+## Preview an HR contact list CSV (offline, nothing stored)
+
+```bash
+python -m career_agent --preview-contact-csv ~/Downloads/hr_contacts.csv
+```
+
+This reads **one** CSV file that you name and reports what is in it. It is the whole of what this build
+does with a contact list today: there is no import, no database table, no review screen and no matching.
+The report is a preview you can read, and nothing else happens.
+
+What it reports:
+
+- how many rows the file has, how many distinct **email keys** they make, and how many keys are shared by
+  more than one row;
+- how many rows carry a review note already written in the file;
+- **five flags**, each naming the line numbers it applies to and never the row's contents:
+  `email-missing` (the email cell is empty), `email-syntax` (the text does not have the shape of an
+  address), `name-missing` (a name column was matched and the cell is empty), `duplicate-key` (another row
+  in the file has the same email key), and `company-conflict` (rows sharing one email key carry different
+  company labels);
+- which columns it read and which it did not, so you can see exactly what was assumed.
+
+**What it will not do.** It prints no email address, no name and no company label - not in the report, not
+in a refusal, not in a log. It does not change, move or repair your file, does not create a database, does
+not contact anything, and does not store a copy of the file anywhere. That is why a preview can be
+cancelled freely: no step of it has written anything.
+
+**Which columns it needs.** The header row must name an email column. `Email`, `Email Address`,
+`Email Key`, `Name`, `Full Name`, `Company`, `Company Label`, `Employer`, `Source Row` and `Review Reason`
+are recognised spellings of the fields it uses; every other column is reported as *not used*. If two
+columns could be the email address it **refuses rather than choosing between them** and tells you which
+two it found - name the one to use on the command line:
+
+```bash
+python -m career_agent --preview-contact-csv ~/Downloads/hr_contacts.csv --contact-email-column "Email Key"
+```
+
+`--contact-name-column` and `--contact-company-column` pin those fields the same way.
+
+**What "the same contact" means.** Only the email is normalised, and only by trimming it and case-folding
+it (`  First.Contact@Example.INVALID  ` and `first.contact@example.invalid` are one key). Nothing else is
+normalised, no dot is removed, and every original string stays exactly as the file wrote it. Company
+labels that disagree inside one key are **kept as they are and flagged** - the preview never picks one,
+never combines them and never invents an employer.
+
+**What the flags are not.** `email-syntax` is a check on the shape of the text. It does not resolve the
+domain, does not know the provider's rules, and cannot say that a mailbox exists, is deliverable, or
+belongs to anybody who agreed to be contacted. Nothing here verifies a person's current employer, their
+consent, an opt-out, or whether a list may be used for outreach at all - those are questions a file cannot
+answer, and the report says so in its own words rather than leaving you to infer it.
+
+**Refusals are plain sentences.** An empty file, a file that is not UTF-8 (including a UTF-16 export, which
+is named as such), a missing or unnamed header column, two columns differing only in case, a record with
+more fields than the header, a cell past the parser's own field limit, and a file over the size or row
+limit each produce one sentence naming the file and the line or column involved, on standard error, with
+exit status `2` and **nothing at all on standard output**. The limits are 20 MB and 50,000 rows, and they
+are refused rather than truncated: a preview that quietly stopped early would report counts that are not
+your file's.
+
+**What is deliberately not here yet.** Import into the database, the review screen in the window,
+row-by-row selection, exporting rejected rows, suppression/do-not-contact records, matching contacts to
+listings, drafts, and anything that sends, submits or contacts anybody. The planning document
+(`planning/hr-contact-outreach-and-application-tracking-2026-10-16.md`) describes those phases, and the
+gate that governs the external ones (`SOURCE_QUALITY_GATE_PASSED`) is still closed: no discovery source is
+enabled and nothing in this build performs an external action.
 
 ## Back up and restore your data
 
