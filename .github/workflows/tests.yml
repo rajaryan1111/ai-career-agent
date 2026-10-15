@@ -14,11 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # ``3.10`` is the floor ``pyproject.toml`` declares, and ``3.13`` is the newest interpreter the suite
+      # ``3.10`` is the floor ``pyproject.toml`` declares, and ``3.14`` is the newest interpreter the suite
       # has been run on. The range is deliberately open-ended in the metadata but *closed* here: the tested
       # claim stops at the last leg, and a version nobody has run is not described anywhere as supported.
+      # 3.14 was added after the release-readiness audit listed "no CI leg for Python 3.14" as a gap; a
+      # version the metadata accepts but no leg runs is a claim with nothing behind it.
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
