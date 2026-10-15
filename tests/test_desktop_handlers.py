@@ -33,6 +33,7 @@ from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
 RESTORE_STAMP = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -746,7 +747,7 @@ _ORIGINAL_TKINTER = sys.modules.get("tkinter")
 sys.modules["tkinter"] = _tkinter
 
 from career_agent import desktop  # noqa: E402  (imported after the stub is installed)
-from career_agent.handlers import default_tasks  # noqa: E402  (after the stub, like the window)
+from career_agent.handlers import default_tasks, seed_default_tasks  # noqa: E402  (after the stub, like the window)
 
 #: The ids a fresh installation is seeded with, taken from the seeder rather than written out here, so a
 #: task added to the product does not require every listing assertion to be edited by hand.
@@ -5293,16 +5294,25 @@ class SchedulerTabTests(HandlerTestCase):
         app.task_runs_tree = Tree()
         return app
 
-    def disable(self, task_id: str) -> None:
-        """Pause one task, so a test about a single attempt is not overtaken by the other task.
+    def keep_only(self, task_id: str) -> None:
+        """Pause every default task except ``task_id``, so a claim can only land where the test wants it.
 
-        A claim takes the earliest due task, and an afternoon clock makes both seeded tasks due; a test
-        that wants one specific attempt therefore removes the other task from contention explicitly
-        rather than depending on which one the scheduler happens to pick.
+        A claim takes the earliest due task, and the three default tasks sit at 00:00 and 12:00, 23:30 and
+        09:00 on the same clock, so *which* of them is the earliest due one depends on the hour the test
+        runs at: seed before 23:30 and the backup slot is the earliest due occurrence; seed after it and
+        the backup rolls to the next evening while the 09:00 digest is already the earliest one left, so a
+        test that had only paused one competitor would claim the wrong task and fail - on the Windows legs
+        at 23:38 Asia/Kolkata and nowhere else. Removing every other task from contention is what makes the
+        assertion about a specific attempt hold at any hour, rather than depending on when CI happens to run.
         """
-        task = self.store.get_scheduled_task(task_id)
-        assert task is not None
-        self.store.save_scheduled_task(task.with_definition(enabled=False))
+        paused = []
+        for task in self.store.list_scheduled_tasks():
+            if task.task_id == task_id:
+                continue
+            self.store.save_scheduled_task(task.with_definition(enabled=False))
+            paused.append(task.task_id)
+        assert paused, "the test is about one task among several; there was nothing else to pause"
+        assert self.store.get_scheduled_task(task_id) is not None
 
     def test_the_tab_lists_the_tasks_and_says_no_worker_holds_the_lease(self):
         app = self.make_scheduler_app()
@@ -5337,7 +5347,7 @@ class SchedulerTabTests(HandlerTestCase):
     def test_a_finished_attempt_appears_with_its_outcome_and_how_long_it_took(self):
         app = self.make_scheduler_app()
         app._add_default_tasks()
-        self.disable("scheduled-discovery")
+        self.keep_only("daily-backup")
         task = self.store.get_scheduled_task("daily-backup")
         assert task is not None and task.next_run_at is not None
         claimed = self.store.claim_due_run(worker_id="w1", now=task.next_run_at)
@@ -5409,7 +5419,7 @@ class SchedulerTabTests(HandlerTestCase):
     def test_pausing_keeps_the_task_its_times_and_its_history(self):
         app = self.make_scheduler_app()
         app._add_default_tasks()
-        self.disable("scheduled-discovery")
+        self.keep_only("daily-backup")
         task = self.store.get_scheduled_task("daily-backup")
         assert task is not None and task.next_run_at is not None
         claimed = self.store.claim_due_run(worker_id="w1", now=task.next_run_at)
@@ -5437,7 +5447,40 @@ class SchedulerTabTests(HandlerTestCase):
                          "every task is still listed: pausing is not deleting")
         self.assertEqual(rows["daily-backup"][5], "paused")
         self.assertEqual(rows["scheduled-discovery"][5], "paused",
-                         "the other task was paused by this test to keep the claim unambiguous")
+                         "the other tasks were paused by this test to keep the claim unambiguous")
+
+    def test_the_claim_a_test_makes_is_the_task_it_asked_for_at_any_hour(self):
+        """The claim helper has to hold at the hour the failure was found as well as at the hour of writing.
+
+        Run 38781575276 failed on both Windows legs because they were the only legs still inside the suite
+        at 23:30 Asia/Kolkata: the 23:30 backup slot had just rolled to the next evening while the 09:00
+        digest slot was already due, so the earliest due task stopped being the one the test named (D18).
+        Seeding at a fixed 23:38 moment reproduces that window on any machine at any hour. The arrangement
+        is asserted first - if a scheduling change ever makes the digest and the backup line up differently,
+        this test says so instead of passing for the wrong reason - and then the claim is required to land
+        on the task the test named.
+        """
+        late_evening = datetime(2026, 10, 16, 23, 38, tzinfo=ZoneInfo("Asia/Kolkata"))
+        seed_default_tasks(self.store, now=late_evening)
+        app = self.make_scheduler_app()
+
+        backup = self.store.get_scheduled_task("daily-backup")
+        digest = self.store.get_scheduled_task("follow-up-digest")
+        assert backup is not None and backup.next_run_at is not None
+        assert digest is not None and digest.next_run_at is not None
+        self.assertLess(digest.next_run_at, backup.next_run_at,
+                        "another task is due before the one under test: that is the arrangement the "
+                        "failure needs, and its absence would make this test pass for the wrong reason")
+
+        self.keep_only("daily-backup")
+        claimed = self.store.claim_due_run(worker_id="w1", now=backup.next_run_at)
+
+        assert claimed is not None, "the task under test was due and is the only one left due"
+        self.assertEqual(claimed.task_id, "daily-backup")
+        app._refresh_scheduler()
+        values = {iid: row for iid, row in app.tasks_tree.inserted}
+        self.assertEqual(len(values), len(DEFAULT_TASK_IDS),
+                         "pausing the others is pausing, not deleting: every task is still listed")
 
     def test_resuming_a_paused_task_schedules_the_next_occurrence(self):
         app = self.make_scheduler_app()
