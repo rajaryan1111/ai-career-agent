@@ -3063,3 +3063,44 @@ acceptance happened. Next smallest step: a store migration holding the key, the 
 provenance and a suppression state that survives re-import, then the review tab built on `_scrollable_body`
 with its steps in the desktop acceptance harness.
 
+
+---
+
+## Product Vision Decision — Resume-First Autonomous Career Agent (2026-10-16)
+
+### Accepted product direction
+The user wants AI Career Agent to operate as a personal career operations system. The intended workflow is: upload a resume, complete one-time onboarding and global authorization, then let the software autonomously perform routine permitted career tasks and continuously report what happened. This is not merely a job recommender or resume builder.
+
+### Desired capabilities
+- Understand resume/profile data: skills, education, projects, experience, graduation year, links and missing information.
+- Discover relevant roles, including AI/ML Engineer, Applied AI Engineer, AI Engineer, Forward Deployed Engineer and internships, twice daily.
+- Evaluate fit, eligibility, source freshness and deadlines with explanations and evidence.
+- Tailor resumes, cover letters and screening responses without fabricating facts.
+- Apply autonomously without per-job approval when saved global policy allows it and the source workflow is supported and permitted.
+- Privately import the user's HR/company list; deduplicate and resolve conflicts; send personalized internship emails with the right resume from an explicitly authorized mailbox.
+- Track applications, email sends, bounces, actual replies, interviews, rejections, offers and follow-ups with timestamps and evidence.
+- Provide dashboard, run status, daily/weekly reports, notifications, pause/stop-all and revocable permissions.
+
+### Autonomy contract
+The user explicitly prefers no repeated permission prompts for routine applications. Implement one-time policy configuration followed by routine autonomy within configured limits. This does not authorize bypassing platform restrictions or required human attestations. Stop only the affected task when required facts are missing, contact records conflict, opt-out/suppression applies, a legal/sensitive answer cannot be verified, identity verification/CAPTCHA/OTP is required, the source disallows automation, or an external outcome is uncertain.
+
+### Truthfulness and privacy invariants
+- A draft is not a sent email; a click is not a confirmed application.
+- Mark external actions complete only with evidence; use an unknown state and reconcile uncertain outcomes rather than blindly retrying.
+- Never invent resume facts, eligibility, legal attestations or screening answers.
+- Keep HR contact data private; never place it in public repository files, test fixtures, screenshots, logs or telemetry.
+- No real external application/email side effects in tests.
+- Use permitted, supported source integrations only; no anti-bot evasion or CAPTCHA/OTP bypass.
+- Keep discovery, email and submission gates separate and fail-closed until each source/action passes its own feasibility, permission and test gate.
+- Preserve existing store/migration, backup/restore and suppression history; inspect and reuse existing code before creating parallel abstractions.
+
+### Current project boundary
+This records product intent only. It does not imply live discovery, account connection, email sending or job submission is enabled. The existing source-quality gate remains disabled until implementation evidence supports changing it. Keep main and PR #2 untouched; work belongs on arena/351e052d-ai-career-agent unless the user explicitly changes that instruction.
+
+### Documentation map
+- prd.md: user outcome, requirements and trust contract.
+- task.md: implementation backlog and verifiable acceptance tasks.
+- architecture.md: components, state invariants and side-effect boundaries.
+- design.md: onboarding, dashboard, status language, controls and failure UX.
+- phases.md: staged delivery sequence and release gates.
+- memory.md: durable product decisions, constraints and current-state caveats.
