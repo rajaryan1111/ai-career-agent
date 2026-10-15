@@ -35,7 +35,21 @@ The decision is reversible. Validate Tk availability, accessibility, native look
 - Browser automation: consider only for workflows that are explicitly authorized and technically appropriate.
 - Company research: official pages and permitted public sources, with retrieval timestamps and citations.
 
-## 5. Job-source adapter contract (conceptual)
+## 5. Job-source adapter contract
+
+Implemented in `career_agent/adapters.py` (reported by `python -m career_agent --sources`; no adapter of
+any live source exists). A `SourceAdapter` fetches and reports; the registry owns the gate, the framework
+owns validation, and nothing else may call a source. `SourceCapabilities` declares what an adapter can do
+and refuses `submission=True` by construction. Each run carries a `RequestBudget` (a hard request cap plus
+a minimum interval, both enforced before a request is issued) and an `AdapterRequest` whose page size is
+required and capped, so an unbounded request cannot be expressed. Failures are translated into the run
+taxonomy, only transient outcomes are retried, and every wait is injected so the backoff schedule is
+tested rather than slept. Normalisation keeps provenance and reports every rejected record with its index
+and reason; it deliberately leaves eligibility scope, disciplines, experience ranges and compensation
+unset until a reviewed parser exists for a source. Health keeps success, empty, partial, failed and
+disabled apart.
+
+### 5a. Original contract notes
 
 Each source adapter should report source identity and documented access method; permission/terms review date and evidence; discovery capability separately from submission capability; listing URL and source identifier; retrieved/missing fields; retrieval timestamp/freshness; rate limits/restrictions/error categories; and support status (supported, experimental, unavailable, awaiting verification).
 

@@ -51,6 +51,14 @@ from .handlers import default_registry, describe_default_handlers, seed_default_
 from .store import SCHEMA_VERSION, CareerStore
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
+# Imported as a namespace: ``default_registry`` here is the *handler* registry the worker runs, and the
+# adapter framework has a function of the same name. Aliasing keeps the two from being confused at the
+# call site - a worker that resolved the wrong registry would silently register no handlers.
+from . import adapters as adapter_framework
+from .sources import (
+    SOURCE_DECISIONS, SOURCE_QUALITY_GATE_PASSED, discovery_gate, enabled_discovery_sources,
+    submission_gate,
+)
 
 EXIT_OK = 0
 #: ``--doctor`` uses this so it can be wired into a launcher or a script: a found problem is a real
@@ -126,6 +134,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--seed-tasks", action="store_true",
         help="Add the default scheduled tasks to this database, leaving existing tasks untouched.",
+    )
+    actions.add_argument(
+        "--sources", action="store_true",
+        help="Report each job source's permission state, adapter and health, then exit (changes nothing).",
     )
     parser.add_argument(
         "--worker-id", metavar="NAME", default=None,
@@ -368,6 +380,51 @@ def run_worker_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_sources(args: argparse.Namespace) -> int:
+    """Report what could be fetched from where, and why nothing is being fetched.
+
+    Read-only and database-free: the answer does not depend on this machine's data, and printing it must
+    not create a database. Each reviewed source is listed with its permission state, whether it is
+    selected for use, and what the gate says about it *now* - because the honest answer today is "none",
+    and a report that only said "no sources" would not tell a person whether that is a policy decision or
+    a broken installation.
+    """
+    print(f"AI Career Agent {__version__} · job sources")
+    gate_open = "passed" if SOURCE_QUALITY_GATE_PASSED else "NOT passed"
+    print(f"Source-quality gate: {gate_open}. While it is not passed no source may run, whatever its own "
+          "permission says.")
+    enabled = enabled_discovery_sources()
+    print(f"Sources permitted to run discovery now: {', '.join(enabled) if enabled else 'none'}.")
+    print("")
+    print("Reviewed sources:")
+    for decision in SOURCE_DECISIONS:
+        gate = discovery_gate(decision.source_id)
+        selected = "selected for use" if decision.selected_for_use else "not selected for use"
+        print(f"  {decision.source_id}: {decision.permission_state.value} ({selected})")
+        print(f"    decision: {gate.reason}")
+        print(f"    evidence: {decision.evidence_ref or 'none recorded'}"
+              f"{' - reviewed ' + decision.reviewed_on if decision.reviewed_on else ''}")
+        for condition in decision.discovery_conditions:
+            print(f"    condition: {condition}")
+        submission = submission_gate(decision.source_id)
+        print(f"    applying for jobs here: "
+              f"{'permitted' if submission.allowed else 'not permitted'}")
+    print("")
+    registry = adapter_framework.default_registry()
+    adapters = registry.source_ids()
+    print(f"Adapters built into this version: {len(adapters)}"
+          f"{' (' + ', '.join(adapters) + ')' if adapters else ''}.")
+    if not adapters:
+        print("  None, deliberately: an adapter is only written for a source whose permission review and "
+              "the source-quality gate have both passed. The framework that will run one is in place and "
+              "tested; the permissions are not.")
+    for line in registry.health():
+        print(f"  {line.describe()}")
+    print("")
+    print("This report is read-only; nothing was contacted and nothing was run.")
+    return EXIT_OK
+
+
 def run_worker(args: argparse.Namespace) -> int:
     """Run this database's scheduled tasks in the foreground until stopped.
 
@@ -452,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_worker_status(args)
         if args.seed_tasks:
             return run_seed_tasks(args)
+        if args.sources:
+            return run_sources(args)
         if args.worker:
             return run_worker(args)
         # Imported only when the window is actually opened, so the database commands work headless.

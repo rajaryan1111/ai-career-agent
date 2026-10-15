@@ -60,6 +60,14 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Respect each source's terms, API rules, and technical access requirements.
 - Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
+### Sources
+
+Implemented today: a read-only source report (`python -m career_agent --sources`) and the adapter
+framework that would run a source, with the gate enforced in one place and no way to open it from the
+adapter layer. Zero adapters exist and live discovery is disabled, because no source has passed both the
+permission review and the source-quality gate; the report says so per source, with the evidence and the
+conditions attached.
+
 ### Matching and eligibility
 
 Implemented today: eligibility is a decision (PASS/FAIL/UNKNOWN) from stated requirements, and matching

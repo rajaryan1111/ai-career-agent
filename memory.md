@@ -1974,3 +1974,44 @@ before the check could bite.
 
 **Evidence.** Full suite 936 tests OK (13 skipped without the optional `pypdf`); `tests/test_matching.py`
 is 45 of them, and the existing evaluation-dialog test was extended rather than weakened.
+
+## 2026-10-15 — The adapter framework, and the one constant everything rests on
+
+**What changed.** `career_agent/adapters.py` is the layer a job source would run under, and
+`python -m career_agent --sources` is its surface: a read-only report of the gate, every reviewed source
+with its decision/evidence/conditions, whether applying would be permitted anywhere (it would not), and
+how many adapters exist (zero). The command creates no database and contacts nothing.
+
+**The framework fixes the rules in code, not prose.** `SourceCapabilities` declares what an adapter can
+do, and `submission=True` raises at construction: no adapter in this project may declare it. `RequestBudget`
+caps a run at five requests, refuses a second request within the source's documented interval, and counts a
+*failed* request against the budget - the bound is on what leaves the machine, not on what succeeds. A
+page size is required and capped at 100, so "fetch everything" cannot be written. Retries happen only for
+the three transient outcomes (rate limit, timeout, network), at most three times, with doubling waits
+injected so the schedule is tested without waiting; a permission refusal or a schema error is **not**
+retried, because repeating a source that said no is the behaviour this project refuses.
+
+**Four results, kept apart.** Success with results, a legitimate empty result, a partial run, and a
+failure - each a distinct outcome, and health reports them distinctly, because "the source is down" and
+"the source has nothing today" lead to opposite decisions, and a partial run may not be used to conclude a
+listing closed. Normalisation keeps provenance (source, request summary, UTC retrieval time with a
+timezone enforced) and reports every rejected record with its index and the field it was missing; a
+non-http(s) URL is rejected rather than stored as where a listing came from.
+
+**What the framework refuses to do.** It does not populate the fields that would require reading the
+source's prose: eligibility scope, degree disciplines, experience ranges and compensation all stay unset,
+because guessing them is how an app starts asserting eligibility nobody stated. Those need a reviewed
+parser per source. It also carries no bypass: I first added a `quality_gate_passed` parameter to
+`AdapterRegistry.execute` for testability, then measured what the override does - `enabled_discovery_sources(
+quality_gate_passed=True)` returns `('jobicy',)` - and removed it. The whole "nothing runs" property
+therefore rests on exactly one constant, and a test asserts both the recorded emptiness and the measured
+`jobicy` consequence, so a future change that moves either one says so loudly.
+
+**Tests.** 61 in `tests/test_adapters.py` plus 6 for the command; the full suite is **1006 OK (13
+skipped)**. Teeth checks: ignoring the gate failed 8 tests, allowing an undeclared capability 1, removing
+the request cap 2, allowing a self-contradicting response 2, removing URL validation 2, allowing
+submission capability 1, retrying non-transient failures 3.
+
+**Still outstanding.** No adapter exists, live discovery stays disabled, and the framework has never made
+a network request - the fixtures are the only adapters in the repository. Compensation is still not
+compared anywhere in matching (no field exists), and a deployed, always-on worker is still not built.

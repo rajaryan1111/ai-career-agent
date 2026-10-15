@@ -331,6 +331,33 @@ so a backup always names the file the app itself would open. Restoring replaces 
   place yourself.
 
 
+## Where listings would come from (and why nothing is fetched yet)
+
+`python -m career_agent --sources` prints what this version could fetch, from where, and under what
+permission — and it is the honest answer to "why are there no jobs in here?":
+
+- the **source-quality gate**, which has not passed: while it is closed, no source may run whatever its
+  own permission says;
+- every **reviewed source** with its state (`approved`, `conditional`, `blocked`, `rejected`), its
+  evidence, the conditions attached to it, and whether it is selected for use;
+- whether **applying for jobs** at that source would be permitted (today: not at any of them);
+- how many **adapters** are built in (**zero**, deliberately — an adapter is only written for a source
+  whose permission review *and* the quality gate have both passed).
+
+The report is read-only: it contacts nothing, changes nothing and does not even create a database. To see
+the adapter layer's own state, the same command prints one health line per registered adapter, keeping
+*success*, *empty*, *partial*, *failed* and *disabled* apart — because "the source is down" and "the
+source has nothing today" lead to opposite decisions.
+
+**The framework an adapter will run under** is written and tested (`career_agent/adapters.py`), and it is
+where the rules live rather than in a wiki: a declared capability model (submission is `False` for every
+adapter, by construction), a hard request cap and a minimum interval between requests, retries bounded to
+transient failures only — a refusal is never retried — normalisation that keeps provenance and reports
+every rejected record with its reason, deduplication through the same canonical-identity rule the rest of
+the app uses, and a run outcome that is one of success/empty/partial/failure rather than a boolean. There
+is deliberately **no flag anywhere that opens the gate**: measured today, forcing it open would enable
+exactly one source, and the whole "nothing runs" property rests on that one constant being honest.
+
 ## How matching works (and what it will not claim)
 
 When you evaluate a saved listing, the app shows two things: whether you appear **eligible**, and how the

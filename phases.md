@@ -79,6 +79,14 @@ Tasks: design a durable queue and worker boundary; compare free/low-cost always-
 
 Exit criteria: observed scheduled runs, laptop-off behavior, restart recovery, duplicate prevention, and outage reporting are tested in the chosen deployment. Do not claim this capability until verified.
 
+The adapter framework is implemented and tested (`career_agent/adapters.py`, reported by
+`python -m career_agent --sources`): declared capabilities with submission refused by construction, a
+bounded request budget with pacing, retries for transient outcomes only, normalisation that validates
+each record and reports every rejection, cross-source deduplication on the app's canonical identity, and
+run outcomes that keep success/empty/partial/failure apart. **No adapter is implemented, because no source
+has passed both reviews**, so live discovery stays disabled and the framework has never made a network
+request. Fixture adapters are the only ones in the repository.
+
 ## Phase 6 — Permitted platform adapters and application automation
 
 **Goal:** Expand from manual/local workflow to real, validated application flows.
@@ -107,7 +115,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 936 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 1006 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
