@@ -251,6 +251,12 @@ _SECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"^(?:technical|key|core|professional|relevant|additional|other|computer|software|it|soft|"
             r"hard)\s+skills?\b"
+            # A discipline or domain word before "skills" states the same thing: a résumé that writes
+            # "LABORATORY SKILLS", "CLINICAL SKILLS" or "ANALYTICAL SKILLS" has a skills heading, and
+            # before this the list below was invisible and the import reported no skills heading at all.
+            r"|^(?:laboratory|lab|clinical|research|engineering|analytical|quantitative|design|creative|"
+            r"business|marketing|sales|finance|financial|accounting|data|hardware|electronics|mechanical|"
+            r"civil|medical|scientific|domain|functional|practical|transferable)\s+skills?\b"
             # "Skill Set" must match as a whole before the bare "skill" alternative can claim it and
             # leave "Set" looking like a value.
             r"|^skill\s?sets?\b|^skills?\b"
@@ -292,13 +298,57 @@ _SECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
+    # Two headings that name a field this module *proposes* (country and work authorization) have to be
+    # headings here as well, or their wording is read as content of whatever section they interrupt -
+    # measured: "WORK AUTHORIZATION" put "Authorized to work in India" into the skills proposal as a
+    # confident value, "COUNTRY" put the country itself there, and that value then feeds eligibility
+    # checks offered as a skill. The vocabulary is the same one ``_LABEL_PATTERNS`` uses, so a document
+    # spelling its heading either way is understood the same way.
+    (
+        "work_authorization",
+        re.compile(
+            r"^(?:work\s+)?(?:authorization|authorisation)\b|^visa\s+status\b|^immigration\s+status\b"
+            r"|^work\s+permit\b",
+            re.I,
+        ),
+    ),
+    (
+        "location",
+        re.compile(
+            r"^country\b|^location\b|^address\b|^based\s+in\b|^current\s+location\b|^city\b",
+            re.I,
+        ),
+    ),
     ("other", re.compile(r"^(?:(?:test|safety)\s+)*(?:notes?|notices?|disclaimers?)\b|^(?:projects?|certifications?|certificates?|awards?|achievements?|publications?|internships?|activities|volunteering|interests?|languages?|declaration|references?)\b", re.I)),
 )
 
+#: Degree abbreviations, by the discipline they belong to. The engineering/science/commerce set was the
+#: first written and it was the whole list, which made the importer blind to design, architecture,
+#: medicine, pharmacy, law, education and hospitality qualifications: a line such as "B.Des in Design,
+#: 2026" produced neither a degree nor a graduation year, because the year rule needs a degree or an
+#: institution on the line. Widened after the Phase 4 cross-industry evaluation measured it. An
+#: abbreviation that is also an ordinary English word (``bed``, ``des``, ``arch``, ``pharm``) requires its
+#: full stop, so prose cannot be read as a qualification; ``bed``-style words without the stop are left out
+#: deliberately.
 _DEGREE_PATTERN = re.compile(
     r"\b(?:b\.?\s?tech|b\.?\s?e\.?|b\.?\s?sc|b\.?\s?c\.?a|b\.?\s?com|b\.?\s?ba|bachelor(?:'s)?(?:\s+of)?|"
     r"m\.?\s?tech|m\.?\s?e\.?|m\.?\s?sc|m\.?\s?c\.?a|m\.?\s?com|m\.?\s?ba|master(?:'s)?(?:\s+of)?|"
-    r"ph\.?\s?d\.?|doctorate|doctoral|diploma|postgraduate|b\.?\s?s\.?|m\.?\s?s\.?)\b",
+    r"ph\.?\s?d\.?|doctorate|doctoral|diploma|postgraduate|b\.?\s?s\.?|m\.?\s?s\.?|"
+    # arts degrees: "B.B.A." was recognised while "B.A." was not, which is the wrong way round
+    r"b\.?\s?a\.?|m\.?\s?a\.?|"
+    # design and fine art
+    r"b\.\s?des|m\.\s?des|b\.?\s?f\.?\s?a|m\.?\s?f\.?\s?a|bachelor\s+of\s+(?:design|fine\s+arts)|"
+    r"master\s+of\s+(?:design|fine\s+arts)|"
+    # architecture and planning
+    r"b\.\s?arch|m\.\s?arch|b\.\s?plan|m\.\s?plan|"
+    # medicine and allied health
+    r"mbbs|bds|b\.\s?pharm|m\.\s?pharm|pharm\.?\s?d|b\.?\s?n\.?\s?s\.?|bpt|b\.\s?mlt|b\.\s?o\.\s?t|"
+    # law
+    r"ll\.\s?b|ll\.\s?m|"
+    # education
+    r"b\.\s?ed|m\.\s?ed|"
+    # hospitality, business and social work
+    r"bhm|bhmct|pgdm|pgp|bsw|msw)\b",
     re.I,
 )
 _INSTITUTION_PATTERN = re.compile(
@@ -875,7 +925,10 @@ def _skills_proposal(section: Iterable[str]) -> FieldProposal | None:
                 continue
             if token.casefold() in _DEGREE_NOISE or token.casefold() in seen:
                 continue
-            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9+#.()/\- ]*$", token):
+            # ``&`` belongs inside a skill name (GD&T, M&A, P&L): the filter exists to keep punctuation
+            # noise out, and a dropped skill is worse than a noisy one, because the person reviews what
+            # is proposed and never sees what was discarded.
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9+#&.()/\- ]*$", token):
                 continue
             if len(token.split()) > 4:
                 continue
@@ -904,7 +957,11 @@ def _degree_proposal(education_lines: Sequence[str], all_lines: Sequence[str]) -
         match = _DEGREE_PATTERN.search(line)
         if not match:
             continue
-        remainder = line[match.end():]
+        # An abbreviation can carry its own full stop, and the pattern may leave it behind: "B.Sc. in
+        # Biotechnology" matches "B.Sc" and leaves ". in Biotechnology". That stop is part of the
+        # abbreviation, not the separator after it, so it is dropped here - otherwise the discipline is
+        # never read and the same qualification produces a worse proposal than without the stop.
+        remainder = re.sub(r"^[\s.]*", "", line[match.end():])
         discipline_match = re.search(
             r"^\s*(?:in|of|,|:|\()\s*([A-Za-z][A-Za-z&,\- ]{2,60}?)\s*(?:\)|,|\.|$|\||\()", remainder
         )

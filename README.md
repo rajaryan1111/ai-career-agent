@@ -745,6 +745,24 @@ To regenerate a reproducible CSV integrity summary (including input SHA-256, row
 python scripts/audit_job_source_csv.py
 ```
 
+To measure the matching engine and the résumé importer across industries — design, VLSI/embedded,
+mechanical, civil, software/data, business and laboratory work — against a reviewed, entirely synthetic
+evaluation set (7 occupation groups, 21 listings with a stated review order, 7 résumé texts):
+
+```bash
+python scripts/evaluate_cross_industry.py
+```
+
+It reports the engine's agreement with the reviewed order, the number of hard-eligibility violations
+(which must be zero, and makes the command exit non-zero), how many stated résumé values were extracted,
+and the extraction rules it checks in both directions. It also lists what it does **not** claim: the corpus
+is synthetic and small, so its numbers measure agreement with a written standard rather than with real
+documents or hiring outcomes. Running it is how the five extractor defects described in
+[the evaluation run](research/cross-industry-evaluation-run-2026-10-16.md) were found — an unrecognised
+heading for a field this app proposes leaking into the skills list, design/architecture/medical/law and
+arts degrees not recognised at all, a trailing full stop hiding the discipline, a `LABORATORY SKILLS`
+heading not counting as a skills heading, and `GD&T` being dropped as a skill.
+
 The tool intentionally does not invent a direct-link validity percentage; the existing route observations do not provide a defensible uniform denominator.
 
 ## Run tests

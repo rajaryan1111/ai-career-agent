@@ -2858,4 +2858,41 @@ refused by name, one row). No defect came out of the battery - the pattern it ve
 product's, and the point of running it was to be able to say so with commands and exit codes rather than by
 reading code. Phase 2 remains **Partially complete**: encryption at rest and a release/upgrade policy are
 still open, and the threat model claims nothing about either.
+**2026-10-16, third session of the day - Phase 4 started, and it found six extractor defects.** Phase 4 was the
+one phase marked "Not started", and its first task was a privacy-safe, human-reviewed cross-industry
+evaluation set. That now exists: `research/cross-industry-evaluation-set-2026-10-16.json` holds seven
+occupation groups (software/data, VLSI/embedded, mechanical, civil, product design, business/financial
+analysis, laboratory/biotech), each with one synthetic profile, three synthetic listings carrying an explicit
+review order (which a reviewer should open first), and one synthetic resume text with the values a reviewer
+says are stated plainly in it. `scripts/evaluate_cross_industry.py` measures the engine and the extractor
+against it and exits non-zero if any hard-eligibility violation is measured;
+`tests/test_cross_industry_evaluation.py` keeps the corpus well-formed, synthetic and fully ranked.
+
+The first run measured 7/7 agreement with the reviewed order, zero hard-eligibility violations, and 22/22
+stated values extracted - but it got there only after finding six real defects, all of them invisible to the
+existing suite because its fixtures are written in the vocabulary the code already knew:
+
+* **D21** - `WORK AUTHORIZATION` and `COUNTRY` as headings (value beneath) were not in the section
+  vocabulary, so their wording landed in the **skills** proposal, marked confident; one of them put the
+  country itself there, a value that feeds eligibility, offered as a skill. Fixed by adding the two headings
+  this module already proposes fields for.
+* **D22** - the degree vocabulary was engineering/science/commerce only: `B.Des in Design, 2026` proposed no
+  degree and no graduation year. Design, architecture, medical, pharmacy, law, education and hospitality
+  qualifications were all invisible. Widened by discipline, with the abbreviations that are also English
+  words requiring their full stop so prose cannot be read as a qualification.
+* **D23** - an abbreviation's own full stop hid the discipline: `B.Sc. in Biotechnology, 2026` proposed
+  "B.Sc" while the same line without the stop proposed "Biotechnology". The leftover stop is now stripped.
+* **D24** - only `technical/key/core/...` before the word "skills" opened a skills section, so `LABORATORY
+  SKILLS` was not a heading at all and the document was reported as having no skills heading.
+* **D25** - the skills token filter allowed `+#.()` but not `&`, so the mechanical resume's headline skill
+  `GD&T` was silently dropped (and a finance resume's `M&A` would have been). A dropped skill is worse than
+  a noisy one: the person reviews what is proposed and never sees what was discarded.
+* the sixth, smaller: `B.B.A.` was recognised while `B.A.` and `M.A.` were not.
+
+Each has a regression test that fails before the fix and passes after. Every number the run reports is
+reported with its denominator, and the eight values that sit outside what the extractor claims (country is
+read only from a labelled line; that rule is deliberate because country decides eligibility) are counted
+separately from the accuracy figure rather than into it, with rule checks passing in both directions so a
+silent widening cannot go unnoticed. Phase 4 moves from **Not started** to **Partially complete**: the
+corpus is synthetic and small, so the thresholds stay *measured*, not achieved for the product.
 

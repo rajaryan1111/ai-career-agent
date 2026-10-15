@@ -1152,6 +1152,43 @@ class SkillsSectionRecognitionTests(unittest.TestCase):
     def notes_of(self, *lines):
         return resume.parse_resume_text("\n".join(lines))[2]
 
+    def test_a_heading_the_module_proposes_a_field_for_also_ends_the_skills_block(self):
+        """The document's own vocabulary decides where a list stops, including for its own fields.
+
+        Measured before this test existed: a résumé that writes its authorization as a heading
+        (``WORK AUTHORIZATION`` on its own line, the wording beneath it) put that wording into the
+        skills proposal, marked *confident*. ``COUNTRY`` did the same, and a ``Location:`` line put the
+        country itself into the skills - a fact that then feeds eligibility checks, offered as a
+        skill. Every one of these headings names a field this module proposes, so it cannot be
+        unknown to the section vocabulary.
+        """
+        leaked = (
+            ("SKILLS\nPython, SQL\nWORK AUTHORIZATION\nAuthorized to work in India.", "WORK AUTHORIZATION"),
+            ("SKILLS\nPython, SQL\nWORK AUTHORIZATION\nAuthorized to work in India.", "Authorized"),
+            ("SKILLS\nPython, SQL\nCOUNTRY\nIndia", "COUNTRY"),
+            ("SKILLS\nPython, SQL\nCOUNTRY\nIndia", "India"),
+            ("SKILLS\nPython, SQL\nLocation: Bengaluru, India", "India"),
+            ("SKILLS\nPython, SQL\nVisa status\nNo sponsorship needed.", "sponsorship"),
+            ("SKILLS\nPython, SQL\nAddress: Pune", "Pune"),
+        )
+        for text, fragment in leaked:
+            with self.subTest(text=text, fragment=fragment):
+                proposal = self.skills_of(*text.splitlines())
+                self.assertIsNotNone(proposal)
+                self.assertNotIn(
+                    fragment, proposal.value,
+                    "a heading for a field this module proposes is not a skill, and neither is what follows it",
+                )
+                self.assertIn("Python", proposal.value, "the real skills must survive the new heading")
+
+        # The headings that already existed keep working, and the sub-label rule is untouched.
+        self.assertEqual(self.skills_of("SKILLS", "Python, SQL", "AWARDS", "Best intern 2024").value, "Python, SQL")
+        self.assertEqual(self.skills_of("SKILLS", "Python, SQL", "EDUCATION", "B.Tech, 2027").value, "Python, SQL")
+        self.assertEqual(
+            self.skills_of("SKILLS", "Languages: Python, C++", "Frameworks: Django, Flask").value,
+            "Python, C++, Django, Flask",
+        )
+
     def test_a_heading_and_its_list_on_one_line_are_both_read(self):
         """The reported bug: the whole line was consumed as a heading and the list was discarded."""
         for line in (
@@ -1227,6 +1264,25 @@ class SkillsSectionRecognitionTests(unittest.TestCase):
                     {"Python", "SQL", "Git", "Docker"},
                 )
 
+    def test_an_ampersand_inside_a_skill_name_is_kept(self):
+        """Found by the Phase 4 corpus: the mechanical résumé's headline skill was silently dropped.
+
+        The token filter allowed ``+#.()`` inside a name but not ``&``, so "GD&T" - the standard
+        mechanical-engineering abbreviation - never reached the proposal, and a finance résumé's "M&A"
+        would have gone the same way. Dropping a stated skill is worse than proposing a noisy one,
+        because the person reviews what is proposed and never sees what was thrown away.
+        """
+        for line, expected in (
+            ("SolidWorks, GD&T, CATIA", "GD&T"),
+            ("Financial Modelling, M&A, Valuation", "M&A"),
+            ("C, C++, C#", "C#"),
+            ("Python & SQL", "SQL"),
+        ):
+            with self.subTest(line=line):
+                proposal = self.skills_of("SKILLS", line)
+                self.assertIsNotNone(proposal)
+                self.assertIn(expected, proposal.value, f"{expected} is a stated skill")
+
     def test_labelled_categories_keep_their_values_without_the_labels(self):
         proposal = self.skills_of("Technical Skills", "Languages: Python, C++", "Frameworks: Django, PyTorch")
 
@@ -1243,6 +1299,87 @@ class SkillsSectionRecognitionTests(unittest.TestCase):
         self.assertIsNotNone(proposal)
         self.assertEqual(proposal.value, "Python, SQL")
         self.assertNotIn("English", proposal.value)
+
+    def test_an_education_line_is_read_whatever_the_discipline_calls_its_degree(self):
+        """Cross-industry blindness found by the Phase 4 evaluation corpus.
+
+        The degree vocabulary recognised engineering, science and commerce abbreviations, so a design,
+        architecture, medical, pharmacy, law or education qualification was not recognised *at all*:
+        neither a degree nor a graduation year was proposed from the line, because the year rule needs a
+        degree or institution on that line. A person with a B.Des, an MBBS or an LL.B was served worse
+        than a person with a B.Tech, which is exactly what "not effectively an AI/ML-only tool" means.
+        Every qualification is spelled out here, and each is checked against an education line.
+        """
+        qualifications = (
+            ("B.Des in Design, 2026", "Design", "2026"),
+            ("M.Des in Communication Design, 2028", "Communication Design", "2028"),
+            ("BFA in Painting, 2025", "Painting", "2025"),
+            ("B.Arch in Architecture, 2027", "Architecture", "2027"),
+            ("MBBS in Medicine, 2029", "Medicine", "2029"),
+            ("B.Pharm in Pharmacy, 2026", "Pharmacy", "2026"),
+            ("LL.B in Law, 2026", "Law", "2026"),
+            ("B.Ed in Education, 2025", "Education", "2025"),
+            ("BHM in Hospitality, 2026", "Hospitality", "2026"),
+            ("B.Tech in Computer Science, 2027", "Computer Science", "2027"),
+        )
+        for line, subject, year in qualifications:
+            with self.subTest(line=line):
+                proposals, _unmapped, _notes = resume.parse_resume_text("\n".join(("Sample Candidate", "EDUCATION", line)))
+                by_key = {proposal.key: proposal for proposal in proposals}
+                self.assertIn("degree", by_key, f"{line!r} states a degree and must propose one")
+                self.assertIn(subject.casefold(), by_key["degree"].value.casefold())
+                self.assertIn("graduation_year", by_key, f"{line!r} states a year and must propose one")
+                self.assertEqual(by_key["graduation_year"].value, year)
+
+    def test_a_full_stop_after_the_abbreviation_does_not_lose_the_discipline(self):
+        """The same qualification written the ordinary way must not produce a worse proposal.
+
+        Measured before this test existed: "B.Sc. in Biotechnology, 2026" proposed the *level* only
+        ("B.Sc", unselected), because the degree pattern consumed the abbreviation's own full stop and
+        the discipline pattern then expected a separator instead of that stop. Exactly the same line
+        without the stop proposed "Biotechnology" confidently. A dot must not change the answer.
+        """
+        for line, subject in (
+            ("B.Sc. in Biotechnology, 2026", "Biotechnology"),
+            ("B.E. in Mechanical Engineering, 2026", "Mechanical Engineering"),
+            ("M.Tech. in Data Science, 2027", "Data Science"),
+            ("B.A. in Economics, 2026", "Economics"),
+            ("B.Com. in Commerce, 2025", "Commerce"),
+        ):
+            with self.subTest(line=line):
+                proposals, _unmapped, _notes = resume.parse_resume_text("\n".join(("Sample Candidate", "EDUCATION", line)))
+                degree = {proposal.key: proposal for proposal in proposals}.get("degree")
+                self.assertIsNotNone(degree, f"{line!r} states a degree")
+                self.assertIn(subject.casefold(), degree.value.casefold(), f"{line!r} names its subject")
+
+    def test_a_discipline_prefix_before_the_word_skills_is_still_a_skills_heading(self):
+        """Cross-industry vocabulary, found by the Phase 4 corpus.
+
+        The recognised headings were technical/key/core/professional/... so a laboratory, clinical,
+        research, engineering, analytical or design skills heading was invisible: the résumé's skills
+        list produced no proposal at all, and the person was told their document has no skills heading
+        even though it has one. A résumé that writes "LABORATORY SKILLS" is not a worse résumé.
+        """
+        for heading in (
+            "LABORATORY SKILLS", "Laboratory skills", "CLINICAL SKILLS", "RESEARCH SKILLS",
+            "ENGINEERING SKILLS", "ANALYTICAL SKILLS", "DESIGN SKILLS", "Business Skills",
+            "FINANCIAL SKILLS", "DATA SKILLS", "MECHANICAL SKILLS", "CIVIL SKILLS",
+        ):
+            with self.subTest(heading=heading):
+                proposal = self.skills_of(heading, "PCR, Cell Culture")
+                self.assertIsNotNone(proposal, f"{heading} is a skills heading")
+                self.assertEqual(proposal.value, "PCR, Cell Culture")
+
+    def test_an_ordinary_word_is_not_read_as_a_degree_abbreviation(self):
+        """Widening the vocabulary must not turn prose into a qualification."""
+        for line in (
+            "Comfortable in a fast bed of changing priorities.",
+            "Led the redesign of the checkout flow.",
+            "Managed a small team of two designers.",
+        ):
+            with self.subTest(line=line):
+                proposals, _unmapped, _notes = resume.parse_resume_text("\n".join(("Sample Candidate", line)))
+                self.assertNotIn("degree", {proposal.key for proposal in proposals})
 
     def test_a_heading_found_without_a_list_is_reported_as_its_own_case(self):
         """The two failures need different next steps, so the notes must not conflate them."""

@@ -1,0 +1,905 @@
+{
+  "corpus_version": 1,
+  "created": "2026-10-16",
+  "privacy_note": "Every value in this file is invented for evaluation: no real candidate, employer, posting, institution or contact detail appears here, and nothing in it was taken from a real person's document. The contact details are the reserved example domains, so nothing here can address a real mailbox.",
+  "purpose": "Phase 4 of phases.md: a privacy-safe, human-reviewed cross-industry evaluation set, so the product can be measured on each occupation group instead of assuming a software/data shape. The review order in each group is a person's stated standard (which listing a reviewer should open first); the harness measures the engine against it and reports disagreements rather than adjusting the standard.",
+  "how_to_review": "Each group names one occupation, one synthetic profile, three listings with an explicit review order (1 = open first), and one synthetic resume with the values a reviewer says are stated plainly in it. Changing a review order or an expected value changes the standard being measured against, so any change here is a decision to be recorded, not a test to be made green.",
+  "groups": [
+    {
+      "id": "software-data",
+      "label": "Software and data",
+      "note": "The shape the engine was first built for; kept here as one group among many rather than the default.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Computer Science",
+        "study_status": "undergraduate",
+        "graduation_year": 2027,
+        "experience_years": 0.5,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "Python",
+          "PostgreSQL",
+          "SQL",
+          "Git"
+        ],
+        "preferred_locations": [
+          "Bengaluru"
+        ],
+        "preferred_work_modes": [
+          "remote",
+          "hybrid"
+        ],
+        "preferred_role_types": [
+          "internship"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "sw-1-data-intern",
+          "employer_name": "Lantern Data (synthetic)",
+          "role_title": "Data Engineering Intern",
+          "availability_status": "open",
+          "location_text": "Bengaluru, India",
+          "work_mode": "hybrid",
+          "role_type": "internship",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Computer Science"
+          ],
+          "allowed_study_statuses": [
+            "undergraduate"
+          ],
+          "allowed_graduation_years": [
+            2027
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 1.0,
+          "required_skills": [
+            "Python",
+            "SQL",
+            "PostgreSQL"
+          ],
+          "review_rank": 1,
+          "review_note": "Same discipline, same city, same mode, all three skills, inside the experience band."
+        },
+        {
+          "listing_id": "sw-2-backend",
+          "employer_name": "Kiln Systems (synthetic)",
+          "role_title": "Backend Engineering Intern",
+          "availability_status": "open",
+          "location_text": "Pune, India",
+          "work_mode": "onsite",
+          "role_type": "internship",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Computer Science"
+          ],
+          "allowed_study_statuses": [
+            "undergraduate",
+            "graduate"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 1.5,
+          "required_skills": [
+            "Python",
+            "Git"
+          ],
+          "review_rank": 2,
+          "review_note": "An internship the person can do, but onsite in another city and a thinner skill overlap."
+        },
+        {
+          "listing_id": "sw-3-ml-senior",
+          "employer_name": "Ochre Labs (synthetic)",
+          "role_title": "Senior Machine Learning Engineer",
+          "availability_status": "open",
+          "location_text": "Remote (United States)",
+          "work_mode": "remote",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "United States"
+          ],
+          "minimum_experience_years": 6.0,
+          "required_skills": [
+            "Python",
+            "PyTorch"
+          ],
+          "review_rank": 3,
+          "review_note": "Not the person's country and not their level: it must not be offered as a vacancy they can take."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nBengaluru, India\nsample.candidate@example.com\n\nSUMMARY\nFinal-year computer science undergraduate, graduating in 2027.\n\nSKILLS\nPython, PostgreSQL, SQL, Git\n\nWORK AUTHORIZATION\nAuthorized to work in India without sponsorship.\n\nEDUCATION\nB.Tech in Computer Science, 2027",
+        "expected": {
+          "degree_contains": "Computer Science",
+          "graduation_year": "2027",
+          "skills_contain": [
+            "Python",
+            "SQL",
+            "PostgreSQL"
+          ],
+          "work_authorization_contains": "Authorized to work in India"
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          },
+          {
+            "field": "skills_do_not_contain",
+            "value": "Authorized to work in India",
+            "rule": "The work-authorization wording is a field this module proposes, so it must never appear inside the skills proposal (resume.py, section vocabulary)."
+          }
+        ]
+      }
+    },
+    {
+      "id": "vlsi-embedded",
+      "label": "VLSI and embedded systems",
+      "note": "Hardware vocabulary: the engine has no alias table for it, so overlap is judged on the listing's own words.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Electronics Engineering",
+        "study_status": "undergraduate",
+        "graduation_year": 2027,
+        "experience_years": 0.5,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "Verilog",
+          "SystemVerilog",
+          "RTL Design",
+          "FPGA",
+          "C"
+        ],
+        "preferred_locations": [
+          "Hyderabad"
+        ],
+        "preferred_work_modes": [
+          "onsite",
+          "hybrid"
+        ],
+        "preferred_role_types": [
+          "internship"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "vlsi-1-rtl-intern",
+          "employer_name": "Blue Mesa Semiconductors (synthetic)",
+          "role_title": "RTL Design Intern",
+          "availability_status": "open",
+          "location_text": "Hyderabad, India",
+          "work_mode": "onsite",
+          "role_type": "internship",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Electronics Engineering",
+            "Electrical Engineering"
+          ],
+          "allowed_study_statuses": [
+            "undergraduate",
+            "graduate"
+          ],
+          "allowed_graduation_years": [
+            2027,
+            2028
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 1.0,
+          "required_skills": [
+            "Verilog",
+            "RTL Design",
+            "SystemVerilog"
+          ],
+          "review_rank": 1,
+          "review_note": "The person's own discipline, city and skills, with the internship type they are looking for."
+        },
+        {
+          "listing_id": "vlsi-2-verification",
+          "employer_name": "Cobalt Micro (synthetic)",
+          "role_title": "Design Verification Intern",
+          "availability_status": "open",
+          "location_text": "Bengaluru, India",
+          "work_mode": "hybrid",
+          "role_type": "internship",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Electronics Engineering"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 2.0,
+          "required_skills": [
+            "SystemVerilog",
+            "UVM"
+          ],
+          "review_rank": 2,
+          "review_note": "Adjacent work the person's SystemVerilog covers in part, in a city they did not name."
+        },
+        {
+          "listing_id": "vlsi-3-analog",
+          "employer_name": "Feldspar Analog (synthetic)",
+          "role_title": "Analog Layout Engineer",
+          "availability_status": "open",
+          "location_text": "Taipei",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "Taiwan"
+          ],
+          "minimum_experience_years": 3.0,
+          "required_skills": [
+            "Cadence Virtuoso",
+            "Analog Layout"
+          ],
+          "review_rank": 3,
+          "review_note": "Neither the person's country nor their skills: it must be reported as blocked, not offered."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nHyderabad, India\n\nOBJECTIVE\nFinal-year electronics engineering undergraduate seeking an RTL design internship, graduating in 2027.\n\nTECHNICAL SKILLS\nVerilog, SystemVerilog, RTL Design, FPGA, C\n\nEDUCATION\nB.Tech in Electronics Engineering, 2027",
+        "expected": {
+          "degree_contains": "Electronics",
+          "graduation_year": "2027",
+          "skills_contain": [
+            "Verilog",
+            "SystemVerilog",
+            "FPGA"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    },
+    {
+      "id": "mechanical",
+      "label": "Mechanical engineering",
+      "note": "A discipline whose fieldwork requirement is a hard eligibility fact rather than a preference.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Mechanical Engineering",
+        "study_status": "graduate",
+        "graduation_year": 2026,
+        "experience_years": 1.0,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "SolidWorks",
+          "GD&T",
+          "CATIA",
+          "Finite Element Analysis"
+        ],
+        "preferred_locations": [
+          "Chennai"
+        ],
+        "preferred_work_modes": [
+          "onsite"
+        ],
+        "preferred_role_types": [
+          "full_time"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "mech-1-design-engineer",
+          "employer_name": "Ironside Machinery (synthetic)",
+          "role_title": "Design Engineer (Graduate)",
+          "availability_status": "open",
+          "location_text": "Chennai, India",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Mechanical Engineering"
+          ],
+          "allowed_study_statuses": [
+            "graduate",
+            "graduated"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 2.0,
+          "required_skills": [
+            "SolidWorks",
+            "GD&T"
+          ],
+          "review_rank": 1,
+          "review_note": "The person's discipline, city, mode, role type and two of their skills."
+        },
+        {
+          "listing_id": "mech-2-cae",
+          "employer_name": "Vellum CAE (synthetic)",
+          "role_title": "CAE Analyst",
+          "availability_status": "open",
+          "location_text": "Pune, India",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Mechanical Engineering",
+            "Aerospace Engineering"
+          ],
+          "minimum_experience_years": 1.0,
+          "maximum_experience_years": 4.0,
+          "required_skills": [
+            "Finite Element Analysis",
+            "ANSYS"
+          ],
+          "review_rank": 2,
+          "review_note": "Uses their FEA background, but in another city and with a tool they have not listed."
+        },
+        {
+          "listing_id": "mech-3-field-service",
+          "employer_name": "Tidewater Turbines (synthetic)",
+          "role_title": "Field Service Engineer",
+          "availability_status": "open",
+          "location_text": "Doha",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "Qatar"
+          ],
+          "minimum_experience_years": 4.0,
+          "required_skills": [
+            "Turbine Maintenance"
+          ],
+          "review_rank": 3,
+          "review_note": "Outside the person's country and experience band; blocked rather than recommended."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nChennai, India\n\nPROFILE\nMechanical engineering graduate with one year of design experience.\n\nKEY SKILLS\nSolidWorks, GD&T, CATIA, Finite Element Analysis\n\nEDUCATION\nB.E. in Mechanical Engineering, 2026",
+        "expected": {
+          "degree_contains": "Mechanical",
+          "graduation_year": "2026",
+          "skills_contain": [
+            "SolidWorks",
+            "GD&T"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    },
+    {
+      "id": "civil",
+      "label": "Civil and structural engineering",
+      "note": "A licensed-adjacent field: the corpus states no licence, so a listing demanding one must not pass silently.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Civil Engineering",
+        "study_status": "graduate",
+        "graduation_year": 2025,
+        "experience_years": 1.5,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "AutoCAD",
+          "STAAD Pro",
+          "Structural Analysis",
+          "Quantity Estimation"
+        ],
+        "preferred_locations": [
+          "Delhi"
+        ],
+        "preferred_work_modes": [
+          "onsite",
+          "hybrid"
+        ],
+        "preferred_role_types": [
+          "full_time"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "civil-1-structural",
+          "employer_name": "Basalt Structures (synthetic)",
+          "role_title": "Structural Design Engineer",
+          "availability_status": "open",
+          "location_text": "New Delhi, India",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Civil Engineering"
+          ],
+          "allowed_study_statuses": [
+            "graduate",
+            "graduated"
+          ],
+          "minimum_experience_years": 1.0,
+          "maximum_experience_years": 3.0,
+          "required_skills": [
+            "STAAD Pro",
+            "Structural Analysis"
+          ],
+          "review_rank": 1,
+          "review_note": "Discipline, city, mode, role type and both headline skills line up."
+        },
+        {
+          "listing_id": "civil-2-quantity-surveyor",
+          "employer_name": "Redline Infrastructure (synthetic)",
+          "role_title": "Quantity Surveyor",
+          "availability_status": "open",
+          "location_text": "Gurugram, India",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Civil Engineering",
+            "Construction Management"
+          ],
+          "minimum_experience_years": 1.0,
+          "maximum_experience_years": 5.0,
+          "required_skills": [
+            "Quantity Estimation",
+            "CostX"
+          ],
+          "review_rank": 2,
+          "review_note": "Uses their estimation skill; the primary tool named is one they have not used."
+        },
+        {
+          "listing_id": "civil-3-site-manager-abroad",
+          "employer_name": "Nordvik Build (synthetic)",
+          "role_title": "Site Manager",
+          "availability_status": "open",
+          "location_text": "Oslo, Norway",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "Norway"
+          ],
+          "minimum_experience_years": 5.0,
+          "required_skills": [
+            "Site Supervision"
+          ],
+          "review_rank": 3,
+          "review_note": "Not their country and well above their experience band: it must be reported as blocked, not offered as a vacancy they could take."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nNew Delhi, India\n\nSUMMARY\nCivil engineering graduate with eighteen months in structural design.\n\nCORE SKILLS\nAutoCAD, STAAD Pro, Structural Analysis, Quantity Estimation\n\nEDUCATION\nB.Tech in Civil Engineering, 2025",
+        "expected": {
+          "degree_contains": "Civil",
+          "graduation_year": "2025",
+          "skills_contain": [
+            "AutoCAD",
+            "STAAD Pro"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    },
+    {
+      "id": "product-design",
+      "label": "Product and visual design",
+      "note": "Portfolio-driven work: the corpus states tools, because the engine can only compare what is written down.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Design",
+        "study_status": "graduate",
+        "graduation_year": 2026,
+        "experience_years": 1.0,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "Figma",
+          "Wireframing",
+          "User Research",
+          "Prototyping"
+        ],
+        "preferred_locations": [
+          "Bengaluru",
+          "Remote"
+        ],
+        "preferred_work_modes": [
+          "remote",
+          "hybrid"
+        ],
+        "preferred_role_types": [
+          "full_time"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "design-1-product-designer",
+          "employer_name": "Paper Kite Studio (synthetic)",
+          "role_title": "Product Designer",
+          "availability_status": "open",
+          "location_text": "Remote (India)",
+          "work_mode": "remote",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Design",
+            "Human-Computer Interaction"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 3.0,
+          "required_skills": [
+            "Figma",
+            "Prototyping",
+            "User Research"
+          ],
+          "review_rank": 1,
+          "review_note": "Remote work the person asked for, in their discipline, with all three of their stated tools."
+        },
+        {
+          "listing_id": "design-2-motion",
+          "employer_name": "Lantern Motion (synthetic)",
+          "role_title": "Motion Designer",
+          "availability_status": "open",
+          "location_text": "Bengaluru, India",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Design",
+            "Animation"
+          ],
+          "minimum_experience_years": 1.0,
+          "maximum_experience_years": 4.0,
+          "required_skills": [
+            "After Effects",
+            "Adobe Illustrator"
+          ],
+          "review_rank": 2,
+          "review_note": "Right city and a design role, but a specialism whose tools the person has not recorded."
+        },
+        {
+          "listing_id": "design-3-head-of-design",
+          "employer_name": "Northgate Retail (synthetic)",
+          "role_title": "Head of Design",
+          "availability_status": "open",
+          "location_text": "London, United Kingdom",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "United Kingdom"
+          ],
+          "minimum_experience_years": 10.0,
+          "required_skills": [
+            "Design Leadership"
+          ],
+          "review_rank": 3,
+          "review_note": "A decade of leadership experience the person does not have, in a country they are not in."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nBengaluru, India\n\nSUMMARY\nDesign graduate with a year of product design practice.\n\nSKILLS\nFigma, Wireframing, User Research, Prototyping\n\nEDUCATION\nB.Des in Design, 2026",
+        "expected": {
+          "degree_contains": "Design",
+          "graduation_year": "2026",
+          "skills_contain": [
+            "Figma",
+            "Prototyping"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    },
+    {
+      "id": "business-analysis",
+      "label": "Business and financial analysis",
+      "note": "A domain where the same tool name means different work: overlap is reported, not interpreted.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Commerce",
+        "study_status": "graduate",
+        "graduation_year": 2025,
+        "experience_years": 1.0,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "Excel",
+          "SQL",
+          "Financial Modelling",
+          "Power BI"
+        ],
+        "preferred_locations": [
+          "Mumbai"
+        ],
+        "preferred_work_modes": [
+          "hybrid",
+          "onsite"
+        ],
+        "preferred_role_types": [
+          "full_time"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "biz-1-financial-analyst",
+          "employer_name": "Harbourline Capital (synthetic)",
+          "role_title": "Financial Analyst",
+          "availability_status": "open",
+          "location_text": "Mumbai, India",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Commerce",
+            "Economics",
+            "Business Administration"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 3.0,
+          "required_skills": [
+            "Financial Modelling",
+            "Excel"
+          ],
+          "review_rank": 1,
+          "review_note": "Their city, their discipline, their two most relevant skills."
+        },
+        {
+          "listing_id": "biz-2-bi-analyst",
+          "employer_name": "Quarry Retail Group (synthetic)",
+          "role_title": "Business Intelligence Analyst",
+          "availability_status": "open",
+          "location_text": "Bengaluru, India",
+          "work_mode": "hybrid",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Commerce",
+            "Computer Science",
+            "Business Administration"
+          ],
+          "minimum_experience_years": 1.0,
+          "maximum_experience_years": 4.0,
+          "required_skills": [
+            "Power BI",
+            "SQL",
+            "Tableau"
+          ],
+          "review_rank": 2,
+          "review_note": "Two of their tools, but a different specialism and a city they did not name."
+        },
+        {
+          "listing_id": "biz-3-audit-associate-ca",
+          "employer_name": "Ledger & Vale (synthetic)",
+          "role_title": "Audit Associate (CA qualified)",
+          "availability_status": "open",
+          "location_text": "Dubai",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "United Arab Emirates"
+          ],
+          "minimum_experience_years": 2.0,
+          "required_skills": [
+            "Statutory Audit",
+            "IFRS"
+          ],
+          "review_rank": 3,
+          "review_note": "Requires a qualification the person has not recorded, and a country they are not in: not for them."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nMumbai, India\n\nSUMMARY\nCommerce graduate with a year in financial planning and analysis.\n\nSKILLS\nExcel, SQL, Financial Modelling, Power BI\n\nEDUCATION\nB.Com in Commerce, 2025",
+        "expected": {
+          "degree_contains": "Commerce",
+          "graduation_year": "2025",
+          "skills_contain": [
+            "Excel",
+            "Financial Modelling"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    },
+    {
+      "id": "laboratory-biotech",
+      "label": "Laboratory and biotechnology",
+      "note": "A field whose entry requirement is often a named degree: the corpus states one plainly, and a listing that names a different one must not pass.",
+      "profile": {
+        "candidate_country": "India",
+        "degree_discipline": "Biotechnology",
+        "study_status": "graduate",
+        "graduation_year": 2026,
+        "experience_years": 0.5,
+        "work_authorization": "authorized_without_sponsorship",
+        "skills": [
+          "PCR",
+          "Cell Culture",
+          "ELISA",
+          "Lab Documentation"
+        ],
+        "preferred_locations": [
+          "Pune"
+        ],
+        "preferred_work_modes": [
+          "onsite"
+        ],
+        "preferred_role_types": [
+          "full_time"
+        ]
+      },
+      "listings": [
+        {
+          "listing_id": "lab-1-research-associate",
+          "employer_name": "Verdant Biosciences (synthetic)",
+          "role_title": "Research Associate (Molecular Biology)",
+          "availability_status": "open",
+          "location_text": "Pune, India",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Biotechnology",
+            "Microbiology",
+            "Biochemistry"
+          ],
+          "allowed_study_statuses": [
+            "graduate",
+            "graduated"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 2.0,
+          "required_skills": [
+            "PCR",
+            "Cell Culture"
+          ],
+          "review_rank": 1,
+          "review_note": "Their discipline, city, mode and both headline techniques."
+        },
+        {
+          "listing_id": "lab-2-qc-analyst",
+          "employer_name": "Beacon Pharma QA (synthetic)",
+          "role_title": "Quality Control Analyst",
+          "availability_status": "open",
+          "location_text": "Ahmedabad, India",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "India"
+          ],
+          "allowed_degree_disciplines": [
+            "Biotechnology",
+            "Pharmacy"
+          ],
+          "minimum_experience_years": 0.0,
+          "maximum_experience_years": 3.0,
+          "required_skills": [
+            "ELISA",
+            "GMP Documentation"
+          ],
+          "review_rank": 2,
+          "review_note": "One technique they have and a documentation habit they share, in another city."
+        },
+        {
+          "listing_id": "lab-3-clinical-trials-us",
+          "employer_name": "Meridian Trials (synthetic)",
+          "role_title": "Clinical Trials Coordinator",
+          "availability_status": "open",
+          "location_text": "Boston, United States",
+          "work_mode": "onsite",
+          "role_type": "full_time",
+          "eligibility_scope": "restricted",
+          "eligible_countries": [
+            "United States"
+          ],
+          "allowed_degree_disciplines": [
+            "Life Sciences"
+          ],
+          "minimum_experience_years": 2.0,
+          "required_skills": [
+            "Clinical Trial Coordination",
+            "GCP"
+          ],
+          "review_rank": 3,
+          "review_note": "Not their country, a qualification requirement they do not meet and work they have not done."
+        }
+      ],
+      "resume": {
+        "text": "Sample Candidate\nPune, India\n\nPROFILE\nBiotechnology graduate with six months of laboratory experience.\n\nLABORATORY SKILLS\nPCR, Cell Culture, ELISA, Lab Documentation\n\nEDUCATION\nB.Sc in Biotechnology, 2026",
+        "expected": {
+          "degree_contains": "Biotechnology",
+          "graduation_year": "2026",
+          "skills_contain": [
+            "PCR",
+            "Cell Culture"
+          ]
+        },
+        "not_proposed_by_design": [
+          {
+            "field": "country",
+            "value": "India",
+            "rule": "Country is proposed only from a labelled country or location line (resume.py, _country_proposal). A bare \"City, Country\" header line is never inferred, because country decides eligibility and a city name can belong to more than one country. This is therefore non-coverage by design, recorded rather than counted as an extraction."
+          }
+        ]
+      }
+    }
+  ],
+  "extraction_rule_checks": [
+    {
+      "name": "a labelled country line yields the country",
+      "text": "Sample Candidate\nCountry: India\n",
+      "field": "country",
+      "expect_proposed": true,
+      "rule": "An explicit country line is the documented path that does yield the value."
+    },
+    {
+      "name": "a labelled location line yields the country",
+      "text": "Sample Candidate\nLocation: Bengaluru, India\n",
+      "field": "country",
+      "expect_proposed": true,
+      "rule": "A labelled location line names an explicit location, and the last comma part is read as the country."
+    },
+    {
+      "name": "a bare city line does not yield a country",
+      "text": "Sample Candidate\nBengaluru, India\n",
+      "field": "country",
+      "expect_proposed": false,
+      "rule": "The conservative rule: without a label the value is not inferred, and this check fails if that ever changes, so a silent widening cannot pass unnoticed."
+    }
+  ]
+}
