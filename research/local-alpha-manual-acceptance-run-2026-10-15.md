@@ -26,7 +26,8 @@ already covered automatically, the status is still BLOCKED unless the step itsel
 | Tkinter | **absent** — `import tkinter` → `ModuleNotFoundError: No module named 'tkinter'` |
 | X tooling | no `Xvfb`, `xvfb-run`, `xdotool`, `wmctrl` |
 | SQLite CLI | absent (`sqlite3`); the checklist's copy-editing steps were done with Python's `sqlite3` module |
-| Installed build under test | wheel built from the branch tip, installed into a throwaway virtual environment |
+| Revision under test | the working tree that became commit `a74b722` on this branch; the four fixes below were made *during* the run, and every step a fix touched was re-run against the corrected build (batch 3) |
+| Installed build under test | wheel built from that tree, installed into a throwaway virtual environment |
 | Wheel contents | 29 files: 24 `career_agent/*.py`, 5 `dist-info`; **no** `tests/` or `scripts/` |
 | Console script | `career-agent 0.1.0 (database schema version 6)` |
 | Data folder | `/home/user/.local/share/ai-career-agent` — created by nothing in this run, still absent afterwards |
@@ -316,7 +317,9 @@ empty throughout; the job-source CSV was not touched
 
 - Full suite on this revision: **1559 tests, `OK (skipped=13)`**; `compileall` clean; the CSV audit reports the
   unchanged digest. CI runs the same suite on 3.10, 3.11, 3.12 and 3.13 plus the installed-package job on 3.10
-  and 3.13; there is **no 3.14 leg** and no macOS or Windows leg, so no support is claimed for them.
+  and 3.13, and the commit carrying this report (`a74b722`, run `38700616471`) passed all six jobs — so the
+  suite result above is reproduced on four interpreters, not only on the 3.11 this machine has. There is **no
+  3.14 leg** and no macOS or Windows leg, so no support is claimed for them.
 - The suite is not a substitute for this run: every window interaction above is still unverified, and the
   defects above were found by executing the checklist, not by the suite — D1 had no assertion on that count,
   D2/D3 were only reachable through a real command sequence, and D4's message was pinned by a test that could
