@@ -21,6 +21,7 @@ from career_agent.core import (
     ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability,
     CandidateProfile, JobListing,
 )
+from career_agent import importer
 from career_agent.store import CareerStore
 
 
@@ -158,6 +159,50 @@ class ExportImportCommandTests(unittest.TestCase):
 
         self.assertEqual(code, cli.EXIT_REFUSED)
         self.assertIn("format_version", err)
+
+    def test_a_file_too_large_to_be_an_export_is_refused_before_it_is_read(self):
+        """A mistyped path can point at anything; reading it whole is not a plan.
+
+        The résumé importer has bounded the documents it reads for a long time. The export importer had
+        no bound at all: it read the file whole and only then discovered whether it was JSON, so pointing
+        ``--import-from`` at a multi-gigabyte log meant loading it into memory first and failing afterwards.
+        Measured with the limit patched to sixteen bytes, because the point is the refusal, not the size.
+        """
+        from unittest import mock
+
+        self.populate(self.target)
+        oversized = self.folder / "not-really-an-export.json"
+        oversized.write_text(json.dumps({"format_version": 2, "jobs": []}), encoding="utf-8")
+
+        with mock.patch.object(importer, "MAX_EXPORT_BYTES", 16):
+            code, _out, err = self.run_cli("--import-from", str(oversized), "--yes",
+                                           "--database", str(self.target))
+
+        self.assertEqual(code, cli.EXIT_REFUSED, err)
+        self.assertIn("REFUSED", err)
+        self.assertIn("limit for an import", err)
+        self.assertIn("was not read", err, "the file must be refused before it is loaded into memory")
+        self.assertIn("Nothing was imported", err)
+        # and the limit this build ships with is a real one, so patching it tiny in the test cannot hide
+        # a production value that would refuse the app's own exports
+        self.assertEqual(importer.MAX_EXPORT_BYTES, 64 * 1024 * 1024)
+
+    def test_a_file_of_the_right_size_still_imports(self):
+        """The bound must not refuse the exports this app writes."""
+        self.populate(self.source)
+        code, out, err = self.run_cli("--export-to", str(self.export), "--database", str(self.source))
+        self.assertEqual(code, cli.EXIT_OK, (out, err))
+        self.assertGreater(self.export.stat().st_size, 0)
+
+        # An import is refused when there is no database yet, so the target is created the way a person
+        # would create it: by running the app once.
+        code, out, err = self.run_cli("--seed-tasks", "--database", str(self.target))
+        self.assertEqual(code, cli.EXIT_OK, (out, err))
+        code, out, err = self.run_cli("--import-from", str(self.export), "--yes",
+                                      "--database", str(self.target))
+
+        self.assertEqual(code, cli.EXIT_OK, (out, err))
+        self.assertIn("Import complete", out)
 
     def test_a_missing_export_file_is_refused(self):
         with CareerStore(self.target):

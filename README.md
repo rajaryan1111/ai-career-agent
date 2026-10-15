@@ -385,7 +385,9 @@ Reading one back is the import, which is also how you move your data to a second
 In the window, the **Data safety** tab has **Export data to a JSON file** and, beside it,
 **Import an exported file (JSON)**. The import always shows you what it would do and asks before it
 writes anything. The import of a file this app did not write is refused: the format carries a version,
-and a missing or different version is an error, not a guess.
+and a missing or different version is an error, not a guess. A file larger than 64 MB is refused before
+it is read at all — this app's exports are kilobytes, so a file that big is not one of them, and reading
+a mistyped path whole is how a command runs out of memory instead of saying no.
 
 Without the window:
 

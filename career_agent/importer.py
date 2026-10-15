@@ -60,6 +60,14 @@ EXPORT_FORMAT_VERSION = 2
 #: Every format version this build reads. A version 1 file carries no history records.
 READABLE_FORMAT_VERSIONS = (1, 2)
 
+#: Largest file this module will read as an export. The résumé importer has bounded its documents since it
+#: first read one; this path read the file whole and only then asked whether it was JSON, so a mistyped
+#: ``--import-from`` pointing at a multi-gigabyte file meant loading it into memory first and refusing
+#: afterwards. An export of this application is kilobytes - a profile, some listings and a history - and
+#: 64 MB leaves room for a decade of them while keeping the refusal cheap. The size is checked with a
+#: ``stat`` before anything is read.
+MAX_EXPORT_BYTES = 64 * 1024 * 1024
+
 #: How many rejections are named before the rest are counted. A plan is read by a person; a hundred
 #: lines is not a plan, it is a log, and the count is always given even when the reasons are not.
 PLAN_DETAIL_LIMIT = 20
@@ -295,6 +303,18 @@ def read_export(path: str | Path) -> dict[str, Any]:
         raise ImportRefused(f"{target} does not exist, so there is nothing to import.")
     if target.is_dir():
         raise ImportRefused(f"{target} is a folder. Choose the JSON file that was exported.")
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        raise ImportRefused(f"{target} could not be examined: {exc.strerror or exc}.") from exc
+    if size > MAX_EXPORT_BYTES:
+        megabytes = size / (1024 * 1024)
+        limit = MAX_EXPORT_BYTES // (1024 * 1024)
+        raise ImportRefused(
+            f"{target} is {megabytes:.1f} MB, over the {limit} MB limit for an import, so it was not read. "
+            "An export written by this application is far smaller than that, so this is probably not the "
+            "file you meant. Nothing was imported."
+        )
     try:
         text = target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
