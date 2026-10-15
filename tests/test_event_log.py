@@ -33,7 +33,7 @@ from career_agent.event_log import (
     EVENTS, LOG_FILE_NAME, MAX_DETAIL_LENGTH, MAX_LOG_BYTES, PREVIOUS_LOG_FILE_NAME, describe_line,
     log_path, read_lines, record_event,
 )
-from career_agent.store import CareerStore
+from career_agent.store import MIGRATION_STEPS, SCHEMA_VERSION, CareerStore
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 10, 15, 9, 30, tzinfo=timezone.utc)
@@ -285,13 +285,12 @@ class StoreEventTests(unittest.TestCase):
 
         self.assertEqual(
             event_names(self.log),
-            ["database.migrated", "database.migrated", "database.migrated", "database.opened"],
+            ["database.migrated"] * len(MIGRATION_STEPS) + ["database.opened"],
             "one line per step the new database needed, then the one that says it opened",
         )
         text = self.log.read_text(encoding="utf-8")
-        self.assertIn("detail=from=0 to=1", text)
-        self.assertIn("detail=from=1 to=2", text)
-        self.assertIn("detail=from=2 to=3", text)
+        for step in MIGRATION_STEPS:
+            self.assertIn(f"detail=from={step - 1} to={step}", text)
 
     def test_an_already_current_database_records_only_that_it_was_opened(self) -> None:
         self.open_store()
@@ -313,6 +312,31 @@ class StoreEventTests(unittest.TestCase):
         lines = self.log.read_text(encoding="utf-8")
         self.assertIn("event=database.migrated detail=from=1 to=2", lines)
         self.assertNotIn("from=0 to=1", lines)
+
+    def test_every_step_the_current_build_can_run_is_re_run_safely(self) -> None:
+        """A version marker set back must not break the database: each step tolerates its own re-run.
+
+        This is the state a copied file or a hand-edited version produces. The alternative - a step that
+        raises ``duplicate column name`` - leaves a database that cannot be opened at all, which is why
+        the follow-up step checks for its columns before adding them (SQLite has no conditional
+        ``ADD COLUMN``).
+        """
+        store = self.open_store()
+        for step in MIGRATION_STEPS:
+            if step == 1:
+                # Version 0 with tables present is the state the store refuses outright - it cannot
+                # tell a half-written file from someone else's database - and that refusal has its own
+                # test. Every *later* step has to tolerate being re-run.
+                continue
+            store._connection.execute(f"PRAGMA user_version = {step - 1}")
+            store._connection.commit()
+            store.close()
+            store = CareerStore(str(self.database))
+            self.addCleanup(store.close)
+            self.assertEqual(
+                store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION,
+                f"reopening after a setback to {step - 1} must reach the current version",
+            )
 
     def test_saving_a_job_records_its_identifier_and_not_its_content(self) -> None:
         store = self.open_store()

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import date, datetime, timezone
 import platform
 import sys
 from pathlib import Path
@@ -48,7 +49,8 @@ from .config import database_path_for_run, describe_settings, resolve_settings
 from .diagnostics import describe_startup_failure, diagnostic_log_path, record_startup_failure
 from .event_log import LOG_FILE_NAME, MAX_LOG_BYTES, log_path, read_lines
 from .handlers import default_registry, describe_default_handlers, seed_default_tasks
-from .store import SCHEMA_VERSION, CareerStore
+from .store import SCHEMA_VERSION, CareerStore, PrivateWriteError, write_private_text_file
+from .followups import calendar_file_name, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
 # Imported as a namespace: ``default_registry`` here is the *handler* registry the worker runs, and the
@@ -138,6 +140,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--sources", action="store_true",
         help="Report each job source's permission state, adapter and health, then exit (changes nothing).",
+    )
+    actions.add_argument(
+        "--follow-ups", action="store_true",
+        help="List the applications whose follow-up day has arrived or is coming, then exit.",
+    )
+    actions.add_argument(
+        "--calendar-to", metavar="PATH",
+        help="Write follow-up reminders to a calendar file (.ics) at PATH, for your own calendar.",
     )
     parser.add_argument(
         "--worker-id", metavar="NAME", default=None,
@@ -380,6 +390,102 @@ def run_worker_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _follow_up_pairs(store: CareerStore) -> list[tuple]:
+    """The stored follow-up records paired with their listings, in a stable order.
+
+    A stored tracker whose listing has since been deleted is skipped *and counted*, so the report can say
+    so. Dropping it silently would make a disappearing reminder look like the app forgetting.
+    """
+    pairs = []
+    for tracker in store.list_follow_up_trackers():
+        job = store.get_job(tracker.listing_id)
+        if job is not None:
+            pairs.append((tracker, job))
+    return pairs
+
+
+def run_follow_ups(args: argparse.Namespace) -> int:
+    """List the applications whose follow-up day has arrived or is coming up, and nothing else.
+
+    Read-only: this never sets a day, never moves an application's status, and never contacts anybody.
+    The day compared against is *this machine's* local day, and the report says so, because "due today"
+    is a statement about the person's calendar rather than about UTC.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · follow-ups for {today.isoformat()} (local day)")
+    if not database.exists():
+        print("No database yet, so no follow-up days are recorded. Open the app to save applications "
+              "and set the day you plan to follow each one up.")
+        return EXIT_OK
+    with CareerStore(database) as store:
+        pairs = _follow_up_pairs(store)
+        upcoming = reminders(pairs, today)
+        print(summary(upcoming))
+        if upcoming:
+            print("")
+            for item in upcoming:
+                print(f"  {item.describe()}")
+        missing_listings = len(store.list_follow_up_trackers()) - len(pairs)
+        if missing_listings:
+            print("")
+            print(f"{missing_listings} record(s) have a follow-up day but no listing stored any more; "
+                  "they are not listed. Open the app to remove or re-link them.")
+    print("")
+    print("This report is read-only; no status was changed and nothing was sent.")
+    return EXIT_OK
+
+
+def run_calendar_export(args: argparse.Namespace) -> int:
+    """Write the recorded follow-ups to a calendar file at the path the person named.
+
+    Local only: a file on this machine, no calendar account, no credentials and no network. The file
+    holds what the person recorded (role, employer, their own note, the day) and is written through the
+    same owner-only write path as everything else, so it is not readable by other accounts on the
+    machine. An existing file is never overwritten in place silently: a name that is taken is reported.
+    """
+    target = Path(args.calendar_to).expanduser()
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · calendar export")
+    if not database.exists():
+        print("No database yet, so there are no follow-up days to export. Nothing was written.")
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        pairs = _follow_up_pairs(store)
+        upcoming = reminders(pairs, today)
+    if not upcoming:
+        print("No follow-up days are recorded, so no calendar file was written. Set a day on an "
+              "application in the window and run this again.")
+        return EXIT_REFUSED
+    if target.exists():
+        # Refusing rather than overwriting: the file holds somebody's plan, and a second export that
+        # quietly replaced the first would lose the reminders they had already imported elsewhere.
+        print(f"REFUSED: {target} already exists. Choose another name (for example "
+              f"{calendar_file_name(today)}) so the existing file is not replaced.", file=sys.stderr)
+        return EXIT_REFUSED
+    text = to_calendar(upcoming, now=datetime.now(timezone.utc))
+    try:
+        written = write_private_text_file(target, text)
+    except PrivateWriteError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    except OSError as exc:
+        print(f"REFUSED: {target} could not be written: {exc.strerror or exc}. Nothing was written.",
+              file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"Wrote {len(upcoming)} reminder(s) to {written}")
+    print(f"Import it into your own calendar when you like; the file is local to this machine "
+          f"({len(text.encode('utf-8'))} bytes, {summary(upcoming)})")
+    print("Nothing was sent anywhere, and no application status changed.")
+    return EXIT_OK
+
+
+def _local_today() -> date:
+    """Today's date on this machine, which is the day a person's own calendar is on."""
+    return datetime.now().date()
+
+
 def run_sources(args: argparse.Namespace) -> int:
     """Report what could be fetched from where, and why nothing is being fetched.
 
@@ -511,6 +617,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_seed_tasks(args)
         if args.sources:
             return run_sources(args)
+        if args.follow_ups:
+            return run_follow_ups(args)
+        if args.calendar_to:
+            return run_calendar_export(args)
         if args.worker:
             return run_worker(args)
         # Imported only when the window is actually opened, so the database commands work headless.

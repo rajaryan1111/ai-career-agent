@@ -19,7 +19,7 @@ from career_agent.handlers import (
     default_registry, default_tasks, describe_default_handlers, discovery_run, seed_default_tasks,
 )
 from career_agent.sources import SOURCE_QUALITY_GATE_PASSED, enabled_discovery_sources
-from career_agent.store import CareerStore
+from career_agent.store import SCHEMA_VERSION, CareerStore
 from career_agent.tasks import DEFAULT_TIMEZONE, HandlerOutcome, RunState, build_task
 from career_agent.worker import TaskContext, Worker, WorkerSettings
 import career_agent.handlers as handlers_module
@@ -81,7 +81,7 @@ class BackupSnapshotTests(HandlerTestCase):
         self.assertTrue(snapshot.is_file(), result.detail)
         self.assertIn(snapshot.name, result.detail)
         info = validate_app_database(snapshot)
-        self.assertEqual(info.schema_version, 3)
+        self.assertEqual(info.schema_version, SCHEMA_VERSION)
         if os.name == "posix":  # owner-only where the platform has modes to check
             self.assertEqual(stat.S_IMODE(snapshot.stat().st_mode), 0o600)
 

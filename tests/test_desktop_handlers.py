@@ -2775,7 +2775,11 @@ class DatabaseRestoreHandlerTests(HandlerTestCase):
         create_backup(Path(self.store.database_path), foreign, timestamp=RESTORE_STAMP)
         connection = sqlite3.connect(str(foreign))
         connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute("INSERT INTO application_tracker VALUES ('missing', 'discovered', NULL, 0, '2026-01-01')")
+        connection.execute(
+            """INSERT INTO application_tracker
+                   (listing_id, status, status_evidence, candidate_confirmed, updated_at)
+               VALUES ('missing', 'discovered', NULL, 0, '2026-01-01')"""
+        )
         connection.commit()
         connection.close()
         FILEDIALOG.path = str(foreign)

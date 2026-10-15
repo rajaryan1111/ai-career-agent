@@ -55,7 +55,7 @@ class SchemaTests(SchedulerStoreTestCase):
                      "SELECT name FROM sqlite_master WHERE type = 'table'")}
 
         self.assertEqual(version, SCHEMA_VERSION)
-        self.assertEqual(SCHEMA_VERSION, 3)
+        self.assertEqual(SCHEMA_VERSION, 4)
         for table in ("scheduled_task", "task_run", "worker_lease"):
             self.assertIn(table, names)
 

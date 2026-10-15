@@ -585,7 +585,10 @@ class BackupValidationTests(BackupTestCase):
             if version == min(SCHEMA_TABLES_BY_VERSION):
                 continue
             previous = SCHEMA_TABLES_BY_VERSION[version - 1]
-            self.assertTrue(set(previous) < set(names), f"schema {version} must only add tables")
+            self.assertTrue(set(previous) <= set(names),
+                            f"schema {version} must not drop a table another version declared")
+            self.assertEqual(names, tuple(sorted(names)),
+                             f"schema {version} must list its tables in a stable order")
 
 
 class RestoreTests(BackupTestCase):
@@ -1080,8 +1083,13 @@ class RestoreTests(BackupTestCase):
         populate(foreign)
         connection = sqlite3.connect(str(foreign))
         connection.execute("PRAGMA foreign_keys = OFF")
+        # Column names are spelled out rather than relying on positional order: the table gained
+        # columns in schema 4, and a positional insert here would be a test that breaks for the wrong
+        # reason and hides what it was written to check.
         connection.execute(
-            "INSERT INTO application_tracker VALUES ('missing-listing', 'discovered', NULL, 0, '2026-01-01')"
+            """INSERT INTO application_tracker
+                   (listing_id, status, status_evidence, candidate_confirmed, updated_at)
+               VALUES ('missing-listing', 'discovered', NULL, 0, '2026-01-01')"""
         )
         connection.commit()
         connection.close()

@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 from .core import (
+    validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
     ApplicationTracker, Availability, CandidateProfile, JobListing, duplicate_key,
     is_allowed_tracker_transition, require_confirmation_evidence, validate_activity_detail,
@@ -28,7 +29,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -40,6 +41,8 @@ SCHEMA_TABLES_BY_VERSION = {
     1: ("application_tracker", "candidate_profile", "job_listings"),
     2: ("application_activity", "application_tracker", "candidate_profile", "job_listings"),
     3: ("application_activity", "application_tracker", "candidate_profile", "job_listings",
+        "scheduled_task", "task_run", "worker_lease"),
+    4: ("application_activity", "application_tracker", "candidate_profile", "job_listings",
         "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
@@ -518,6 +521,27 @@ def _stored_text(value: object, noun: str, field: str) -> str:
     return value
 
 
+def _stored_date(value: object, listing_id: str) -> date | None:
+    """A stored ``YYYY-MM-DD`` column as a date, or a refusal naming the record.
+
+    Raises :class:`StoredRecordError` (a ``ValueError``) rather than ``None`` for text that is not a date:
+    a reminder silently disappearing is worse than an error naming the record, because the person would
+    never learn that the day they set is not being honoured.
+    """
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        parsed = date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise StoredRecordError(
+            f"the application record for {listing_id}",
+            f"its follow-up day is {value!r}, which is not a YYYY-MM-DD date",
+        ) from exc
+    return parsed
+
+
 def _stored_text_values(value: object, noun: str, field: str) -> list:
     """A stored list of strings, or refuse. A bare string is refused rather than split into letters.
 
@@ -672,6 +696,32 @@ def _migration_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v4(connection: sqlite3.Connection) -> None:
+    """Schema 4: two nullable columns recording the day a person plans to follow an application up.
+
+    Additive and non-destructive: ``ALTER TABLE ... ADD COLUMN`` appends a column without rewriting the
+    table, and existing rows get ``NULL`` - which is exactly right, because an existing record has no
+    follow-up planned and inventing one would be putting a reminder in somebody's list they never asked
+    for. Nothing is dropped, nothing is converted, and a database that never uses follow-ups is
+    unchanged apart from two empty columns.
+
+    The columns are plain text holding an ISO date (``YYYY-MM-DD``) and a short note. A date is stored as
+    a date rather than a timestamp on purpose: the person names a day, and a day has no time of day to
+    get wrong when the same database is opened in another timezone.
+
+    Each column is added only when it is missing. SQLite has no ``ADD COLUMN IF NOT EXISTS``, so the
+    check is explicit - the same defensiveness the other steps get from ``IF NOT EXISTS``. It matters in
+    two real cases: a database whose recorded version was set back by a person or by a copied file, and a
+    step that was interrupted after its first statement. Running the step twice must never fail, because
+    a failed step leaves a database that cannot be opened at all.
+    """
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(application_tracker)")}
+    if "follow_up_on" not in existing:
+        connection.execute("ALTER TABLE application_tracker ADD COLUMN follow_up_on TEXT")
+    if "follow_up_note" not in existing:
+        connection.execute("ALTER TABLE application_tracker ADD COLUMN follow_up_note TEXT")
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -680,7 +730,13 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (1, "create the profile, job listing and application tracker tables", _migration_to_v1),
     (2, "add the application activity log", _migration_to_v2),
     (3, "add the background task scheduler tables", _migration_to_v3),
+    (4, "add the follow-up plan columns to the application tracker", _migration_to_v4),
 )
+
+
+#: The version numbers of the steps above, in order, for callers that report or verify them. Derived
+#: from the migration table so it cannot drift from what actually runs.
+MIGRATION_STEPS: tuple[int, ...] = tuple(target for target, _, _ in _MIGRATIONS)
 
 
 class CareerStore:
@@ -909,16 +965,28 @@ class CareerStore:
             # be invisible to the very read (often on another connection) that verifies it.
             # ``status_evidence`` is compared with IFNULL because a stored NULL and an absent note mean
             # the same thing.
+            # A caller that read the follow-up fields and passed them in gets them guarded too: the
+            # condition is added only when the caller supplied them, so an older caller's ``expected``
+            # (status/evidence/confirmation) keeps working exactly as before.
+            follow_up_guard = ""
+            parameters: list[object] = [
+                tracker.status.value, tracker.status_evidence, int(tracker.candidate_confirmed),
+                tracker.follow_up_on.isoformat() if tracker.follow_up_on else None,
+                tracker.follow_up_note, timestamp, tracker.listing_id, str(expected.get("status")),
+                str(expected.get("status_evidence") or ""), int(bool(expected.get("candidate_confirmed"))),
+            ]
+            if "follow_up_on" in expected:
+                follow_up_guard = " AND IFNULL(follow_up_on, '') = ? AND IFNULL(follow_up_note, '') = ?"
+                parameters.extend([str(expected.get("follow_up_on") or ""),
+                                   str(expected.get("follow_up_note") or "")])
             with self._connection:
                 cursor = self._connection.execute(
                     """UPDATE application_tracker
-                          SET status = ?, status_evidence = ?, candidate_confirmed = ?, updated_at = ?
+                          SET status = ?, status_evidence = ?, candidate_confirmed = ?,
+                              follow_up_on = ?, follow_up_note = ?, updated_at = ?
                         WHERE listing_id = ? AND status = ? AND IFNULL(status_evidence, '') = ?
-                          AND candidate_confirmed = ?""",
-                    (tracker.status.value, tracker.status_evidence, int(tracker.candidate_confirmed),
-                     timestamp, tracker.listing_id, str(expected.get("status")),
-                     str(expected.get("status_evidence") or ""),
-                     int(bool(expected.get("candidate_confirmed")))),
+                          AND candidate_confirmed = ?""" + follow_up_guard,
+                    tuple(parameters),
                 )
                 matched = cursor.rowcount
             if matched != 1:
@@ -932,18 +1000,23 @@ class CareerStore:
         try:
             with self._connection:
                 self._connection.execute(
-                    """INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed, updated_at)
-                       VALUES (?, ?, ?, ?, ?)
+                    """INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed,
+                                                     follow_up_on, follow_up_note, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(listing_id) DO UPDATE SET status=excluded.status,
                          status_evidence=excluded.status_evidence, candidate_confirmed=excluded.candidate_confirmed,
+                         follow_up_on=excluded.follow_up_on, follow_up_note=excluded.follow_up_note,
                          updated_at=excluded.updated_at""",
                     (tracker.listing_id, tracker.status.value, tracker.status_evidence,
-                     int(tracker.candidate_confirmed), timestamp),
+                     int(tracker.candidate_confirmed),
+                     tracker.follow_up_on.isoformat() if tracker.follow_up_on else None,
+                     tracker.follow_up_note, timestamp),
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("Save the job listing before its application tracker.") from exc
         self._record("tracker.saved", f"id={tracker.listing_id} status={tracker.status.value} "
-                                      f"confirmed={int(bool(tracker.candidate_confirmed))}")
+                                      f"confirmed={int(bool(tracker.candidate_confirmed))}"
+                                      f" follow_up={tracker.follow_up_on.isoformat() if tracker.follow_up_on else 'none'}")
 
     def add_activity(self, listing_id: str, activity: ApplicationActivity) -> int:
         """Append one dated entry to a listing's history and return its ``activity_id``.
@@ -1589,6 +1662,15 @@ class CareerStore:
         only for a record that already carried the flag or that is being confirmed now,
         so a later status can keep or drop a real confirmation but cannot invent one.
         """
+        # The follow-up plan is checked here as well as where it is set, because storage is the last
+        # place a rule can be enforced: a note with no day would be a reminder nobody is ever shown.
+        if tracker.follow_up_on is not None:
+            validate_follow_up_date(tracker.follow_up_on)
+            validate_follow_up_note(tracker.follow_up_note)
+        elif tracker.follow_up_note:
+            raise ValueError(
+                "A follow-up note needs a day to appear on. Nothing was saved."
+            )
         if tracker.status is ApplicationStatus.CONFIRMED:
             # The same evidence floor the domain applies, enforced again here so a caller cannot
             # bypass it by writing straight to storage. Storage can prove the field is filled with
@@ -1629,7 +1711,9 @@ class CareerStore:
         deletes anything.
         """
         row = self._connection.execute(
-            "SELECT status, status_evidence, candidate_confirmed, updated_at FROM application_tracker WHERE listing_id=?",
+            """SELECT status, status_evidence, candidate_confirmed, updated_at, follow_up_on,
+                      follow_up_note
+                 FROM application_tracker WHERE listing_id=?""",
             (listing_id,),
         ).fetchone()
         if row is None:
@@ -1637,7 +1721,38 @@ class CareerStore:
         return {
             "status": row["status"], "status_evidence": row["status_evidence"],
             "candidate_confirmed": bool(row["candidate_confirmed"]), "updated_at": row["updated_at"],
+            "follow_up_on": row["follow_up_on"], "follow_up_note": row["follow_up_note"],
         }
+
+    def list_follow_up_trackers(self) -> tuple[ApplicationTracker, ...]:
+        """Every application that has a follow-up day recorded, soonest day first.
+
+        Read straight from the column, so a person's whole reminder list costs one query rather than a
+        read per application, and a record with no day is not read at all. A record whose stored day
+        cannot be parsed is reported as unreadable rather than skipped: silently dropping one reminder
+        would hide exactly the thing this list exists to show.
+        """
+        rows = self._connection.execute(
+            """SELECT listing_id, status, status_evidence, candidate_confirmed, follow_up_on,
+                      follow_up_note
+                 FROM application_tracker
+                WHERE follow_up_on IS NOT NULL
+                ORDER BY follow_up_on, listing_id"""
+        ).fetchall()
+        trackers: list[ApplicationTracker] = []
+        for row in rows:
+            try:
+                status = ApplicationStatus(row["status"])
+            except ValueError as exc:
+                raise TrackerStatusError(row["status"]) from exc
+            trackers.append(ApplicationTracker(
+                listing_id=row["listing_id"], status=status,
+                status_evidence=row["status_evidence"],
+                candidate_confirmed=bool(row["candidate_confirmed"]),
+                follow_up_on=_stored_date(row["follow_up_on"], row["listing_id"]),
+                follow_up_note=row["follow_up_note"],
+            ))
+        return tuple(trackers)
 
     def get_record_times(self, listing_id: str) -> dict | None:
         """When this device first and last wrote a listing, or ``None`` when it is not stored.
@@ -1660,7 +1775,9 @@ class CareerStore:
         stored status is not one this build recognises, so callers refuse safely and can say why.
         """
         row = self._connection.execute(
-            "SELECT listing_id, status, status_evidence, candidate_confirmed FROM application_tracker WHERE listing_id=?",
+            """SELECT listing_id, status, status_evidence, candidate_confirmed, follow_up_on,
+                      follow_up_note
+                 FROM application_tracker WHERE listing_id=?""",
             (listing_id,),
         ).fetchone()
         if row is None:
@@ -1672,6 +1789,8 @@ class CareerStore:
         return ApplicationTracker(
             listing_id=row["listing_id"], status=status,
             status_evidence=row["status_evidence"], candidate_confirmed=bool(row["candidate_confirmed"]),
+            follow_up_on=_stored_date(row["follow_up_on"], listing_id),
+            follow_up_note=row["follow_up_note"],
         )
 
     def delete_profile(self) -> bool:

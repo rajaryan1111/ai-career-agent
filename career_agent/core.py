@@ -6,7 +6,7 @@ future desktop application to call and test.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping, Sequence
@@ -474,12 +474,77 @@ def selectable_tracker_statuses(current: ApplicationStatus) -> tuple[Application
     return tuple(status for status in ApplicationStatus if status is current or status in permitted)
 
 
+#: The longest a follow-up note may be. Long enough for "ask Priya about the interview panel", short
+#: enough that it stays a reminder rather than becoming a document.
+MAX_FOLLOW_UP_NOTE_LENGTH = 300
+
+
+def validate_follow_up_date(value: date) -> date:
+    """Return the day, or raise ``ValueError`` when it cannot be a day to act on.
+
+    The bounds are the same as an activity date's, for the same reason: a mistyped year (``0202``,
+    ``20226``) should be refused where it is typed rather than quietly stored as a reminder nobody will
+    ever see.
+    """
+    if not isinstance(value, date) or isinstance(value, datetime):
+        raise ValueError("Give the follow-up a day as YYYY-MM-DD.")
+    if not _MIN_ACTIVITY_YEAR <= value.year <= _MAX_ACTIVITY_YEAR:
+        raise ValueError(
+            f"The follow-up day must be a real calendar date between {_MIN_ACTIVITY_YEAR} and "
+            f"{_MAX_ACTIVITY_YEAR}; {value.isoformat()} looks like a typo."
+        )
+    return value
+
+
+def validate_follow_up_note(note: str | None) -> str | None:
+    """Return the trimmed note (or ``None``), refusing one that is blank or too long."""
+    if note is None:
+        return None
+    if not isinstance(note, str):
+        raise ValueError("A follow-up note must be text.")
+    text = " ".join(note.split())
+    if not text:
+        return None
+    if len(text) > MAX_FOLLOW_UP_NOTE_LENGTH:
+        raise ValueError(
+            f"A follow-up note can hold at most {MAX_FOLLOW_UP_NOTE_LENGTH} characters (this one is "
+            f"{len(text)}). Keep it to what you will need on the day."
+        )
+    return text
+
+
 @dataclass(frozen=True)
 class ApplicationTracker:
     listing_id: str
     status: ApplicationStatus = ApplicationStatus.DISCOVERED
     status_evidence: str | None = None
     candidate_confirmed: bool = False
+    follow_up_on: date | None = None
+    follow_up_note: str | None = None
+
+    def with_follow_up(self, on: date | None, *, note: str | None = None) -> "ApplicationTracker":
+        """Return the tracker with a day to act on set, changed, or cleared.
+
+        This is a *plan*, not a status: setting a reminder to chase a reply does not make the
+        application chase itself, and nothing here changes ``status``. That separation is the whole
+        point - ordinary activity must never advance an application, and neither must a reminder.
+
+        A note without a day is refused rather than stored, because a reminder with no day is a note
+        the person will never be shown at the right time; clear the day and the note goes with it.
+        """
+        if on is None:
+            if note:
+                raise ValueError(
+                    "A follow-up note needs a day to appear on. Set the day as well, or clear both."
+                )
+            return replace(self, follow_up_on=None, follow_up_note=None)
+        day = validate_follow_up_date(on)
+        return replace(self, follow_up_on=day, follow_up_note=validate_follow_up_note(note))
+
+    @property
+    def has_follow_up(self) -> bool:
+        """Whether a day to act on has been recorded."""
+        return self.follow_up_on is not None
 
     def transition(
         self, new_status: ApplicationStatus, *, evidence: str | None = None,

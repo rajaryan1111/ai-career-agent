@@ -269,7 +269,17 @@ class RestoreCommandTests(CommandLineTestCase):
         with mock.patch.object(store_module, "_MIGRATIONS", steps):
             with CareerStore(str(older)) as store:
                 store.save_job(listing("only-in-the-older-backup"))
-                store.save_tracker(ApplicationTracker("only-in-the-older-backup"))
+                # The tracker row is written here as the older build wrote it: an application record
+                # at the initial status, with only the columns that schema had. Calling today's
+                # ``save_tracker`` would name a column this file does not have yet, which is not how a
+                # file left behind by an older build looks.
+                with store._connection:
+                    store._connection.execute(
+                        """INSERT INTO application_tracker
+                               (listing_id, status, status_evidence, updated_at)
+                           VALUES (?, 'discovered', NULL, '2026-01-01T00:00:00+00:00')""",
+                        ("only-in-the-older-backup",),
+                    )
 
         code, out, err = self.run_command(["--restore-from", str(older), "--yes"])
 

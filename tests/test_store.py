@@ -839,8 +839,8 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 3)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 3)
+        self.assertEqual(SCHEMA_VERSION, 4)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 4)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
