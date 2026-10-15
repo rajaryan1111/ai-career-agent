@@ -3150,4 +3150,19 @@ now take the window from a context manager that closes it inside the folder's bl
 rather than rewritten. Still open on this run: `SuiteConnectionLeakTests` on every macOS and Windows leg.
 Verified locally: the three desktop suites together (376 tests, `OK`), the full suite 1778 tests
 `OK (skipped=13)`, compileall clean.
+**2026-10-16, this session — the matrix is fully green for the first time, and one register entry was wrong.**
+Run `38823626117` at `3a88e6e` (the D34 commit) completed **13/13 jobs green**: every display-backed leg reports
+`RESULT: PASS - 82 checks passed` with workflow K's K1/K2/K3 on Linux, macOS and Windows, `RESULT: PASS - 14
+checks passed` for the smoke workflow, and `Ran 1778 tests ... OK` per leg (skips 13/20/39/46 by platform). So
+D33 and D34 are verified where they were measured, not only structurally: the 780-pixel wrap fits macOS's 826
+x453 page, the scrolling `Background tasks` tab holds, and Windows no longer errors on the two tests D34 fixed.
+The same run also showed that a claim already written into the register was wrong: `SuiteConnectionLeakTests`
+had been recorded in section 22 as a platform-specific connection leak on all four macOS/Windows legs, but that
+test asserts the child suite exited zero *before* it looks at any counts, so what was seen on those legs was
+workflow K failing inside the child run - the cascade section 4.1 had already described, reported by a test
+whose name says "leak". No unclosed connection was ever demonstrated there, and the failure is green on all five
+legs now that K passes. The correction is appended beside the original paragraph in section 22 (and pointed to
+from section 23) rather than edited into it, and section 24 now carries the verification the run it describes
+could not provide; `phases.md` cites the green run in the Phase 1 row. Nothing in
+`tests/test_resource_lifecycle.py` was changed to bring that about.
 

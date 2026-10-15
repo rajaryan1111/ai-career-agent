@@ -859,6 +859,18 @@ green on every Linux leg of the matrix and in a local checkout, so it is platfor
 register rather than a footnote: the leak watch exists to catch exactly this, and a failure of it is not
 something to leave standing in a green matrix.
 
+**Corrected on 2026-10-16, after run 38823626117 (green on all thirteen jobs).** The paragraph above reads more
+into that failure than the evidence supported, and the correction is left beside it rather than edited into it.
+`SuiteConnectionLeakTests` runs the whole suite again in a child process and asserts, *before* it looks at any
+counts, that the child exited zero (``assertEqual(completed.returncode, 0, "the suite failed in the child run")``).
+On those four legs the child suite failed - workflow K failed in it - so that first assertion fired and the test
+reported a failure whose name says "leak" while nothing had been counted at all. The cascade was already
+recorded in this file (section 4.1, "the child-suite leak watch (which cascades from any suite failure)"). No
+unclosed connection was ever demonstrated on macOS or Windows; the sentence "so it is platform-specific" was an
+inference from the leg it appeared on, not a measurement. The evidence for this reading is the run that made K
+pass on every leg: the leak watch is green on all five, with the full suite's own counts. Nothing in
+`tests/test_resource_lifecycle.py` was changed to bring that about.
+
 ## 23. D33 — two tabs still asked for more room than they had (run 38820361412 at `494d931`, 2026-10-16)
 
 **How it was found.** The run that carried D32's fix measured workflow K again, and it failed on the same three
@@ -918,7 +930,9 @@ real-display verdict for this fix is the CI run on the commit that carries it - 
 what the window *asks for*, not whether Tk had room. The macOS pages are shorter than the 900x600 this
 application declares, and `judge_layout_at` reports both sizes and declines to judge a window below that
 minimum; on these legs it judged, so the fixed layout is being held to the same standard there. The
-`SuiteConnectionLeakTests` failure on all four macOS/Windows legs is unchanged by this work and remains open.
+`SuiteConnectionLeakTests` failure on all four macOS/Windows legs is unchanged by this work - see the correction
+at the end of section 22: that failure was the child suite failing, not a counted leak, and it is green on every
+leg of run 38823626117.
 
 ## 24. D34 — the wrap number had to come down to the smallest page any platform gives, and two new tests errored on Windows (run 38822542797 at `7ca7879`, 2026-10-16)
 
@@ -954,3 +968,12 @@ D33 fix in place - a real display, measured. macOS's K1 is *expected* to pass wi
 not evidence: the next run on this commit is what says so. Windows' layout checks pass on this run's legs.
 `SuiteConnectionLeakTests` still fails on the macOS and Windows legs (unchanged by any of this, and still the
 one open defect from these runs).
+
+**Verified by the next run: 38823626117 at `3a88e6e`, 13/13 jobs green - the first fully green matrix in this
+register.** Every display-backed leg reports `RESULT: PASS - 82 checks passed` (workflow K included: K1, K2 and
+K3 on Linux, macOS and Windows) and `RESULT: PASS - 14 checks passed` for the smoke workflow, with the suite's
+own `Ran 1778 tests ... OK (skipped=13/20/39/46, by platform)` on each leg. So the 780-pixel wrap does fit the
+826x453 macOS page, the scrolling `Background tasks` tab holds on every platform, and Windows no longer errors
+on the two tests this section is about. `SuiteConnectionLeakTests` is green on all five legs as a consequence -
+see the correction at the end of section 22, which is the part of this register that had to be revised rather
+than extended.
