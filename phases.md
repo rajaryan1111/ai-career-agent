@@ -438,3 +438,62 @@ extra and the installed-command rehearsal) — so this is an installable alpha, 
 and no human has yet run it on either platform.
 
 Résumé import is local and text-only: there is no OCR, so a scanned PDF with no text layer is refused with an explanation rather than guessed at, and PDF reading needs the optional `pypdf` library (DOCX import uses the standard library alone). A remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.
+
+---
+
+## Product Vision Alignment and Delivery Sequence (2026-10-16)
+
+The north star is a resume-first autonomous career operations agent. The user completes initial profile/policy/account setup once; the software then performs routine, policy-compliant work without per-application approval, within source permissions and explicit stop conditions. This is target state, not a claim that full automation is implemented.
+
+### Phase A — Baseline and HR contact import
+- Inspect and reuse existing resume/CSV importers, SQLite schema/migration contract, desktop views, activity events, backup/restore and tests.
+- Complete offline HR CSV parsing, preview, duplicate/conflict review and explicit commit semantics.
+- Preserve provenance and suppression/opt-out history; do not transmit contact data.
+- Test malformed rows, duplicate groups, conflicts, missing names, BOM/encoding, re-import and cancellation/no-write behavior with synthetic fixtures.
+
+### Phase B — Resume-derived profile and guided setup
+- Extract profile facts from supported resume formats and retain provenance.
+- Separate confirmed facts, uncertain extractions and missing values.
+- Collect essential application fields once and persist target roles, preferences, eligibility, exclusions and action limits.
+- Add profile review/edit/versioning and tests preventing invented facts.
+
+### Phase C — Durable job and application ledger
+- Audit existing job/application/event schema and reuse it where possible.
+- Define stable job/application identity across sources and discovery runs.
+- Track discovered, evaluated, prepared, blocked, submitted, submission-unknown, interview, assessment, rejected, offer, withdrawn and follow-up states.
+- Store timestamps, source URLs, external IDs, artifact versions, decision reasons and submission evidence.
+- Make side effects idempotent; reconcile uncertain outcomes before retrying; test migrations, backup and restore.
+
+### Phase D — Source feasibility and scheduled discovery
+- Build a source-by-source feasibility/permission matrix for official company career pages, supported ATS/public feeds, LinkedIn, Unstop, Internshala, Naukri.com and other relevant sources.
+- Document access method, platform terms/permissions, authentication, rate limits, freshness, fields, failure modes and submission support.
+- Implement timezone-aware twice-daily scheduling, run history, bounded retries, cancellation and pause/stop controls.
+- Enable only sources that pass documented feasibility, permission and test gates. No unsupported scraping or human-verification bypass.
+
+### Phase E — Application preparation and controlled execution
+- Generate role-specific resume, cover letter and screening responses from verified facts only.
+- Validate required fields, eligibility and policy before side effects.
+- Implement only source-specific submission routes that are permitted and testable.
+- Execute routine applications autonomously within saved global policy, without per-job approval, when no required fact or human attestation is unresolved.
+- Stop affected tasks for missing facts, sensitive/legal attestations, identity verification, CAPTCHA/OTP, platform restriction or suspicious posting.
+- Mark submitted only with evidence; reconcile uncertain outcomes before retrying.
+
+### Phase F — Authorized email outreach and response tracking
+- Connect a supported mail provider with least-privilege permissions and revocation.
+- Import HR contacts privately; resolve duplicate/conflict queues and enforce suppression, opt-outs, campaign limits and cross-run idempotency.
+- Test draft generation and attachment correctness before enabling real sends.
+- Enable personalized internship outreach only after explicit global authorization and verified contact/campaign eligibility.
+- With separately authorized mailbox access, track actual replies, bounces, delivery evidence and bounded follow-ups.
+
+### Phase G — Reporting, resilience and release readiness
+- Deliver run summaries, daily/weekly reports, deadline/follow-up alerts and actionable failure explanations.
+- Validate pause/stop-all, permission revocation, secure credentials, privacy, export/delete, backup and restore.
+- Run regression, migration, scheduler, idempotency, adapter-contract and mocked end-to-end tests.
+- Document only verified capabilities and source coverage.
+
+### Release gates and invariants
+- Keep source discovery, email sending and application submission independently fail-closed until their own gates pass.
+- Never bypass CAPTCHA/OTP, identity verification, platform restrictions or required human attestations.
+- No real external applications or emails in tests.
+- No personal contact data in public repository, fixtures, CI output, screenshots or telemetry.
+- This documentation update does not merge to main or change unrelated PR state.
