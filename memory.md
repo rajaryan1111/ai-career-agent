@@ -2499,3 +2499,62 @@ this increment (1527 plus the five documented-command tests). Before the ignored
 ran instead of skipping (which is why an intermediate run read `skipped=12`). No assertion was
 weakened. Mutation checks re-run on the new code: reverting the two source files was executed and fails the new
 tests, and the before/after exit codes were measured on the same database.
+
+## 2026-10-15 — Manual acceptance run: 98 steps on a headless machine, four defects, and the refusal that now reaches every command
+
+**The campaign was executed, not planned.** The 98-step manual checklist was run on the only machine available
+(a headless Linux sandbox, CPython 3.11.2, no display, no Tkinter, no `sqlite3` CLI). 22 numbered steps passed,
+76 are blocked for a named missing capability (almost all for the absent window), none failed, and six of the
+seven preconditions passed. The per-step state is in the checklist itself and the full record — command,
+observed result, status, and the before/after evidence for every fix — is
+[`research/local-alpha-manual-acceptance-run-2026-10-15.md`](research/local-alpha-manual-acceptance-run-2026-10-15.md).
+Headless execution of a *window* checklist was possible because most steps have two halves: what the window
+does, and what the record must hold afterwards. The record half was driven through the same store and domain
+layer the dialogs use, in 48 assertions that each printed what they observed.
+
+**Four defects, all found by executing the steps rather than by reading the code.**
+
+1. **The progress report counted a round nobody had attended as one whose outcome was recorded.** A round saved
+   for tomorrow stores `outcome='awaiting'`, and the count was `record.outcome is not None` under the label
+   "your own reading of the round, saved after it happened" — so a future interview appeared to have been read
+   back to itself. The count now excludes `awaiting`; the regression test fails before the fix with `3` where
+   the label promises `2`.
+2. **A readable database holding one unreadable record was reported as a start-up that failed.** `--doctor`,
+   `--analytics`, `--follow-ups` and friends had been given the refusal in the release rehearsal, but
+   `--preview-calendar-export`, `--calendar-to`, `--draft-follow-up` and `--record-follow-up` still reached the
+   top-level handler: `COULD NOT START … the application did not start`, exit **3**, and a start-up note written
+   beside the data for a start-up that never happened. The handler now refuses a database it cannot read for
+   every command (one sentence, exit 2, no note) and describes a start-up only when the window is what was
+   asked for — the window is the only thing that really starts.
+3. **An import into such a database wrote part of the file and then refused, saying nothing had been written.**
+   Row counts on a refused `--import-from … --yes`: profile 0→1, employment 0→3, education 0→2, and the stored
+   listing's payload rewritten, behind the sentence "Nothing was changed or repaired". The import now sweeps
+   its target read-only with the same decoder sweep the doctor uses and refuses before it plans or applies
+   anything; the same command now leaves every row and the file's bytes untouched.
+4. **A refusal claimed a draft had been written when nothing was on disk.** `--draft-follow-up j1
+   --mock-ledger …` with no recipient printed "the draft was written but not performed (invalid)" and exited 2
+   with no file anywhere. One sentence served two states; it now names what happened (no file written, or the
+   path that was written), and the test that had pinned the old wording could not see the missing file.
+
+**The rule was extended rather than patched per command.** `rules.md`'s diagnostic invariant now says the
+refusal reaches every command and that a command which writes checks first; `design.md` states that the window
+is the only start-up path; `architecture.md` records the import's pre-write sweep; the README's unreadable-record
+bullet says an import into such a database is refused before it writes anything. The release-readiness audit
+cross-references the run in its defect and coverage sections, and its flag count was corrected (21, not 20).
+
+**What the run could not do, and said so.** Every window step is BLOCKED: no display, no Tkinter, no X tooling.
+The résumé steps are blocked twice over (no window, and the optional `pypdf` extra is absent; the 12 PDF tests
+skip for the same reason). A real calendar application and a mail client are not present, so "import the `.ics`
+into your calendar" and "watch for a mail window" are unrun. macOS, Windows and Python 3.14 remain unexecuted and
+unclaimed. Nothing was simulated: an assertion that a unit test covers a related rule is never reported as the
+step passing.
+
+**Test reading.** 1559 tests, `OK (skipped=13)` — 12 need the optional `pypdf` extra and one runs only where
+the project is installed. Nine tests were added here (seven covering the damaged-record and refusal cases, one for the
+analytics count, one for the saved-draft message), and each fix has a fail-before check that was actually
+executed: reverting the source hunk makes the new test fail (exit 3 vs 2
+for defect 2, `6` failures for the command group, `3` vs `2` for the analytics count, and the file claim for
+defect 4). The job-source CSV was not touched (`input_sha256 0356b093…`, 83 records), `compileall` is clean,
+`SOURCE_QUALITY_GATE_PASSED` stays `False` and `enabled_discovery_sources()` stays empty. The wheel built and
+installed during the run was byte-different across two builds of the same tree while every entry's *content*
+was identical: a wheel hash identifies one build, not one revision.

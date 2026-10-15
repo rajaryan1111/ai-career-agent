@@ -315,7 +315,26 @@ class DraftFollowUpCommandTests(IntegrationCommandTestCase):
         self.assertIn("[invalid]", out)
         self.assertIn("recipient", out)
         self.assertIn("not performed (invalid)", err)
+        self.assertIn("no file was written", err,
+                      "a refusal after saving nothing must not say a draft was written")
         self.assertFalse(ledger.exists(), "nothing was performed, so there was nothing to record")
+
+    def test_a_saved_draft_that_the_mock_refuses_says_which_file_was_written(self):
+        """The other state: the person asked for a file, the file exists, and the message names it."""
+        self.add_application("j1", days=3)
+        target = self.folder / "follow-up.txt"
+        ledger = self.folder / "ledger.json"
+
+        code, out, err = self.run_cli("--draft-follow-up", "j1", "--save-draft", str(target),
+                                      "--mock-ledger", str(ledger))
+
+        self.assertEqual(code, 2)
+        self.assertIn("[invalid]", out)
+        self.assertIn("not performed (invalid)", err)
+        self.assertIn(str(target), err, "the message must name the file that was written")
+        self.assertTrue(target.is_file())
+        self.assertIn("DRAFT ONLY", target.read_text(encoding="utf-8"))
+        self.assertFalse(ledger.exists())
 
     def test_a_ledger_that_cannot_be_read_stops_the_command_and_says_why(self):
         self.add_application("j1", days=3)

@@ -314,17 +314,43 @@ def _nearest_existing(path: Path) -> Path | None:
     return None
 
 
-def _refuse_unreadable_records(exc: Exception) -> int:
-    """Report a stored record this build cannot read, having written nothing.
+#: The closing sentence of every refusal to read a database, so one answer is worded one way whichever
+#: command reaches the failure first.
+_REFUSAL_ADVICE = ("Nothing was changed or repaired. `python -m career_agent --doctor` reports which record "
+                   "it is, and a verified backup taken earlier can be restored over it.")
+
+
+def _refuse_unreadable_records(exc: Exception | None = None, *, problems: tuple[str, ...] = ()) -> int:
+    """Report a database this build cannot read, having written nothing.
 
     Every read-only report goes through this rather than letting the failure reach the top-level handler,
-    which would describe a damaged row as "COULD NOT START" and exit with an unexpected-failure status. The
-    message names what could not be read - never its contents - says nothing was changed or repaired, and
-    points at the doctor, which reads the same records without writing and names the row itself.
+    which would describe a damaged row as "COULD NOT START" and exit with an unexpected-failure status. Two
+    different failures arrive here and they are not described the same way: a *stored record* this version
+    cannot decode, and a *file* that cannot be read as a database at all (a text file with the wrong name, a
+    truncated download). Saying "this database holds a record this version cannot read" about a file that
+    holds no records would send somebody looking for a row that does not exist, so the file-level refusal
+    says what actually happened. In both cases the message names what failed - never a record's contents -
+    says nothing was changed or repaired, and points at the doctor, which reads the same file without
+    writing and gives its own reason.
+
+    ``problems`` is the other way in: the sentences the read-only sweep found before a command that *writes*
+    touched anything. A command that plans to write has to know this first, because applying part of its work
+    and failing halfway would leave a half-written database behind a message saying nothing was written.
     """
+    if problems:
+        print("REFUSED: this database holds a record this version cannot read:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        print(_REFUSAL_ADVICE, file=sys.stderr)
+        return EXIT_REFUSED
+    if isinstance(exc, sqlite3.Error):
+        print(f"REFUSED: this database file could not be read, so nothing was reported: {exc}",
+              file=sys.stderr)
+        print("Nothing was changed or repaired. `python -m career_agent --doctor` names the file and the "
+              "reason, and a verified backup taken earlier can be restored over it.", file=sys.stderr)
+        return EXIT_REFUSED
     print(f"REFUSED: this database holds a record this version cannot read: {exc}", file=sys.stderr)
-    print("Nothing was changed or repaired. `python -m career_agent --doctor` reports which record it is, "
-          "and a verified backup taken earlier can be restored over it.", file=sys.stderr)
+    print(_REFUSAL_ADVICE, file=sys.stderr)
     return EXIT_REFUSED
 
 
@@ -625,6 +651,13 @@ def run_import(args: argparse.Namespace) -> int:
               "run the app or the commands once first, then import.")
         return EXIT_REFUSED
     with CareerStore(database) as store:
+        # An import is planned and then applied to the whole file. If the file holds a record this build
+        # cannot read, the apply would write the parts it can and fail on that record - leaving a
+        # part-written database behind a refusal that says nothing was written. So the file is swept first,
+        # read-only, and the command refuses before it plans or writes anything.
+        problems = unreadable_stored_records(database)
+        if problems:
+            return _refuse_unreadable_records(problems=problems)
         try:
             plan = importer.plan_import(store, document, source=str(source))
         except importer.ImportRefused as exc:
@@ -1092,6 +1125,7 @@ def run_draft_follow_up(args: argparse.Namespace) -> int:
     print("-" * 72)
     print(integrations.draft_as_text(draft).rstrip("\n"))
     print("-" * 72)
+    written_path: Path | None = None
     if args.save_draft:
         target = Path(args.save_draft).expanduser()
         if target.exists():
@@ -1106,6 +1140,7 @@ def run_draft_follow_up(args: argparse.Namespace) -> int:
             print(f"REFUSED: {target} could not be written: {exc.strerror or exc}. Nothing was written.",
                   file=sys.stderr)
             return EXIT_REFUSED
+        written_path = written
         print(f"Wrote the draft to {written} (a plain text file on this machine, not a message that was sent).")
     if not args.mock_ledger:
         print("Nothing was attempted: no email integration is enabled in this build, so this draft could not "
@@ -1115,7 +1150,18 @@ def run_draft_follow_up(args: argparse.Namespace) -> int:
     result = integrations.dispatch_with_retry(integration, draft)
     print(result.describe())
     if not result.succeeded:
-        print(f"REFUSED: the draft was written but not performed ({result.outcome.value}).", file=sys.stderr)
+        # Two different states arrive here and the sentence has to fit the one that happened: a draft saved
+        # to a file and then refused, and a draft that was never written anywhere because the request was
+        # missing a fact. Saying "the draft was written" in the second case sends somebody looking for a file
+        # that does not exist - reproduced from the acceptance run on 2026-10-15, where a draft with no
+        # recipient printed that sentence and left nothing on disk.
+        if written_path is None:
+            print(f"REFUSED: no file was written and the draft was not performed "
+                  f"({result.outcome.value}); the preview above is not a file on this machine.",
+                  file=sys.stderr)
+        else:
+            print(f"REFUSED: the draft was written to {written_path} but not performed "
+                  f"({result.outcome.value}).", file=sys.stderr)
         return EXIT_REFUSED
     return EXIT_OK
 
@@ -1369,6 +1415,10 @@ def _stop_event_installed():
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(argv)
+    #: Whether the person asked for the window rather than a command. Only the window branch below sets
+    #: it, and every command keeps it False, so the failure handler can tell a start-up apart from a
+    #: command that could not read the database it was pointed at.
+    opening_the_window = False
     try:
         if args.backup_to:
             return run_backup(args)
@@ -1418,12 +1468,25 @@ def main(argv: list[str] | None = None) -> int:
             return run_worker(args)
         # Imported only when the window is actually opened, so the database commands work headless.
         from .desktop import main as run_desktop
+        # Opening the window is the one thing the person can ask for that really is a start-up, so a
+        # database it cannot read is described by the start-up handler below. Every command above is a
+        # report or an action that runs to completion: for those the same failure is a refusal.
+        opening_the_window = True
         run_desktop(database_path=args.database)
         return EXIT_OK
     except BackupError as exc:  # defensive: the actions above already handle their own failures
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     except Exception as exc:  # noqa: BLE001 - report honestly rather than showing a bare traceback
+        if not opening_the_window and isinstance(exc, (StoredRecordError, TrackerStatusError, sqlite3.Error)):
+            # A record this build cannot read, or a file that cannot be read as a database at all, is a
+            # refusal rather than a crash. The read-only reports already word it that way; routing the
+            # commands that read the same records through the same sentence is what makes the answer the
+            # same whichever one is asked first. Without this, a damaged record in a command that is not
+            # one of those reports was reported as "the application stopped while starting up" - with a
+            # start-up note written beside the data for a start-up that never happened, and a status
+            # meaning "unexpected failure" where every other path uses the documented refusal.
+            return _refuse_unreadable_records(exc)
         # Start-up failures are explained in plain language with local paths redacted, and kept in a
         # bounded owner-only note beside the app data, because a terminal transcript is easy to paste
         # somewhere and must not carry candidate data, credentials, or filesystem locations.

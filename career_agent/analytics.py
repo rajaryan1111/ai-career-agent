@@ -29,7 +29,8 @@ from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
 from .core import (
-    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, InterviewRound,
+    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, InterviewOutcome,
+    InterviewRound,
 )
 
 #: The smallest number of applications a rate may be computed over. Chosen so that one event moves the
@@ -362,7 +363,11 @@ def build_report(
         Count("Rounds whose day is today or earlier", sum(1 for record in rounds if record.scheduled_on <= today),
               "the planned day has arrived; nothing here claims the interview took place"),
         Count("Rounds where you recorded how it went",
-              sum(1 for record in rounds if record.outcome is not None),
+              # ``awaiting`` is a stored outcome that means "it has not happened yet", so counting it
+              # would report a future round as one the person had already read back to themselves. The
+              # label above says "saved after it happened", and the count has to mean that.
+              sum(1 for record in rounds
+                  if record.outcome is not None and record.outcome is not InterviewOutcome.AWAITING),
               "your own reading of the round, saved after it happened"),
         Count("Rejections recorded with evidence", len(rejected),
               "a status the app refuses to store without a confirmed employer response"),

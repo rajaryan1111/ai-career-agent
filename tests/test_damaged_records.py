@@ -22,15 +22,18 @@ from __future__ import annotations
 import contextlib
 import io
 import sqlite3
+import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 from pathlib import Path
 
 import career_agent.__main__ as cli
 from career_agent.core import (
-    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability, InterviewStage,
-    JobListing,
+    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
+    InterviewStage, JobListing,
 )
 from career_agent.store import (
     SCHEMA_VERSION, CareerStore, TrackerStatusError, unreadable_stored_records,
@@ -49,11 +52,11 @@ class DisposableDatabaseTestCase(unittest.TestCase):
         self.database = self.folder / "career_agent.sqlite3"
         self.today = date.today()
 
-    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+    def run_cli(self, *arguments: object) -> tuple[int, str, str]:
         """Run the real parser and the real command; return (exit code, stdout, stderr)."""
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main([*arguments, "--database", str(self.database)])
+            code = cli.main([*(str(argument) for argument in arguments), "--database", str(self.database)])
         return code, out.getvalue(), err.getvalue()
 
     def write_one_of_every_record(self, listing_id: str = "j1") -> None:
@@ -333,6 +336,184 @@ class ReadOnlyReportsOnDamagedRecordsTests(DisposableDatabaseTestCase):
         self.assertIn("Nothing was changed or repaired", err)
         # A refusal must not be dressed up as a report: no metric is printed after it.
         self.assertNotIn("Progress from this database", out.splitlines()[-1])
+
+
+class EveryCommandThatReadsTheRecordTests(DisposableDatabaseTestCase):
+    """The refusal has to be the same whichever command reaches the record first.
+
+    The read-only reports word it themselves; the commands that write - a draft, a calendar file, an
+    import - used to reach the same record through the failure handler, which describes a *start-up* that
+    stopped and leaves a note beside the data. A readable database holding one unreadable row is not a
+    start-up failure, and a command that never started a window must not say it did. Reproduced before this
+    test existed, from the acceptance run on 2026-10-15: four of these commands exited 3 with
+    "COULD NOT START ... the application did not start".
+    """
+
+    def assert_refused_cleanly(self, code: int, out: str, err: str, target: Path | None = None) -> None:
+        self.assertEqual(code, cli.EXIT_REFUSED, f"exit {code}: {err}")
+        self.assertIn("REFUSED", err)
+        self.assertIn(UNKNOWN_STATUS, err, "the refusal must name what could not be read")
+        self.assertIn("--doctor", err, "the refusal must say how to find which record it is")
+        self.assertNotIn("COULD NOT START", err + out)
+        self.assertNotIn("Traceback", err + out)
+        if target is not None:
+            self.assertFalse(target.exists(), f"{target.name} was written despite the refusal")
+        note = self.database.parent / "logs" / "startup-diagnostics.log"
+        self.assertFalse(note.exists(), "a refusal is not a start-up failure, so no start-up note is written")
+
+    def test_the_writing_commands_refuse_the_record_the_same_way_the_reports_do(self) -> None:
+        self.write_one_of_every_record()
+        self.damage_status()
+        before = self.bytes_of_database()
+        calendar = self.folder / "follow-ups.ics"
+        draft = self.folder / "draft.txt"
+        commands = (("--preview-calendar-export", None),
+                    ("--calendar-to", calendar),
+                    ("--draft-follow-up", "j1"),
+                    ("--record-follow-up", "j1"))
+        for command, value in commands:
+            with self.subTest(command=command):
+                target = draft if command == "--draft-follow-up" else value
+                arguments = [command] if value is None else (command, value)
+                if command == "--draft-follow-up":
+                    arguments = (command, value, "--save-draft", str(draft))
+                code, out, err = self.run_cli(*arguments)
+                self.assert_refused_cleanly(code, out, err, target if isinstance(target, Path) else None)
+        self.assertEqual(self.bytes_of_database(), before, "a refused command wrote to the database")
+
+    def test_a_file_that_is_not_a_database_is_refused_by_those_commands_too(self) -> None:
+        self.database.write_text("this is not a database", encoding="utf-8")
+        before = self.bytes_of_database()
+
+        code, out, err = self.run_cli("--preview-calendar-export")
+
+        self.assertEqual(code, cli.EXIT_REFUSED)
+        self.assertIn("could not be read", err)
+        self.assertNotIn("COULD NOT START", err + out)
+        self.assertEqual(self.bytes_of_database(), before)
+
+    def rows_of_every_table(self) -> dict[str, list[tuple]]:
+        """Every row of every table, so "nothing was written" can be checked as a fact rather than a claim."""
+        connection = sqlite3.connect(str(self.database))
+        connection.row_factory = sqlite3.Row
+        try:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                    for table in tables}
+        finally:
+            connection.close()
+
+    def test_an_import_into_a_database_with_an_unreadable_record_writes_nothing(self) -> None:
+        """The refusal must come before the writing, not after half of it.
+
+        An import carries a profile, listings, application records, a follow-up plan and history, and it is
+        applied record by record. Applying it to a file that holds a record this build cannot read wrote the
+        parts that came first and then refused - so the message "Nothing was changed or repaired" was
+        printed over a database that had gained a profile, three employment records, two education records
+        and a rewritten listing. Reproduced before this test existed, from the acceptance run on
+        2026-10-15: the source below is the shape that reaches it, a file exported from this same database
+        before one record became unreadable, which is what somebody restoring their own export would hold.
+        """
+        source_database = self.folder / "source.sqlite3"
+        with CareerStore(source_database) as store:
+            store.save_job(JobListing("j1", "fixture", "Fixture", "https://jobs.example.invalid/j1",
+                                      "Sandbox Systems", "Data Engineer", availability_status=Availability.OPEN))
+            store.save_tracker(ApplicationTracker("j1"))
+            store.save_profile(CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                                                study_status="final_year", graduation_year=2027,
+                                                experience_years=1.0, skills=frozenset({"Python"}),
+                                                preferred_locations=frozenset({"Bengaluru"}),
+                                                preferred_work_modes=frozenset({"hybrid"}),
+                                                preferred_role_types=frozenset({"full_time"})))
+            store.add_work_history("Sandbox Systems", "Data Intern", date(2024, 6, 1), is_current=True)
+        source = self.folder / "source.json"
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["--database", str(source_database), "--export-to", str(source)])
+        self.assertEqual(code, cli.EXIT_OK, err.getvalue())
+
+        self.write_one_of_every_record("j1")
+        self.damage_status("j1")
+        before_bytes = self.bytes_of_database()
+        before_rows = self.rows_of_every_table()
+
+        code, out, err = self.run_cli("--import-from", source, "--yes")
+
+        self.assert_refused_cleanly(code, out, err)
+        self.assertIn("application_tracker", err, "the refusal must name the table the record is in")
+        self.assertEqual(self.rows_of_every_table(), before_rows,
+                         "the refused import wrote rows into the database")
+        self.assertEqual(self.bytes_of_database(), before_bytes,
+                         "the refused import changed the file it refused to write to")
+
+    def test_a_refused_calendar_write_leaves_no_ledger_behind(self) -> None:
+        """A mock ledger records operations that happened; a refusal means none did."""
+        self.write_one_of_every_record()
+        self.damage_status()
+        ledger = self.folder / "ledger.json"
+
+        code, out, err = self.run_cli("--record-follow-up", "j1", "--mock-ledger", ledger)
+
+        self.assert_refused_cleanly(code, out, err)
+        self.assertFalse(ledger.exists(), "a refused operation was recorded in the mock ledger")
+
+    def test_opening_the_window_still_reports_a_record_it_cannot_read_as_a_start_up_failure(self) -> None:
+        """The one case that really is a start-up: the person asked for the window, not a command."""
+        # ``mock.patch.dict`` puts ``sys.modules`` back exactly as it was, real module and all; the fake is
+        # only needed while this one call runs, and any import a later test does must find the real one.
+        fake_module = types.ModuleType("career_agent.desktop")
+
+        def failing_main(database_path=None):
+            raise TrackerStatusError(UNKNOWN_STATUS)
+
+        fake_module.main = failing_main
+        with mock.patch.dict(sys.modules, {"career_agent.desktop": fake_module}):
+            code, out, err = self.run_cli()
+
+        self.assertEqual(code, cli.EXIT_UNEXPECTED)
+        self.assertIn("COULD NOT START", err)
+        self.assertNotIn("REFUSED", err)
+
+
+class NotADatabaseAtAllTests(DisposableDatabaseTestCase):
+    """A file that cannot be read as a database is not described as a database holding a bad record.
+
+    The two failures look alike from a distance and are not alike at all: one is a row this build cannot
+    decode, the other is a file with no rows in it. Both are refused, and the refusal has to say which
+    happened, because the first sends somebody to look at a record and the second sends them to look at the
+    file. Reproduced before this test existed, from the acceptance run on 2026-10-15: only the record-level
+    sentence was printed for both.
+    """
+
+    def write_garbage(self) -> None:
+        self.database.write_text("this is not a database, it is a text file with a database name",
+                                 encoding="utf-8")
+
+    def test_a_file_that_is_not_a_database_is_reported_as_a_file_failure(self) -> None:
+        self.write_garbage()
+        before = self.bytes_of_database()
+
+        code, out, err = self.run_cli("--analytics")
+
+        self.assertEqual(code, cli.EXIT_REFUSED)
+        self.assertIn("could not be read", err)
+        self.assertIn("file is not a database", err, "SQLite's own words explain the file")
+        self.assertNotIn(
+            "holds a record this version cannot read", err,
+            "a file with no records must not be described as holding an unreadable record",
+        )
+        self.assertNotIn("Traceback", err + out)
+        self.assertEqual(self.bytes_of_database(), before, "the refused file was rewritten")
+
+    def test_the_doctor_names_the_file_and_the_reason_on_the_same_input(self) -> None:
+        self.write_garbage()
+
+        code, out, _ = self.run_cli("--doctor")
+
+        self.assertEqual(code, cli.EXIT_PROBLEM_FOUND)
+        self.assertIn("file is not a database", out)
+        self.assertIn("Nothing was changed", out)
 
 
 class ExportOfDamagedRecordsTests(DisposableDatabaseTestCase):

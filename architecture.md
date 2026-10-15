@@ -130,7 +130,9 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   not imported rather than adopted, because a status here is only ever reached by the guarded transition
   path. Follow-up days travel as data, unreadable days are reported rather than dropped, and activity is
   appended with (day, kind, text) deduplication so re-importing a file cannot double a timeline. Writes
-  go through `store.write_private_text_file` (owner-only, symlink-refusing); the CLI dry-runs by default.
+  go through `store.write_private_text_file` (owner-only, symlink-refusing); the CLI dry-runs by default, and
+  an import sweeps the target file with `store.unreadable_stored_records` before it plans anything, so a file
+  holding a record this build cannot read is refused instead of being half-applied.
 - Safe handling of source schema or page changes.
 - Provider-specific response semantics: a successful response with zero records is not always proof that a board is valid and empty; migrations can leave old and new boards both responding; filtered runs must not mark omitted records closed. Record per-source run outcomes, counts before/after filters and deduplication, stable IDs touched, and explicit error categories (empty success, blocked, rate-limited, transient failure, schema error, permission gate closed). See the [n8n workflow pattern review](research/n8n-workflows-repository-review-2026-10-13.md).
 - Matching is a comparison, not a forecast. `career_agent/matching.py` reports each factor

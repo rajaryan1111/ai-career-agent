@@ -884,7 +884,8 @@ promise is narrower and enforced by the code, so a newer build never has to gues
   listing or profile — an existing record wins over the file's copy.
 - **An unreadable record is reported, never repaired.** A status, activity kind or payload this build
   cannot interpret is refused by name, on the read paths and in `--doctor`, without being rewritten or
-  deleted; the export still takes the data out, marking the value it could not label.
+  deleted; the export still takes the data out, marking the value it could not label; and an import into
+  that database is refused before it writes anything, rather than applied in part.
 
 Before upgrading, run `career-agent --backup-to <somewhere-private>`; after upgrading, run
 `career-agent --doctor`, which reports the schema version the file now records. The rehearsal behind these

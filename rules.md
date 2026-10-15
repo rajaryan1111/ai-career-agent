@@ -39,6 +39,14 @@
   rehearsal rather than by reading the code: the doctor reported "no problems found" on a database every read
   path refused (evidence and before/after exit codes in
   `research/release-readiness-audit-2026-10-15.md`).
+  **Extended after the manual acceptance run (2026-10-15):** the same refusal reaches *every* command, not
+  only the reports - a follow-up draft, a `.ics` file and an import are refused in the same sentence with the
+  same exit status, because a readable database holding one unreadable row is not a start-up that failed and
+  must not be described as one. And a command that writes checks first: the import sweeps the whole file
+  read-only before it plans or applies anything, because applying part of an import and failing on the record
+  halfway leaves a part-written database behind a refusal that says nothing was written. Both were reproduced
+  before they were fixed, and both have a regression test that fails on the behaviour they replaced
+  (`tests/test_damaged_records.py`, evidence in `research/local-alpha-manual-acceptance-run-2026-10-15.md`).
 - Optimize for relevant opportunities and outcomes, not raw application count.
 
 ## 4. Platform compliance

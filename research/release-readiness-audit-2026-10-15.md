@@ -222,6 +222,16 @@ Related behaviour confirmed in the same probe: **the export still takes the data
 }
 ```
 
+**Found later, by the manual acceptance run.** Executing the checklist on 2026-10-15 turned up four more
+defects, three of them in this same neighbourhood: a progress figure that counted a round nobody had attended,
+four commands that reported a readable database holding one unreadable record as a start-up that failed (exit
+3, with a start-up note), an import that wrote part of the file and then refused while saying nothing had been
+written, and a refusal that claimed a draft had been written when nothing was on disk. Each is diagnosed, fixed
+and regression-tested in
+[`local-alpha-manual-acceptance-run-2026-10-15.md`](local-alpha-manual-acceptance-run-2026-10-15.md) section 5.
+The refusal this section describes now reaches *every* command, not only the read-only reports, and the import
+sweeps its target read-only before it writes anything.
+
 ## 8. CI coverage audit
 
 The workflow runs three jobs on `ubuntu-latest` only. What it covers, and why:
@@ -242,10 +252,14 @@ Decisions behind the matrix:
   `SSL_ERROR_SYSCALL`) — so the newest leg can only be proven by CI. No 3.14 leg exists, and none is claimed.
 - `tests/test_documented_commands.py` reads every `--flag` this README and the manual smoke-test checklist
   tell a person to run and looks it up in the real `--help` output, so a documented command that no longer
-  exists fails the suite. Current state: README 30 flags, checklist 20 flags, 0 unknown in either.
+  exists fails the suite. Current state: README 30 flags, checklist 21 flags, 0 unknown in either. (This
+  line read "checklist 20" when it was written; re-counted on 2026-10-15 while executing the checklist, which
+  is 21 either way — the document is what changed, not the count of flags in it.)
 - Not covered by CI, and therefore not claimed anywhere: real Tk rendering, window behaviour, macOS or
-  Windows behaviour, code signing, or anything requiring a display. The manual campaign is deferred and
-  tracked in `research/local-alpha-manual-smoke-test-checklist-2026-10-14.md`.
+  Windows behaviour, code signing, or anything requiring a display. The manual campaign's non-GUI half has
+  since been executed and is recorded in
+  [`local-alpha-manual-acceptance-run-2026-10-15.md`](local-alpha-manual-acceptance-run-2026-10-15.md); the
+  window items are still unrun, and the checklist itself carries the per-step state.
 
 ## 9. Version and data-compatibility policy
 
@@ -278,7 +292,8 @@ summarised here with the evidence this audit produced:
 3. The per-operating-system half of this rehearsal: a backup/restore and doctor pass on a real macOS and
    Windows desktop from a packaged build. Nothing in this document speaks for either.
 4. Real GUI coverage: the manual smoke-test checklist's desktop items are still unrun; automated tests use
-   widget stubs and are not GUI tests.
+   widget stubs and are not GUI tests. The checklist's non-GUI half *has* been executed (22 steps passed, 76
+   blocked for the missing display, four defects found and fixed) — see the acceptance run linked in section 7.
 5. A CI leg for Python 3.14, and a macOS/Windows CI leg (this repository runs only on `ubuntu-latest`).
 6. The read-only-*filesystem* case from section 6, which needs a machine where a read-only mount can be
    arranged.

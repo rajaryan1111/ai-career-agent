@@ -19,8 +19,8 @@ from career_agent.analytics import (
     MIN_MEDIAN_SAMPLES, MIN_RATE_DENOMINATOR, TREND_WINDOW_DAYS, build_report, report_from_store,
 )
 from career_agent.core import (
-    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability, InterviewRound,
-    InterviewStage, JobListing,
+    ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability, InterviewOutcome,
+    InterviewRound, InterviewStage, JobListing,
 )
 from career_agent.store import CareerStore
 
@@ -546,6 +546,35 @@ class StoreBackedReportTests(unittest.TestCase):
 
         self.assertIn("Interview rounds recorded: 1", "\n".join(report.describe()))
         self.assertIn("Applications with an interview round recorded: 1", "\n".join(report.describe()))
+
+    def test_a_round_that_has_not_happened_is_not_counted_as_one_whose_outcome_was_recorded(self):
+        """A future round stores ``awaiting``, which means "it has not happened yet".
+
+        The count is labelled "Rounds where you recorded how it went ... your own reading of the round,
+        saved after it happened". A stored ``awaiting`` is not a reading: the person has written nothing
+        down about how it went, because it has not happened. Counting it made the report say a future
+        interview had been read back to itself - reproduced before this test existed, from the acceptance
+        run on 2026-10-15, and pinned here so the label and the count cannot drift apart again.
+        """
+        self.store.save_job(job("j1"))
+        self.store.add_activity("j1", applied("j1", 20))
+        # The day has passed, and the person still has not said how it went: it must not be counted either.
+        self.store.record_interview("j1", InterviewStage.SCREENING, TODAY - timedelta(days=2))
+        # A round saved for tomorrow is the same claim, stored the same way.
+        self.store.record_interview("j1", InterviewStage.TECHNICAL, TODAY + timedelta(days=1))
+        # Two readings a person really can record, including "it did not go ahead" (a reading too: it is
+        # something they wrote down, not a round nobody has held yet).
+        self.store.set_interview_outcome(self.store.list_interviews()[0].round_id, InterviewOutcome.WENT_WELL)
+        third = self.store.record_interview("j1", InterviewStage.PANEL, TODAY - timedelta(days=1))
+        self.store.set_interview_outcome(third.round_id, InterviewOutcome.NOT_HELD)
+
+        text = "\n".join(report_from_store(self.store, today=TODAY).describe())
+
+        self.assertIn("Interview rounds recorded: 3", text, "every saved round is still counted")
+        self.assertIn("Rounds where you recorded how it went: 2", text,
+                      "the awaiting round is not a recorded reading")
+        self.assertIn("Rounds where you recorded how it went: 2 (your own reading of the round, saved "
+                      "after it happened)", text)
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience for a focused run
