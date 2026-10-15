@@ -184,6 +184,15 @@ jobs:
       # recorded into annotations, which the API does return - so the failing test or the failed smoke
       # check stays readable from outside a browser. Two slices because a step may carry at most ten
       # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -238,6 +247,15 @@ jobs:
       # recorded into annotations, which the API does return - so the failing test or the failed smoke
       # check stays readable from outside a browser. Two slices because a step may carry at most ten
       # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -587,6 +605,15 @@ jobs:
       # step as "Process completed with exit code 1". These three steps turn what the steps above recorded
       # into annotations, which the API does return, so a red leg on a platform this checkout cannot run
       # locally still says which test failed and why.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
