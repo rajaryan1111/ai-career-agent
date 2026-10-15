@@ -409,10 +409,13 @@ class Tree(ValidatedWidget):
         self.selected = (selection,) if isinstance(selection, str) else tuple(selection)
 
     def delete(self, item):
-        # A deleted row leaves the tree: it is no longer a child and can no longer be read.
+        # A deleted row leaves the tree: it is no longer a child, can no longer be read, and is no longer
+        # selected - real Tk drops a deleted item from the selection, and a list refresh rebuilds every
+        # row, so a window that repopulates its list loses the row the person had chosen.
         self.rows = tuple(row for row in self.rows if str(row) != str(item))
         self.children = tuple(child for child in self.children if str(child) != str(item))
         self.current.pop(str(item), None)
+        self.selected = tuple(chosen for chosen in self.selected if str(chosen) != str(item))
 
     def selection_remove(self, selection):
         self.selected = ()
@@ -4418,6 +4421,31 @@ class TreeRowReadbackTests(unittest.TestCase):
             "a row inserted again under the same id must read back as the values it now holds",
         )
 
+    def test_deleting_the_selected_row_leaves_nothing_selected(self):
+        tree = Tree()
+        tree.insert("", "end", iid="7", values=("a row",))
+        tree.selection_set("7")
+
+        tree.delete("7")
+
+        self.assertEqual(tree.selection(), (), "a deleted row cannot still be selected")
+
+    def test_a_refresh_of_every_row_drops_the_selection_like_a_real_tree(self):
+        """Every refresh here deletes each row and inserts it again, which is what a person's edit does."""
+
+        tree = Tree()
+        for listing_id in ("j1", "j2"):
+            tree.insert("", "end", iid=listing_id, values=(listing_id,))
+        tree.selection_set("j1")
+
+        for listing_id in ("j1", "j2"):
+            tree.delete(listing_id)
+        for listing_id in ("j1", "j2"):
+            tree.insert("", "end", iid=listing_id, values=(listing_id, "renamed"))
+
+        self.assertEqual(tree.selection(), (), "the rebuilt list must not claim a row is still selected")
+        self.assertEqual(tree.item("j1", "values"), ("j1", "renamed"))
+
     def test_a_deleted_row_cannot_be_read_back(self):
         tree = Tree()
         tree.insert("", "end", iid="8", values=("gone",))
@@ -5259,6 +5287,10 @@ class SchedulerTabTests(HandlerTestCase):
         app._toggle_scheduled_task()
         asked_before_resuming = [kind for _title, _answer, kind in MESSAGES.calls].count("askyesno")
 
+        # Pausing refreshed the list, and a refreshed list deletes and re-inserts every row, which is what
+        # takes the selection away in a real window: choosing the row again is what the person does before
+        # pressing the button a second time, and what the window tells them to do when they do not.
+        app.tasks_tree.selection_set("daily-backup")
         app._toggle_scheduled_task()
 
         resumed = self.store.get_scheduled_task("daily-backup")

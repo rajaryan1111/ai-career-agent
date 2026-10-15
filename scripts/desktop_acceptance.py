@@ -1831,18 +1831,37 @@ def workflow_g_history_records(run: Run) -> None:
     with results.step("G7 the selected role's title can be changed and saved over the record"):
         entries = app.store.list_work_history()
         target = next(entry for entry in entries if entry.job_title == "Fictional Current Role")
+        # The form is emptied first, so that what the button fills it from can be told apart from what was
+        # already in it: a form still holding this role's own values would pass a check like this without
+        # the role ever being read. Every save rebuilds the list, and a rebuilt list has no row selected,
+        # so the row is chosen again the way a person re-clicks it before pressing the button.
+        clear_history_forms(app, workspace.root)
         app.work_tree.selection_set(str(target.entry_id))
         workspace.root.update()
+        policy.reset()
         press(app.history_tab, "Select the selected role for editing", workspace.root)
         require(
+            "Nothing selected" not in policy.titles(),
+            f"reading the role asked for a selection that was already made: {policy.titles()}",
+        )
+        require(
             field_value(app.history_tab, app.work_vars["job_title"], what="the role job title field")
-            == "Fictional Current Role",
-            "selecting the role for editing did not load its title into the form",
+            == "Fictional Current Role"
+            and field_value(app.history_tab, app.work_vars["employer"], what="the role employer field")
+            == "Fixture Systems Ltd"
+            and field_value(app.history_tab, app.work_vars["start_date"], what="the role start date field")
+            == "2025-03-01",
+            "selecting the role for editing did not fill the emptied form from the stored record",
         )
         set_field(app.history_tab, app.work_vars["job_title"], "Fictional Renamed Role",
                   what="the role job title field")
         tick(app.history_tab, app.work_current, what="the current-role checkbox")
+        policy.reset()
         press(app.history_tab, "Save changes to the selected role", workspace.root)
+        require(
+            "Role not updated" not in policy.titles(),
+            f"saving the change was refused: {policy.said('Role not updated')!r}",
+        )
         require(
             "Employment record" in app.status.get() and "saved" in app.status.get(),
             f"saving the change reported {app.status.get()!r}",
@@ -1867,11 +1886,32 @@ def workflow_g_history_records(run: Run) -> None:
             app.work_current.get() is False and app.study_ongoing.get() is False,
             "clearing the history forms left a checkbox ticked",
         )
+        renamed = [entry for entry in app.store.list_work_history()
+                   if entry.job_title == "Fictional Renamed Role"]
+        require(len(renamed) == 1, f"{len(renamed)} renamed role(s) are stored, expected 1")
+        # The save in G7 rebuilt the list, so nothing is selected until the row is chosen again.
+        app.work_tree.selection_set(str(renamed[0].entry_id))
+        workspace.root.update()
+        policy.reset()
         press(app.history_tab, "Select the selected role for editing", workspace.root)
+        require(
+            "Nothing selected" not in policy.titles(),
+            f"reading the role asked for a selection that was already made: {policy.titles()}",
+        )
+        require(
+            field_value(app.history_tab, app.work_vars["start_date"], what="the role start date field")
+            == "2025-03-01",
+            "the emptied form was not filled from the stored role before the flag was changed",
+        )
         tick(app.history_tab, app.work_current, what="the current-role checkbox", on=False)
         set_field(app.history_tab, app.work_vars["end_date"], "2026-09-30",
                   what="the role end date field")
+        policy.reset()
         press(app.history_tab, "Save changes to the selected role", workspace.root)
+        require(
+            "Role not updated" not in policy.titles(),
+            f"saving the change was refused: {policy.said('Role not updated')!r}",
+        )
         saved = [entry for entry in app.store.list_work_history()
                  if entry.job_title == "Fictional Renamed Role"]
         require(len(saved) == 1, f"{len(saved)} renamed role(s) are stored, expected 1")
