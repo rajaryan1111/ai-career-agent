@@ -4690,7 +4690,72 @@ class FollowUpTabTests(HandlerTestCase):
         app._set_follow_up()
 
         self.assertIn("Select an application", MESSAGES.titles())
+        self.assertIn("Application tracker", MESSAGES.text("showinfo"),
+                      "the message says where an application can be selected")
         self.assertIsNone(self.store.get_tracker("j1").follow_up_on)
+
+    def test_the_first_follow_up_day_is_recordable_from_the_selected_application(self):
+        """The regression: the first reminder for an application could not be recorded at all.
+
+        This tab lists the applications that already hold a day, so the list is empty before the first
+        one is set - and the button used to take its subject from that empty list, which reported
+        "select an application" to somebody who had one selected and left the first follow-up day
+        unsettable from anywhere in this application. The subject is now the selected application.
+        """
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+        app.tracker_tree.selected = ("j1",)
+        app._refresh_follow_ups()
+        self.assertEqual(app.follow_up_tree.inserted, (),
+                         "the reminder list cannot hold an application that has no day yet")
+        day = date.today() + timedelta(days=3)
+        app.follow_up_day.set(day.isoformat())
+        app.follow_up_note.set("send the portfolio")
+
+        app._set_follow_up()
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertNotIn("Select an application", MESSAGES.titles())
+        self.assertEqual(tracker.follow_up_on, day)
+        self.assertEqual(tracker.follow_up_note, "send the portfolio")
+        self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED,
+                         "a reminder never advances an application")
+        self.assertIn("the application's status was not changed", app.status.get())
+        self.assertEqual([iid for iid, _values in app.follow_up_tree.inserted], ["j1"],
+                         "the reminder just recorded is listed at once")
+
+    def test_the_day_and_note_fields_follow_the_selected_application(self):
+        """The fields describe the selection, so one application's note cannot be saved onto another."""
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=4, note="chase the reply")
+        self.add_application("j2", days=None)
+
+        app.tracker_tree.selected = ("j1",)
+        app._select_tracker()
+        self.assertEqual(app.follow_up_day.get(), (date.today() + timedelta(days=4)).isoformat())
+        self.assertEqual(app.follow_up_note.get(), "chase the reply")
+
+        app.tracker_tree.selected = ("j2",)
+        app._select_tracker()
+        self.assertEqual(app.follow_up_day.get(), "",
+                         "another application's day was left in the fields")
+        self.assertEqual(app.follow_up_note.get(), "")
+
+    def test_a_selection_whose_record_vanished_is_reported_and_writes_nothing(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=2)
+        app.tracker_tree.selected = ("j1",)
+        self.store._connection.execute("DELETE FROM application_tracker WHERE listing_id = 'j1'")
+        self.store._connection.commit()
+        app.follow_up_day.set((date.today() + timedelta(days=9)).isoformat())
+
+        app._set_follow_up()
+
+        self.assertIn("Listing not found", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1"),
+                          "no application record was invented for a selection that is gone")
+        self.assertNotIn("Follow-up set", app.status.get())
 
     def test_clearing_a_follow_up_asks_first_and_keeps_the_application(self):
         app = self.make_follow_up_app()

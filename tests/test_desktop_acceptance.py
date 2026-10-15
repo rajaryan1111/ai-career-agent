@@ -477,8 +477,10 @@ class DisplayBackedWorkflowTests(unittest.TestCase):
             self.assertIn(f"--- workflow {name}", output)
 
     def test_the_workflow_list_covers_the_documented_letters(self):
+        # The order is the run's own, and H sits before F because F releases the Tk root the run works
+        # through: a workflow that needs a window has to come before the one that takes it away.
         names = [name for name, _workflow in acceptance.WORKFLOWS]
-        self.assertEqual([name[0] for name in names], ["A", "B", "C", "D", "E", "G", "F"])
+        self.assertEqual([name[0] for name in names], ["A", "B", "C", "D", "E", "G", "H", "F"])
         for name, workflow in acceptance.WORKFLOWS:
             self.assertTrue(callable(workflow), f"{name} is not runnable")
             self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")

@@ -1346,31 +1346,49 @@ class CareerAgentApp:
         self.follow_up_tab.columnconfigure(0, weight=1)
 
     def _selected_follow_up_id(self) -> str | None:
-        """The listing id of the selected reminder row, or ``None`` with nothing selected."""
-        if not hasattr(self, "follow_up_tree"):
-            return None
-        selection = self.follow_up_tree.selection()
-        return str(selection[0]) if selection else None
+        """The listing id the day and note fields act on, or ``None`` when nothing is selected.
 
-    def _select_follow_up(self, _event=None):
-        """Put the selected reminder's own day and note in the fields, so editing starts from the truth."""
-        listing_id = self._selected_follow_up_id()
-        if listing_id is None:
+        A reminder row comes first, because a row on this tab is what the tab is about. Failing that,
+        the application selected on the Application tracker or Jobs tab is used, and that fallback is
+        what makes the first reminder recordable at all: this list is built from the applications that
+        already hold a day, so before the fallback existed the tab could only ever change a reminder
+        that some other means had recorded - and no other means exists in this application, which left
+        the first follow-up day unsettable from anywhere in the product.
+        """
+        if hasattr(self, "follow_up_tree"):
+            selection = self.follow_up_tree.selection()
+            if selection:
+                return str(selection[0])
+        return self._selected_job_id()
+
+    def _fill_follow_up_fields(self, listing_id: str | None) -> None:
+        """Put one application's recorded day and note in the fields, so editing starts from the truth.
+
+        A record with no day, or no record at all, empties both fields: leaving the previous
+        application's day standing would let a note written for one application be saved onto another.
+        """
+        if not hasattr(self, "follow_up_day"):
             return
-        try:
-            tracker = self.store.get_tracker(listing_id)
-        except StoredRecordError as exc:
-            self._report_unreadable_record(exc)
-            return
-        except sqlite3.Error as exc:
-            self._report_database_unavailable(exc)
-            return
+        tracker = None
+        if listing_id is not None:
+            try:
+                tracker = self.store.get_tracker(listing_id)
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
         if tracker is None or tracker.follow_up_on is None:
             self.follow_up_day.set("")
             self.follow_up_note.set("")
             return
         self.follow_up_day.set(tracker.follow_up_on.isoformat())
         self.follow_up_note.set(tracker.follow_up_note or "")
+
+    def _select_follow_up(self, _event=None):
+        """Put the selected reminder's own day and note in the fields, so editing starts from the truth."""
+        self._fill_follow_up_fields(self._selected_follow_up_id())
 
     def _refresh_follow_ups(self):
         """Re-read the reminders; change nothing.
@@ -1430,8 +1448,11 @@ class CareerAgentApp:
         """Record the day and note in the fields against the selected application."""
         listing_id = self._selected_follow_up_id()
         if not listing_id:
-            messagebox.showinfo("Select an application",
-                               "Select the application this follow-up belongs to first.", parent=self.root)
+            messagebox.showinfo(
+                "Select an application",
+                "Select the application this follow-up belongs to first: a row on the Application "
+                "tracker tab, a saved job on the Jobs tab, or a reminder row on this tab.",
+                parent=self.root)
             return
         try:
             day = date.fromisoformat(self.follow_up_day.get().strip())
@@ -1468,8 +1489,10 @@ class CareerAgentApp:
         """Remove the selected application's follow-up, after asking, keeping the application itself."""
         listing_id = self._selected_follow_up_id()
         if not listing_id:
-            messagebox.showinfo("Select an application",
-                               "Select the follow-up you want to clear first.", parent=self.root)
+            messagebox.showinfo(
+                "Select an application",
+                "Select the follow-up you want to clear first: a reminder row here, or the application "
+                "on the Application tracker tab.", parent=self.root)
             return
         if not messagebox.askyesno(
                 "Clear this follow-up?",
@@ -2593,6 +2616,10 @@ class CareerAgentApp:
             if selection[0] in self.jobs_tree.get_children():
                 self.jobs_tree.selection_set(selection[0])
             self._refresh_activity()
+            # The Follow-ups tab acts on whichever application is selected, so its day and note
+            # fields follow this selection: what is on screen there always describes the application
+            # the buttons will write to.
+            self._fill_follow_up_fields(selection[0])
 
     def _selected_application(self, dialog_title: str) -> str | None:
         """The selected tracker row, or ``None`` after telling the person to select one.

@@ -97,6 +97,7 @@ from desktop_smoke_test import (  # noqa: E402 - after the path is set
 #: sees ("the entry", "the button") rather than an index into whatever list the widget tree returns.
 BUTTON = "TButton"
 ENTRY = "TEntry"
+LABEL = "TLabel"
 COMBOBOX = "TCombobox"
 CHECKBUTTON = "TCheckbutton"
 TREEVIEW = "Treeview"
@@ -637,6 +638,10 @@ class Workspace:
         self.folder = Path(tempfile.mkdtemp(prefix=f"career-agent-acceptance-{name}-"))
         self.database = self.folder / "synthetic-primary.sqlite3"
         self.second_database = self.folder / "synthetic-secondary.sqlite3"
+        #: A third database for the workflows that record follow-ups and next actions. Kept apart from the
+        #: other two so that a day recorded here cannot be read as part of an export or import workflow,
+        #: and so that the damaged-record checks below damage a database nothing else depends on.
+        self.third_database = self.folder / "synthetic-third.sqlite3"
         self.root = None
         self.windows: list[tuple[object, object]] = []
         #: Recorded before anything opens: the application's own database location must come out of this
@@ -1929,6 +1934,532 @@ def workflow_g_history_records(run: Run) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Workflow H - follow-up reminders and the combined next-action list
+# --------------------------------------------------------------------------------------------------
+#: The title the preparation item is given. A fixture, like every other string this run types: it names no
+#: real employer, role or person.
+PREPARATION_TITLE = "Fixture: revise the fixture exercise"
+
+
+def follow_up_listing(reference: str) -> dict:
+    """A synthetic listing for this workflow, with the same fields the Jobs form holds."""
+    return {
+        **LISTING_WITH_EVIDENCE,
+        "employer": f"Fixture Follow-up Ltd {reference}",
+        "title": f"Fictional Analyst {reference}",
+        "source_url": f"https://example.com/fixture/followups/{reference}",
+        "provenance_note": "Fixture: created by the desktop acceptance run's follow-up workflow.",
+    }
+
+
+def save_listing(app, workspace, values) -> str:
+    """Type a listing into the Jobs form and save it, returning the id the window is working on.
+
+    New-listing mode is entered first on purpose: saving switches the form to editing the listing it just
+    wrote, so a second save in the same window would update the first listing instead of creating another.
+    """
+    press(app.jobs_tab, "New job", workspace.root)
+    for key, value in values.items():
+        if key in ("availability", "scope"):
+            continue
+        set_field(app.jobs_tab, app.job_vars[key], value, what=f"the {key} field")
+    choose_in(app.jobs_tab, app.job_vars["availability"], values["availability"],
+              what="the availability chooser")
+    choose_in(app.jobs_tab, app.job_vars["scope"], values["scope"], what="the scope chooser")
+    press(app.jobs_tab, "Save job", workspace.root)
+    listing_id = app.selected_job_id
+    require(bool(listing_id), "the listing was not saved")
+    return str(listing_id)
+
+
+def set_follow_up_through_the_window(app, workspace, listing_id: str, day, note: str) -> None:
+    """Select one application and record its follow-up day through the Follow-ups tab's own button.
+
+    The application is selected on the Application tracker tab, because that is where an application
+    without a day can be selected at all: the Follow-ups tab lists the applications that already hold a
+    day, so its own list cannot hold the one being recorded for the first time.
+    """
+    select_tracker_row(app, listing_id, workspace.root)
+    type_into(app.follow_up_tab, app.follow_up_day, day.isoformat(), what="the follow-up day field")
+    type_into(app.follow_up_tab, app.follow_up_note, note, what="the follow-up note field")
+    press(app.follow_up_tab, "Set the day for the selected application", workspace.root)
+
+
+def select_follow_up_row(app, listing_id: str, root) -> None:
+    """Select a reminder row on the Follow-ups tab, which is what its own buttons act on.
+
+    Real Tk dispatches ``<<TreeviewSelect>>`` and the window then fills its day and note fields from the
+    reminder that was chosen. What proves it reacted is a field holding *that* reminder's stored day, not
+    the tree's selection, which the click itself sets and would say yes even if nothing had run. Where the
+    window did not react, the command the tree's binding runs is called: the same command a person's click
+    runs, never a second implementation of it.
+    """
+    app.follow_up_tree.selection_set(listing_id)
+    root.update()
+    tracker = app.store.get_tracker(listing_id)
+    stored_day = "" if tracker is None or tracker.follow_up_on is None else tracker.follow_up_on.isoformat()
+    if app.follow_up_day.get() != stored_day:
+        app._select_follow_up()  # noqa: SLF001 - the command the tree's <<TreeviewSelect>> binding runs
+        root.update()
+    require(
+        list(app.follow_up_tree.selection())[:1] == [listing_id],
+        f"the reminder row for {listing_id!r} is not selected",
+    )
+    require(
+        app.follow_up_day.get() == stored_day,
+        f"selecting the reminder for {listing_id!r} left {app.follow_up_day.get()!r} in the day field",
+    )
+
+
+def reminder_rows(app) -> list[tuple[str, tuple]]:
+    """Every row on the Follow-ups tab in the order the tab built it: (row id, cell values)."""
+    return [(str(item), app.follow_up_tree.item(item, "values"))
+            for item in app.follow_up_tree.get_children()]
+
+
+def action_rows(app) -> dict[str, tuple]:
+    """Every row on the Next actions tab, by the record its row id names."""
+    return {str(item): app.actions_tree.item(item, "values") for item in app.actions_tree.get_children()}
+
+
+def select_action_row(app, row_id: str, root) -> None:
+    """Select a next-action row, which is what that tab's own buttons act on."""
+    app.actions_tree.selection_set(row_id)
+    root.update()
+    if list(app.actions_tree.selection())[:1] != [row_id]:
+        app._select_action()  # noqa: SLF001 - the command the tree's <<TreeviewSelect>> binding runs
+        root.update()
+    require(
+        list(app.actions_tree.selection())[:1] == [row_id],
+        f"the next-action row {row_id!r} is not selected",
+    )
+
+
+def dialog_lines(dialog) -> str:
+    """Everything a read-only dialog says, as a person reading it sees it."""
+    lines = []
+    for widget in descendants(dialog):
+        if widget.winfo_class() != LABEL:
+            continue
+        try:
+            lines.append(str(widget.cget("text")))
+        except Exception:  # noqa: BLE001 - a label with no readable text contributes nothing
+            continue
+    return "\n".join(lines)
+
+
+def change_the_synthetic_database(database, statements) -> None:
+    """Make a change the window itself would never make, in a disposable database.
+
+    Each statement is passed with its own parameters, so nothing is assembled into SQL text here. Used
+    only to reach the states the damaged-record handling exists for - an application whose listing is
+    gone, a reminder whose application row is gone. Foreign-key enforcement is left off in this
+    connection deliberately: that is how a database copied between machines or edited by hand ends up
+    holding a row that refers to nothing, and what the checks below are about is that the window reports
+    such a row instead of crashing on it or acting on it. This never runs against the person's own
+    database, which this run does not open.
+    """
+    import sqlite3  # noqa: PLC0415 - only these checks reach past the application to a database
+
+    connection = sqlite3.connect(database)
+    try:
+        with connection:
+            for statement, parameters in statements:
+                connection.execute(statement, parameters)
+    finally:
+        connection.close()
+
+
+def workflow_h_follow_ups_and_actions(run: Run) -> None:
+    """Follow-up reminders and the combined next-action list, driven through the window itself.
+
+    What this covers: an application saved in the window holds no reminder until one is recorded; the
+    first day *is* recordable, from the application the person selected; overdue, due-today, upcoming and
+    later days read as words computed from fixed days; the list survives closing and reopening the window;
+    a day can be moved and cleared, and a refused clear changes nothing; recording or clearing a day never
+    moves the application; the calendar preview and the email draft write nothing and send nothing; a
+    preparation item is added through its own dialog and appears as a next action with its day; ticking an
+    item off touches no status; and a reminder whose record has gone is reported rather than acted on.
+
+    Every day this workflow checks is computed from the machine's own day, which is the day the window
+    compares against: the offsets are fixed, and the words they must produce are asserted exactly.
+    """
+    from datetime import timedelta  # noqa: PLC0415 - only this workflow needs day arithmetic
+
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window(database=workspace.third_database)
+
+    with results.step("H1 an application saved in the window has no follow-up day recorded yet"):
+        from career_agent import ApplicationStatus  # noqa: PLC0415
+
+        listing_a = save_listing(app, workspace, follow_up_listing("a"))
+        select_tracker_row(app, listing_a, workspace.root)
+        status = tracker_status(app, listing_a)
+        require(
+            status is not None and status is ApplicationStatus.DISCOVERED,
+            f"a listing saved a moment ago is {status!r} in the tracker",
+        )
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        require(reminder_rows(app) == [], f"a reminder exists before one was recorded: {reminder_rows(app)}")
+        require(
+            "No follow-ups are recorded" in app.follow_up_summary.get(),
+            f"the tab says {app.follow_up_summary.get()!r} with nothing recorded",
+        )
+
+    with results.step("H2 the first follow-up day is recorded from the application selected in the window"):
+        from career_agent import ApplicationStatus  # noqa: PLC0415
+
+        today = date.today()
+        day = today + timedelta(days=2)
+        note = "Fixture: chase the reply, written by the acceptance run."
+        require(reminder_rows(app) == [], "the reminder list is not empty before the first day is recorded")
+        set_follow_up_through_the_window(app, workspace, listing_a, day, note)
+        line = app.status.get()
+        require(line.startswith(f"Follow-up set for {day.isoformat()}"),
+                f"the window says {line!r} after recording the day")
+        require(
+            "the application's status was not changed" in line,
+            "the window does not say the application's status was left alone",
+        )
+        tracker = app.store.get_tracker(listing_a)
+        require(tracker is not None and tracker.follow_up_on == day,
+                f"the stored day is {getattr(tracker, 'follow_up_on', None)!r}, not {day.isoformat()}")
+        require(tracker.follow_up_note == note, f"the stored note is {tracker.follow_up_note!r}")
+        require(tracker.candidate_confirmed is False,
+                "recording a reminder marked the application as confirmed by a candidate")
+        require(tracker.status is ApplicationStatus.DISCOVERED,
+                f"recording a reminder moved the status to {tracker.status!r}")
+        rows = reminder_rows(app)
+        require([row_id for row_id, _values in rows] == [listing_a],
+                f"the reminder list holds {[row_id for row_id, _values in rows]}")
+        values = rows[0][1]
+        require(str(values[3]) == day.isoformat(), f"the reminder row's day reads {values[3]!r}")
+        require(str(values[4]) == "in 2 day(s)", f"the reminder row's timing reads {values[4]!r}")
+        require(str(values[5]) == note, f"the reminder row's note reads {values[5]!r}")
+        require("none are due yet" in app.follow_up_summary.get(),
+                f"the summary reads {app.follow_up_summary.get()!r}")
+
+    with results.step("H3 overdue, due today and later days are classified in words, from fixed days"):
+        today = date.today()
+        listing_b = save_listing(app, workspace, follow_up_listing("b"))
+        listing_c = save_listing(app, workspace, follow_up_listing("c"))
+        listing_d = save_listing(app, workspace, follow_up_listing("d"))
+        for listing_id, offset, wording in (
+            (listing_b, -3, "3 day(s) overdue"),
+            (listing_c, 0, "due today"),
+            (listing_d, 20, "in 20 day(s)"),
+        ):
+            wanted = today + timedelta(days=offset)
+            set_follow_up_through_the_window(
+                app, workspace, listing_id, wanted,
+                f"Fixture: reminder at {offset:+d} day(s), written by the acceptance run.",
+            )
+            values = dict(reminder_rows(app))[listing_id]
+            require(str(values[3]) == wanted.isoformat(),
+                    f"the reminder for {offset:+d} day(s) stored {values[3]!r}, not {wanted.isoformat()}")
+            require(str(values[4]) == wording,
+                    f"the reminder for {offset:+d} day(s) reads {values[4]!r}, not {wording!r}")
+
+    with results.step("H4 the reminder list is ordered by day and the summary counts what is due"):
+        from career_agent import ApplicationStatus  # noqa: PLC0415
+
+        order = [row_id for row_id, _values in reminder_rows(app)]
+        expected = [listing_b, listing_c, listing_a, listing_d]
+        require(order == expected, f"the reminder list is ordered {order}, not {expected}")
+        require(
+            app.follow_up_summary.get().startswith("1 overdue, 1 due today: 2 application(s) need a look."),
+            f"the summary reads {app.follow_up_summary.get()!r}",
+        )
+        for listing_id in (listing_a, listing_b, listing_c, listing_d):
+            tracker = app.store.get_tracker(listing_id)
+            require(
+                tracker is not None and tracker.status is ApplicationStatus.DISCOVERED
+                and tracker.candidate_confirmed is False,
+                f"{listing_id} is {tracker!r} after four follow-up days were recorded",
+            )
+
+    with results.step("H5 a reminder is moved and cleared from its own row, and a refused clear changes nothing"):
+        from career_agent import ApplicationStatus  # noqa: PLC0415
+
+        today = date.today()
+        select_follow_up_row(app, listing_a, workspace.root)
+        require(
+            app.follow_up_day.get() == (today + timedelta(days=2)).isoformat(),
+            f"selecting the reminder put {app.follow_up_day.get()!r} in the day field",
+        )
+        require(
+            app.follow_up_note.get() == "Fixture: chase the reply, written by the acceptance run.",
+            f"selecting the reminder put {app.follow_up_note.get()!r} in the note field",
+        )
+        moved = today + timedelta(days=1)
+        type_into(app.follow_up_tab, app.follow_up_day, moved.isoformat(), what="the follow-up day field")
+        type_into(app.follow_up_tab, app.follow_up_note, "Fixture: the day was moved.",
+                  what="the follow-up note field")
+        press(app.follow_up_tab, "Set the day for the selected application", workspace.root)
+        tracker = app.store.get_tracker(listing_a)
+        require(tracker is not None and tracker.follow_up_on == moved,
+                f"the moved day reads {getattr(tracker, 'follow_up_on', None)!r}")
+        # A refresh rebuilds the list, so the row that was selected is no longer selected: each press
+        # below selects the row it acts on again, which is what a person does as well.
+        policy.answers["Clear this follow-up?"] = False
+        select_follow_up_row(app, listing_a, workspace.root)
+        press(app.follow_up_tab, "Clear the selected follow-up", workspace.root)
+        tracker = app.store.get_tracker(listing_a)
+        require(tracker is not None and tracker.follow_up_on == moved,
+                "a refused clear removed the day anyway")
+        require(any(row_id == listing_a for row_id, _values in reminder_rows(app)),
+                "the reminder row disappeared after a refused clear")
+        policy.answers["Clear this follow-up?"] = True
+        select_follow_up_row(app, listing_a, workspace.root)
+        press(app.follow_up_tab, "Clear the selected follow-up", workspace.root)
+        tracker = app.store.get_tracker(listing_a)
+        require(tracker is not None and tracker.follow_up_on is None and tracker.follow_up_note is None,
+                f"after clearing, the stored record is {tracker!r}")
+        require(tracker.status is ApplicationStatus.DISCOVERED,
+                f"clearing a reminder moved the status to {tracker.status!r}")
+        require("Follow-up cleared; the application itself was not changed." in app.status.get(),
+                f"the window says {app.status.get()!r} after clearing")
+        require(all(row_id != listing_a for row_id, _values in reminder_rows(app)),
+                "the cleared reminder is still listed")
+        require(app.follow_up_day.get() == "" and app.follow_up_note.get() == "",
+                "the fields still hold a day that was cleared")
+
+    with results.step("H6 closing the window and opening it again shows the same reminders"):
+        before = [(row_id, tuple(str(value) for value in values)) for row_id, values in reminder_rows(app)]
+        summary_before = app.follow_up_summary.get()
+        statuses_before = {listing_id: tracker_status(app, listing_id)
+                           for listing_id in (listing_b, listing_c, listing_d)}
+        workspace.close_window(host, app)
+        host, app = workspace.open_window(database=workspace.third_database)
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        after = [(row_id, tuple(str(value) for value in values)) for row_id, values in reminder_rows(app)]
+        require(after == before, f"the reminders changed across a restart:\n{before}\n{after}")
+        require(app.follow_up_summary.get() == summary_before,
+                f"the summary changed to {app.follow_up_summary.get()!r}")
+        for listing_id, status in statuses_before.items():
+            require(tracker_status(app, listing_id) == status,
+                    f"{listing_id} is {tracker_status(app, listing_id)!r} after the window was reopened")
+        require(app.follow_up_day.get() == "",
+                "a window that has just opened already holds a follow-up day in its fields")
+
+    with results.step("H7 the calendar preview and the email draft write nothing and send nothing"):
+        files_before = sorted(path.name for path in workspace.folder.iterdir())
+        digest_before = file_digest(workspace.third_database)
+        select_follow_up_row(app, listing_c, workspace.root)
+        policy.reset()
+        press(app.follow_up_tab, "Preview the calendar export", workspace.root)
+        listed = [row_id for row_id, _values in reminder_rows(app)]
+        preview = open_dialog(host, "Calendar export preview (read-only)")
+        preview_text = dialog_lines(preview)
+        require(
+            f"Calendar export preview: {len(listed)} event(s) would be written." in preview_text,
+            f"the calendar preview does not describe the {len(listed)} reminders the tab lists:\n"
+            f"{preview_text[:400]}",
+        )
+        require("no invitation" in preview_text,
+                "the calendar preview does not say that no invitation is involved")
+        require("no attendee is invited" in preview_text,
+                "the calendar preview does not say that nobody is invited")
+        require("Nothing has been written yet" in preview_text,
+                "the calendar preview does not say that nothing has been written")
+        require("nothing has been written yet" in app.status.get(),
+                f"the status line says {app.status.get()!r} after the preview")
+        close_open_dialogs(host)
+        select_follow_up_row(app, listing_c, workspace.root)
+        policy.reset()
+        press(app.follow_up_tab, "Draft a follow-up email", workspace.root)
+        drafted = open_dialog(host, "Follow-up email draft (read-only, nothing is sent)")
+        draft_text = dialog_lines(drafted)
+        require("nothing here can send anything" in draft_text,
+                f"the draft does not say it cannot be sent:\n{draft_text[:400]}")
+        require("No email account is connected" in draft_text,
+                "the draft does not say that no email account is connected")
+        require("Fictional Analyst c" in draft_text,
+                "the draft does not name the role it was written for")
+        close_open_dialogs(host)
+        require(sorted(path.name for path in workspace.folder.iterdir()) == files_before,
+                "a read-only preview or draft wrote a file")
+        require(file_digest(workspace.third_database) == digest_before and digest_before != "missing",
+                "the database changed while two read-only dialogs were open")
+        require("nothing was sent" in app.status.get(),
+                f"the status line says {app.status.get()!r} after the draft")
+
+    with results.step("H8 a preparation item is added through its dialog and appears with its own day"):
+        from career_agent.core import PreparationKind  # noqa: PLC0415
+
+        today = date.today()
+        select_tracker_row(app, listing_c, workspace.root)
+        policy.reset()
+        record_dialog_controls(
+            policy, "Add a preparation item",
+            lambda: press(app.actions_tab, "Add a preparation item", workspace.root),
+        )
+        dialog = open_dialog(host, "Add a preparation item")
+        texts = string_variables(policy, "Add a preparation item")
+        require(len(texts) == 3, f"the preparation dialog created {len(texts)} text variables, expected 3")
+        title_var, kind_var, day_var = texts
+        chooser = widget_for(dialog, kind_var, klass=COMBOBOX, what="the kind chooser")
+        require(
+            [str(value) for value in chooser.cget("values")] == [kind.value for kind in PreparationKind],
+            "the kind chooser does not offer the documented kinds of preparation",
+        )
+        type_into(dialog, title_var, PREPARATION_TITLE, what="the item field")
+        choose_in(dialog, kind_var, PreparationKind.PRACTICE.value, what="the kind chooser")
+        type_into(dialog, day_var, (today - timedelta(days=1)).isoformat(), what="the day field")
+        press(dialog, "Add it", workspace.root)
+        line = app.status.get()
+        require(line.startswith("Preparation item added"), f"the window says {line!r}")
+        require("No status was changed." in line, "adding an item does not say the status was left alone")
+        open_items = [item for item in app.store.list_preparation(listing_c) if not item.is_done]
+        require(len(open_items) == 1, f"the stored open preparation items are {open_items!r}")
+        preparation_id = open_items[0].preparation_id
+        rows = action_rows(app)
+        row_id = f"preparation:{preparation_id}"
+        require(row_id in rows, f"the new item is not in the next actions: {sorted(rows)}")
+        job = app.store.get_job(listing_c)
+        require(job is not None, "the listing the item was added to is no longer stored")
+        require(str(rows[row_id][0]) == f"{(today - timedelta(days=1)).isoformat()} (1 day(s) overdue)",
+                f"the row reads {rows[row_id][0]!r} for a day one day gone")
+        require(PREPARATION_TITLE in str(rows[row_id][1]), f"the row does not name the item: {rows[row_id]!r}")
+        require(f"{job.role_title} at {job.employer_name}" in str(rows[row_id][2]),
+                f"the row does not name the application: {rows[row_id]!r}")
+
+    with results.step("H9 an item with no day is listed rather than hidden, and a reminder shows here too"):
+        today = date.today()
+        select_tracker_row(app, listing_c, workspace.root)
+        policy.reset()
+        record_dialog_controls(
+            policy, "Add a preparation item",
+            lambda: press(app.actions_tab, "Add a preparation item", workspace.root),
+        )
+        dialog = open_dialog(host, "Add a preparation item")
+        title_var, kind_var, day_var = string_variables(policy, "Add a preparation item")
+        undated_title = f"{PREPARATION_TITLE} (no day)"
+        type_into(dialog, title_var, undated_title, what="the item field")
+        choose_in(dialog, kind_var, "research", what="the kind chooser")
+        type_into(dialog, day_var, "", what="the day field")
+        press(dialog, "Add it", workspace.root)
+        undated = [item for item in app.store.list_preparation(listing_c)
+                   if not item.is_done and item.due_on is None]
+        require(len(undated) == 1, f"the undated item was not stored as undated: {undated!r}")
+        rows = action_rows(app)
+        undated_row = f"preparation:{undated[0].preparation_id}"
+        require(undated_row in rows, f"the undated item is not listed: {sorted(rows)}")
+        require(str(rows[undated_row][0]) == "No day set", f"the undated row reads {rows[undated_row][0]!r}")
+        reminder_row = f"follow-up:{listing_c}"
+        require(reminder_row in rows, f"the recorded reminder is not in the next actions: {sorted(rows)}")
+        require(str(rows[reminder_row][0]) == f"{today.isoformat()} (today)",
+                f"the reminder row reads {rows[reminder_row][0]!r}")
+        summary = app.actions_summary.get()
+        require("2 item(s) still to do" in summary, f"the summary reads {summary!r}")
+        require("1 overdue" in summary, f"the summary does not count the overdue item: {summary!r}")
+        require("1 with no day set" in summary, f"the summary does not count the undated item: {summary!r}")
+
+    with results.step("H10 ticking off the selected item changes it and no status anywhere"):
+        from career_agent import ApplicationStatus  # noqa: PLC0415
+
+        before = tracker_status(app, listing_c)
+        row_id = f"preparation:{preparation_id}"
+        select_action_row(app, row_id, workspace.root)
+        press(app.actions_tab, "Mark the selected item done", workspace.root)
+        require(app.status.get() == f"Done: {PREPARATION_TITLE}. The application's status was not changed.",
+                f"the window says {app.status.get()!r} after ticking the item off")
+        require(row_id not in action_rows(app), "the finished item is still listed as something to do")
+        stored = [item for item in app.store.list_preparation(listing_c)
+                  if item.preparation_id == preparation_id]
+        require(len(stored) == 1 and stored[0].is_done is True,
+                f"the stored item is {stored!r} after being ticked off")
+        require(tracker_status(app, listing_c) == before,
+                f"ticking off an item moved the application from {before!r} to {tracker_status(app, listing_c)!r}")
+        require(tracker_status(app, listing_c) is ApplicationStatus.DISCOVERED,
+                "an application with only follow-ups and preparation done is not still discovered")
+        require("Every preparation item is done" not in app.actions_summary.get(),
+                "the summary claims every item is done while one is still open")
+
+    with results.step("H11 the buttons that do not apply to a reminder explain instead of acting"):
+        reminder_row = f"follow-up:{listing_c}"
+        tracker_before = app.store.get_tracker(listing_c)
+        select_action_row(app, reminder_row, workspace.root)
+        policy.reset()
+        press(app.actions_tab, "Mark the selected item done", workspace.root)
+        require("That row is not a preparation item" in policy.titles(),
+                f"ticking off a reminder row was not explained; dialogs raised: {policy.titles()}")
+        require(all(item.is_done is False for item in app.store.list_preparation(listing_c)
+                    if item.preparation_id != preparation_id),
+                "ticking off a reminder row completed a preparation item")
+        select_action_row(app, reminder_row, workspace.root)
+        policy.reset()
+        press(app.actions_tab, "Delete the selected record", workspace.root)
+        require("Follow-up days are cleared, not deleted" in policy.titles(),
+                f"deleting a reminder row was not explained; dialogs raised: {policy.titles()}")
+        tracker_after = app.store.get_tracker(listing_c)
+        require(
+            tracker_after is not None and tracker_after.follow_up_on == tracker_before.follow_up_on
+            and tracker_after.follow_up_note == tracker_before.follow_up_note
+            and tracker_after.status == tracker_before.status,
+            f"the reminder changed from {tracker_before!r} to {tracker_after!r} when its row was refused",
+        )
+        require(reminder_row in action_rows(app), "the reminder row disappeared after a refusal")
+
+    with results.step("H12 a reminder whose listing is gone is reported, and nothing else changes"):
+        change_the_synthetic_database(workspace.third_database, [
+            ("DELETE FROM job_listings WHERE listing_id = ?", (listing_d,)),
+        ])
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        summary = app.follow_up_summary.get()
+        require(
+            "1 record(s) have a day but no stored listing any more" in summary,
+            f"the tab does not report the reminder whose listing is gone: {summary!r}",
+        )
+        listed = [row_id for row_id, _values in reminder_rows(app)]
+        require(listing_d not in listed, "a reminder whose listing is gone is still listed")
+        require(listing_b in listed and listing_c in listed,
+                f"the reminders that still have listings were dropped instead: {listed}")
+        require(app.store.get_job(listing_d) is None, "the listing this check removed is still stored")
+
+    with results.step("H13 a reminder whose application record is gone is refused, not acted on"):
+        change_the_synthetic_database(workspace.third_database, [
+            ("DELETE FROM application_tracker WHERE listing_id = ?", (listing_b,)),
+        ])
+        select_follow_up_row(app, listing_b, workspace.root)
+        type_into(app.follow_up_tab, app.follow_up_day, date.today().isoformat(),
+                  what="the follow-up day field")
+        policy.reset()
+        press(app.follow_up_tab, "Set the day for the selected application", workspace.root)
+        require("Listing not found" in policy.titles(),
+                f"a reminder whose record is gone was not reported; dialogs raised: {policy.titles()}")
+        require("no longer in the local database" in policy.said("Listing not found"),
+                "the refusal does not say that the record is gone")
+        require(app.store.get_tracker(listing_b) is None,
+                "an application record was written for a reminder whose record is gone")
+        require("Follow-up set for" not in app.status.get(),
+                f"the status line claims a day was recorded: {app.status.get()!r}")
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        listed = [row_id for row_id, _values in reminder_rows(app)]
+        require(listing_b not in listed, f"the reminder whose record is gone is still listed: {listed}")
+        require(listing_c in listed, f"the tab lost the reminders it can still show: {listed}")
+
+    with results.step("H14 nothing here is recorded as an employer decision or as a career outcome"):
+        import re  # noqa: PLC0415 - only this check reads the recorded events
+
+        from career_agent import analytics  # noqa: PLC0415
+
+        for tracker in app.store.list_trackers():
+            require(tracker.candidate_confirmed is False,
+                    f"{tracker.listing_id} is stored as confirmed after reminders and preparation")
+        report = analytics.report_from_store(app.store, today=date.today())
+        require(report.applications_recorded == 0,
+                f"{report.applications_recorded} application(s) are counted as sent by this workflow")
+        names = set(re.findall(r"event=([a-z_.]+)", event_lines(workspace.third_database)))
+        require("preparation.added" in names and "preparation.completed" in names,
+                f"the preparation events are missing from the log: {sorted(names)}")
+        require(not any("confirm" in name for name in names),
+                f"a confirmation event was recorded by this workflow: {sorted(names)}")
+
+    workspace.close_window(host, app)
+
+
+# --------------------------------------------------------------------------------------------------
 # Workflow F - cleanup, lifecycle, and cleanup after a failure
 # --------------------------------------------------------------------------------------------------
 def workflow_f_cleanup(run: Run) -> None:
@@ -1979,7 +2510,7 @@ def workflow_f_cleanup(run: Run) -> None:
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
 #: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
 #: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
-#: before it - G included, which is why the letters are not alphabetical here.
+#: before it - G and H included, which is why the letters are not alphabetical here.
 WORKFLOWS = (
     ("A - candidate profile persistence", workflow_a_profile),
     ("B - the two job URLs", workflow_b_job_urls),
@@ -1987,6 +2518,7 @@ WORKFLOWS = (
     ("D - tracker and analytics", workflow_d_tracker_and_analytics),
     ("E - export, import and refusal", workflow_e_export_import),
     ("G - work history and study records", workflow_g_history_records),
+    ("H - follow-up reminders and next actions", workflow_h_follow_ups_and_actions),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
@@ -2144,10 +2676,14 @@ def main(argv=None) -> int:
         "and its blank application URL; an unevidenced listing stayed UNKNOWN and refused shortlisting "
         "while an evidenced listing reached PASS; an application moved through its permitted statuses "
         "with a recorded interview round never counted as an outcome; an export round-tripped into a "
-        "second database and three refusals wrote nothing; and every window, connection and temporary "
-        "file was released. The dialogs a person would answer - a file chooser and the confirmations - "
-        "were answered by the run and are listed above. This is not the manual checklist: no check has "
-        "judged layout, wording, focus order, accessibility, or how any of it feels to use."
+        "second database and three refusals wrote nothing; follow-up days were recorded, moved, refused "
+        "and cleared on an application nothing else moved, with overdue, due-today and later days read "
+        "back in words from fixed days, the list read back after the window was closed and reopened, a "
+        "preparation item added through its own dialog and ticked off, and reminders whose records had "
+        "gone reported instead of acted on; and every window, connection and temporary file was "
+        "released. The dialogs a person would answer - a file chooser and the confirmations - were "
+        "answered by the run and are listed above. This is not the manual checklist: no check has judged "
+        "layout, wording, focus order, accessibility, or how any of it feels to use."
     )
 
 
