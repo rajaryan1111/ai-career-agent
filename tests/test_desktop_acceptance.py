@@ -229,6 +229,47 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertFalse(acceptance.using_stand_in_tk(smoke))  # a real module, with a file
 
 
+class DestroyedWindowTests(unittest.TestCase):
+    """A window whose Tk interpreter is gone: the case that only a real display produces.
+
+    The display-backed CI run reported it: after the run's root was destroyed, ``winfo_exists`` no longer
+    answered - it raised ``TclError: can't invoke "winfo" command: application has been destroyed`` - and the
+    cleanup check reported a defect that was not there. The stand-in cannot produce that, because it has no
+    interpreter to destroy, which is why the shape of the real failure is written down here as well.
+    """
+
+    class Gone:
+        """A widget of a destroyed interpreter: it still exists as an object, and Tk will not answer."""
+
+        def winfo_exists(self):
+            raise RuntimeError('can\'t invoke "winfo" command: application has been destroyed')
+
+        def winfo_children(self):
+            raise RuntimeError('can\'t invoke "winfo_children" command: application has been destroyed')
+
+        def winfo_class(self):
+            raise RuntimeError('can\'t invoke "winfo_class" command')
+
+    def test_a_window_whose_interpreter_is_destroyed_does_not_count_as_surviving(self):
+        self.assertFalse(acceptance.widget_exists(self.Gone()))
+
+    def test_a_window_that_really_survived_still_counts_as_existing(self):
+        self.assertTrue(acceptance.widget_exists(self.tk_widget()))
+
+    def test_a_widget_that_really_was_destroyed_does_not_count_as_existing(self):
+        widget = self.tk_widget()
+        widget.destroy()
+        self.assertFalse(acceptance.widget_exists(widget))
+
+    def test_no_dialogs_are_reported_for_a_window_tk_will_not_answer_for(self):
+        self.assertEqual(acceptance.dialogs_under(self.Gone()), [])
+
+    def tk_widget(self):
+        stub = stub_module._tkinter  # noqa: SLF001
+        host = stub.Toplevel()
+        return stub.ttk.Frame(host)
+
+
 class SelectionTests(unittest.TestCase):
     """Selecting a row, against a window whose event loop cannot dispatch a selection event."""
 

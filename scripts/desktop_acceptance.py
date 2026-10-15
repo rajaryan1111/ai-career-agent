@@ -306,9 +306,33 @@ def text_in(widget) -> str:
     return str(widget.get("1.0", "end"))
 
 
+def widget_exists(widget) -> bool:
+    """Whether a widget is still there, including when Tk will no longer answer at all.
+
+    ``winfo_exists`` does not answer "gone" for a window whose Tk interpreter has been destroyed - it
+    raises ``TclError: can't invoke "winfo" command: application has been destroyed``, which is what the
+    display-backed CI run reported. That is the strongest possible form of "the window is gone": there is no
+    interpreter left to own one. Read any other way, a *correct* cleanup would look like a defect, and the
+    check below would never be verifying anything on a real display - it passed against the stand-in only
+    because a stand-in has no interpreter to destroy.
+    """
+    try:
+        return bool(widget.winfo_exists())
+    except Exception as exc:  # noqa: BLE001 - the widget's interpreter is gone, so the widget is
+        print(f"[note] Tk no longer answers for a window ({type(exc).__name__}: {exc}); it is gone")
+        return False
+
+
 def dialogs_under(host) -> list:
-    """Every open dialog belonging to this window, oldest first."""
-    return [widget for widget in descendants(host) if widget.winfo_class() == TOPLEVEL]
+    """Every open dialog belonging to this window, oldest first.
+
+    An empty list when Tk will not answer at all: a window whose interpreter is gone has no dialogs open.
+    """
+    try:
+        return [widget for widget in descendants(host) if widget.winfo_class() == TOPLEVEL]
+    except Exception as exc:  # noqa: BLE001 - same reason as ``widget_exists``
+        print(f"[note] Tk no longer answers for this window ({type(exc).__name__}: {exc})")
+        return []
 
 
 def open_dialog(host, title: str):
@@ -371,7 +395,7 @@ def close_open_dialogs(host) -> list:
     """Destroy every dialog still open, so one refused step cannot block the next. Returns their titles."""
     titles = []
     for dialog in dialogs_under(host):
-        titles.append(str(dialog.title()))
+        titles.append(str(dialog.title()) if widget_exists(dialog) else "<destroyed>")
         try:
             dialog.destroy()
         except Exception:  # noqa: BLE001 - a dialog already gone is not a problem
@@ -688,7 +712,7 @@ def workflow_a_profile(run: Run) -> None:
 
     with results.step("A4 the window closes and a second window opens on the same database"):
         workspace.close_window(host, app)
-        require(not host.winfo_exists(), "the window still exists after being closed")
+        require(not widget_exists(host), "the window still exists after being closed")
         host2, app2 = workspace.open_window()
         require(Path(app2.db_path) == workspace.database, f"the second window opened {app2.db_path!r}")
         require(app2.store.get_profile() is not None, "the second window did not read the stored profile")
@@ -808,11 +832,36 @@ def workflow_b_job_urls(run: Run) -> None:
             status is not None and status.value == "discovered",
             f"the application's status is {status!r} after saving a listing, which claims more than a save",
         )
-        lines = event_lines(workspace.database)
-        require("submitted" not in lines.lower() or "not submitted" in lines.lower(),
-                "the event log claims something was submitted")
-        require(not run.dialogs.said("Possible duplicate"),
-                "the window asked about a duplicate of a listing that was saved only once")
+        lines = event_lines(workspace.database).splitlines()
+        require(lines, "the application recorded no events at all, so this check proves nothing")
+        # The application's own vocabulary is the check: every event this build can record is declared in
+        # career_agent.event_log, and none of them is a submission. A line naming anything else would be an
+        # event nobody declared, which is the other half of the same guarantee.
+        from career_agent.event_log import EVENTS  # noqa: PLC0415
+
+        # A log line is "<timestamp> event=<name> detail=..." - read as the format documents it rather
+        # than as a guess about where the name sits.
+        recorded = {
+            parts[1].removeprefix("event=")
+            for parts in (line.split(" ", 2) for line in lines)
+            if len(parts) > 1
+        }
+        require(
+            recorded <= set(EVENTS),
+            f"the log holds events this build does not declare: {sorted(recorded - set(EVENTS))}",
+        )
+        require(
+            not [name for name in recorded if "submit" in name],
+            f"the log claims a submission: {sorted(name for name in recorded if 'submit' in name)}",
+        )
+        require(
+            "job.saved" in recorded,
+            f"saving a listing recorded no job.saved event: {sorted(recorded)}",
+        )
+        require(
+            not run.dialogs.said("Possible duplicate"),
+            "the window asked about a duplicate of a listing that was saved only once",
+        )
 
     with results.step("B5 the save wrote into the disposable database and nowhere else"):
         require(
@@ -1455,7 +1504,7 @@ def workflow_f_cleanup(run: Run) -> None:
         database = Path(app.db_path)
         require(database.exists(), "the window did not create its database")
         workspace.close_window(host, app)
-        require(not host.winfo_exists(), "the window still exists after being closed")
+        require(not widget_exists(host), "the window still exists after being closed")
         side_files = sorted(path.name for path in database.parent.glob(f"{database.name}-*"))
         require(
             not [name for name in side_files if name.endswith(("-wal", "-journal", "-shm"))],
@@ -1473,6 +1522,10 @@ def workflow_f_cleanup(run: Run) -> None:
         workspace.require_default_database_untouched()
 
     with results.step("F4 cleanup also runs after a workflow raises"):
+        # A fresh workspace, and therefore a fresh Tk interpreter: the run's own root was destroyed on
+        # purpose by F1, and this is the only workflow that starts after that. It is also where real Tk
+        # behaved differently from the stand-in - see ``widget_exists`` - which is why the check reads the
+        # window's existence through that helper rather than calling Tk directly.
         scratch = Workspace("forced-failure")
         scratch.start()
         host, app = scratch.open_window()
@@ -1483,7 +1536,7 @@ def workflow_f_cleanup(run: Run) -> None:
                 scratch.cleanup()
         except SmokeFailure:
             pass
-        require(not host.winfo_exists(), "the window survived a failure in the middle of a workflow")
+        require(not widget_exists(host), "the window survived a failure in the middle of a workflow")
         require(not scratch.folder.exists(), "the disposable folder survived a failure")
         scratch.require_default_database_untouched()
 
