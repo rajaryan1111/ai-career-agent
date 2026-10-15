@@ -397,6 +397,7 @@ class Tree(ValidatedWidget):
         super().__init__(*args, **kwargs)
         self.rows = ()
         self.inserted = ()
+        self.current = {}
         self.selected = ()
         self.children = ()
 
@@ -411,6 +412,7 @@ class Tree(ValidatedWidget):
         # A deleted row leaves the tree: it is no longer a child and can no longer be read.
         self.rows = tuple(row for row in self.rows if str(row) != str(item))
         self.children = tuple(child for child in self.children if str(child) != str(item))
+        self.current.pop(str(item), None)
 
     def selection_remove(self, selection):
         self.selected = ()
@@ -421,8 +423,10 @@ class Tree(ValidatedWidget):
     def insert(self, parent, index, iid=None, values=None):
         self.rows += (iid,)
         # ``inserted`` is an append-only record of what was inserted (what tests assert on);
-        # ``children`` is the current state, as real ``get_children`` reports it.
+        # ``children`` is the current state, as real ``get_children`` reports it, and ``current`` is what
+        # each live item holds *now*, as real ``item`` reports it.
         self.inserted += ((iid, values),)
+        self.current[str(iid)] = values
         if parent in ("", None):
             self.children += (iid,)
         return iid
@@ -431,13 +435,15 @@ class Tree(ValidatedWidget):
         """Real ``Treeview.item`` reads a row's options; ``values`` is the one this suite uses.
 
         Item ids are Tcl strings, so an integer id reads the row inserted under that number's string
-        form, and a row that is no longer in the tree cannot be read at all.
+        form, and a row that is no longer in the tree cannot be read at all. Reading a row that was
+        inserted again under the same id - how every refresh here updates a row - answers with the values
+        of the latest insert, the way a real tree does, rather than with the first ones ever inserted.
         """
         if option == "values":
-            current = {str(row) for row in self.rows}
-            for iid, values in self.inserted:
-                if str(iid) == str(item) and str(iid) in current:
-                    return values
+            # The values a row holds *now*: a row refreshed with new values reads back as the new ones,
+            # which is what real Tk answers and what a workflow reading the list back is asking about.
+            if str(item) in {str(row) for row in self.rows}:
+                return self.current[str(item)]
             raise KeyError(f"Item {item} not found")
         return {}
 
@@ -4388,6 +4394,41 @@ class WindowConstructionTests(HandlerTestCase):
         self.assertTrue(hasattr(app, "profile_tab") and hasattr(app, "jobs_tab"))
         self.assertTrue(hasattr(app, "tracker_tab") and hasattr(app, "data_tab"))
         self.assertEqual(app.profile_vars["skills"].get(), "", "a fresh window starts with an empty profile")
+
+
+class TreeRowReadbackTests(unittest.TestCase):
+    """The tree double reads a row back the way a real tree does: the values it holds now.
+
+    A workflow that refreshes a list and then reads the refreshed rows back is asking the double what
+    the window shows. Answering with the values of the first insert ever made for that id would let a
+    stale list pass for a current one - which is what a refresh workflow has to be able to catch.
+    """
+
+    def test_a_row_refreshed_under_the_same_id_reads_back_as_the_new_values(self):
+        tree = Tree()
+        tree.insert("", "end", iid="7", values=("first",))
+
+        self.assertEqual(tree.item("7", "values"), ("first",))
+
+        tree.delete("7")
+        tree.insert("", "end", iid="7", values=("second",))
+
+        self.assertEqual(
+            tree.item("7", "values"), ("second",),
+            "a row inserted again under the same id must read back as the values it now holds",
+        )
+
+    def test_a_deleted_row_cannot_be_read_back(self):
+        tree = Tree()
+        tree.insert("", "end", iid="8", values=("gone",))
+        tree.delete("8")
+
+        with self.assertRaises(KeyError):
+            tree.item("8", "values")
+
+        tree.insert("", "end", iid="9", values=("here",))
+        self.assertEqual(tree.item("9", "values"), ("here",))
+        self.assertNotIn("8", tree.get_children(), "a deleted row is no longer a child")
 
 
 class UnreadableStoredRecordTests(HandlerTestCase):

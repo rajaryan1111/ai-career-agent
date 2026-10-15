@@ -232,6 +232,26 @@ def press(parent, text: str, root) -> None:
     root.update()
 
 
+def describe_bindings(parent, *, klass: str) -> str:
+    """What every widget of one class under ``parent`` is bound to, for a message that has to explain itself.
+
+    Read with the same two options ``linked_to`` reads, and each read is reported as it happened: an option
+    a widget does not have, or a value Tk will not hand over, is reported as that rather than as a missing
+    widget. A lookup that fails without this has to be guessed at, and a guess is not evidence.
+    """
+    described = []
+    for widget in find_widgets(parent, klass=klass):
+        parts = []
+        for option in ("textvariable", "variable"):
+            try:
+                parts.append(f"{option}={widget.cget(option)!r}")
+            except Exception as exc:  # noqa: BLE001 - the refusal is the finding, so it is reported
+                parts.append(f"{option}=<{type(exc).__name__}>")
+        described.append("(" + ", ".join(parts) + ")")
+    body = "; ".join(described) if described else "none"
+    return f"{len(described)} {klass} widget(s) under it: {body}"
+
+
 def linked_to(widget, variable) -> bool:
     """Whether a widget is bound to ``variable``.
 
@@ -241,6 +261,8 @@ def linked_to(widget, variable) -> bool:
     stub that answers with the variable object. Both spellings are accepted, so the same helper reads a
     real window and a stubbed one, and neither has to know which it is looking at.
     """
+    names = {name for name in (str(variable), getattr(variable, "_name", None)) if isinstance(name, str)}
+    names.discard("")
     for option in ("textvariable", "variable"):
         try:
             linked = widget.cget(option)
@@ -248,7 +270,12 @@ def linked_to(widget, variable) -> bool:
             continue
         if linked is variable:
             return True
-        if isinstance(linked, str) and linked != "" and linked == str(variable):
+        # ``str(linked)`` as well as ``linked``: Tk can hand back a string-like object of its own rather
+        # than a ``str``, and the name it carries is the same name either way.
+        for spelling in (linked, getattr(linked, "_name", None)):
+            if isinstance(spelling, str) and spelling in names:
+                return True
+        if not isinstance(linked, str) and linked is not None and str(linked) in names:
             return True
     return False
 
@@ -257,7 +284,11 @@ def widget_for(parent, variable, *, klass: str, what: str):
     """The one widget of ``klass`` under ``parent`` that is bound to ``variable``."""
     matches = [widget for widget in find_widgets(parent, klass=klass) if linked_to(widget, variable)]
     if len(matches) != 1:
-        raise SmokeFailure(f"expected exactly one {what}, found {len(matches)}")
+        wanted = {str(variable)} | {str(getattr(variable, "_name", ""))}
+        raise SmokeFailure(
+            f"expected exactly one {what}, found {len(matches)}; looked for the {klass} bound to "
+            f"{sorted(wanted - {''})!r}, and {describe_bindings(parent, klass=klass)}"
+        )
     return matches[0]
 
 
@@ -1647,9 +1678,10 @@ def clear_history_forms(app, root) -> None:
         set_field(app.history_tab, variable, "", what=f"the role {key} field")
     for key, variable in app.study_vars.items():
         set_field(app.history_tab, variable, "", what=f"the qualification {key} field")
-    for variable in (app.work_current, app.study_ongoing):
+    for variable, what in ((app.work_current, "the current-role checkbox"),
+                           (app.study_ongoing, "the still-studying checkbox")):
         if bool(variable.get()):
-            widget_for_any(app.history_tab, variable, what="a history checkbox").invoke()
+            tick(app.history_tab, variable, what=what, on=False)
     root.update()
 
 
@@ -1678,6 +1710,8 @@ def workflow_g_history_records(run: Run) -> None:
                        what="the still-studying checkbox") is not None,
             "the qualification form has no still-studying checkbox",
         )
+        print(f"[note] the two history checkbuttons read as "
+              f"{describe_bindings(app.history_tab, klass=CHECKBUTTON)}")
 
     with results.step("G2 a role whose end date is before its start is refused, and nothing is stored"):
         before = len(app.store.list_work_history())
@@ -1823,6 +1857,32 @@ def workflow_g_history_records(run: Run) -> None:
         require(
             len(app.store.list_work_history()) == len(entries),
             "editing a role added or removed a record",
+        )
+
+    with results.step("G8 a role can stop being current, and the flag is stored as it was left"):
+        # The form is cleared first, which unticks the checkbuttons: clearing used to look for them the
+        # way it looks for entries, so a form left with one ticked could never be cleared.
+        clear_history_forms(app, workspace.root)
+        require(
+            app.work_current.get() is False and app.study_ongoing.get() is False,
+            "clearing the history forms left a checkbox ticked",
+        )
+        press(app.history_tab, "Select the selected role for editing", workspace.root)
+        tick(app.history_tab, app.work_current, what="the current-role checkbox", on=False)
+        set_field(app.history_tab, app.work_vars["end_date"], "2026-09-30",
+                  what="the role end date field")
+        press(app.history_tab, "Save changes to the selected role", workspace.root)
+        saved = [entry for entry in app.store.list_work_history()
+                 if entry.job_title == "Fictional Renamed Role"]
+        require(len(saved) == 1, f"{len(saved)} renamed role(s) are stored, expected 1")
+        require(
+            saved[0].is_current is False and saved[0].end_date is not None,
+            f"the role was stored as current={saved[0].is_current!r}, end={saved[0].end_date!r}",
+        )
+        rows = [app.work_tree.item(item, "values") for item in app.work_tree.get_children()]
+        require(
+            any("Fictional Renamed Role" in str(row) and str(row[-1]).strip() == "" for row in rows),
+            f"the list still marks the role as current: {rows}",
         )
 
     workspace.close_window(host, app)

@@ -103,6 +103,87 @@ class HarnessTests(unittest.TestCase):
         found = acceptance.widget_for(frame, wanted, klass=acceptance.ENTRY, what="the field")
         self.assertIs(found.cget("textvariable"), wanted)
 
+    def test_a_widget_that_names_its_variable_the_way_real_tk_does_is_found(self):
+        """Real Tk answers ``cget`` with the variable's Tcl name, not with the variable object.
+
+        The stand-in answers with the object, so this is the half of the comparison only a real window
+        exercises: a widget bound through a name has to be recognised, and a name that belongs to another
+        variable - or to none - must not be.
+        """
+
+        class NamedVariable:
+            def __init__(self, name):
+                self._name = name
+
+            def __str__(self):
+                return self._name
+
+        class NamedWidget:
+            def __init__(self, bound):
+                self.bound = bound
+
+            def cget(self, option):
+                if option == "textvariable":
+                    raise KeyError("a checkbutton is not bound through textvariable here")
+                return self.bound
+
+        variable = NamedVariable("PY_VAR7")
+        self.assertTrue(acceptance.linked_to(NamedWidget("PY_VAR7"), variable), "a name is a binding")
+        self.assertTrue(acceptance.linked_to(NamedWidget(variable), variable), "the object itself is one too")
+        self.assertFalse(acceptance.linked_to(NamedWidget("PY_VAR9"), variable), "another name is not")
+        self.assertFalse(acceptance.linked_to(NamedWidget(""), variable), "no name at all is not")
+        self.assertFalse(acceptance.linked_to(NamedWidget(None), variable), "a missing option is not")
+
+    def test_a_variable_name_tk_hands_back_as_its_own_kind_of_object_is_still_read(self):
+        """Tk does not always answer a lookup with a ``str``: what it hands back has to be read as one."""
+
+        class NamedVariable:
+            _name = "PY_VAR11"
+
+            def __str__(self):
+                return self._name
+
+        class TclObject:
+            """Stands in for whatever Tk returns when the result is not a plain Python string."""
+
+            def __init__(self, text):
+                self.text = text
+
+            def __str__(self):
+                return self.text
+
+        class NamedWidget:
+            def __init__(self, bound):
+                self.bound = bound
+
+            def cget(self, option):
+                if option == "textvariable":
+                    raise KeyError("a checkbutton is not bound through textvariable here")
+                return self.bound
+
+        variable = NamedVariable()
+        self.assertTrue(
+            acceptance.linked_to(NamedWidget(TclObject("PY_VAR11")), variable),
+            "a name handed back as Tk's own object was not read as the name it carries",
+        )
+        self.assertFalse(acceptance.linked_to(NamedWidget(TclObject("PY_VAR12")), variable),
+                         "another variable's name is not a binding")
+
+    def test_a_lookup_that_finds_nothing_says_what_the_class_actually_holds(self):
+        frame = self.tk.ttk.Frame()
+        wanted = self.tk.BooleanVar(value=False)
+        other = self.tk.BooleanVar(value=False)
+        self.tk.ttk.Checkbutton(frame, variable=other)
+
+        with self.assertRaises(acceptance.SmokeFailure) as caught:
+            acceptance.widget_for(frame, wanted, klass=acceptance.CHECKBUTTON,
+                                  what="the current-role checkbox")
+
+        message = str(caught.exception)
+        self.assertIn("the current-role checkbox", message)
+        self.assertIn("1 TCheckbutton widget(s) under it", message, message)
+        self.assertIn("variable=<", message, "the failure does not say what the widget is bound to")
+
     def test_a_missing_control_fails_with_a_message_naming_what_was_looking_for(self):
         frame = self.tk.ttk.Frame()
         self.tk.ttk.Label(frame, text="nothing like a button")
