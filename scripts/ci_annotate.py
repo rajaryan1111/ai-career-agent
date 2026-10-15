@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 #: The lines that begin a finding in the recorded output. ``unittest`` writes ``FAIL: <id>`` and
@@ -54,12 +55,36 @@ MAX_NAMES_CHARS = 6000
 #: GitHub un-escapes these in a command's message, so a message containing them has to escape them first.
 _ESCAPES = (("%", "%25"), ("\r", "%0D"), ("\n", "%0A"))
 
+#: Control bytes other than the newline that is escaped above, and the tab that is harmless: a terminal
+#: escape sequence or a stray NUL inside a workflow command is at best ignored.
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 
 def escape(message: str) -> str:
     """Escape a message for a workflow command, in the order GitHub un-escapes it."""
     for plain, encoded in _ESCAPES:
         message = message.replace(plain, encoded)
-    return message
+    return _CONTROL.sub("", message)
+
+
+def use_utf8_stdout() -> None:
+    """Print workflow commands as UTF-8 whatever this platform's default encoding is.
+
+    A runner reads workflow commands as UTF-8; a Windows runner's Python writes the platform's ANSI code
+    page instead. The notes file therefore mixes the two - the bash steps write UTF-8, the Python steps
+    write code-page bytes - and reading it back as UTF-8 with ``errors="replace"`` turns each such byte
+    into U+FFFD, which that code page has no byte for. Printing it raised ``UnicodeEncodeError`` and failed
+    the reporting step of a Windows leg whose every check had passed (2026-10-15). Reproduced by driving
+    the tail mode over a notes file holding the byte such a run leaves where an em dash should be.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8")
+    except (ValueError, OSError):
+        # A stream that cannot be reconfigured is used exactly as it is; printing is still attempted.
+        pass
 
 
 def findings(text: str) -> list[tuple[str, str]]:
@@ -93,6 +118,23 @@ def annotation(level: str, title: str, message: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Report findings, and never fail the run this reports on.
+
+    This runs as the last step of a job, after the checks. A defect in the reporting must not turn a run
+    whose checks passed into a red one, and it must not be silent either: anything unexpected is published
+    as a warning annotation carrying the error, which is readable through the API like every other
+    annotation here. The behaviour of the modes themselves is pinned by tests/test_ci_annotate.py.
+    """
+    use_utf8_stdout()
+    try:
+        return _main(argv)
+    except Exception as exc:  # noqa: BLE001 - the last step of a job reports; it does not fail it
+        print(annotation("warning", "the annotation step could not report",
+                         f"{type(exc).__name__}: {exc}"))
+        return 0
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("notes", type=Path, help="the file a step redirected its output into")
     parser.add_argument("--start", type=int, default=0, help="index of the first finding to report")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import sys
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -103,6 +104,78 @@ class FindingTests(unittest.TestCase):
         self.assertLessEqual(len(found[0][1]), ci_annotate.DETAIL_LIMIT)
 
 
+class ConsoleEncodingTests(unittest.TestCase):
+    """A runner reads workflow commands as UTF-8; a Windows runner's redirected stdout is not UTF-8.
+
+    Measured on 2026-10-15: the summary step of a Windows leg failed, with every check in the job having
+    passed, because the tail annotation printed the recorded output - which holds an em dash - through a
+    stdout whose code page could not carry it.
+    """
+
+    def run_tail_on(self, encoding: str) -> bytes:
+        notes = "RESULT: BLOCKED — this Python has no tkinter module\n"
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "notes.txt"
+            path.write_text(notes, encoding="utf-8")
+            buffer = io.BytesIO()
+            stream = io.TextIOWrapper(buffer, encoding=encoding, newline="")
+            with mock.patch.object(sys, "stdout", stream):
+                status = ci_annotate.main([str(path), "--tail", "2", "--level", "notice"])
+                # Read while the stream is still open: leaving the patch closes it and its buffer.
+                stream.flush()
+                buffer.seek(0)
+                written = buffer.read()
+        self.assertEqual(status, 0)
+        return written
+
+    def test_notes_written_in_the_platforms_own_encoding_are_published_and_not_fatal(self):
+        """The Windows legs' real failure, 2026-10-15.
+
+        Their bash steps write UTF-8 while their Python steps write the ANSI code page, so an em dash
+        reaches the notes as a lone 0x97 byte. The tail mode reads the notes as UTF-8 with
+        ``errors="replace"``, which turns that byte into U+FFFD - a character the console code page has no
+        byte for. Printing it raised ``UnicodeEncodeError`` and the two reporting steps of an otherwise
+        green Windows leg ended "Process completed with exit code 1".
+        """
+        # Byte for byte what the windows leg left behind: 0x97 where the em dash should be.
+        notes = ("Ran 1600 tests in 45.751s\n\nOK (skipped=13)\n".encode("utf-8")
+                 + b"RESULT: BLOCKED \x97 the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)\n")
+        for encoding in ("cp1252", "cp437"):
+            with self.subTest(encoding=encoding):
+                with TemporaryDirectory() as folder:
+                    path = Path(folder) / "notes.txt"
+                    path.write_bytes(notes)
+                    buffer = io.BytesIO()
+                    stream = io.TextIOWrapper(buffer, encoding=encoding, newline="")
+                    with mock.patch.object(sys, "stdout", stream):
+                        status = ci_annotate.main([str(path), "--tail", "3", "--level", "notice"])
+                        stream.flush()
+                        buffer.seek(0)
+                        written = buffer.read()
+                self.assertEqual(status, 0)
+                self.assertIn(b"::notice title=the run's last words::", written)
+                self.assertIn(b"RESULT: BLOCKED", written)
+
+    def test_a_console_that_cannot_carry_the_content_still_publishes_it_as_utf8(self):
+        for encoding in ("cp437", "ascii", "cp1252"):
+            with self.subTest(encoding=encoding):
+                written = self.run_tail_on(encoding)
+                self.assertIn("::notice title=the run's last words::".encode(), written)
+                self.assertIn("—".encode(), written, "the command must reach the runner as UTF-8")
+
+
+class EscapeTests(unittest.TestCase):
+    def test_a_control_byte_is_dropped_rather_than_sent_inside_a_command(self):
+        # Only the control byte goes: a colour code's remaining characters are ordinary text.
+        for control, expected in (
+            ("\x00", "beforeafter"), ("\x07", "beforeafter"), ("\x0c", "beforeafter"),
+            ("\x1b[31m", "before[31mafter"), ("\x7f", "beforeafter"),
+        ):
+            with self.subTest(control=control):
+                self.assertEqual(ci_annotate.escape(f"before{control}after"), expected)
+        self.assertEqual(ci_annotate.escape("a\tb"), "a\tb", "a tab is harmless and is kept")
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, notes: str | None, argv: list[str]) -> tuple[int, str]:
         with TemporaryDirectory() as folder:
@@ -163,6 +236,19 @@ class MainTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertNotIn("::", output)
         self.assertIn("no failure is recorded", output)
+
+    def test_a_reporting_defect_is_published_as_a_warning_and_does_not_fail_the_step(self):
+        """This runs after the checks: a defect in the reporting must not redden a run that passed."""
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "notes.txt"
+            path.write_text(UNITTEST_OUTPUT, encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.object(ci_annotate, "findings", side_effect=ValueError("simulated defect")), \
+                    redirect_stdout(stdout):
+                status = ci_annotate.main([str(path)])
+        self.assertEqual(status, 0)
+        self.assertIn("::warning title=the annotation step could not report::", stdout.getvalue())
+        self.assertIn("simulated defect", stdout.getvalue())
 
     def test_a_warning_level_run_still_pairs_each_finding_with_its_detail(self):
         status, output = self.run_main(SMOKE_OUTPUT, ["--level", "warning"])
