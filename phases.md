@@ -9,6 +9,8 @@ Deliver a downloadable, maintainable career-automation product that real candida
 
 ## Phase 0 — Product contract and risk controls
 
+**Status: Complete** (audited 2026-10-16 — see [Phase status](#phase-status-audited-2026-10-16)).
+
 **Goal:** Keep the product promise, user control, safety boundaries, and measurable quality criteria consistent across all six canonical documents.
 
 Tasks: maintain the cross-industry scope; distinguish implemented, gated, experimental, and production-supported capabilities; preserve candidate truth, privacy, source permission, and evidence-backed application state.
@@ -17,17 +19,26 @@ Exit criteria: PRD, architecture, rules, design, and memory agree; no stale stat
 
 ## Phase 1 — Usable local desktop workflow
 
+**Status: Partially complete** — the workflow is implemented and driven end to end automatically; the
+manual GUI half of its exit criterion is outstanding (audited 2026-10-16).
+
 **Goal:** Turn the existing offline core into a usable end-to-end local application.
 
 Tasks: implement the chosen Python/Tkinter local shell; candidate profile editing; manual job entry; hard eligibility and explainable matching; shortlist; application ledger/status evidence; persistent SQLite storage; export/delete; and clear unsupported-source states. Resume parsing is deliberately deferred to a follow-on local-only increment so it does not block a complete, testable first workflow.
 
-Exit criteria: a user can configure a profile, add and evaluate a job, shortlist only an explicitly eligible job, track application state with evidence for confirmation, export/delete local data, restart the app, and find saved state intact without a network connection or paid API. Automated tests and manual GUI smoke tests cover critical workflows and invalid inputs. This is an internal local alpha, not the final product. The manual test protocol is recorded in [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md); it must be executed before GUI acceptance is claimed.
+Exit criteria: a user can configure a profile, add and evaluate a job, shortlist only an explicitly eligible job, track application state with evidence for confirmation, export/delete local data, restart the app, and find saved state intact without a network connection or paid API. Automated tests and manual GUI smoke tests cover critical workflows and invalid inputs. The manual half now has a run-book: [the human desktop acceptance handoff](research/human-desktop-acceptance-handoff-2026-10-16.md). This is an internal local alpha, not the final product. The manual test protocol is recorded in [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md); it must be executed before GUI acceptance is claimed.
 
 ### Phase 1B — Local resume import and profile review
+
+**Status: Partially complete** — implemented locally and tested automatically; no human has run the review
+dialog, and OCR is deliberately out of scope (audited 2026-10-16).
 
 Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 
 ## Phase 2 — Product reliability and security foundation
+
+**Status: Partially complete** — migrations, backup/restore, permissions, logs and packaging metadata exist;
+encryption at rest and a release/upgrade policy do not (audited 2026-10-16).
 
 **Goal:** Make the application recoverable, maintainable, and safe before external actions are enabled.
 
@@ -36,6 +47,9 @@ Tasks: schema migrations; backup/restore; secure secret storage; redacted logs; 
 Exit criteria: repeatable installation and recovery tests pass; privacy/security boundaries are documented and enforced; no secrets or real candidate data enter source control or test fixtures.
 
 ## Phase 3 — Source permission and job-quality validation
+
+**Status: Blocked** — the gate is closed and no source has current permission evidence; nothing may be
+enabled from this state (audited 2026-10-16).
 
 **Goal:** Prove that source integrations are permitted and useful, not merely technically reachable.
 
@@ -58,6 +72,9 @@ nothing in the product is calibrated to one industry's vocabulary.
 
 ## Phase 4 — Cross-industry matching validation
 
+**Status: Not started** — transparent matching exists, but no human-reviewed cross-industry evaluation set
+does, and no threshold is claimed (audited 2026-10-16).
+
 **Goal:** Ensure the product is not effectively an AI/ML-only tool.
 
 Tasks: create privacy-safe, human-reviewed resume/job-description test sets across representative domains (for example design, VLSI/embedded, mechanical, civil, software/data, and business); define occupation-aware skill and credential schemas; evaluate extraction and top-ranked relevance separately from hard eligibility.
@@ -72,6 +89,9 @@ Proposed initial thresholds (not yet achieved):
 Exit criteria: reproducible evaluation results and explicit coverage gaps by occupation group.
 
 ## Phase 5 — Background execution and scheduled discovery
+
+**Status: Partially complete** — the engine and both local surfaces exist and are tested; a deployed
+always-on worker and laptop-off operation are unimplemented and unverified (audited 2026-10-16).
 
 **Goal:** Deliver reliable 00:00/12:00 IST runs, including when the user's laptop is off.
 
@@ -89,6 +109,9 @@ request. Fixture adapters are the only ones in the repository.
 
 ## Phase 6 — Permitted platform adapters and application automation
 
+**Status: Blocked** — the framework exists, zero adapters are built in, and no source has passed both
+reviews (audited 2026-10-16).
+
 **Goal:** Expand from manual/local workflow to real, validated application flows.
 
 Tasks: begin with read-only discovery adapters only after each source's permission gate passes; validate listing freshness and direct application routes; implement platform-specific preparation/submission adapters only when permitted; configure standing user policies; record all actions and evidence; pause only the affected workflow on uncertainty and continue independent safe work.
@@ -96,6 +119,9 @@ Tasks: begin with read-only discovery adapters only after each source's permissi
 Exit criteria: each advertised source/workflow has current permission evidence, deterministic fixtures, integration tests, failure recovery, duplicate protection, and real-world pilot validation. CAPTCHA/OTP, access-control, anti-bot, and employer restrictions are never bypassed.
 
 ## Phase 7 — Email, interview lifecycle, and career intelligence
+
+**Status: Partially complete** — reminders, interview rounds, read-only drafts/previews, calendar export and
+analytics are implemented without any integration; a real provider connection is not (audited 2026-10-16).
 
 **Goal:** Support the journey beyond initial application without expanding permissions silently.
 
@@ -116,17 +142,51 @@ Exit criteria: integrations are revocable, external data boundaries are explicit
 
 ## Phase 8 — Pilot, release, and continuous maintenance
 
+**Status: Not started** — no pilot, no packaged or signed release, and no human desktop acceptance on any
+platform (audited 2026-10-16).
+
 **Goal:** Prove the product useful in real life and keep it working as sources change.
 
 Tasks: pilot with consenting users from more than one occupation group; measure time saved, matching quality, form/adapter failure rates, application integrity, user trust, and response/interview outcomes without promising selection; establish release notes, versioning, support/error reporting, and periodic platform-policy reviews.
 
 Exit criteria: installation, upgrades, recovery, privacy/security checks, and pilot acceptance criteria pass; release claims match tested coverage; unsupported roles/sources are labeled honestly.
 
+## Phase status (audited 2026-10-16)
+
+Every status below was re-derived from the evidence named beside it, at commit `e18c6d2` plus the working tree
+of that date. **Statuses were not changed to make the roadmap look finished, and a phase whose exit criteria
+mention a real desktop, a real source or a packaged release is not "complete" because its code exists.** The
+distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *human-accepted* ≠ *release-ready*.
+
+| Phase | Status | Evidence, and what is missing |
+| --- | --- | --- |
+| **0 — Product contract and risk controls** | **Complete** | `prd.md`, `architecture.md`, `rules.md`, `design.md`, `phases.md`, `memory.md` and `README.md` agree; no document says the implementation is unauthorized or research-only. |
+| **1 — Usable local desktop workflow** | **Partially complete** | The workflow exists and is exercised end to end automatically: ten workflows, 76 checks, on five display-backed CI legs (run `38762008724` at `5b291a7a`), over a 1649-test suite. The exit criterion "automated tests **and manual GUI smoke tests** cover critical workflows" is **half met**: no human has run the window on any platform, so all 76 window steps of the checklist stay BLOCKED (22 steps passed, all of them needing no window). |
+| **1B — Local resume import and profile review** | **Partially complete** | Implemented locally and text-only: `career_agent/resume.py` extracts from DOCX with the standard library and from PDF through the optional `pypdf`, proposes values with their evidence and confidence, and writes **only** the values the person selects and confirms. Automated coverage: the reader and proposal layers, encrypted/damaged/empty/oversized/textless refusals, a socket-blocked local-only run, and workflow H/I-independent handler tests for the review dialog. Missing: a human import review through the real window (checklist steps 24–31, all BLOCKED), a scanned-PDF path (OCR is deliberately out of scope, so a textless PDF is refused), and the 12 PDF-dependent tests skip in a checkout without the `pdf` extra. |
+| **2 — Product reliability and security foundation** | **Partially complete** | Schema migrations with a pre-update verified snapshot and honest refusals (newer/unrecognised files refused by type), backup/restore with validation, owner-only export and database permissions where the platform has them, redacted one-line event log, JSON export/import with a preview plan, packaging metadata and an installed-command rehearsal on three platforms. Missing: **encryption at rest**, a written release/upgrade policy beyond the README's data-compatibility section, a diagnostics/threat-model document, and per-platform launch artefacts. |
+| **3 — Source permission and job-quality validation** | **Blocked** | The gate is closed (`SOURCE_QUALITY_GATE_PASSED = False`) and `enabled_discovery_sources()` is empty, by design: the 50-record validation sample is not finished, and no source has current permission evidence. Nothing may be enabled from this repository state. |
+| **4 — Cross-industry matching validation** | **Not started** | Transparent matching exists (`career_agent/matching.py`) with synthetic fixtures across software/data, embedded/VLSI, mechanical, civil, design, a sparse record and a near-silent listing — but the phase's own thresholds (95% extraction accuracy, 80% top-10 precision against a human-reviewed standard) need human-reviewed, privacy-safe test sets across occupations. No such set exists and no threshold is claimed as met. |
+| **5 — Background execution and scheduled discovery** | **Partially complete (foreground and local only)** | The scheduler engine, the task/run/lease schema, crash recovery as *interrupted*, retries that never retry a refusal, the two built-in handlers and both surfaces (`--worker` in the foreground and the window's **Background tasks** tab) are implemented and tested, and the window's tab is now driven end to end by workflow I. **A deployed always-on worker, the missed-run report and therefore laptop-off operation remain unimplemented and unverified** — the phase's exit criterion is not met, and a foreground worker is not an always-on one. |
+| **6 — Permitted platform adapters and application automation** | **Blocked** | The adapter framework is implemented (capabilities with submission refused by construction, bounded request budget, retries for transient outcomes only, per-record validation, cross-source dedup, honest run outcomes) and 0 adapters are built in, because no source has passed both reviews. Live discovery and any application automation stay disabled. |
+| **7 — Email, interview lifecycle and career intelligence** | **Partially complete** | Implemented without any integration: follow-up reminders and the next-action list, interview rounds with an outcome vocabulary that has no `passed`/`rejected`, typed draft/preview/perform contracts whose only implementation is a local mock that contacts nothing, calendar export and its preview, and activity-vs-outcome analytics that names denominators and refuses to print unobservable metrics. Missing: any real provider connection, confirmation/interview detection from real email, and résumé/cover-letter versions per application. |
+| **8 — Pilot, release and continuous maintenance** | **Not started** | No pilot user, no consenting participant, no release notes process, no packaging/signing/notarisation, and no human desktop acceptance on any platform. Nothing is deployed. |
+
+**Set beside each other, the four claims this table keeps apart:**
+
+* **Implemented:** the domain core, storage, migrations and backup/restore, the Tk window with its tabs, the
+  scheduler engine, the adapter framework, analytics, export/import, résumé reading, the event log.
+* **Automated-tested:** 1649 unit and integration tests plus the two scripted desktop entry points, green on
+  five display-backed legs and four interpreter versions — **and the checks are about records, widget cells and
+  status lines, never about pixels, wording or focus**.
+* **Human-accepted:** **nothing.** No person has opened this window on any platform.
+* **Release-ready:** **nothing.** There is no packaged, signed or notarised build on any operating system, and
+  one has never been attempted.
+
 ## Current implementation status
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1550 tests passing locally (13 skipped in a checkout: 12 of them need the optional
+implemented, with 1649 tests passing locally (13 skipped in a checkout: 12 of them need the optional
 `pypdf` library and one runs only where the project is installed) and a
 Python 3.10–3.13 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
@@ -175,7 +235,10 @@ entries and cascades them with their listing, the desktop Tracker tab has an act
 dialog and a delete confirmation, and the JSON export carries the log as stored (marking a kind this
 version cannot label instead of blocking the export). An entry is deliberately not evidence: it cannot
 change a status, create a tracker record, or satisfy the confirmation floor — each of those is a test.
-Reminders and notifications that would build on the dates are not implemented (Phase F).
+The dates are used: a follow-up day is recorded against an application, the **Follow-ups** tab and the
+**Next actions** list surface it, the `followup.digest` task reports the ones that are due, and the calendar
+export writes them locally. What is not implemented is an operating-system notification or any alert that
+could reach a person while the window is closed.
 
 Local JSON export and import are implemented as one versioned format owned by `career_agent/importer.py`,
 with a plan the caller must show before anything is written. Export is the same document it always was
@@ -217,8 +280,8 @@ count or a category — never profile values, document text or URLs — is strip
 and redacted with the same function the start-up note uses; the file is owner-only where the platform
 supports it, bounded by rotation at 256 KiB with one previous file kept, and a logging failure returns
 `None` rather than failing the action it describes. `--doctor` prints the log's path and its most recent
-line. A diagnostics view inside the window is still planned, as is the version/data-compatibility policy
-for releases.
+line. A diagnostics view inside the window is still planned; the version/data-compatibility policy for releases is
+written in the README ("What a version number promises about your data").
 
 Schema versioning and safe updates are implemented. `career_agent.store` holds an ordered list of
 schema steps (version 1 created the profile/job/tracker tables; version 2 adds the application activity
@@ -239,8 +302,10 @@ refused untouched, by type, and `diagnostics` explains each of those three cases
 `backup.validate_app_database` now validates a candidate file against the tables of the version that file
 records, so restoring an older backup works again — installs it exactly as validated, then updates it
 when the app opens it, reporting that in the window and on the command line — while a newer file is still
-refused rather than downgraded. Encryption at rest, a written release/upgrade policy, and the desktop
-surface for the new activity log remain outstanding.
+refused rather than downgraded. The desktop surface for the activity log now exists (the **Application
+tracker** tab's activity panel, with an add dialog and a delete confirmation); the version/data-compatibility
+policy is the README's "What a version number promises about your data". Encryption at rest and a written
+release/upgrade policy remain outstanding.
 
 Background execution is partially implemented. Schema version 3 stores what may run and what
 happened when it did: a task definition with times in a named zone (default 00:00 and 12:00
@@ -329,8 +394,10 @@ decodes every stored record read-only and names what it cannot read, and the rea
 record with one sanitised refusal and exit status 2 instead of an unexpected failure. The
 version/data-compatibility policy that was missing is written in the README ("What a version number
 promises about your data"). Still missing: per-platform launch artefacts, code signing/notarisation, a
-decision on bundling the interpreter, the per-operating-system half of the release checklist (a real
-desktop, macOS and Windows), and a macOS/Windows CI leg — so this is an installable alpha, not a packaged
-desktop release.
+decision on bundling the interpreter, and the per-operating-system half of the release checklist (a real
+desktop, macOS and Windows). The macOS and Windows CI legs this paragraph used to list as missing now exist
+(`windows-latest` and `macos-latest`, 3.10 and 3.13, each running the suite, the résumé tests with the `pypdf`
+extra and the installed-command rehearsal) — so this is an installable alpha, not a packaged desktop release,
+and no human has yet run it on either platform.
 
 Résumé import is local and text-only: there is no OCR, so a scanned PDF with no text layer is refused with an explanation rather than guessed at, and PDF reading needs the optional `pypdf` library (DOCX import uses the standard library alone). A remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.

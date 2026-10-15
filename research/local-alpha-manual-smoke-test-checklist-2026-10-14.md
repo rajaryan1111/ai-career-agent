@@ -25,6 +25,23 @@ first time. It is fixed (`480dca1`) with a regression test at the handler level,
 display-backed proof.
 
 **Update, 2026-10-15 (later the same day):** the numbered steps' verdicts are unchanged — 22 PASS, 76 BLOCKED, 0 FAIL — and **no box has been ticked**. What is new is 14 steps whose *functional* claim is now checked automatically, through the real window, on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26; CPython 3.10–3.13): each of those steps now carries an "Automated coverage" line naming the checks, the run and the commit. Nothing about layout, wording, focus order, accessibility, mouse-driven use or native feel is covered by those checks, which is what the remaining BLOCKED verdicts are about; see "Automated coverage of numbered steps" below.  
+**Update, 2026-10-16 (coverage gaps closed, no verdict changed):** the verdicts are unchanged — 22 PASS,
+76 BLOCKED, 0 FAIL, no box ticked — and **no acceptance workflow was added or extended**: the milestone's
+harness stays at ten workflows and 76 checks. What changed is that five claims previously marked *partial* now
+carry a verified assertion at the level where they live. Four are at the handler-stub level, in
+`tests/test_desktop_handlers.py`, and each was proved to bite by a temporary mutation that the assertion caught:
+the application's **activity history is compared before and after a declined and an accepted follow-up
+clear** (because the confirmation promises it stays as it is); the scheduler tab's own **cadence and timezone
+cells are asserted for all three default tasks** (`00:00, 12:00`, `23:30`, `09:00`, `Asia/Kolkata` — the module
+test names the constant, so a literal appears here); the calendar preview's **whole per-event line** is asserted
+as the dialog draws it; and the email draft's **complete field set plus the refusal when no reminder is
+selected** are asserted. The fifth, next-action row ordering, was already covered and needed no new test:
+`tests/test_preparation.py::ActionTests` (most-overdue-first, the kind tie-break, and independence from input
+order) and `tests/test_desktop_handlers.py::NextActionsTabTests` (the exact row order across all three kinds).
+Each of the five steps' coverage lines now names both levels rather than calling itself partial, and the one
+half that remains genuinely unasserted (whether some other control could connect an account, step 86) is stated
+as such.
+
 **Date created:** 2026-10-14
 
 This checklist is intentionally separate from unit tests. It requires a real desktop session and should be completed on each operating system that the project advertises as supported. Do not mark a step passed based only on code inspection.
@@ -263,7 +280,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     again and accept: the day and note must disappear, while the application, its status and its activity
     history stay exactly as they were.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; clearing the follow-up was executed at the storage layer.**
-    → **Automated coverage (2026-10-15): H5 — **partial**: a day is moved from its own row, a declined clear leaves the day and its row in place, and an accepted clear removes the day and the note, leaves the status alone, empties the fields and takes the row out of the list; the application's activity history is not re-read by the run drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): H5 (a day is moved from its own row, a declined clear leaves the day and its row in place, and an accepted clear removes the day and the note, leaves the status alone, empties the fields and takes the row out of the list) plus the stored-activity comparison that `tests/test_desktop_handlers.py::FollowUpTabTests::test_clearing_a_follow_up_asks_first_and_keeps_the_application` now makes: two recorded history entries are compared before and after both answers, because the confirmation says the history stays as it is. The workflow drove the window half on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 47. [ ] Press **Export to a calendar file**, choose a name, and open the saved `.ics` in a real calendar
     application on this OS. It must import without an error dialog, show an all-day event on each
     follow-up day, name the employer and role, and contain no attendee and no link. Then export again to
@@ -290,7 +307,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     with a stored follow-up that day), and confirm the attempt's detail in **Recent attempts** names the
     due application and does not change any application's status.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the three tasks were seeded and read back with their times and zones.**
-    → **Automated coverage (2026-10-15): I1–I2 and I8 — **partial**: the schedule starts empty with the tab saying nothing is scheduled and no worker holds the lease, the defaults are added through the tab (created, enabled, with a next run) and adding them again creates nothing and leaves the stored tasks untouched, and using the tab takes no lease, records no attempt and writes no `task.run_*` or `worker.*` event; the three tasks' names, times and timezone are asserted by the suite and by the terminal runs, not by this workflow drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): I1–I2 and I8 (the schedule starts empty with the tab saying nothing is scheduled and no worker holds the lease; the defaults are added through the tab, created, enabled, with a next run, and adding them again creates nothing and leaves the stored tasks untouched; using the tab takes no lease, records no attempt and writes no `task.run_*` or `worker.*` event). The three tasks' names, times and timezone are asserted at two other levels: `tests/test_handlers.py::DefaultTaskTests::test_the_defaults_are_the_product_cadence_and_a_daily_backup` (all three ids in order, `00:00, 12:00`, `23:30`, the digest cadence, and every task in `Asia/Kolkata`) and `tests/test_desktop_handlers.py::SchedulerTabTests::test_the_tab_lists_the_tasks_and_says_no_worker_holds_the_lease` (the cells the tab itself shows: `00:00, 12:00`, `23:30`, `09:00` and the zone for every row). The workflow drove its half on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 52. [ ] With the app open, pause `follow-up-digest` in the Background tasks tab, confirm it asks first and
     that pausing keeps its times and its history, then resume it and confirm the next run is scheduled.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; a task saved as paused read back paused with its times intact.**
@@ -345,7 +362,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     must appear at the top of the list (the overdue one first, the undated one after the dated items), and
     the application's status must be unchanged everywhere in the window.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal list printed the order and the preparation and round counts.**
-    → **Automated coverage (2026-10-15): H8–H9 — **partial**: a preparation item with yesterday's day is added through its own dialog, whose kind chooser offers the documented kinds, and lists as "<day> (1 day(s) overdue)" naming the item and the application; an item with no day lists as "No day set" rather than being hidden, and the reminder recorded earlier appears in the same list; the run selected the application on the tracker tab rather than the Jobs tab and did not assert the order of the two rows drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): H8–H9 (a preparation item with yesterday's day is added through its own dialog, whose kind chooser offers the documented kinds, and lists as "<day> (1 day(s) overdue)" naming the item and the application; an item with no day lists as "No day set" rather than being hidden, and the reminder recorded earlier appears in the same list). The ordering the step states is asserted elsewhere, on the list standing alone: `tests/test_preparation.py::ActionTests` (most-overdue-first, an appointment outranking a chase on the same day, and the order not depending on the order things were passed in) and `tests/test_desktop_handlers.py::NextActionsTabTests::test_the_list_shows_the_three_kinds_with_the_record_each_row_names` (the exact row order across all three kinds). The workflow drove its half on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 62. [ ] Select the item and press **Mark the selected item done**. The row must leave the list, the status
     line must say the application's status was not changed, and the tracker row on the **Application
     tracker** tab must be exactly as it was.
@@ -480,20 +497,20 @@ account was touched, which is why they are here and not in the suite.
     email** beside the existing controls, and there must be no button, menu item or setting anywhere in the
     window that connects an account, sends a message, or invites anybody.
     → **BLOCKED — the tab is a window; the terminal equivalents ran and the shipped code was scanned for account and socket use.**
-    → **Automated coverage (2026-10-15): H7 — **partial**: both buttons are pressed on the tab, the preview and the draft are the read-only dialogs they claim to be ("no invitation", "no attendee is invited", "No email account is connected", "nothing here can send anything"), no file is written while they are open and both status lines say nothing was sent; whether any other control in the window could connect an account is not scanned by this workflow drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): H7 — **partial**: both buttons are pressed on the tab, the preview and the draft are the read-only dialogs they claim to be ("no invitation", "no attendee is invited", "No email account is connected", "nothing here can send anything"), no file is written while they are open and both status lines say nothing was sent. **Still open here:** whether some other control in the window could connect an account; the shipped-code scan in step 15 covers the code, not the widgets. That half ran on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 87. [ ] Press **Preview the calendar export** with at least one follow-up recorded. A read-only dialog must
     list each event as `<day>: Follow up: <role> at <employer>  [follow-up-<id>-<day>@ai-career-agent.local]`,
     state that nothing has been written yet and that every event is an all-day entry with no attendee, and
     close with **Close**, Escape and Return. Before and after, the folder holding the database must contain
     no new `.ics` file.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal preview listed the same event and wrote no file.**
-    → **Automated coverage (2026-10-15): H7 — **partial**: the preview counts the reminders the tab lists, states that nothing has been written yet and that no attendee is invited, and the folder holding the database gains no file; the per-event line format and the dialog's Close/Escape/Return behaviour are not asserted here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): H7 and the window's own dialog at the stub level: the preview counts the reminders the tab lists, states that nothing has been written yet and that no attendee is invited, and the folder holding the database gains no file; `tests/test_desktop_handlers.py::IntegrationSurfaceTests::test_the_preview_lists_the_events_and_writes_nothing` now asserts the whole per-event line the dialog draws (`2026-10-17: Follow up: AI Intern at Example Inc  [follow-up-j1-20261017@ai-career-agent.local]`), and `tests/test_cli_integrations.py` asserts the same day-prefixed line on the terminal preview. Still not asserted anywhere: whether the dialog closes on Escape and Return. The workflow drove its half on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 88. [ ] Press **Draft a follow-up email** with no row selected: it must ask you to select a reminder, and
     open nothing. With a reminder selected, the dialog must show the subject, the full body, `To: NOT
     SUPPLIED`, `Status: DRAFT ONLY`, an `Operation id: email-...`, the "Missing, and not guessed" line for
     the recipient, and a line saying nothing was sent and nothing was created.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal refusals and the full draft text were observed.**
-    → **Automated coverage (2026-10-15): H7 — **partial**: the draft names the role it was written for, says that nothing here can send anything and that no email account is connected, and the database's digest does not move while it is open; the subject, the body, `To: NOT SUPPLIED`, `Status: DRAFT ONLY`, the operation id, the "Missing, and not guessed" line and the refusal with no row selected are not asserted here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-15): H7 and the same surface at the stub level, where the complete field set is asserted: `tests/test_desktop_handlers.py::IntegrationSurfaceTests::test_the_draft_carries_the_stored_context_and_states_that_nothing_was_sent` checks the subject, a line of the body, `To: NOT SUPPLIED`, `Status: DRAFT ONLY`, `Missing, and not guessed:`, the operation id and the "Nothing was sent and nothing was created" line, and `...::test_the_draft_refuses_with_nothing_selected_and_opens_nothing` checks that the button with no row selected explains itself and opens nothing. The workflow drove its half - both dialogs opened on the real window, no file written, both status lines saying nothing was sent - on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 89. [ ] While that draft dialog is open, check the application's status, its follow-up day and its note, and
     the reminders list: none may change. Select and copy the draft text out of the dialog by hand; nothing
     must be written to disk by copying.
@@ -744,7 +761,10 @@ For each operating system tested, record:
 
 ### 2026-10-15 — third follow-up: 14 steps' functional claims are now checked on real displays
 
-**No numbered step changed verdict and no box was ticked.** The 98 steps remain 22 PASS, 76 BLOCKED, 0 FAIL.
+**This subsection is a historical record of the 38-check state of the harness at that moment.** Later
+subsections in this file record the same workflows after more were added (46 and then 76 checks); the numbers
+below are what those runs reported at the commits named in them. **No numbered step changed verdict and no box
+was ticked.** The 98 steps remain 22 PASS, 76 BLOCKED, 0 FAIL.
 What follows is automated, machine-observed evidence from the project's own acceptance workflows; a person has
 still not used this window, and every judgement a person has to make is still outstanding.
 
@@ -770,18 +790,19 @@ that the workflows report BLOCKED with no display and that the stand-in developm
 both passed. The full record, including the defect below and the per-leg annotations, is section 14 of
 `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
 
-**Automated coverage of numbered steps.** 35 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10,
-11, 13, 17, 18, 19, 21, 32, 33, 34, 43, 44, 52, 54, 62, 64, 68, 69, 70, 73, 78** are covered for the functional
-claim the step states, and **12, 46, 51, 61, 63, 71, 72, 86, 87 and 88 are covered in part** — step 12's
-pasted-guidance-text refusal and in-place evidence rewrite are not driven, step 46's activity history is not
-re-read by the run, step 51's three tasks' names, times and timezone are asserted by the suite and the terminal
-runs rather than by the workflow, step 61's selection was made on the tracker tab and the order of its two rows
-is not asserted, step 63's appearance in the other list views is not checked, step 71's delete button and both
-answers to its confirmation are not driven, step 72's record with a completion date and no start date, and its
-place after the ongoing one, were verified at the storage layer rather than in this run, and steps 86–88's
-per-event line format, dialog key bindings, draft fields and the absence of any account-connecting control
-elsewhere in the window are not asserted. Step 78 already passed by file inspection; its second half (the plan
-for an already-populated database, and the repeat import) is now checked automatically as well.
+**Automated coverage of numbered steps.** 35 steps carry an "Automated coverage" line: **3, 4, 5, 6, 10,
+11, 13, 17, 18, 19, 21, 32, 33, 34, 43, 44, 46, 51, 52, 54, 61, 62, 64, 68, 69, 70, 73, 78, 87 and 88** are
+covered for the functional claim the step states, and **12, 63, 71, 72 and 86 are covered in part** — step 12's
+pasted-guidance-text refusal and in-place evidence rewrite are not driven, step 63's appearance in the other list
+views is not checked, step 71's delete button and both answers to its confirmation are not driven, step 72's
+record with a completion date and no start date, and its place after the ongoing one, were verified at the storage
+layer rather than in this run, and step 86's remaining half is whether some other control in the window could
+connect an account (the shipped-code scan in step 15 covers the code, not the widgets). Each line names the level
+it was established at: a workflow step on a display-backed runner and/or a named test at the module or
+handler-stub level. **A stub test is not a GUI test** — it drives the handler behind the widgets and says so in
+its own docstring — and no line here moves a step's verdict. Step 78 already passed by file inspection; its
+second half (the plan for an already-populated database, and the repeat import) is now checked automatically as
+well.
 
 **A defect that only a real display could show (D14).** The first display-backed run of these workflows
 (38734920175 at `115ad2a`) passed 35 of 36 checks; the failure was F4 reporting a cleanup that had worked,

@@ -869,7 +869,11 @@ macOS wheel-verification step was the one such step left, and it stayed unexplai
 Automated tests, including that script, do **not** cover what a person sees: pixel rendering, layout,
 dialog wording, and operating-system integration are still checked by hand on a real desktop. Those checks
 remain outstanding, and every one of their statuses is in
-[the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md).
+[the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md) - which
+is the record, with one line per step and its result. How to get to a state where those steps can be run, what
+to capture for each area, and where to write the result is
+[the human desktop acceptance handoff](research/human-desktop-acceptance-handoff-2026-10-16.md); the status of
+each delivery phase, with the evidence beside it, is the table in [phases.md](phases.md).
 
 ## Packaging status
 

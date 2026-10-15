@@ -2643,3 +2643,76 @@ behaviour has only ever been exercised by a script on a runner, never by a perso
 notarisation remain unimplemented and unclaimed. `SOURCE_QUALITY_GATE_PASSED` stays `False`,
 `enabled_discovery_sources()` stays `()`, the job-source CSV is untouched (`input_sha256 0356b093…`, 83
 records), and no generated database or backup is committed.
+
+## 2026-10-16 — Closing the coverage gaps, correcting the metadata, and handing the window to a person
+
+**The five gaps the previous report left open are closed, and none of them by adding another acceptance
+workflow.** The milestone's harness stays where it was: ten workflows, 76 checks, `declared_step_count()` 76.
+Four claims that had been recorded as "covered in part" now have a verified assertion at the level where the
+claim actually lives, and one was already covered:
+
+1. **The activity history survives clearing a follow-up day.** `clear_follow_up`'s confirmation says the
+   application's history stays as it is, and nothing tested that. `FollowUpTabTests::
+   test_clearing_a_follow_up_asks_first_and_keeps_the_application` now records two history entries, compares
+   them (day, kind, detail - not `recorded_at`, this application's own clock) after a *declined* answer and
+   again after an accepted one, and asserts the fixture really has two entries so the comparison cannot be
+   vacuous. A temporary mutation that also deleted the activity rows made it fail; the file was restored.
+2. **The default tasks' names, times and timezone.** Already covered, at two levels, and now said so plainly:
+   `test_handlers.py::DefaultTaskTests::test_the_defaults_are_the_product_cadence_and_a_daily_backup` (all
+   three ids in order, `00:00, 12:00`, `23:30`, the digest cadence, every task in `Asia/Kolkata`) and the
+   window's own cells in `SchedulerTabTests::test_the_tab_lists_the_tasks_and_says_no_worker_holds_the_lease`,
+   which now asserts `00:00, 12:00`, `23:30`, **`09:00`** and the zone for every row. The literal `09:00` is
+   the part the module test cannot catch: it compares the digest's times against the same constant the product
+   uses, so redefining the constant to `08:00` left that test green and turned this one red - which is exactly
+   what a mutation check is for. Both were run.
+3. **Next-action row ordering.** Already covered; no test added. `test_preparation.py::ActionTests` holds
+   most-overdue-first, the kind tie-break on the same day, and independence from input order;
+   `NextActionsTabTests::test_the_list_shows_the_three_kinds_with_the_record_each_row_names` holds the exact
+   row order across all three kinds.
+4. **The calendar preview's per-event line.** The dialog drew a line the tests only partly pinned. The whole
+   line is now asserted as the checklist documents it:
+   `2026-10-17: Follow up: AI Intern at Example Inc  [follow-up-j1-20261017@ai-career-agent.local]`. Dropping
+   the day prefix in `CalendarExportPlan.describe` made it fail. Escape/Return closing the dialog remains
+   unasserted and is now named as the remaining half rather than implied by "partial".
+5. **The complete email-draft field set, and the refusal with no reminder selected.** The field set was
+   already asserted (`IntegrationSurfaceTests::test_the_draft_carries_the_stored_context_and_states_that_
+   nothing_was_sent`: subject, a body line, `To: NOT SUPPLIED`, `Status: DRAFT ONLY`, `Missing, and not
+   guessed:`, the operation id, "Nothing was sent and nothing was created"); the refusal was not, so
+   `test_the_draft_refuses_with_nothing_selected_and_opens_nothing` now drives the button with no row chosen
+   and asserts it explains itself, opens no dialog and no chooser, and claims nothing in the status line.
+   Making the handler return silently made it fail.
+
+**Stale metadata corrected.** `scripts/desktop_acceptance.py`'s module docstring said six workflows and listed
+A, B, C, D, E, G, F; it now describes all ten, including H, I and J, in the order they run. `phases.md` said
+1550 tests (now 1649) and listed a macOS/Windows CI leg as missing, which it no longer is; it also said the
+activity log had no desktop surface and that the version/data-compatibility policy was unwritten, both of
+which stopped being true when those shipped, and it described reminders as not implemented when the recorded
+day, the digest handler and the local export all exist - what is missing there is an OS notification, and the
+text now says that. `phases.md` gained an audited **phase status table** (Phase 0 complete, Phases 1, 1B, 2, 5
+and 7 partially complete, Phases 3 and 6 blocked, Phases 4 and 8 not started) with the evidence beside each,
+plus a **Status:** line under every phase heading, and the four-way distinction the whole document turns on:
+implemented ≠ automated-tested ≠ human-accepted ≠ release-ready. The checklist's historical "third follow-up"
+subsection is now labelled as the 38-check record it is, the acceptance-run file says which sections quote
+which revision's totals, and the five partly-covered steps now name the level of every half (workflow on a
+display-backed runner, module test, or handler-stub test) - with the one genuinely unasserted half, whether
+some other window control could connect an account, still called out as such.
+
+**A human desktop acceptance handoff, deliberately short.** `research/human-desktop-acceptance-handoff-2026-10-16.md`
+is a run-book, not a second checklist: prerequisites, how to run the two automated entry points first (and what
+they do *not* establish), the thirteen areas with the checklist step numbers that carry each, expected results,
+what to capture, the per-area human-only judgement, the per-platform table, and where to write the result - in
+the checklist, in its existing style, without deleting the lines already there and without ticking a box for a
+step nobody executed. It covers launch/shutdown, layout and resizing down to the documented `900x600` minimum,
+profile/job/eligibility/tracker, the first follow-up and its restart behaviour, next-action ordering, scheduler
+pause/resume and truthful worker status, backup/refusals/restore, résumé import review and cancellation, file
+chooser and confirmation wording, keyboard-only navigation and focus, screen-reader behaviour (an area with no
+coverage anywhere, so it is named as such), real mouse and native feel, and macOS/Windows/Linux specifics.
+
+**Evidence and invariants.** Focused tests for the four touched tests plus their classes: 41 tests, `OK`;
+mutation checks in four places, each failed as designed and each file restored byte-identical to its backup.
+Full suite `Ran 1649 tests ... OK (skipped=13)` (one test added by this increment); `compileall` clean; `declared_step_count()` 76; the acceptance
+harness under the stand-in reports 76 passed with `RESULT: BLOCKED` and exit 2 and is never evidence; on this
+machine the real entry point exits 2 with `RESULT: BLOCKED` because there is no display and no Tkinter - no
+human run is claimed anywhere. `SOURCE_QUALITY_GATE_PASSED` is `False`, `enabled_discovery_sources()` is `()`,
+the job-source CSV audit reports `input_sha256 0356b093ded3917c0fa9ba3aa9f12a682caaf81df7c49a6b042950d66a08f414`
+and 83 records, and no database, backup or credential is committed.

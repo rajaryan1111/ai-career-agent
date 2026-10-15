@@ -4,7 +4,7 @@ The manual checklist in ``research/`` is what a *person* has to do, and this scr
 replace it. What it does is narrower and still worth having: it builds the real ``CareerAgentApp`` window on
 a disposable synthetic database, types into the real ``Entry`` widgets, presses the real buttons through
 Tk's own ``invoke``, answers the dialogs a person would answer, and then checks the *stored* result and what
-the window says about it. Six workflows run, in the order a first-time user would meet them:
+the window says about it. Ten workflows run, in the order a first-time user would meet them:
 
 * **A - the candidate profile.** Type a synthetic profile, add a role and a qualification through the
   window's own forms, save, close the window, open a second window on the same database, and check that the
@@ -23,6 +23,20 @@ the window says about it. Six workflows run, in the order a first-time user woul
 * **G - work history and study records.** Add a current role and an ongoing qualification through their own
   forms and check what is stored; refuse an end date before its start, a date written in another shape, and a
   qualification marked ongoing that carries a completion date, and check that a refusal stores nothing.
+* **H - follow-up reminders and the next-action list.** Record an application's first follow-up day from the
+  tracker tab, check that overdue, due-today and later days read as words computed from fixed offsets, move
+  and clear a day from its own row (with a refused clear changing nothing), reopen the window and find the
+  list unchanged, add preparation items through their own dialog, tick one off without touching any status,
+  and check that the calendar preview and the email draft write nothing and send nothing.
+* **I - the scheduler tab.** Add the default tasks through the tab (and check that adding them again keeps
+  them), pause one after a confirmation that can be declined, check the pause survives a restart, resume it
+  and check the next occurrence is scheduled from now with nothing replayed - and check that none of this
+  starts a worker, takes the lease or records an attempt.
+* **J - data safety.** Write a backup through the tab and check it is verified before success is reported,
+  refuse an existing destination and an unwritable one, refuse a malformed, foreign, truncated and too-new
+  file with the live database untouched, decline a restore and check nothing moved, then restore a valid
+  backup and check the records came back, the previous database was kept as a readable copy and nothing
+  temporary was left behind.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 

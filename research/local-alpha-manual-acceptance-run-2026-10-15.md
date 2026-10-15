@@ -9,6 +9,11 @@ every step that needs the window is recorded **BLOCKED**, naming the missing cap
 inferred from a unit test, and no macOS or Windows behaviour is claimed. Nothing here says the alpha is
 verified: the checklist's own release rule is untouched.
 
+**Revision scope.** Sections 1-8 record the run and its revision as they stood at that time (the suite is
+quoted at 1559 tests, and the harness at 38 then 46 checks). Later sections are dated and carry the numbers
+of their own runs; the current totals are in `phases.md` and the newest per-leg table is section 15 of the
+cross-platform evidence file.
+
 **Tester / date.** An agent-operated acceptance run, 2026-10-15, on branch `arena/351e052d-ai-career-agent`.
 Every status below is backed by a command that was run and its observed output; where a status is PASS, the
 command and result are in the Evidence column, and where the evidence is a test that the *same* behaviour was

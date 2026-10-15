@@ -1666,6 +1666,13 @@ class IntegrationSurfaceTests(HandlerTestCase):
         self.assertIn("1 event(s) would be written", lines)
         self.assertIn("Follow up: AI Intern at Example Inc", lines)
         self.assertIn("follow-up-j1-20261017@ai-career-agent.local", lines)
+        # The whole per-event line, as the checklist documents it: the day the person chose, the summary
+        # the .ics writer builds, and the uid that identifies the event it would create.
+        self.assertIn(
+            "2026-10-17: Follow up: AI Intern at Example Inc"
+            "  [follow-up-j1-20261017@ai-career-agent.local]",
+            lines,
+        )
         self.assertIn("Nothing has been written yet", lines)
         self.assertIn("no attendee is invited", lines)
         self.assertIn("nothing has been written yet", app.status.get())
@@ -1716,6 +1723,25 @@ class IntegrationSurfaceTests(HandlerTestCase):
             [],
             "a draft must not write a file",
         )
+
+    def test_the_draft_refuses_with_nothing_selected_and_opens_nothing(self):
+        """What the button does with no row chosen: the refusal the checklist names, and no dialog at all."""
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ()
+        app.jobs_tree.selected = ()
+        before = RecordingToplevel.created[:]
+        MESSAGES.reset()
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._draft_follow_up_email()
+
+        self.assertIn("Select an application", MESSAGES.titles("showinfo"))
+        self.assertIn("Select the reminder this draft is about first.", MESSAGES.text("showinfo"))
+        self.assertEqual(RecordingToplevel.created, before,
+                         "a refusal must open no dialog window, let alone a draft")
+        self.assertEqual(FILEDIALOG.opened, None, "a refusal must not open a file chooser")
+        self.assertNotIn("nothing was sent", app.status.get(),
+                         "a refusal must not report having drafted anything")
 
     def test_the_draft_does_not_move_the_application(self):
         _root, app = self.reminders_tab()
@@ -4801,11 +4827,20 @@ class FollowUpTabTests(HandlerTestCase):
     def test_clearing_a_follow_up_asks_first_and_keeps_the_application(self):
         app = self.make_follow_up_app()
         self.add_application("j1", days=-1, note="chase them")
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.APPLIED, date(2026, 10, 10), "Sent through the employer portal."))
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.RESPONSE, date(2026, 10, 12), "A recruiter asked for a time slot."))
+        history = self.activity_history("j1")
+        self.assertEqual(len(history), 2,
+                         "the fixture's history must exist, or comparing it proves nothing")
         app.follow_up_tree.selected = ("j1",)
         CONFIG["Clear this follow-up?"] = False
 
         app._clear_follow_up()
         self.assertIsNotNone(self.store.get_tracker("j1").follow_up_on, "a declined confirmation does nothing")
+        self.assertEqual(self.activity_history("j1"), history,
+                         "a declined confirmation wrote to the application's history")
 
         CONFIG["Clear this follow-up?"] = True
         app._clear_follow_up()
@@ -4817,6 +4852,20 @@ class FollowUpTabTests(HandlerTestCase):
         self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
         self.assertEqual(app.follow_up_day.get(), "")
         self.assertEqual(app.follow_up_tree.inserted, (), "the list is refreshed after clearing")
+        self.assertEqual(
+            self.activity_history("j1"), history,
+            "the confirmation promises the application's history stays as it is, so clearing a day must "
+            "not add an entry, drop one, or rewrite one",
+        )
+
+    def activity_history(self, listing_id: str) -> list:
+        """The stored history of one application, as values: what the promise above is about.
+
+        ``recorded_at`` is deliberately not compared - it is this application's own write clock, and the
+        claim is about the entries the person recorded and their order.
+        """
+        return [(entry.occurred_on, entry.kind, entry.detail)
+                for entry in self.store.list_activity(listing_id)]
 
     def test_a_status_change_through_the_window_keeps_the_recorded_reminder(self):
         """The regression: moving an application on used to cancel the reminder silently.
@@ -5264,8 +5313,13 @@ class SchedulerTabTests(HandlerTestCase):
 
         rows = {iid: values for iid, values in app.tasks_tree.inserted}
         self.assertEqual(sorted(rows), sorted(DEFAULT_TASK_IDS))
-        self.assertIn("00:00, 12:00", rows["scheduled-discovery"][3])
-        self.assertIn("Asia/Kolkata", rows["scheduled-discovery"][4])
+        # Every default task's own cadence, in the window's own cells: the checklist states these times,
+        # so what the tab shows for each of the three is asserted rather than one standing for all.
+        self.assertEqual(rows["scheduled-discovery"][3], "00:00, 12:00")
+        self.assertEqual(rows["daily-backup"][3], "23:30")
+        self.assertEqual(rows["follow-up-digest"][3], "09:00")
+        for task_id, values in rows.items():
+            self.assertEqual(values[4], "Asia/Kolkata", f"{task_id} is listed in the wrong zone")
         self.assertEqual(rows["daily-backup"][6], "never run")
         self.assertIn("No worker holds the lease", app.scheduler_summary.get())
         self.assertIn("No attempt has been recorded yet", app.scheduler_summary.get())
