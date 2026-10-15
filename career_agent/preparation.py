@@ -21,10 +21,13 @@ test does not depend on when it runs.
 round went, and deliberately has no value that sounds like an employer's decision. The application cannot
 know that, and offering a field for it would put words in an employer's mouth.
 
-**Order is a decision, not an accident.** Actionable items come first (most overdue first), then today, then
-what is coming; interviews sort before follow-ups, which sort before preparation, because an appointment is
-on somebody else's clock, a chase is a promise, and preparation is your own to arrange. Within a group the
-day, the listing id and the description break ties, so two runs over the same data print the same list.
+**Order is a decision, not an accident.** Actionable items come first, then today, then what is coming. Within
+the overdue group the *oldest promise comes first whatever its kind* - a preparation item five days late
+outranks a follow-up due yesterday - because how late something is, is what a person needs to see first; the
+kind then breaks ties on the same day, an appointment before a chase before your own list, because an
+appointment is on somebody else's clock, a chase is a promise, and preparation is your own to arrange. After
+that the day, the listing id and the description break ties, so two runs over the same data print the same
+list.
 """
 from __future__ import annotations
 
@@ -65,8 +68,9 @@ class ActionKind(str, Enum):
     PREPARATION = "preparation"
 
 
-#: Lower sorts first. An appointment on somebody else's clock outranks a chase, which outranks your own
-#: list - see the module docstring.
+#: Lower sorts first, and it decides *ties* rather than the whole order: over days the oldest promise comes
+#: first whatever its kind, and only actions that fall on the same day are ordered by an appointment (on
+#: somebody else's clock) before a chase (a promise) before your own list - see the module docstring.
 _KIND_ORDER = {ActionKind.INTERVIEW: 0, ActionKind.FOLLOW_UP: 1, ActionKind.PREPARATION: 2}
 _TIMING_ORDER = {Timing.OVERDUE: 0, Timing.TODAY: 1, Timing.SOON: 2, Timing.LATER: 3, Timing.UNDATED: 4}
 

@@ -2684,7 +2684,7 @@ claim actually lives, and one was already covered:
 
 **Stale metadata corrected.** `scripts/desktop_acceptance.py`'s module docstring said six workflows and listed
 A, B, C, D, E, G, F; it now describes all ten, including H, I and J, in the order they run. `phases.md` said
-1550 tests (now 1649) and listed a macOS/Windows CI leg as missing, which it no longer is; it also said the
+1550 tests (now 1651) and listed a macOS/Windows CI leg as missing, which it no longer is; it also said the
 activity log had no desktop surface and that the version/data-compatibility policy was unwritten, both of
 which stopped being true when those shipped, and it described reminders as not implemented when the recorded
 day, the digest handler and the local export all exist - what is missing there is an OS notification, and the
@@ -2710,9 +2710,22 @@ coverage anywhere, so it is named as such), real mouse and native feel, and macO
 
 **Evidence and invariants.** Focused tests for the four touched tests plus their classes: 41 tests, `OK`;
 mutation checks in four places, each failed as designed and each file restored byte-identical to its backup.
-Full suite `Ran 1649 tests ... OK (skipped=13)` (one test added by this increment); `compileall` clean; `declared_step_count()` 76; the acceptance
+Full suite `Ran 1651 tests ... OK (skipped=13)` (one test added by this increment, and two more by the concurrent commit below); `compileall` clean; `declared_step_count()` 76; the acceptance
 harness under the stand-in reports 76 passed with `RESULT: BLOCKED` and exit 2 and is never evidence; on this
 machine the real entry point exits 2 with `RESULT: BLOCKED` because there is no display and no Tkinter - no
 human run is claimed anywhere. `SOURCE_QUALITY_GATE_PASSED` is `False`, `enabled_discovery_sources()` is `()`,
 the job-source CSV audit reports `input_sha256 0356b093ded3917c0fa9ba3aa9f12a682caaf81df7c49a6b042950d66a08f414`
 and 83 records, and no database, backup or credential is committed.
+
+**A concurrent commit landed mid-increment, and its documentation caught up with it.** While this increment
+was being verified, the repository owner pushed `d16f8cf` ("fix(preparation): prioritize most overdue actions
+across kinds") onto the same branch, on top of `1f1e50c`. It was fast-forwarded here rather than fought with:
+it changes the ordering rule so that within the overdue group the *oldest promise comes first whatever its
+kind*, with the kind breaking same-day ties, and adds two tests
+(`test_most_overdue_action_wins_across_kinds`, `test_kind_priority_breaks_ties_for_overdue_actions`). Three
+places still described the old rule and now describe the new one - `preparation.py`'s module docstring and the
+`_KIND_ORDER` comment (which now says the kind decides *ties*, not the whole order), `__main__.py`'s
+`run_next_actions` docstring, the README's Next-actions paragraph and `architecture.md`'s ordering sentence -
+and the checklist's ordering citation for step 61 names the age-first rule and the two new tests. Only words
+changed: no behaviour, no test, and no assertion was touched to accommodate the commit, and the full suite is
+green at 1651 tests after it.

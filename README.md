@@ -593,9 +593,9 @@ qualify.
 A job hunt is not a list of jobs, it is a list of things to do. The **Next actions** tab answers that one
 question across every application: the **preparation items** you have written down (tailor the résumé,
 read the engineering blog, get a reference letter ready), the **interview rounds** you have been invited to
-and recorded, and the **follow-up days** that have arrived. Overdue first, then today, then what is coming,
-with interviews ahead of follow-ups and follow-ups ahead of your own checklist - somebody else's calendar
-first.
+and recorded, and the **follow-up days** that have arrived. Overdue first, then today, then what is coming;
+within the overdue group the oldest promise comes first whatever its kind, and the kind breaks ties on the same
+day - an appointment on somebody else's calendar ahead of a chase, ahead of your own checklist.
 
 ```bash
 python -m career_agent --next-actions     # what is due, what is coming, and what is recorded

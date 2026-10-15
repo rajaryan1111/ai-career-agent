@@ -87,7 +87,8 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
 - The work around an application is its own record, in its own module. ``career_agent/preparation.py`` is
   pure: it takes preparation items, interview rounds, follow-up reminders, the listings and a ``today`` the
   caller supplies, and returns one ordered action list plus the sentences that describe it. The ordering is
-  a documented decision (overdue first, then today, then the window; an appointment on somebody else's
+  a documented decision (overdue first, then today, then the window; within the overdue group the oldest
+  promise first whatever its kind, with the kind breaking same-day ties - an appointment on somebody else's
   clock ahead of a chase, ahead of your own checklist), the two summary functions distinguish "nothing
   recorded" from "nothing due", and a capped report always states how many lines it left out. The records
   themselves live in schema 5's ``application_preparation`` and ``interview_round`` tables, both deleted

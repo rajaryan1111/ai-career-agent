@@ -751,8 +751,9 @@ def run_next_actions(args: argparse.Namespace) -> int:
 
     This is the one question a career workspace should answer first: not "what do you have" but "what is
     waiting on you". It combines the three things a person can have to do - a round to prepare for, a
-    follow-up day that has arrived, and an open preparation item - orders them so somebody else's clock
-    comes first, and says how many items are further out rather than hiding them.
+    follow-up day that has arrived, and an open preparation item - orders them so what is most overdue comes
+    first, with the kind breaking ties on the same day, and says how many items are further out rather than
+    hiding them.
 
     Read-only, and deliberately so: nothing here moves an application's status, and the report says so. The
     day compared against is this machine's local day, because "due today" is a statement about the person's
