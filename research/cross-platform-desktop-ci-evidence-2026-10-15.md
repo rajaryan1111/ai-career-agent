@@ -650,3 +650,51 @@ so I1–I8 keep their meaning and every earlier citation of them still names the
 **What this does not establish.** That a person wants this report, or understands it: that judgement is one
 of the human-only items in the acceptance handoff. And it establishes nothing about laptop-off operation
 itself — a reported missed occurrence is still a missed occurrence.
+
+## 19. D20 — a non-finite poll interval was accepted, and then misbehaved (found by probing)
+
+**How it was found.** The same probing pass that produced D19 walked the command line's other numeric
+options. Every date, time and identifier argument refused a bad value cleanly. Two cases did not:
+
+```
+$ python -m career_agent --worker --poll-seconds nan      # (cut off after 6 seconds)
+AI Career Agent 0.1.0 · worker e2b.local-cli               … and it kept running
+$ python -m career_agent --worker --poll-seconds inf
+AI Career Agent 0.1.0 · worker e2b.local-cli
+…
+exit 3                                                     # COULD NOT START, after the header was printed
+```
+
+**Why.** ``WorkerSettings.__post_init__`` validated its three numeric fields with ``value <= 0``, which is
+**False for NaN** and for positive infinity, so both passed. Measured on the primitives rather than assumed:
+``threading.Event().wait(nan)`` returns immediately, so a NaN interval makes the loop's sleep a no-op and the
+worker polls as fast as it can; ``threading.Event().wait(inf)`` raises ``OverflowError: timestamp too large to
+convert``, which escaped the worker loop *after* it had started and reached the top level as an "unexpected
+failure" (exit 3) with a startup-diagnostics note — for one mis-typed number. The tracker, the matcher and the
+form validation already refuse non-finite numbers (``core.py``, ``matching.py``, ``validation.py``); the worker
+settings were the one place that did not.
+
+**Classification: product defect**, in the command-line/worker boundary.
+
+**The smallest correct fix.** The check now requires a *finite* positive number
+(``math.isfinite(value) and value > 0``), and the refusal says so ("poll_seconds must be a positive, finite
+number of seconds."). ``run_worker`` catches ``WorkerConfigurationError`` around the settings it builds and
+returns the documented refused status rather than letting it reach the top-level handler, so a bad flag value
+is a refusal with a message and no diagnostics note; the option's help text says what is accepted. Everything
+else about the worker is untouched, and a merely unusual-but-finite value (``0.5``) still works.
+
+**Regression tests (fail before, pass after).**
+``tests/test_worker.py::SettingsTests::test_a_non_finite_interval_is_refused_rather_than_run_with`` covers all
+three settings against NaN, infinity and negative infinity, requires the refusal to name the field and to say
+"finite", and requires a finite value to still be accepted; before the fix it fails with nine
+`WorkerConfigurationError not raised` subtest failures. On the command line,
+``tests/test_cli_worker.py::WorkerCommandTests::test_an_interval_the_worker_cannot_run_with_is_refused_before_it_starts``
+requires exit 2, a `REFUSED` line naming finiteness, and **no output at all on stdout** — the strong form of
+"nothing was started" — for `nan`, `inf`, `0` and `-1`, plus a parser-level refusal for `-inf` (argparse reads
+it as an option, which is also a refusal). Fail-before for the command-line half was measured directly rather
+than through the test runner, because the unfixed code *starts the worker*: `nan` ran until a six-second cap
+killed it (exit 124) and `inf` exited 3.
+
+**What this does not establish.** Nothing about intervals that are finite but absurd in practice
+(``--poll-seconds 1e9`` starts a worker that will not poll again in this century, which is the operator's own
+choice and is left alone). The refusal is about values the worker cannot run *correctly* with.

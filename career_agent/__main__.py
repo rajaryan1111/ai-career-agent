@@ -67,7 +67,7 @@ from . import analytics, importer, preparation
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
-from .worker import Worker, WorkerSettings, worker_status
+from .worker import Worker, WorkerConfigurationError, WorkerSettings, worker_status
 # Imported as a namespace: ``default_registry`` here is the *handler* registry the worker runs, and the
 # adapter framework has a function of the same name. Aliasing keeps the two from being confused at the
 # call site - a worker that resolved the wrong registry would silently register no handlers.
@@ -283,7 +283,8 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--poll-seconds", type=float, default=None, metavar="SECONDS",
-        help="How often the worker looks for due work (default: every 15 seconds).",
+        help="How often the worker looks for due work (default: every 15 seconds; must be a "
+             "positive, finite number).",
     )
     parser.add_argument(
         "--yes", action="store_true",
@@ -1383,12 +1384,21 @@ def run_worker(args: argparse.Namespace) -> int:
     The worker executes local work only: the registered handlers write a verified local backup and
     refuse the gated discovery run, so nothing here reaches the network. Ctrl-C stops it cleanly - the
     attempt in progress is given the chance to wind up, its outcome is recorded, and the lease is
-    released - and the exit status says which of those happened.
+    released - and the exit status says which of those happened. A poll interval the worker cannot run
+    with is refused before anything starts, rather than surfacing later as an unexpected failure.
     """
     database = _database_path(args)
     worker_id = (args.worker_id or DEFAULT_WORKER_ID).strip()
-    settings = WorkerSettings() if args.poll_seconds is None else WorkerSettings(
-        poll_seconds=args.poll_seconds)
+    try:
+        settings = WorkerSettings() if args.poll_seconds is None else WorkerSettings(
+            poll_seconds=args.poll_seconds)
+    except WorkerConfigurationError as exc:
+        # A flag value the worker cannot run with is a refusal, like every other bad option value, and not an
+        # unexpected failure: measured before this existed, `--poll-seconds 0` printed "COULD NOT START" and
+        # wrote a startup-diagnostics note for what is one mis-typed number, and exited 3 rather than 2.
+        print(f"REFUSED: {exc} Nothing was started, nothing was claimed and no note was written.",
+              file=sys.stderr)
+        return EXIT_REFUSED
     print(f"AI Career Agent {__version__} · worker {worker_id}")
     print(f"Database: {database}")
     print("Registered kinds:")

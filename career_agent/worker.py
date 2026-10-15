@@ -27,6 +27,7 @@ consistent so the next worker can retry the occurrence it owes.
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 from dataclasses import dataclass, field
@@ -85,8 +86,14 @@ class WorkerSettings:
         for noun, value in (("poll_seconds", self.poll_seconds),
                             ("heartbeat_seconds", self.heartbeat_seconds),
                             ("stale_after_seconds", self.stale_after_seconds)):
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-                raise WorkerConfigurationError(f"{noun} must be a positive number of seconds.")
+            # ``value <= 0`` is False for NaN, so a non-finite interval used to pass this check and then
+            # either made the loop's sleep return immediately (NaN: the worker polls as fast as it can) or
+            # raised OverflowError out of ``Event.wait`` after the worker had started (infinity). The
+            # tracker and the matcher already refuse non-finite numbers; this is the same rule here.
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0):
+                raise WorkerConfigurationError(
+                    f"{noun} must be a positive, finite number of seconds.")
         if isinstance(self.max_runs_per_tick, bool) or not isinstance(self.max_runs_per_tick, int) \
                 or self.max_runs_per_tick < 1:
             raise WorkerConfigurationError("max_runs_per_tick must be a positive whole number.")

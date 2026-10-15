@@ -173,6 +173,25 @@ class WorkerStatusCommandTests(CliWorkerTestCase):
 class WorkerCommandTests(CliWorkerTestCase):
     """``--worker``: it runs due work, stops when asked, and refuses to double up."""
 
+    def test_an_interval_the_worker_cannot_run_with_is_refused_before_it_starts(self) -> None:
+        """D20 through the front end: exit 2 and a refusal, not exit 3 and a started worker.
+
+        ``nan`` used to make the loop's sleep return immediately and ``inf`` raised OverflowError out of
+        ``Event.wait`` after the header had been printed. A *negative* infinity never reaches that far,
+        because argparse reads ``-inf`` as an option rather than a value - which is also a refusal, from
+        the parser, so both ways of naming an unusable interval are checked and neither starts a worker.
+        """
+        for value in ("nan", "inf", "0", "-1"):
+            with self.subTest(value):
+                code, out, err = self.run_cli("--worker", "--poll-seconds", value)
+                self.assertEqual(code, cli.EXIT_REFUSED, (value, out, err))
+                self.assertIn("REFUSED", err)
+                self.assertIn("finite", err)
+                self.assertFalse(out, "the worker must not announce itself before refusing")
+        with self.assertRaises(SystemExit) as caught, contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli("--worker", "--poll-seconds", "-inf")
+        self.assertNotEqual(caught.exception.code, 0, "the parser must refuse, not accept, a negative infinity")
+
     def test_it_refuses_while_another_worker_holds_the_lease(self) -> None:
         self.run_cli("--seed-tasks")
         with self.seeded_store() as store:

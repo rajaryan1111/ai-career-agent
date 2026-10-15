@@ -143,6 +143,25 @@ class SettingsTests(WorkerTestCase):
                 with self.assertRaises(WorkerConfigurationError):
                     WorkerSettings(**changes)  # type: ignore[arg-type]
 
+    def test_a_non_finite_interval_is_refused_rather_than_run_with(self):
+        """D20: NaN and infinity passed ``value <= 0``, so the worker ran with them and misbehaved.
+
+        Measured on the primitives rather than assumed: ``threading.Event().wait(nan)`` returns at once, so
+        a NaN poll interval makes the loop poll as fast as it can, and ``wait(inf)`` raises OverflowError -
+        which reached the top level as "COULD NOT START" (exit 3) *after* the worker had printed its header
+        and started. Every numeric setting is checked, because the same comparison guarded all three.
+        """
+        for field in ("poll_seconds", "heartbeat_seconds", "stale_after_seconds"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(WorkerConfigurationError) as caught:
+                        WorkerSettings(**{field: value})  # type: ignore[arg-type]
+                    self.assertIn(field, str(caught.exception))
+                    self.assertIn("finite", str(caught.exception),
+                                  "the refusal has to say what was wrong with the number")
+        # and a value that merely *looks* unusual still works, so the check is about finiteness
+        self.assertEqual(WorkerSettings(poll_seconds=0.5).poll_seconds, 0.5)
+
     def test_a_worker_needs_an_id(self):
         with self.assertRaises(WorkerConfigurationError):
             Worker(self.store, worker_id="  ")

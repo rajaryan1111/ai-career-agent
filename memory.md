@@ -2813,3 +2813,26 @@ says the summary names both the overdue occurrence and what was missed), and a n
 index that says, for every artefact in that folder, what question it answers and whether it is current
 guidance or dated evidence - linked from `README.md` and from the handoff.
 
+**2026-10-16, same session - a second defect from the same probing pass (D20).** `--poll-seconds` took any
+`float` the parser would accept, and `WorkerSettings` validated its three numeric fields with `value <= 0` -
+which is False for NaN and for positive infinity, so both passed. Measured on the primitives rather than
+assumed: `threading.Event().wait(nan)` returns immediately (the loop's sleep becomes a no-op, so a mistyped
+flag turns the worker into a poll loop with no delay), and `wait(inf)` raises `OverflowError: timestamp too
+large to convert`, which escaped the worker loop *after* it had started and reached the top level as an
+"unexpected failure" - exit 3 plus a startup-diagnostics note for one mis-typed number. The tracker, the
+matcher and the form validation already refuse non-finite numbers; the worker settings were the one place
+that did not.
+
+The fix requires a finite positive value, names finiteness in the refusal, and catches
+`WorkerConfigurationError` in `run_worker` so a bad flag value is the documented refusal (exit 2, message, no
+diagnostics note) rather than an unexpected failure; the option's help text says what is accepted, and a
+merely unusual finite value (0.5) still works. Regression tests at both levels:
+`SettingsTests::test_a_non_finite_interval_is_refused_rather_than_run_with` (nine `WorkerConfigurationError
+not raised` subtest failures before the fix) and
+`WorkerCommandTests::test_an_interval_the_worker_cannot_run_with_is_refused_before_it_starts` (exit 2, a
+REFUSED line naming finiteness, and **no stdout at all** - the strong form of "nothing was started" - for
+nan, inf, 0 and -1, plus a parser-level refusal for -inf). The command-line fail-before was measured directly
+because the unfixed code starts the worker: nan ran until a six-second cap killed it (exit 124), inf exited 3.
+D20 is written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` section 19, including what it
+does not establish (a finite but absurd interval such as 1e9 is the operator's own choice and is left alone).
+
