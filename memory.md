@@ -2761,6 +2761,11 @@ written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` sectio
 times, the two annotations verbatim, the classification and what it does not establish (no window coverage, no
 human acceptance, and the window steps stay BLOCKED).
 
-**State after it.** `main` is still `127244b5`; the branch carries the small docs cross-reference from the
-release-readiness audit to `phases.md`'s audited phase table and to the handoff, plus this fix; the run for the
-fix commit is the one that decides whether the matrix is green at 1652 tests.
+**Resolved the same night.** The run for the fix and its write-up,
+[38784018777](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38784018777) at `eba6b4f2`, is
+**green 12/12** with the suite at **1652 tests on every leg** and the five display-backed legs at
+`RESULT: PASS — 76 checks passed` (plus `14 checks passed` on the window-lifecycle step). It started at 23:44
+IST and the Windows legs ran to 23:53 and 23:56 - the same window that had broken the run three hours of suite
+earlier in the evening - so the fix is confirmed at the hour of the failure, not just at the hour it was written.
+`main` is still `127244b5`; the branch also carries the small docs cross-reference from the release-readiness
+audit to `phases.md`'s audited phase table and to the handoff.
