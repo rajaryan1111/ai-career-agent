@@ -7,22 +7,28 @@ useful or a lie: one writes and verifies a file, the other refuses and says exac
 from __future__ import annotations
 
 import os
+import socket
 import stat
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
+from zoneinfo import ZoneInfo
 
 from career_agent.backup import automatic_backup_path, automatic_backup_snapshots, validate_app_database
 from career_agent.handlers import (
-    BACKUP_TASK_ID, DISCOVERY_TASK_ID, MAX_AUTOMATIC_SNAPSHOTS, backup_snapshot,
-    default_registry, default_tasks, describe_default_handlers, discovery_run, seed_default_tasks,
+    BACKUP_TASK_ID, DIGEST_NAMES_AT_MOST, DISCOVERY_TASK_ID, FOLLOW_UP_DIGEST_TIMES, FOLLOW_UP_TASK_ID,
+    MAX_AUTOMATIC_SNAPSHOTS, backup_snapshot, default_registry, default_tasks,
+    describe_default_handlers, discovery_run, follow_up_digest, seed_default_tasks,
 )
 from career_agent.sources import SOURCE_QUALITY_GATE_PASSED, enabled_discovery_sources
+from career_agent.core import ApplicationStatus, ApplicationTracker, Availability, JobListing
 from career_agent.store import SCHEMA_VERSION, CareerStore
 from career_agent.tasks import DEFAULT_TIMEZONE, HandlerOutcome, RunState, build_task
 from career_agent.worker import TaskContext, Worker, WorkerSettings
 import career_agent.handlers as handlers_module
+import career_agent.tasks as tasks_module
 
 UTC = timezone.utc
 #: 2026-10-15 11:30 IST.
@@ -54,19 +60,30 @@ class HandlerTestCase(unittest.TestCase):
 class RegistryTests(HandlerTestCase):
     """The built-in kinds are registered and described, not implied."""
 
-    def test_the_two_built_in_kinds_are_registered_with_descriptions(self):
+    def test_the_built_in_kinds_are_registered_with_descriptions(self):
         registry = default_registry()
 
-        self.assertEqual(registry.kinds(), ("backup.snapshot", "discovery.run"))
+        self.assertEqual(registry.kinds(), ("backup.snapshot", "discovery.run", "followup.digest"))
         for kind in registry.kinds():
             self.assertTrue(registry.get(kind).description.strip())
 
     def test_the_description_lines_name_the_kinds(self):
         lines = describe_default_handlers()
 
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(any(line.startswith("backup.snapshot:") for line in lines))
-        self.assertTrue(any(line.startswith("discovery.run:") for line in lines))
+        self.assertEqual(len(lines), len(default_registry().kinds()))
+        for kind in default_registry().kinds():
+            self.assertTrue(any(line.startswith(f"{kind}:") for line in lines),
+                            f"{kind} must be described where the others are")
+
+    def test_every_registered_kind_has_a_default_task_or_is_deliberately_not_scheduled(self):
+        """A kind nobody schedules is a feature nobody gets; each one is either seeded or explained."""
+        registered = set(default_registry().kinds())
+        scheduled = {task.kind for task in default_tasks(now=self.now)}
+
+        self.assertTrue(scheduled <= registered,
+                        "a default task must name a kind that exists")
+        self.assertEqual(registered - scheduled, set(),
+                         "every registered kind is scheduled for a fresh installation")
 
 
 class BackupSnapshotTests(HandlerTestCase):
@@ -165,16 +182,189 @@ class DiscoveryHandlerTests(HandlerTestCase):
         self.assertIn("no source adapter is implemented", result.detail)
 
 
+class FollowUpDigestTests(HandlerTestCase):
+    """The scheduled reminder: it reports what is due, and it writes nothing at all.
+
+    The occurrence used is 2026-10-15 09:00 Asia/Kolkata (03:30 UTC), which is the day the digest is
+    about. The handler must derive that day from the *occurrence*, not from this machine's clock, or a
+    laptop that was asleep would be told the wrong day when it finally runs.
+    """
+
+    SLOT = datetime(2026, 10, 15, 3, 30, tzinfo=UTC)
+    TODAY = date(2026, 10, 15)
+
+    def digest_context(self, *, slot_at=None) -> TaskContext:
+        task = build_task(FOLLOW_UP_TASK_ID, "Daily follow-up reminders", "followup.digest",
+                          times=FOLLOW_UP_DIGEST_TIMES, now=self.now)
+        return self.context(task=task, slot_at=slot_at or self.SLOT)
+
+    def add_application(self, listing_id: str, *, days: int | None, role: str = "Data Engineer",
+                        note: str | None = None) -> None:
+        self.store.save_job(JobListing(listing_id, "fixture", "Fixture",
+                                       f"https://jobs.example.invalid/{listing_id}", "Sandbox Systems",
+                                       role, availability_status=Availability.UNKNOWN))
+        self.store.save_tracker(ApplicationTracker(listing_id))
+        if days is not None:
+            self.store.save_tracker(ApplicationTracker(listing_id).with_follow_up(
+                self.TODAY + timedelta(days=days), note=note))
+
+    def test_nothing_due_is_a_success_that_says_so_and_names_nobody(self):
+        """The schedule ran and did its whole job; "nothing to chase" is not an empty result.
+
+        The reminder five days out is *not* named. A digest that listed it would be telling somebody to
+        chase an application they deliberately planned to leave alone until next week.
+        """
+        self.add_application("j1", days=5, role="Later Role")
+
+        result = follow_up_digest(self.digest_context())
+
+        self.assertEqual(result.outcome, HandlerOutcome.SUCCEEDED)
+        self.assertIn("none are due yet", result.detail)
+        self.assertNotIn("Later Role", result.detail)
+        self.assertNotIn("due today", result.detail)
+        self.assertNotIn("overdue", result.detail)
+
+    def test_a_record_with_no_day_at_all_is_reported_as_nothing_recorded(self):
+        self.add_application("j1", days=None)
+
+        result = follow_up_digest(self.digest_context())
+
+        self.assertEqual(result.outcome, HandlerOutcome.SUCCEEDED)
+        self.assertIn("No follow-ups are recorded", result.detail)
+
+    def test_due_and_overdue_follow_ups_are_named_with_their_day(self):
+        self.add_application("j1", days=-2, role="Data Engineer", note="ask about the panel")
+        self.add_application("j2", days=0, role="QA Engineer")
+
+        result = follow_up_digest(self.digest_context())
+
+        self.assertEqual(result.outcome, HandlerOutcome.SUCCEEDED)
+        self.assertIn("1 overdue", result.detail)
+        self.assertIn("1 due today", result.detail)
+        self.assertIn("Data Engineer", result.detail)
+        self.assertIn("QA Engineer", result.detail)
+        self.assertIn("2026-10-13", result.detail, "the day itself is in the record")
+
+    def test_a_long_list_is_summarised_rather_than_pasted_whole(self):
+        for index in range(DIGEST_NAMES_AT_MOST + 3):
+            self.add_application(f"j{index}", days=-1, role=f"Role {index}")
+
+        result = follow_up_digest(self.digest_context())
+
+        self.assertIn("(3 more not named here)", result.detail)
+        self.assertIn("(checked for 2026-10-15)", result.detail)
+        self.assertLessEqual(len(result.detail), tasks_module.MAX_DETAIL_LENGTH + len("... (truncated)"),
+                             "a run record is a bounded line, not a report")
+
+    def test_the_digest_changes_no_application_and_writes_no_entry(self):
+        self.add_application("j1", days=-1)
+
+        follow_up_digest(self.digest_context())
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
+        self.assertIsNone(tracker.status_evidence)
+        self.assertFalse(tracker.candidate_confirmed)
+        self.assertEqual(self.store.list_activity("j1"), ())
+        self.assertEqual([run.detail for run in self.store.list_task_runs()], [],
+                         "the handler writes nothing; the worker records the attempt, not the handler")
+
+    def test_the_day_reported_is_the_occurrence_day_not_the_wall_clock(self):
+        """A digest claimed late still reports the day it was due for, on the workspace's clock."""
+        self.add_application("j1", days=-1)
+
+        # The same occurrence, expressed in two zones: the day it is about does not move.
+        ist = ZoneInfo("Asia/Kolkata")
+        as_ist = follow_up_digest(self.digest_context(slot_at=self.SLOT.astimezone(ist)))
+        as_utc = follow_up_digest(self.digest_context(slot_at=self.SLOT))
+
+        self.assertEqual(as_ist.detail, as_utc.detail)
+        self.assertIn("checked for 2026-10-15", as_ist.detail)
+
+    def test_a_database_that_is_not_there_is_a_refusal_not_a_crash(self):
+        self.store.close()
+        self.database_path.unlink()
+
+        result = follow_up_digest(self.digest_context())
+
+        self.assertEqual(result.outcome, HandlerOutcome.REFUSED)
+        self.assertIn("no database file", result.detail)
+
+    def test_the_digest_reaches_no_network(self):
+        """No socket is opened anywhere in the handler: it reads one local file and returns a line."""
+        self.add_application("j1", days=0)
+        opened = []
+        real_socket = socket.socket
+
+        def spy(*args, **kwargs):
+            opened.append(args)
+            return real_socket(*args, **kwargs)
+
+        with mock.patch.object(socket, "socket", spy):
+            result = follow_up_digest(self.digest_context())
+
+        self.assertEqual(result.outcome, HandlerOutcome.SUCCEEDED)
+        self.assertEqual(opened, [], "the scheduled reminder must not open a socket")
+
+
+class DigestThroughTheWorkerTests(HandlerTestCase):
+    """The digest as a person actually gets it: a scheduled task, run by the worker, recorded.
+
+    The other tests call the handler directly; this one proves the wiring - that the seeded kind runs
+    through the real registry, that its one line lands in the run history, and that a run changes no
+    candidate data.
+    """
+
+    def test_the_seeded_digest_runs_through_the_worker_and_lands_in_the_history(self):
+        self.store.save_job(JobListing("j1", "fixture", "Fixture", "https://jobs.example.invalid/1",
+                                       "Sandbox Systems", "Data Engineer",
+                                       availability_status=Availability.UNKNOWN))
+        self.store.save_tracker(ApplicationTracker("j1"))
+        # Seeded a minute before the digest's 09:00 IST occurrence, on the day the follow-up is due.
+        slot = datetime(2026, 10, 12, 3, 29, tzinfo=UTC)
+        due_at = datetime(2026, 10, 12, 3, 30, tzinfo=UTC)
+        self.store.save_tracker(ApplicationTracker("j1").with_follow_up(date(2026, 10, 12),
+                                                                       note="ask about the panel"))
+        seeded = seed_default_tasks(self.store, now=slot)
+        self.assertIn(FOLLOW_UP_TASK_ID, seeded.created)
+        # Only the digest is due, so the claim cannot land on another task.
+        for task in self.store.list_scheduled_tasks():
+            if task.task_id != FOLLOW_UP_TASK_ID:
+                self.store.save_scheduled_task(task.with_definition(enabled=False), now=slot)
+
+        worker = Worker(self.store, worker_id="test-worker", registry=default_registry(),
+                        settings=WorkerSettings(poll_seconds=0.01, heartbeat_seconds=0.05,
+                                                stale_after_seconds=30),
+                        clock=lambda: due_at, on_outcome=lambda outcome: None)
+        executed = worker.tick(now=due_at)
+
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0].task_id, FOLLOW_UP_TASK_ID)
+        self.assertEqual(executed[0].state, RunState.SUCCEEDED)
+        self.assertIn("due today", executed[0].detail)
+        self.assertIn("Data Engineer", executed[0].detail)
+        self.assertIn("2026-10-12", executed[0].detail, "the day is the occurrence's day")
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
+        self.assertEqual(self.store.list_activity("j1"), (),
+                         "a reminder is not an activity entry; only the person writes those")
+
+
 class DefaultTaskTests(HandlerTestCase):
     """What a fresh installation is scheduled to do."""
 
     def test_the_defaults_are_the_product_cadence_and_a_daily_backup(self):
         tasks = default_tasks(now=self.now)
 
-        self.assertEqual([task.task_id for task in tasks], [DISCOVERY_TASK_ID, BACKUP_TASK_ID])
-        discovery, backup = tasks
+        self.assertEqual([task.task_id for task in tasks],
+                         [DISCOVERY_TASK_ID, BACKUP_TASK_ID, FOLLOW_UP_TASK_ID])
+        discovery, backup, digest = tasks
         self.assertEqual(discovery.times, ("00:00", "12:00"))
         self.assertEqual(backup.times, ("23:30",))
+        self.assertEqual(digest.times, FOLLOW_UP_DIGEST_TIMES,
+                         "the reminder about today arrives near the start of today")
         for task in tasks:
             self.assertEqual(task.timezone, DEFAULT_TIMEZONE)
             self.assertTrue(task.enabled)
@@ -190,15 +380,15 @@ class DefaultTaskTests(HandlerTestCase):
         discovery = self.store.get_scheduled_task(DISCOVERY_TASK_ID)
         assert discovery is not None
 
-        self.assertEqual(first.created, (DISCOVERY_TASK_ID, BACKUP_TASK_ID))
+        self.assertEqual(first.created, (DISCOVERY_TASK_ID, BACKUP_TASK_ID, FOLLOW_UP_TASK_ID))
         self.assertEqual(first.kept, ())
         self.assertEqual(again.created, ())
-        self.assertEqual(again.kept, (DISCOVERY_TASK_ID, BACKUP_TASK_ID))
+        self.assertEqual(again.kept, (DISCOVERY_TASK_ID, BACKUP_TASK_ID, FOLLOW_UP_TASK_ID))
         self.assertEqual(third.created, ())
         self.assertEqual(discovery.times, ("01:00",), "a person's times stay as they set them")
         self.assertEqual(discovery.name, "Renamed")
         self.assertFalse(discovery.enabled, "a task the person paused stays paused")
-        self.assertEqual(len(third.tasks), 2)
+        self.assertEqual(len(third.tasks), len(default_tasks(now=self.now)))
 
     def test_the_seed_outcome_says_what_it_did(self):
         first = seed_default_tasks(self.store, now=self.now)

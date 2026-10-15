@@ -115,7 +115,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1006 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 1077 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit

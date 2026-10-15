@@ -148,6 +148,51 @@ This checklist is intentionally separate from unit tests. It requires a real des
     is damaged. Then create the folder and start again: the app must open normally. (The automated tests cover
     this message; this step confirms what the desktop window actually shows.)
 
+## Follow-ups, matching, sources and the worker (added 2026-10-15)
+
+These steps cover the surfaces added after the original checklist was written. Each one is listed here
+because an automated test cannot confirm what a real window shows: the tests exercise the handlers and
+the store behind the widgets, and the checklist is where the widgets themselves are seen.
+
+42. [ ] Open the new **Follow-ups** tab. It must explain that a follow-up is a day you plan to act on, not
+    a status, and that nothing there contacts anybody.
+43. [ ] With an application selected in the **Application tracker** tab, set a follow-up: pick a day a few
+    days ahead, add a note, press **Set the day for the selected application**. The row must appear in the
+    Follow-ups list with the day, the note, and "in N day(s)"; the status shown must be unchanged, and the
+    status bar must say the application's status was not changed.
+44. [ ] Set a day in the past for a second application (for example yesterday). It must sort above the
+    future one and read "N day(s) overdue". Confirm the summary line counts overdue and due-today
+    separately, and that the **Application tracker** tab still shows the same statuses as before.
+45. [ ] Type something that is not a date ("next tuesday") and press the set button. The app must refuse
+    with a message naming the YYYY-MM-DD form, and the stored record must be unchanged (check with
+    `python -m career_agent --follow-ups`, or by re-reading the row).
+46. [ ] Press **Clear the selected follow-up** and decline the confirmation: nothing may change. Press it
+    again and accept: the day and note must disappear, while the application, its status and its activity
+    history stay exactly as they were.
+47. [ ] Press **Export to a calendar file**, choose a name, and open the saved `.ics` in a real calendar
+    application on this OS. It must import without an error dialog, show an all-day event on each
+    follow-up day, name the employer and role, and contain no attendee and no link. Then export again to
+    the same name and decline the replace prompt: the existing file must be untouched.
+48. [ ] In **Jobs & eligibility**, press **Evaluate** for a saved listing. The report must show the
+    eligibility lines first and then a **MATCHING (explainable, and never a prediction)** section with one
+    line per factor, an overlap percentage *with how much was known*, and the sentence that it is not a
+    probability of being hired. A listing you do not meet the stated requirements for must say it is
+    blocked from the recommendation while still showing the comparison.
+49. [ ] Run `python -m career_agent --sources`. It must print the gate as NOT passed, name each reviewed
+    source with its state, evidence and conditions, print "applying for jobs here: not permitted" for
+    every one of them, and say that zero adapters are built in. Nothing must be contacted.
+50. [ ] Run `python -m career_agent --follow-ups` and `--calendar-to <a new path>`. The report must list
+    the recorded days with an explicit "no status was changed and nothing was sent"; the export must
+    write a file (owner-only on POSIX: `ls -l` shows `-rw-------`) and must refuse a second export to the
+    same path with a message suggesting a dated name.
+51. [ ] Open the **Background tasks** tab and confirm three tasks are listed: `daily-backup` (23:30),
+    `scheduled-discovery` (00:00, 12:00) and `follow-up-digest` (09:00), all Asia/Kolkata. Run
+    `python -m career_agent --worker` in a terminal, wait for the digest's turn (or start it after 09:00
+    with a stored follow-up that day), and confirm the attempt's detail in **Recent attempts** names the
+    due application and does not change any application's status.
+52. [ ] With the app open, pause `follow-up-digest` in the Background tasks tab, confirm it asks first and
+    that pausing keeps its times and its history, then resume it and confirm the next run is scheduled.
+
 ## Record results
 
 For each operating system tested, record:

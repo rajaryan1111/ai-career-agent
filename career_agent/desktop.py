@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 import tkinter as tk
@@ -26,7 +26,9 @@ from . import __version__
 from .config import database_path_for_run
 from .event_log import record_event
 from .handlers import default_registry, describe_default_handlers, seed_default_tasks
+from .followups import FollowUpState, calendar_file_name, reminders, summary, to_calendar
 from .matching import DISCLAIMER as MATCHING_DISCLAIMER, FactorStatus, assess
+from .store import PrivateWriteError, write_private_text_file
 from .worker import WorkerSettings, worker_status
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
@@ -93,9 +95,11 @@ class CareerAgentApp:
         self.tracker_tab = ttk.Frame(self.tabs, padding=12)
         self.data_tab = ttk.Frame(self.tabs, padding=12)
         self.scheduler_tab = ttk.Frame(self.tabs, padding=12)
+        self.follow_up_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
+        self.tabs.add(self.follow_up_tab, text="Follow-ups")
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.profile_vars = {}
@@ -103,12 +107,15 @@ class CareerAgentApp:
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
+        self._build_follow_ups()
         self._build_data_safety()
         self._build_scheduler()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
         self._refresh_jobs()
+        self._refresh_tracker()
+        self._refresh_follow_ups()
         self._refresh_scheduler()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
@@ -309,6 +316,235 @@ class CareerAgentApp:
             self.task_runs_tree.column(column, width=width, anchor=W)
         self.task_runs_tree.grid(row=6, column=0, columnspan=4, sticky="nsew")
         self.scheduler_tab.columnconfigure(0, weight=1)
+
+    def _build_follow_ups(self):
+        """The reminders tab: the days already recorded, and the two actions that change them.
+
+        Kept deliberately small. A follow-up is one day and one line of note, so the tab shows the list,
+        the day picker and the note field, and nothing else pretends to be a project-management tool.
+        """
+        actions = ttk.Frame(self.follow_up_tab)
+        actions.pack(fill=X, pady=(0, 8))
+        ttk.Button(actions, text="Refresh", command=self._refresh_follow_ups).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="Set the day for the selected application",
+                   command=self._set_follow_up).pack(side="left", padx=8)
+        ttk.Button(actions, text="Clear the selected follow-up",
+                   command=self._clear_follow_up).pack(side="left", padx=8)
+        ttk.Button(actions, text="Export to a calendar file",
+                   command=self._export_follow_ups).pack(side="left", padx=8)
+        ttk.Label(
+            self.follow_up_tab, wraplength=900,
+            text=("A follow-up is a day you plan to act on, not a status: setting one never moves the "
+                  "application, and nothing here contacts anybody. The daily reminder task reads this "
+                  "list and reports it in the run history; the calendar export writes a file on this "
+                  "machine for your own calendar."),
+        ).pack(anchor=W, pady=(0, 8))
+        entry = ttk.Frame(self.follow_up_tab)
+        entry.pack(fill=X, pady=(0, 8))
+        ttk.Label(entry, text="Day (YYYY-MM-DD)").pack(side="left")
+        self.follow_up_day = tk.StringVar()
+        ttk.Entry(entry, textvariable=self.follow_up_day, width=14).pack(side="left", padx=(4, 12))
+        ttk.Label(entry, text="Note (optional)").pack(side="left")
+        self.follow_up_note = tk.StringVar()
+        ttk.Entry(entry, textvariable=self.follow_up_note, width=48).pack(side="left", padx=4)
+        self.follow_up_summary = tk.StringVar()
+        ttk.Label(self.follow_up_tab, textvariable=self.follow_up_summary, wraplength=900,
+                  justify="left").pack(anchor=W, pady=(0, 8))
+        columns = ("employer", "role", "status", "day", "when", "note")
+        self.follow_up_tree = ttk.Treeview(self.follow_up_tab, columns=columns, show="headings", height=10)
+        for column, label, width in (("employer", "Employer", 170), ("role", "Role", 200),
+                                     ("status", "Application status", 170), ("day", "Follow-up day", 120),
+                                     ("when", "When", 120), ("note", "Your note", 320)):
+            self.follow_up_tree.heading(column, text=label)
+            self.follow_up_tree.column(column, width=width, anchor=W)
+        self.follow_up_tree.pack(fill=BOTH, expand=True)
+        self.follow_up_tree.bind("<<TreeviewSelect>>", self._select_follow_up)
+        self.follow_up_tab.columnconfigure(0, weight=1)
+
+    def _selected_follow_up_id(self) -> str | None:
+        """The listing id of the selected reminder row, or ``None`` with nothing selected."""
+        if not hasattr(self, "follow_up_tree"):
+            return None
+        selection = self.follow_up_tree.selection()
+        return str(selection[0]) if selection else None
+
+    def _select_follow_up(self, _event=None):
+        """Put the selected reminder's own day and note in the fields, so editing starts from the truth."""
+        listing_id = self._selected_follow_up_id()
+        if listing_id is None:
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if tracker is None or tracker.follow_up_on is None:
+            self.follow_up_day.set("")
+            self.follow_up_note.set("")
+            return
+        self.follow_up_day.set(tracker.follow_up_on.isoformat())
+        self.follow_up_note.set(tracker.follow_up_note or "")
+
+    def _refresh_follow_ups(self):
+        """Re-read the reminders; change nothing.
+
+        The rows come from the store's own follow-up read, so a record whose day cannot be read is
+        reported rather than silently missing from a list whose whole purpose is not to forget things.
+        """
+        if not hasattr(self, "follow_up_tree"):
+            return
+        try:
+            trackers = self.store.list_follow_up_trackers()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        try:
+            pairs = [(tracker, self.store.get_job(tracker.listing_id)) for tracker in trackers]
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        today = datetime.now().date()
+        complete = [(tracker, job) for tracker, job in pairs if job is not None]
+        found = reminders(complete, today)
+        self.follow_up_summary.set(summary(found))
+        for item in self.follow_up_tree.get_children():
+            self.follow_up_tree.delete(item)
+        for reminder in found:
+            self.follow_up_tree.insert(
+                "", END, iid=reminder.listing_id,
+                values=(reminder.employer_name, reminder.role_title,
+                        reminder.status.value if reminder.status else "unknown",
+                        reminder.on.isoformat(),
+                        self._follow_up_when(reminder), reminder.note or ""),
+            )
+        missing = len(trackers) - len(complete)
+        if missing:
+            self.follow_up_summary.set(
+                f"{summary(found)} {missing} record(s) have a day but no stored listing any more; "
+                "they are not listed here.")
+
+    def _follow_up_when(self, reminder) -> str:
+        """How far away a reminder's day is, in words, from the day this window is being used."""
+        return {
+            FollowUpState.OVERDUE: f"{abs(reminder.days_away)} day(s) overdue",
+            FollowUpState.DUE_TODAY: "due today",
+            FollowUpState.UPCOMING: f"in {reminder.days_away} day(s)",
+            FollowUpState.LATER: f"in {reminder.days_away} day(s)",
+            FollowUpState.NONE: "no day recorded",
+        }[reminder.state]
+
+    def _set_follow_up(self):
+        """Record the day and note in the fields against the selected application."""
+        listing_id = self._selected_follow_up_id()
+        if not listing_id:
+            messagebox.showinfo("Select an application",
+                               "Select the application this follow-up belongs to first.", parent=self.root)
+            return
+        try:
+            day = date.fromisoformat(self.follow_up_day.get().strip())
+        except ValueError:
+            messagebox.showinfo("Give the day",
+                               "Write the day as YYYY-MM-DD, for example 2026-10-20.", parent=self.root)
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if tracker is None:
+            self._report_stale_selection(listing_id)
+            return
+        try:
+            updated = tracker.with_follow_up(day, note=self.follow_up_note.get())
+            self.store.save_tracker(updated)
+        except ValueError as exc:
+            messagebox.showinfo("Follow-up not saved", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_follow_ups()
+        self.status.set(f"Follow-up set for {updated.follow_up_on.isoformat()}; "
+                        f"the application's status was not changed ({updated.status.value}).")
+
+    def _clear_follow_up(self):
+        """Remove the selected application's follow-up, after asking, keeping the application itself."""
+        listing_id = self._selected_follow_up_id()
+        if not listing_id:
+            messagebox.showinfo("Select an application",
+                               "Select the follow-up you want to clear first.", parent=self.root)
+            return
+        if not messagebox.askyesno(
+                "Clear this follow-up?",
+                "The day and the note will be removed. The application, its status and its history stay "
+                "exactly as they are.", parent=self.root):
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+            if tracker is None:
+                self._report_stale_selection(listing_id)
+                return
+            self.store.save_tracker(tracker.with_follow_up(None))
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.follow_up_day.set("")
+        self.follow_up_note.set("")
+        self._refresh_follow_ups()
+        self.status.set("Follow-up cleared; the application itself was not changed.")
+
+    def _export_follow_ups(self):
+        """Write the recorded follow-ups to a calendar file the person chooses."""
+        try:
+            trackers = self.store.list_follow_up_trackers()
+            pairs = [(tracker, self.store.get_job(tracker.listing_id)) for tracker in trackers]
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        today = datetime.now().date()
+        found = reminders([(tracker, job) for tracker, job in pairs if job is not None], today)
+        if not found:
+            messagebox.showinfo("Nothing to export",
+                               "No follow-up days are recorded yet, so there is nothing to put in a "
+                               "calendar.", parent=self.root)
+            return
+        chosen = filedialog.asksaveasfilename(
+            parent=self.root, title="Save follow-up reminders", defaultextension=".ics",
+            initialfile=calendar_file_name(today), filetypes=[("Calendar file", "*.ics"), ("All files", "*.*")])
+        if not chosen:
+            return
+        target = Path(chosen)
+        if target.exists() and not messagebox.askyesno(
+                "Replace this file?",
+                f"{target.name} already exists. Replace it with the reminders from this window?",
+                parent=self.root):
+            return
+        try:
+            written = write_private_text_file(target, to_calendar(found, now=datetime.now(timezone.utc)))
+        except (PrivateWriteError, OSError) as exc:
+            messagebox.showerror("Calendar file not written",
+                                 f"{exc}\n\nNothing was written, and no reminder was changed.",
+                                 parent=self.root)
+            return
+        self.status.set(f"Wrote {len(found)} reminder(s) to {written}; nothing was sent anywhere.")
 
     def _refresh_scheduler(self):
         """Re-read the schedule and the run history; change nothing.

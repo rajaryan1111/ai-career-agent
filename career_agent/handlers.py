@@ -11,6 +11,11 @@ done":
   missed snapshot. It never deletes an existing file: a scheduled job must not be able to destroy the
   recovery copies it exists to create.
 
+* ``followup.digest`` reads the follow-up days recorded against applications and reports the ones that
+  are due or overdue. It writes nothing but its own run record: no status moves, no activity entry is
+  added, and nobody is contacted. It is how a reminder survives the window being closed - the run history
+  keeps what was due, and the same list is one command (`--follow-ups`) or one tab away.
+
 * ``discovery.run`` is the scheduled discovery the product is built around. Live discovery is
   *disabled*: the source-quality gate has not passed and no source is enabled, so this handler refuses
   with that reason attached and touches no network. If the gate ever genuinely passes, the same task
@@ -23,8 +28,11 @@ and it is what makes the difference visible between "we did not try" and "we tri
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from .followups import reminders, summary
 
 from .backup import automatic_backup_snapshots, create_backup, next_automatic_backup_path
 from .sources import SOURCE_QUALITY_GATE_PASSED, enabled_discovery_sources
@@ -43,6 +51,16 @@ MAX_AUTOMATIC_SNAPSHOTS = 30
 #: seeded tasks are what a person actually sees in their schedule.
 DISCOVERY_TASK_ID = "scheduled-discovery"
 BACKUP_TASK_ID = "daily-backup"
+FOLLOW_UP_TASK_ID = "follow-up-digest"
+
+#: When the digest runs, on the person's clock. Early, because a message about a day you planned to act on
+#: is worth reading at the start of that day, and the other two tasks already use midnight and noon.
+FOLLOW_UP_DIGEST_TIMES = ("09:00",)
+
+#: How many reminders the digest names individually before it summarises the rest. The run record is a
+#: line a person reads, not a report to scroll: the window shows the whole list, and the digest says how
+#: many it did not name so nobody mistakes a short line for a short list.
+DIGEST_NAMES_AT_MOST = 3
 
 
 class BuiltinHandler:
@@ -111,6 +129,58 @@ def discovery_run(context: TaskContext) -> HandlerResult:
         "was fetched.")
 
 
+def follow_up_digest(context: TaskContext) -> HandlerResult:
+    """Report the follow-up days that are due or overdue, from the database this worker serves.
+
+    The store is opened read-only in effect: this handler writes no candidate data at all. It is opened
+    per run rather than held, so a person editing the window while the worker runs is never blocked, and
+    a database that has vanished since the worker started is reported as a refusal rather than a crash.
+    """
+    database = Path(context.database_path)
+    if not database.is_file():
+        return HandlerResult(
+            HandlerOutcome.REFUSED,
+            "there is no database file to read follow-up days from, so nothing was reported")
+    # Local import: the store imports the scheduler tables' definitions, and this module is imported by
+    # the worker that owns them. Reading the day from the context's own clock keeps the whole run - the
+    # occurrence, the attempt and the report - on one timeline.
+    from .store import CareerStore
+
+    with CareerStore(database) as store:
+        pairs = []
+        for tracker in store.list_follow_up_trackers():
+            job = store.get_job(tracker.listing_id)
+            if job is not None:
+                pairs.append((tracker, job))
+        today = _local_day(context)
+        upcoming = reminders(pairs, today)
+        actionable = [item for item in upcoming if item.is_actionable]
+        if not actionable:
+            # A legitimate, successful nothing: the schedule ran, and today there is nobody to chase.
+            # Saying "success" rather than "empty" matters here - the task did its whole job.
+            summary_line = summary(upcoming)
+            return HandlerResult(HandlerOutcome.SUCCEEDED, f"{summary_line} (checked for {today.isoformat()})")
+        named = "; ".join(item.describe() for item in actionable[:DIGEST_NAMES_AT_MOST])
+        extra = len(actionable) - DIGEST_NAMES_AT_MOST
+        # The count of what was *not* named comes before the names: a run record is capped at
+        # MAX_DETAIL_LENGTH, and a summary that only appeared at the end of a long line would be the
+        # part that got cut off - leaving a short line that reads like a short list.
+        more = f" ({extra} more not named here)" if extra > 0 else ""
+        return HandlerResult(
+            HandlerOutcome.SUCCEEDED,
+            f"{summary(actionable)}{more} (checked for {today.isoformat()}) {named}",)
+
+
+def _local_day(context: TaskContext) -> date:
+    """The day the digest is about: the occurrence's own clock, converted to the workspace's timezone.
+
+    Deliberately derived from the occurrence rather than from ``datetime.now()``: a run that was claimed
+    late (a laptop that was asleep) reports the day it was *due* for, so the record explains itself
+    afterwards. It is a real calendar day on the person's clock, not a UTC one.
+    """
+    return context.slot_at.astimezone(ZoneInfo(context.task.timezone)).date()
+
+
 def default_registry() -> HandlerRegistry:
     """The registry this application runs: the two built-in kinds, and nothing else."""
     registry = HandlerRegistry()
@@ -118,6 +188,10 @@ def default_registry() -> HandlerRegistry:
         "backup.snapshot",
         "Write a verified snapshot of the database beside it (refuses instead of deleting old ones)",
         backup_snapshot))
+    registry.register("followup.digest", BuiltinHandler(
+        "followup.digest",
+        "Report the follow-up days that are due or overdue (writes nothing; contacts nobody)",
+        follow_up_digest))
     registry.register("discovery.run", BuiltinHandler(
         "discovery.run",
         "Run scheduled discovery (refuses while the source-quality gate is closed; no network access)",
@@ -146,6 +220,10 @@ def default_tasks(*, now: datetime | None = None) -> tuple[ScheduledTask, ...]:
             BACKUP_TASK_ID, "Daily database backup", "backup.snapshot",
             times=("23:30",), timezone=DEFAULT_TIMEZONE,
             timeout_seconds=300, max_attempts=2, retry_backoff_seconds=600, now=now),
+        build_task(
+            FOLLOW_UP_TASK_ID, "Daily follow-up reminders", "followup.digest",
+            times=FOLLOW_UP_DIGEST_TIMES, timezone=DEFAULT_TIMEZONE,
+            timeout_seconds=120, max_attempts=2, retry_backoff_seconds=300, now=now),
     )
 
 

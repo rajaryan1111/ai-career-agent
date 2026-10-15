@@ -397,14 +397,42 @@ than guessing from the listing's free text. Also, differently-spelled skill name
 same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
 otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
 
+## Follow up on an application (and put it in your own calendar)
+
+An application you sent and never heard about is the state most job hunts die in, so each application can
+carry **a day you plan to act on** and a short note. The **Follow-ups** tab lists them: overdue first,
+then due today, then what is coming.
+
+**A follow-up is a plan, not a status.** Setting one never moves the application, never writes an activity
+entry and never records that an employer replied — silence is not a reply, and neither is your own
+reminder. The row shows the application's real status beside your note so you can see both. Clearing a
+follow-up asks first and keeps the application, its status and its history exactly as they were. A note
+without a day is refused rather than stored, because a reminder with no day is never shown at the right
+time.
+
+Three ways to meet your own reminders:
+
+- the **daily reminder task** (`follow-up-digest`, 09:00 Asia/Kolkata) reads the days you recorded, reports
+  the ones that are due or overdue in the run history, and changes nothing;
+- `career-agent --follow-ups` prints the same list in a terminal, read-only, with the local day it used;
+- **Export to a calendar file** (or `career-agent --calendar-to PATH`) writes an `.ics` file for your own
+  calendar application — all-day entries, no attendees, no links, and on POSIX the file is owner-only
+  (`-rw-------`). It is written on this machine and sent nowhere; an existing file is never replaced
+  without asking.
+
+For the record: the project has no email, calendar-account or notification integration, and none is
+mocked into looking present — a reminder that needs somebody's credentials is documented as unavailable,
+not faked.
+
 ## Run scheduled tasks (local worker)
 
-The app can keep a schedule of its own work. Two tasks are created for you, and both run on your
-computer while the worker process is running — nothing is sent anywhere, and nothing runs while the
+The app can keep a schedule of its own work. Three tasks are created for you, and all of them run on
+your computer while the worker process is running — nothing is sent anywhere, and nothing runs while the
 computer is off or asleep.
 
 | Task | Runs at | What it does |
 | --- | --- | --- |
+| `follow-up-digest` | 09:00 Asia/Kolkata | Reports the follow-up days that are due or overdue (writes nothing) |
 | `daily-backup` | 23:30 Asia/Kolkata | Writes a verified snapshot of your database beside it |
 | `scheduled-discovery` | 00:00 and 12:00 Asia/Kolkata | Scheduled job discovery — **refused** while the source-quality gate is closed |
 

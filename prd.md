@@ -60,6 +60,13 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Respect each source's terms, API rules, and technical access requirements.
 - Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
+### Follow-ups and reminders
+
+Implemented today: a day to act on per application, listed in the window and on the command line with
+overdue/due-today distinction, a daily local reminder task, and a calendar file the person can import
+into their own calendar. Reminders never change application state. Email, calendar-account and push
+notifications are **not** implemented and are not simulated.
+
 ### Sources
 
 Implemented today: a read-only source report (`python -m career_agent --sources`) and the adapter

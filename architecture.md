@@ -86,6 +86,15 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   information" and the score is not allowed to look confident. Silence is never a pass, equivalences
   between differently-spelled skills come only from a caller-supplied table, and no output may describe a
   score as a probability. Compensation is deliberately not compared: the domain model has no field for it.
+- Follow-ups are a *plan*, not an event: `application_tracker.follow_up_on` and `follow_up_note`
+  (schema 4, additive columns) hold a day a person chose and a short note; `career_agent/followups.py`
+  turns them into reminders (overdue / due today / upcoming / later) counted in whole days against a date
+  the caller supplies, so a report is reproducible and no timezone is guessed. Nothing in that path moves
+  an application's status, writes an activity entry, or records that an employer replied. Two local
+  surfaces read it - the `follow-up-digest` scheduled task (day taken from the occurrence, not from the
+  wall clock, so a late run reports the day it was due for) and `--follow-ups` - and one local export
+  writes it out: an `.ics` with all-day events, no attendees and no links, folded at 75 octets on
+  character boundaries, written owner-only. There is no email, calendar-account or push integration.
 - Field-level uncertainty: preserve missing vs. zero, raw pay ranges, currency, unit/period, source wording and evidence. Do not normalize ambiguous compensation to annual salary.
 - Contract fixtures per source for pagination, timestamp units, empty/error responses, missing fields, challenge pages, dedup/reposts, and malformed payloads. Keep live smoke tests separate from deterministic offline tests.
 

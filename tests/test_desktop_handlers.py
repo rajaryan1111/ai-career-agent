@@ -31,7 +31,7 @@ from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
 RESTORE_STAMP = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -489,6 +489,11 @@ _ORIGINAL_TKINTER = sys.modules.get("tkinter")
 sys.modules["tkinter"] = _tkinter
 
 from career_agent import desktop  # noqa: E402  (imported after the stub is installed)
+from career_agent.handlers import default_tasks  # noqa: E402  (after the stub, like the window)
+
+#: The ids a fresh installation is seeded with, taken from the seeder rather than written out here, so a
+#: task added to the product does not require every listing assertion to be edited by hand.
+DEFAULT_TASK_IDS = tuple(task.task_id for task in default_tasks())
 from career_agent.tasks import RunState  # noqa: E402  (same reason: after the stub)
 from career_agent.desktop_logic import job_form_values, profile_form_values  # noqa: E402
 
@@ -3491,6 +3496,184 @@ class UnreadableStoredRecordTests(HandlerTestCase):
         self.assertNotIn("Traceback", message)
 
 
+class FollowUpTabTests(HandlerTestCase):
+    """The Follow-ups tab: what it lists, what setting one does, and what it must never do.
+
+    The window is driven through the same stub harness the other tab tests use, so these are tests of
+    the handler logic behind the widgets - not of pixels. A real Tk session is part of the consolidated
+    manual checklist, and nothing here claims to have run one.
+    """
+
+    def make_follow_up_app(self):
+        """The app with the widgets the Follow-ups tab builds, wired to the same stub harness."""
+        app = self.make_app()
+        app.follow_up_tab = Widget()
+        app.follow_up_summary = StringVar()
+        app.follow_up_day = StringVar()
+        app.follow_up_note = StringVar()
+        app.follow_up_tree = Tree()
+        app.follow_up_tree.selected = ()
+        MESSAGES.reset()
+        FILEDIALOG.path = ""
+        return app
+
+    def add_application(self, listing_id: str, *, days: int | None, role: str = "Data Engineer",
+                        note: str | None = None) -> None:
+        """Store one application with (or without) a follow-up day relative to today."""
+        self.store.save_job(JobListing(listing_id, "fixture", "Fixture",
+                                       f"https://jobs.example.invalid/{listing_id}", "Sandbox Systems",
+                                       role, availability_status=Availability.UNKNOWN))
+        self.store.save_tracker(ApplicationTracker(listing_id))
+        if days is not None:
+            self.store.save_tracker(ApplicationTracker(listing_id).with_follow_up(
+                date.today() + timedelta(days=days), note=note))
+
+    def test_the_tab_lists_the_recorded_days_nearest_action_first(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=5, role="Designer")
+        self.add_application("j2", days=-2, role="Data Engineer", note="ask about the panel")
+        self.add_application("j3", days=None, role="Analyst")
+
+        app._refresh_follow_ups()
+
+        rows = app.follow_up_tree.inserted
+        self.assertEqual([iid for iid, _ in rows], ["j2", "j1"],
+                         "the overdue one comes first, and the undated one is not listed at all")
+        self.assertIn("2 day(s) overdue", rows[0][1][4])
+        self.assertIn("ask about the panel", rows[0][1][5])
+        self.assertIn("1 overdue", app.follow_up_summary.get())
+
+    def test_the_summary_distinguishes_nothing_recorded_from_nothing_due(self):
+        app = self.make_follow_up_app()
+
+        app._refresh_follow_ups()
+        self.assertIn("No follow-ups are recorded", app.follow_up_summary.get())
+
+        self.add_application("j1", days=6)
+        app._refresh_follow_ups()
+        self.assertIn("none are due yet", app.follow_up_summary.get())
+
+    def test_selecting_a_row_puts_its_own_day_and_note_in_the_fields(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=3, note="chase the recruiter")
+        app.follow_up_tree.selected = ("j1",)
+
+        app._select_follow_up()
+
+        expected = (date.today() + timedelta(days=3)).isoformat()
+        self.assertEqual(app.follow_up_day.get(), expected)
+        self.assertEqual(app.follow_up_note.get(), "chase the recruiter")
+
+    def test_setting_a_day_moves_no_status_and_says_so(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+        app.follow_up_tree.selected = ("j1",)
+        app.follow_up_day.set((date.today() + timedelta(days=2)).isoformat())
+        app.follow_up_note.set("nudge them")
+
+        app._set_follow_up()
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertEqual(tracker.follow_up_on, date.today() + timedelta(days=2))
+        self.assertEqual(tracker.follow_up_note, "nudge them")
+        self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED,
+                         "a reminder never advances an application")
+        self.assertIn("the application's status was not changed", app.status.get())
+
+    def test_a_mistyped_day_is_refused_before_anything_is_written(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+        app.follow_up_tree.selected = ("j1",)
+        app.follow_up_day.set("next tuesday")
+
+        app._set_follow_up()
+
+        self.assertIn("Give the day", MESSAGES.titles())
+        self.assertIn("YYYY-MM-DD", MESSAGES.text("showinfo"))
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertIsNone(tracker.follow_up_on, "nothing was written from a day that is not a day")
+
+    def test_setting_a_day_with_nothing_selected_asks_rather_than_guessing(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+
+        app._set_follow_up()
+
+        self.assertIn("Select an application", MESSAGES.titles())
+        self.assertIsNone(self.store.get_tracker("j1").follow_up_on)
+
+    def test_clearing_a_follow_up_asks_first_and_keeps_the_application(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=-1, note="chase them")
+        app.follow_up_tree.selected = ("j1",)
+        CONFIG["Clear this follow-up?"] = False
+
+        app._clear_follow_up()
+        self.assertIsNotNone(self.store.get_tracker("j1").follow_up_on, "a declined confirmation does nothing")
+
+        CONFIG["Clear this follow-up?"] = True
+        app._clear_follow_up()
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertIsNone(tracker.follow_up_on)
+        self.assertIsNone(tracker.follow_up_note)
+        self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
+        self.assertEqual(app.follow_up_day.get(), "")
+        self.assertEqual(app.follow_up_tree.inserted, (), "the list is refreshed after clearing")
+
+    def test_export_writes_a_calendar_file_for_the_recorded_days(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=2, note="ask about the panel")
+        target = Path(self.store.database_path).parent / "reminders.ics"
+        FILEDIALOG.path = str(target)
+
+        app._export_follow_ups()
+
+        self.assertTrue(target.is_file())
+        text = target.read_text(encoding="utf-8")
+        self.assertIn("BEGIN:VCALENDAR", text)
+        self.assertIn("Follow up: Data Engineer at Sandbox Systems", text)
+        self.assertIn("ask about the panel", text)
+        self.assertIn("Wrote 1 reminder(s)", app.status.get())
+
+    def test_export_with_nothing_recorded_writes_no_file(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=None)
+        target = Path(self.store.database_path).parent / "reminders.ics"
+        FILEDIALOG.path = str(target)
+
+        app._export_follow_ups()
+
+        self.assertFalse(target.exists())
+        self.assertIn("Nothing to export", MESSAGES.titles())
+
+    def test_export_asks_before_replacing_an_existing_file(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=2)
+        target = Path(self.store.database_path).parent / "reminders.ics"
+        target.write_text("the person's own file", encoding="utf-8")
+        FILEDIALOG.path = str(target)
+        CONFIG["Replace this file?"] = False
+
+        app._export_follow_ups()
+
+        self.assertEqual(target.read_text(encoding="utf-8"), "the person's own file")
+
+    def test_cancelling_the_file_chooser_writes_nothing(self):
+        app = self.make_follow_up_app()
+        self.add_application("j1", days=2)
+        FILEDIALOG.path = ""
+
+        app._export_follow_ups()
+
+        self.assertNotIn("Wrote", app.status.get())
+        self.assertEqual([name for name in os.listdir(Path(self.store.database_path).parent)
+                          if name.endswith(".ics")], [])
+
+
 class SchedulerTabTests(HandlerTestCase):
     """The Background tasks tab: what a person can see and change, through the real handlers.
 
@@ -3527,7 +3710,7 @@ class SchedulerTabTests(HandlerTestCase):
         app._refresh_scheduler()
 
         rows = {iid: values for iid, values in app.tasks_tree.inserted}
-        self.assertEqual(sorted(rows), ["daily-backup", "scheduled-discovery"])
+        self.assertEqual(sorted(rows), sorted(DEFAULT_TASK_IDS))
         self.assertIn("00:00, 12:00", rows["scheduled-discovery"][3])
         self.assertIn("Asia/Kolkata", rows["scheduled-discovery"][4])
         self.assertEqual(rows["daily-backup"][6], "never run")
@@ -3574,9 +3757,9 @@ class SchedulerTabTests(HandlerTestCase):
         app._add_default_tasks()
 
         self.assertIn("Created: nothing.", MESSAGES.text("showinfo"))
-        self.assertIn("Left exactly as they were: scheduled-discovery, daily-backup",
+        self.assertIn("Left exactly as they were: scheduled-discovery, daily-backup, follow-up-digest",
                       MESSAGES.text("showinfo"))
-        self.assertEqual(len(self.store.list_scheduled_tasks()), 2)
+        self.assertEqual(len(self.store.list_scheduled_tasks()), len(default_tasks()))
 
     def test_adding_the_defaults_never_rewrites_a_task_the_person_configured(self):
         app = self.make_scheduler_app()
@@ -3643,8 +3826,8 @@ class SchedulerTabTests(HandlerTestCase):
                          ["wrote one snapshot"])
         self.assertIn("paused", app.status.get())
         rows = dict(app.tasks_tree.inserted)
-        self.assertEqual(sorted(rows), ["daily-backup", "scheduled-discovery"],
-                         "both tasks are still listed: pausing is not deleting")
+        self.assertEqual(sorted(rows), sorted(DEFAULT_TASK_IDS),
+                         "every task is still listed: pausing is not deleting")
         self.assertEqual(rows["daily-backup"][5], "paused")
         self.assertEqual(rows["scheduled-discovery"][5], "paused",
                          "the other task was paused by this test to keep the claim unambiguous")

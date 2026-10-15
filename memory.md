@@ -2015,3 +2015,39 @@ submission capability 1, retrying non-transient failures 3.
 **Still outstanding.** No adapter exists, live discovery stays disabled, and the framework has never made
 a network request - the fixtures are the only adapters in the repository. Compensation is still not
 compared anywhere in matching (no field exists), and a deployed, always-on worker is still not built.
+
+## 2026-10-15 — Follow-ups reach the window and the schedule
+
+**What changed.** The Follow-ups tab shows every recorded day (overdue first, then due today, then what is
+coming), with a picker and note field, a Clear button that asks first, and a calendar export that writes
+an `.ics` beside whatever the person chooses. A third scheduled task, `follow-up-digest`, runs at 09:00
+Asia/Kolkata, reads the recorded days and reports the due and overdue ones in the run history - and
+changes nothing else. `--follow-ups` and `--calendar-to PATH` do the same two things from a terminal.
+
+**Three decisions worth keeping.** (1) The tab's summary distinguishes "no follow-ups recorded" from
+"none are due yet": the first usually means the feature has not been used, the second means it is working.
+(2) The digest derives its day from the *occurrence*, not from `datetime.now()`, so a run claimed after a
+laptop was asleep still reports the day it was due for - and a test asserts the same occurrence expressed
+in two zones gives the same report. (3) The digest's detail carries its count of unnamed reminders
+*before* the names, because run details are capped at 300 characters: a marker that only appeared at the
+end of a long line would be the part that got cut off, leaving a short line that reads like a short list.
+
+**A reminder is not an event.** No handler, tab action or command writes an activity entry, moves a
+status, or sets `candidate_confirmed`; the digest test asserts the activity log is still empty afterwards,
+and the tab test asserts the tracker status is untouched after setting a day.
+
+**Third default task, and the test churn it caused.** Seeding now creates three tasks, so every assertion
+that named two had to be updated - honestly, not weakened: counts now derive from `default_tasks()`, and
+the desktop tests take their expected ids from `DEFAULT_TASK_IDS`, so the next task added does not need a
+dozen hand edits. One new test asserts that every registered handler kind is either scheduled for a fresh
+installation or has to be explained, because "a kind nobody schedules is a feature nobody gets".
+
+**Teeth checks.** Reading the day from the wall clock failed 1 test; everything counting as due failed 1
+(after strengthening the test to assert a not-yet-due reminder is not *named*); a not-yet-due list
+reported as a refusal failed 2; hiding the count of unnamed reminders failed 1; dropping the missing
+database refusal failed 1; exporting without asking before replacing a file failed 1; silently substituting
+today for a mistyped day failed 1.
+
+**Evidence.** Full suite 1077 tests OK (13 skip without `pypdf`); the checklist in
+`research/local-alpha-manual-smoke-test-checklist-2026-10-14.md` gained steps 42-52 for the new surfaces,
+all unchecked, because no real GUI session has been run for them.

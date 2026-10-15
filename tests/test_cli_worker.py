@@ -22,7 +22,9 @@ from zoneinfo import ZoneInfo
 
 import career_agent.__main__ as cli
 from career_agent.backup import automatic_backup_snapshots
-from career_agent.handlers import BACKUP_TASK_ID, DISCOVERY_TASK_ID
+from career_agent.handlers import (
+    BACKUP_TASK_ID, DISCOVERY_TASK_ID, FOLLOW_UP_TASK_ID, default_tasks,
+)
 from career_agent.store import SCHEMA_VERSION, CareerStore
 from career_agent.tasks import RunState, build_task
 
@@ -80,7 +82,7 @@ class SeedTaskCommandTests(CliWorkerTestCase):
         self.assertIn("--worker", out)
         with self.seeded_store() as store:
             self.assertEqual([task.task_id for task in store.list_scheduled_tasks()],
-                             [BACKUP_TASK_ID, DISCOVERY_TASK_ID])
+                             sorted([BACKUP_TASK_ID, DISCOVERY_TASK_ID, FOLLOW_UP_TASK_ID]))
 
     def test_seeding_again_changes_nothing_and_says_so(self) -> None:
         self.run_cli("--seed-tasks")
@@ -88,7 +90,8 @@ class SeedTaskCommandTests(CliWorkerTestCase):
         code, out, err = self.run_cli("--seed-tasks")
 
         self.assertEqual(code, cli.EXIT_OK, err)
-        self.assertIn("left scheduled-discovery, daily-backup exactly as they were", out)
+        self.assertIn("left scheduled-discovery, daily-backup, follow-up-digest exactly as they were",
+                      out)
 
     def test_seeding_leaves_a_task_a_person_configured_exactly_as_it_is(self) -> None:
         self.run_cli("--seed-tasks")
@@ -192,7 +195,7 @@ class WorkerCommandTests(CliWorkerTestCase):
         self.assertIn("No database yet; the default schedule is being added", out)
         self.assertIn("created scheduled-discovery, daily-backup", out)
         with self.seeded_store() as store:
-            self.assertEqual(len(store.list_scheduled_tasks()), 2)
+            self.assertEqual(len(store.list_scheduled_tasks()), len(default_tasks()))
             self.assertEqual(store.list_task_runs(), ())
             self.assertIsNone(store.get_worker_lease(), "a zero-tick worker leaves no lease behind")
 
@@ -237,7 +240,8 @@ class ExistingDatabaseCommandTests(CliWorkerTestCase):
         self.assertEqual(code, cli.EXIT_OK, err)
         with CareerStore(target) as store:
             self.assertEqual([task.task_id for task in store.list_scheduled_tasks()],
-                             [BACKUP_TASK_ID, DISCOVERY_TASK_ID])
+                             sorted([BACKUP_TASK_ID, DISCOVERY_TASK_ID, FOLLOW_UP_TASK_ID]),
+                             "the schedule travels inside the backup, in the store's own order")
 
 
 class ScheduleZoneTests(CliWorkerTestCase):
