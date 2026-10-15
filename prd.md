@@ -238,3 +238,36 @@ compensation is not compared because no compensation field exists yet.
 ## 11. Production definition of done
 
 A release is not production-ready merely because its UI renders or unit tests pass. For each advertised capability, provide repeatable tests, truthful support status, failure recovery, privacy/security review, and user-facing error handling. Before general release, validate installation and upgrade/uninstall paths; persistence and backup/restore; source freshness and direct application destinations; critical resume-field extraction; hard-eligibility false positives; duplicate protection; evidence-backed submission status; scheduler missed-run recovery; and a representative pilot across more than one profession. Keep unvalidated integrations disabled and label them clearly.
+
+---
+
+## Product Vision Update — Autonomous Personal Career Agent (2026-10-16)
+
+### North-star outcome
+AI Career Agent is intended to become a resume-driven personal career operations agent, not merely a job board, resume editor, or recommendation chatbot. After explicit initial setup, the user uploads a resume and the application runs a bounded workflow: understand the profile, discover relevant vacancies twice daily, evaluate fit and eligibility, prepare truthful application materials, submit through supported and permitted routes, conduct authorized HR outreach, track outcomes, and proactively report progress.
+
+### Core journey
+1. **Resume-to-profile onboarding:** extract skills, education, projects, experience, dates, links, graduation year and job-relevant facts; retain provenance; ask only to confirm uncertain or supply required missing facts.
+2. **Career policy setup:** configure target roles (AI/ML Engineer, Applied AI Engineer, AI Engineer, Forward Deployed Engineer and relevant internships), location/remote preferences, work type, compensation, eligibility, exclusions, action limits and permitted data sharing.
+3. **Twice-daily discovery:** configurable morning/evening runs across sources with verified, permitted integrations. Prioritize official employer career pages and supported ATS/public feeds. Assess LinkedIn, Unstop, Internshala, Naukri.com and other sources individually; do not promise universal coverage before feasibility is established.
+4. **Explainable fit and preparation:** retain job/source evidence, required-versus-preferred qualifications, eligibility findings, freshness and confidence; tailor resume/cover letter using verified facts only.
+5. **Authorized routine execution:** after global automation policy and account setup, execute routine, policy-compliant applications and outreach without per-item approval where the source and workflow permit it. Never bypass platform restrictions or required human attestations.
+6. **HR outreach:** privately import the user's contact list, preserve provenance, resolve duplicates/conflicts, enforce suppression and prior-send checks, and send personalized internship outreach with the correct resume only through an explicitly authorized email account.
+7. **Application and communication command center:** durable history for discovery, evaluation, preparation, blocked tasks, submissions, emails, bounces, replies, interviews, assessments, rejections, offers and follow-ups. Report only evidence-supported states.
+8. **Proactive reporting and controls:** run status, daily/weekly summaries, notifications, next actions, visible failures, pause/stop-all and revocable permissions.
+
+### Autonomy and trust contract
+The desired experience is one-time policy configuration followed by routine autonomy, not repeated approval prompts for every eligible application. Initial account connection, global authorization, privacy/data-sharing boundaries and automation limits still require explicit setup. Missing required facts, legal/sensitive attestations, identity checks, CAPTCHA/OTP, conflicting contact records, suspicious postings, unsupported/prohibited flows, opt-outs and uncertain submission outcomes must stop only the affected operation and explain the blocker.
+
+Never fabricate qualifications or answers. A generated draft, clicked apply button or opened listing is not a confirmed submission. Mark an application submitted only with verifiable evidence such as a confirmation ID/page, receipt email or supported API response. Treat ambiguous outcomes as unknown and do not blindly retry.
+
+### Non-functional requirements
+- Local-first handling where practical; least-privilege account access and secure secret storage.
+- Durable, auditable and idempotent state transitions; duplicate prevention across restarts and imports.
+- Evidence-linked status, timestamps, bounded retries, timeouts, safe recovery, backups and tested restore.
+- User export/delete and revocation controls; private HR data must not enter public source control, fixtures, logs, screenshots or telemetry.
+- Source-specific feasibility, terms/permission review and tests before enabling real discovery, email sending or submission.
+- No real external actions in automated tests; use synthetic data and mocked adapters.
+
+### Current-state boundary
+This is the target product definition, not a claim that all capabilities exist today. Existing source-quality and execution gates remain fail-closed until each source-specific integration and action has been implemented, permitted, tested and evidenced.
