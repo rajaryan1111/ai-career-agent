@@ -76,7 +76,19 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   is first copied to a verified snapshot beside itself - because a step that succeeds and is only later
   found to be wrong is already committed, and that copy is then the recovery path. A copy that cannot be
   written stops the update instead of proceeding without one.
-- Local backups and export/import.
+- Local backups and export/import. Back up/restore moves the whole SQLite file and is the local
+  durability path; the JSON export/import is the portable, versioned format and is deliberately stricter
+  about what it will assert: `career_agent/importer.py` owns both directions of the format
+  (`EXPORT_FORMAT_VERSION`), reads and validates the whole file before writing anything, refuses any
+  document that is not an export of this version, and returns a plan (what would be added, linked, kept or
+  refused) that a caller must show and confirm before `apply_import` runs. The import never replaces
+  stored data: a listing already present is linked through the same duplicate key the rest of the app uses
+  and keeps its first-seen time, a stored candidate profile is kept and reported, and an application
+  record is always created at `ApplicationStatus.DISCOVERED` — a later status in the file is *reported* as
+  not imported rather than adopted, because a status here is only ever reached by the guarded transition
+  path. Follow-up days travel as data, unreadable days are reported rather than dropped, and activity is
+  appended with (day, kind, text) deduplication so re-importing a file cannot double a timeline. Writes
+  go through `store.write_private_text_file` (owner-only, symlink-refusing); the CLI dry-runs by default.
 - Safe handling of source schema or page changes.
 - Provider-specific response semantics: a successful response with zero records is not always proof that a board is valid and empty; migrations can leave old and new boards both responding; filtered runs must not mark omitted records closed. Record per-source run outcomes, counts before/after filters and deduplication, stable IDs touched, and explicit error categories (empty success, blocked, rate-limited, transient failure, schema error, permission gate closed). See the [n8n workflow pattern review](research/n8n-workflows-repository-review-2026-10-13.md).
 - Matching is a comparison, not a forecast. `career_agent/matching.py` reports each factor

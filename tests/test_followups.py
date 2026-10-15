@@ -368,3 +368,30 @@ class DomainRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlanSurvivesTheApplicationMovingOnTests(unittest.TestCase):
+    """A reminder is a plan, not a status: moving an application on must not cancel it.
+
+    The regression this locks: ``ApplicationTracker.transition`` rebuilt the record from the status and
+    the evidence, so the day and the note were dropped on the way, and the store wrote the row from that
+    object - a person who set a reminder and then shortlisted the application lost the reminder without a
+    word. Reproduced against a file-backed database before the fix (set 2026-10-20, transition to
+    shortlisted, re-read: both fields NULL).
+    """
+
+    def test_the_transitioned_record_still_carries_the_day_and_the_note(self):
+        planned = ApplicationTracker("j1").with_follow_up(TODAY + timedelta(days=5),
+                                                         note="chase the reply")
+
+        moved = planned.transition(ApplicationStatus.SHORTLISTED)
+
+        self.assertEqual(moved.status, ApplicationStatus.SHORTLISTED)
+        self.assertEqual(moved.follow_up_on, planned.follow_up_on)
+        self.assertEqual(moved.follow_up_note, "chase the reply")
+
+    def test_a_record_with_no_plan_stays_without_one_after_a_transition(self):
+        moved = ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED)
+
+        self.assertFalse(moved.has_follow_up)
+        self.assertIsNone(moved.follow_up_note)

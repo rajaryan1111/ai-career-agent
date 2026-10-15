@@ -521,6 +521,9 @@ class ApplicationTracker:
     candidate_confirmed: bool = False
     follow_up_on: date | None = None
     follow_up_note: str | None = None
+    # ``follow_up_on`` and ``follow_up_note`` survive ``transition``: they are a plan the person made,
+    # not a property of a status, and the store writes them only when a caller says to (see
+    # ``CareerStore.save_tracker``).
 
     def with_follow_up(self, on: date | None, *, note: str | None = None) -> "ApplicationTracker":
         """Return the tracker with a day to act on set, changed, or cleared.
@@ -568,6 +571,11 @@ class ApplicationTracker:
             status=new_status,
             status_evidence=evidence.strip() if evidence else None,
             candidate_confirmed=self.candidate_confirmed if candidate_confirmed is None else candidate_confirmed,
+            # A plan outlives a status change. The day was chosen by the person and the status moving on
+            # does not make it wrong - silently dropping the reminder here would mean a follow-up that
+            # disappears exactly when the application becomes worth chasing.
+            follow_up_on=self.follow_up_on,
+            follow_up_note=self.follow_up_note,
         )
 
 

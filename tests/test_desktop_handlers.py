@@ -2575,6 +2575,115 @@ class DatabaseBackupHandlerTests(HandlerTestCase):
         self.assertIn("nothing was written", self.app.status.get())
 
 
+class DataImportHandlerTests(HandlerTestCase):
+    """The import button: it shows the plan, asks, and never replaces what is already stored.
+
+    The stub harness drives the handler, not the pixels; a real window is part of the consolidated
+    manual checklist. What is checked here is the decision sequence - refuse, plan, ask, write - and that
+    a declined confirmation leaves the database exactly as it was.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.exports = Path(self.store.database_path).parent
+
+    def write_export(self, *, name: str = "export.json", role: str = "Data Engineer",
+                     profile: bool = True) -> Path:
+        """A file this app wrote, holding one invented application, made through the real exporter."""
+        from career_agent import importer as import_export
+        from career_agent.core import CandidateProfile
+
+        path = self.exports / name
+        with CareerStore(str(self.exports / "source.sqlite3")) as source:
+            if profile:
+                source.save_profile(CandidateProfile(candidate_country="India",
+                                                     skills=frozenset({"Python"})))
+            source.save_job(JobListing("imported-1", "fixture", "Fixture",
+                                       "https://jobs.example.invalid/imported-1", "Imported Systems",
+                                       role, availability_status=Availability.OPEN))
+            source.save_tracker(ApplicationTracker("imported-1"))
+            import_export.write_export(source, path)
+        return path
+
+    def test_the_import_shows_the_plan_and_applies_it_only_after_yes(self):
+        path = self.write_export()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        CONFIG["Import this file?"] = True
+
+        app._import_data()
+
+        self.assertIn("Import complete", MESSAGES.titles())
+        listing = self.store.get_job("imported-1")
+        assert listing is not None
+        self.assertEqual(listing.employer_name, "Imported Systems")
+        self.assertEqual(self.store.get_profile().candidate_country, "India")
+        self.assertIn("Import complete:", app.status.get())
+
+    def test_a_declined_confirmation_writes_nothing(self):
+        path = self.write_export()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        CONFIG["Import this file?"] = False
+
+        app._import_data()
+
+        self.assertIsNone(self.store.get_job("imported-1"))
+        self.assertEqual(self.store.list_jobs(), ())
+        self.assertIn("Import cancelled", app.status.get())
+        self.assertIn("Apply it now?", MESSAGES.text("askyesno"))
+
+    def test_a_file_that_is_not_an_export_is_refused_without_a_dialog_to_continue(self):
+        broken = self.exports / "broken.json"
+        broken.write_text("{}", encoding="utf-8")
+        app = self.make_app()
+        FILEDIALOG.path = str(broken)
+
+        app._import_data()
+
+        self.assertIn("Nothing was imported", MESSAGES.titles())
+        self.assertIn("format_version", MESSAGES.text("showerror"))
+        self.assertNotIn("Import this file?", MESSAGES.titles(),
+                         "a refused file must not reach the confirmation step")
+        self.assertEqual(self.store.list_jobs(), ())
+
+    def test_cancelling_the_file_chooser_does_nothing_at_all(self):
+        app = self.make_app()
+        FILEDIALOG.path = ""
+
+        app._import_data()
+
+        self.assertEqual(MESSAGES.titles(), [])
+        self.assertEqual(self.store.list_jobs(), ())
+
+    def test_a_second_import_of_the_same_file_leaves_everything_as_it_is(self):
+        path = self.write_export()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        CONFIG["Import this file?"] = True
+
+        app._import_data()
+        MESSAGES.reset()
+        app._import_data()
+
+        self.assertIn("left 1 already-stored listing(s) as they were", MESSAGES.text("showinfo"))
+        self.assertEqual(len(self.store.list_jobs()), 1)
+
+    def test_a_stored_profile_is_kept_and_the_dialog_says_so(self):
+        from career_agent.core import CandidateProfile
+
+        self.store.save_profile(CandidateProfile(candidate_country="Canada", skills=frozenset({"Go"})))
+        path = self.write_export()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        CONFIG["Import this file?"] = True
+
+        app._import_data()
+
+        self.assertIn("your stored profile is kept", MESSAGES.text("askyesno"))
+        self.assertEqual(self.store.get_profile().candidate_country, "Canada")
+
+
 class DatabaseRestoreHandlerTests(HandlerTestCase):
     """Restoring replaces candidate data, so it must confirm, validate and reopen deliberately."""
 
@@ -3623,6 +3732,54 @@ class FollowUpTabTests(HandlerTestCase):
         self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
         self.assertEqual(app.follow_up_day.get(), "")
         self.assertEqual(app.follow_up_tree.inserted, (), "the list is refreshed after clearing")
+
+    def test_a_status_change_through_the_window_keeps_the_recorded_reminder(self):
+        """The regression: moving an application on used to cancel the reminder silently.
+
+        ``_update_status`` builds the tracker it works from and saves the transitioned record, and the
+        transition rebuilt the record from the status and evidence alone - so the day and note were
+        written back as empty. Driven here through the same dialog handler the smoke test uses.
+        """
+        self.make_follow_up_app()
+        self.add_application("j1", days=4, note="chase the reply")
+        dialog_app, status_var, evidence_var, assertion, apply = self.open_status_dialog("j1")
+
+        status_var.set("shortlisted")
+        apply()
+
+        tracker = self.store.get_tracker("j1")
+        assert tracker is not None
+        self.assertEqual(tracker.status, ApplicationStatus.SHORTLISTED)
+        self.assertIn("updated to shortlisted", dialog_app.status.get())
+        self.assertEqual(tracker.follow_up_on, date.today() + timedelta(days=4),
+                         "the reminder must survive the status change")
+        self.assertEqual(tracker.follow_up_note, "chase the reply")
+
+    def test_an_unrecognised_status_does_not_cost_the_recorded_reminder(self):
+        """The refusal path reads the row through the parsed record, so a damaged status cannot wipe a plan.
+
+        Reading the tracker to build the dialog is where an unreadable value must stop the flow, and the
+        stop must be *before* anything is written. The day and note stay exactly as they were.
+        """
+        self.make_follow_up_app()
+        self.add_application("j1", days=2, note="chase the reply")
+        self.store._connection.execute("UPDATE application_tracker SET status='ghosted' WHERE listing_id='j1'")
+        self.store._connection.commit()
+        expected_day = (date.today() + timedelta(days=2)).isoformat()
+        app = self.make_app()
+        app.tracker_tree.selected = ("j1",)
+
+        with mock.patch.object(
+            self.store, "save_tracker", side_effect=AssertionError("nothing may be written for ghosted")
+        ):
+            app._update_status()
+
+        self.assertIn("Status not recognised", MESSAGES.titles())
+        self.assertIn("'ghosted'", MESSAGES.text("showerror"))
+        row = self.store.get_tracker_raw("j1")
+        self.assertEqual(row["status"], "ghosted")
+        self.assertEqual(row["follow_up_on"], expected_day)
+        self.assertEqual(row["follow_up_note"], "chase the reply")
 
     def test_export_writes_a_calendar_file_for_the_recorded_days(self):
         app = self.make_follow_up_app()

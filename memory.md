@@ -2051,3 +2051,99 @@ today for a mistyped day failed 1.
 **Evidence.** Full suite 1077 tests OK (13 skip without `pypdf`); the checklist in
 `research/local-alpha-manual-smoke-test-checklist-2026-10-14.md` gained steps 42-52 for the new surfaces,
 all unchecked, because no real GUI session has been run for them.
+
+## 2026-10-15 — JSON export and import: a file you can carry, and the rules that keep it honest
+
+**What changed.** The JSON document gained a `format_version`, and reading one back is implemented.
+`career_agent/importer.py` now owns both directions: `export_document`/`write_export` produce the file,
+`read_export` validates the whole document before anything is written, `plan_import` is read-only and
+returns what would be added, linked, kept or refused, and `apply_import` recomputes that plan rather than
+trusting the caller, so the promise shown and the writes made cannot diverge. The window's *Data safety*
+tab has **Import an exported file (JSON)** beside the export button, which shows the plan in a dialog and
+asks before applying it; `--export-to PATH` and `--import-from PATH` do the same from a terminal, the
+second a dry run until `--yes` is added. `import.written`, `import.refused` and `import.failed` joined the
+event log.
+
+**The import is deliberately not a restore.** A backup moves the whole file; an import must survive
+landing in a database that already holds work. So: a listing already present is linked through the same
+`duplicate_key` the rest of the app uses and keeps its first-seen time, a stored profile is kept and the
+plan says so, and every application record arrives at `discovered`.
+
+**The bug that made the last rule real.** `_profile_from_record` had been written against remembered
+field names — `work_authorizations` (plural, a tuple) instead of `work_authorization` and
+`preferred_locations` as a `frozenset` — and it coerced a missing `experience_years` to `0.0`, which
+states a fact the file did not carry. The round trip only reproduced the source profile after both were
+corrected; the parser now reads the stored names and leaves a missing number missing.
+
+**A status is never asserted.** My first pass had the tracker refused entirely when the file's status was
+later than `discovered`, which contradicted the promise that the application itself imports. The rule is
+now: the record is always created at `discovered` (the status `store.save_tracker` requires for a new
+record), and only the *status* is reported as not imported. The store's initial-status rule was not
+weakened for imports, and a test walks the real transition path
+(`discovered → shortlisted → prepared → awaiting_user → submission_attempted → submitted_unverified →
+confirmed`) to prove a confirmed record in a file cannot arrive confirmed here.
+
+**Two API facts the tests taught.** `store.save_tracker` refuses a new record at any status other than
+`discovered`, and `prepared → submission_attempted` is not a legal edge — `awaiting_user` sits between
+them. Also, `recorded_at` is the writing database's clock, so the round-trip test compares activity on
+(kind, occurred_on, detail) rather than on a timestamp two databases will never agree about.
+
+**Teeth checks.** Four deliberate mutations of the new rules, each reverted and verified by hash
+(`66612e3f…`): adopting the file's status → 1 failure + 2 errors; treating an already-stored listing as
+new → 3 failures; letting the file's profile replace the stored one → 2 failures; accepting any format
+version → 1 failure. Every one was caught by the tests that exist for it.
+
+**Evidence.** `tests/test_importer.py` 23 OK, `tests/test_cli_export_import.py` 11 OK, six new handler
+tests in `tests/test_desktop_handlers.py` (206 OK), full suite 1117 tests OK (13 skip without `pypdf`).
+A real command-line round trip on `/tmp/roundtrip` produced `Wrote 1 listing(s) and the profile to
+/tmp/roundtrip/out.json`, a dry run that listed its plan and then `Nothing was written. Run the same
+command with --yes to apply this plan.`, an apply that reported
+`Import complete: added 1 listing(s); imported the profile; created 1 application record(s); recorded 1
+follow-up day(s); appended 1 activity entr(ies).`, and a second apply that reported
+`left 1 already-stored listing(s) as they were`. A second export to the same path refused with status 2.
+The manual checklist gained the window-import and round-trip steps; nothing in them is marked passed,
+because no real GUI session has been run for them.
+
+## 2026-10-15 — A reminder that survived the status change (defect found while writing the import tests)
+
+**The defect.** `ApplicationTracker.transition` built the next record from `status` and `evidence` alone,
+and `CareerStore.save_tracker` wrote the whole row - including `follow_up_on` and `follow_up_note` - from
+the object it was handed. So the most ordinary update in the app, moving an application's status, wrote the
+person's reminder back to NULL. Reproduced against a file-backed database before any fix: save
+`with_follow_up(2026-10-20, note="chase the reply")`, call `.transition(SHORTLISTED)`, save, re-read - both
+columns empty. Nothing reported it, and the Follow-ups tab would simply have shown one fewer reminder.
+
+**Two fixes, because one layer was not enough.** (1) The domain: `transition` now carries the plan, so the
+record it returns is the whole record rather than the status portion of it. (2) The storage boundary, which
+is where the guarantee belongs: `save_tracker` takes `follow_up: FollowUpWrite = FollowUpWrite.KEEP`, and
+under `KEEP` the stored day and note are written back exactly as they are. A save is only allowed to touch
+the plan when it says so, with a new `store.set_follow_up`/`store.clear_follow_up` pair as the intended way
+to set or remove one. A plan that *differs* from the stored one under `KEEP` raises instead of winning
+quietly: the caller either meant it or did not notice the stored reminder, and guessing would lose or
+invent a day.
+
+**Why the boundary rule, and not only the domain fix.** A tracker built from a status alone carries no day,
+and there is no way for a store to tell "I did not mention the reminder" from "clear the reminder" - which
+is exactly how the defect happened. Making the default mean "this save is not about the reminder" removes
+the whole class of bug for every future caller, including the import path, which sets a plan on a freshly
+created record. The plan is written by one method per direction, and the event line records which of the two
+happened (`follow_up_write=keep|write`).
+
+**The third place it would have bitten.** The status dialog rebuilt the record from `get_tracker_raw` and
+passed only status, evidence and confirmation into the constructor - so even with the domain fix, the object
+it transitioned from would have had no plan and the write would have cleared it. That read now goes through
+`get_tracker`, which is the parsed record (and still reports an unrecognised status as
+`TrackerStatusError` through the same refusal path the Mac smoke test exercised).
+
+**Teeth checks.** Two mutations, both caught, both reverted and verified by hash
+(`core.py be7242f7…`, `store.py d1a575e8…`): dropping the plan again in `transition` → 2 failures (the
+record-equality test and the stored-row agreement test); making `save_tracker` write the plan
+unconditionally → 4 failures across the store and desktop suites, including the window-path regression.
+
+**Evidence.** Full suite 1133 tests OK (13 skip without `pypdf`), 12 new store tests, 2 new domain tests, 2
+new window-handler tests. The store tests cover: the plan surviving a plain status change and a conditional
+(`expected=...`) write, the transitioned object equalling the stored row, a fresh record keeping a plan set
+through `with_follow_up`, a differing plan under `KEEP` being refused and changing nothing, explicit
+replacement, `clear_follow_up` leaving the status alone, clearing a record that has no plan, refusing a plan
+for a listing with no application record, refusing a mistyped day at the boundary, and the event line naming
+the plan it left alone.

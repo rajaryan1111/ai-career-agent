@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 from datetime import date, datetime, timezone
 import platform
 import sys
@@ -49,7 +50,10 @@ from .config import database_path_for_run, describe_settings, resolve_settings
 from .diagnostics import describe_startup_failure, diagnostic_log_path, record_startup_failure
 from .event_log import LOG_FILE_NAME, MAX_LOG_BYTES, log_path, read_lines
 from .handlers import default_registry, describe_default_handlers, seed_default_tasks
-from .store import SCHEMA_VERSION, CareerStore, PrivateWriteError, write_private_text_file
+from .store import (
+    SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
+)
+from . import importer
 from .followups import calendar_file_name, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
@@ -148,6 +152,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--calendar-to", metavar="PATH",
         help="Write follow-up reminders to a calendar file (.ics) at PATH, for your own calendar.",
+    )
+    actions.add_argument(
+        "--export-to", metavar="PATH",
+        help="Write this database's profile, listings and history to a JSON file at PATH.",
+    )
+    actions.add_argument(
+        "--import-from", metavar="PATH",
+        help="Show what importing a JSON export at PATH would do (add --yes to apply it).",
     )
     parser.add_argument(
         "--worker-id", metavar="NAME", default=None,
@@ -404,6 +416,79 @@ def _follow_up_pairs(store: CareerStore) -> list[tuple]:
     return pairs
 
 
+def run_export(args: argparse.Namespace) -> int:
+    """Write this database's own export document to the path the person named.
+
+    Local only, owner-only, and never overwritten silently: the file may hold the whole profile and
+    history, so it goes through the same private write path as a backup. It is the same document the
+    window's export button writes, built by the same function, so a file exported here imports there and
+    the other way round.
+    """
+    target = Path(args.export_to).expanduser()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · export local data")
+    if not database.exists():
+        print("No database yet, so there is nothing to export. Nothing was written.")
+        return EXIT_REFUSED
+    if target.exists():
+        print(f"REFUSED: {target} already exists. Choose another name so the existing file is not "
+              "replaced.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        try:
+            written = importer.write_export(store, target)
+            document = importer.export_document(store)
+        except PrivateWriteError as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        except (StoredRecordError, sqlite3.Error) as exc:
+            print(f"REFUSED: the database could not be read for export: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+    print(f"Wrote {len(document['jobs'])} listing(s) and the profile to {written}")
+    print("This file may hold personal information. It was written owner-only where the file system "
+          "supports it, and nothing was sent anywhere.")
+    return EXIT_OK
+
+
+def run_import(args: argparse.Namespace) -> int:
+    """Show what importing a file would do, and apply it only when told to.
+
+    Reading the file and planning are read-only, so a mistyped path or a file from another program is
+    refused without touching the database. Applying it writes through the store's own methods, so every
+    storage rule still holds, and the report is counted from what actually happened.
+    """
+    source = Path(args.import_from).expanduser()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · import local data")
+    try:
+        document = importer.read_export(source)
+    except importer.ImportRefused as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    if not database.exists():
+        print(f"No database exists yet at {database}. Opening an import is how it would be created; "
+              "run the app or the commands once first, then import.")
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        try:
+            plan = importer.plan_import(store, document, source=str(source))
+        except importer.ImportRefused as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        for line in plan.describe():
+            print(line)
+        if not args.yes:
+            print("")
+            print("Nothing was written. Run the same command with --yes to apply this plan.")
+            return EXIT_OK
+        outcome = importer.apply_import(store, document, source=str(source))
+    print("")
+    print(f"Import complete: {outcome.describe()}.")
+    print("Nothing was replaced: a listing or profile already stored wins over the file's copy. "
+          "Nothing was sent anywhere.")
+    return EXIT_OK
+
+
 def run_follow_ups(args: argparse.Namespace) -> int:
     """List the applications whose follow-up day has arrived or is coming up, and nothing else.
 
@@ -621,6 +706,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_follow_ups(args)
         if args.calendar_to:
             return run_calendar_export(args)
+        if args.export_to:
+            return run_export(args)
+        if args.import_from:
+            return run_import(args)
         if args.worker:
             return run_worker(args)
         # Imported only when the window is actually opened, so the database commands work headless.

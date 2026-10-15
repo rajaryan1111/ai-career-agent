@@ -151,7 +151,10 @@ compensation is not compared because no compensation field exists yet.
   event, holding event names, identifiers and counts rather than candidate content, with local paths
   redacted by the same function that sanitises the start-up note. **Planned:** a diagnostics view in the
   window that reads the log, and a version/data-compatibility policy for released builds.
-- Data export and deletion.
+- Data export, import and deletion: a versioned JSON document that can be read back on another
+  computer, planned and confirmed before it writes, with an existing listing linked rather than
+  replaced, a stored profile kept, and an application record never imported at a status it did not
+  reach here.
 - Accessible, understandable user interface.
 - Cross-platform distribution to be evaluated before commitment.
 

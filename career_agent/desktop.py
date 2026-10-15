@@ -9,7 +9,6 @@ import json
 import sqlite3
 import uuid
 from datetime import date, datetime, timezone
-from dataclasses import asdict
 from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
@@ -19,17 +18,18 @@ from .backup import (
     validate_app_database,
 )
 from .core import (
-    INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationStatus, ApplicationTracker, Availability,
+    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
     Decision, evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
 from . import __version__
 from .config import database_path_for_run
 from .event_log import record_event
-from .handlers import default_registry, describe_default_handlers, seed_default_tasks
+from .handlers import seed_default_tasks
+from . import importer as import_export
 from .followups import FollowUpState, calendar_file_name, reminders, summary, to_calendar
 from .matching import DISCLAIMER as MATCHING_DISCLAIMER, FactorStatus, assess
 from .store import PrivateWriteError, write_private_text_file
-from .worker import WorkerSettings, worker_status
+from .worker import worker_status
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
     format_stored_timestamp, form_values, job_form_values, plan_job_save,
@@ -42,6 +42,7 @@ from .store import (
     CareerStore,
     PrivateWriteError,
     StoredRecordError,
+    TrackerStatusError,
     UnavailableStore,
     write_private_text_file,
 )
@@ -251,6 +252,18 @@ class CareerAgentApp:
         ).grid(row=0, column=0, sticky=W, pady=(0, 8))
         ttk.Button(self.data_tab, text="Back up database", command=self._backup_database).grid(row=1, column=0, sticky=W, pady=4)
         ttk.Button(self.data_tab, text="Restore from backup", command=self._restore_database).grid(row=2, column=0, sticky=W, pady=4)
+        ttk.Button(self.data_tab, text="Import an exported file (JSON)", command=self._import_data).grid(row=3, column=0, sticky=W, pady=4)
+        ttk.Label(
+            self.data_tab,
+            text=(
+                "Importing reads a JSON file this app exported, shows you what it would do, and only "
+                "writes after you agree. It never replaces a listing or profile you already have: an "
+                "entry that is already stored wins, an application record the file holds at a later "
+                "status is imported without that status (with the reason shown), and a file that is not "
+                "a valid export is refused before anything is read."
+            ),
+            wraplength=900,
+        ).grid(row=4, column=0, sticky=W, pady=(10, 0))
         ttk.Label(
             self.data_tab,
             text=(
@@ -261,7 +274,7 @@ class CareerAgentApp:
                 "database aside first, replaces the database in one step, then reopens and verifies it."
             ),
             wraplength=900,
-        ).grid(row=3, column=0, sticky=W, pady=(10, 0))
+        ).grid(row=5, column=0, sticky=W, pady=(10, 0))
 
     # ------------------------------------------------------------------ background tasks
     #
@@ -467,8 +480,9 @@ class CareerAgentApp:
             self._report_stale_selection(listing_id)
             return
         try:
-            updated = tracker.with_follow_up(day, note=self.follow_up_note.get())
-            self.store.save_tracker(updated)
+            # One call sets the day and the note on the stored row; the status is not part of this write
+            # at all, so a reminder can never be mistaken for a status change.
+            updated = self.store.set_follow_up(listing_id, day, note=self.follow_up_note.get())
         except ValueError as exc:
             messagebox.showinfo("Follow-up not saved", str(exc), parent=self.root)
             return
@@ -496,7 +510,7 @@ class CareerAgentApp:
             if tracker is None:
                 self._report_stale_selection(listing_id)
                 return
-            self.store.save_tracker(tracker.with_follow_up(None))
+            self.store.clear_follow_up(listing_id)
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
@@ -1650,25 +1664,32 @@ class CareerAgentApp:
         # read that could disagree with the first. No transition can be validated from a status this
         # build does not know, so such a record is left exactly as it is and the situation is
         # explained, rather than guessed at.
-        stored = self.store.get_tracker_raw(listing_id)
         try:
-            current_tracker = (
-                ApplicationTracker(listing_id) if stored is None
-                else ApplicationTracker(
-                    listing_id, ApplicationStatus(stored["status"]),
-                    stored["status_evidence"], stored["candidate_confirmed"],
-                )
-            )
-        except ValueError:
+            stored = self.store.get_tracker_raw(listing_id)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        try:
+            # The parsed read, not the raw one: it carries the recorded follow-up day as well, so the
+            # tracker this dialog works from is the whole stored record and a status change through it
+            # cannot look like a tracker that never had a reminder.
+            current_tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
+        except TrackerStatusError as exc:
             messagebox.showerror(
                 "Status not recognised",
-                f"The saved status for this application is {stored['status']!r}, which this version of "
+                f"The saved status for this application is {exc.raw_value!r}, which this version of "
                 "the application does not know. Nothing was changed and no new status is offered, "
                 "because the application cannot tell which changes would be valid from an unknown "
                 "state.\n\nThe value is still in your database; if you know what it should be, correct "
                 "it there or restore a verified backup.",
                 parent=self.root,
             )
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
             return
         options = selectable_tracker_statuses(current_tracker.status)
         if len(options) == 1:
@@ -1804,57 +1825,15 @@ class CareerAgentApp:
         if not destination:
             return
         try:
-            profile = self.store.get_profile()
-            jobs = self.store.list_jobs()
-            # Read every tracker row here, inside the same guard: a connection that dies midway through
-            # the loop below would otherwise raise out of a Tk callback, and the file must not be
-            # half-written either way.
-            tracker_rows = {job.listing_id: self.store.get_tracker_raw(job.listing_id) for job in jobs}
-            activity_rows = {job.listing_id: self.store.list_activity_raw(job.listing_id) for job in jobs}
+            # The document is built by the importer module, which is also what reads a file back: one
+            # definition of the format, so the two directions cannot drift apart.
+            payload = import_export.export_document(self.store)
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
         except sqlite3.Error as exc:
             self._report_database_unavailable(exc)
             return
-        payload = {"format_version": 1, "profile": asdict(profile) if profile else None, "jobs": [],
-                   "privacy_note": "Export may contain personal information; store securely."}
-        if payload["profile"]:
-            for key, value in payload["profile"].items():
-                if isinstance(value, (set, frozenset, tuple)):
-                    payload["profile"][key] = sorted(value)
-        for job in jobs:
-            record = asdict(job)
-            record["availability_status"] = job.availability_status.value
-            for key, value in record.items():
-                if isinstance(value, (set, frozenset, tuple)):
-                    record[key] = sorted(value)
-            # The stored values are exported exactly as they are, so a record whose status this
-            # version does not recognise can still be taken out of the app instead of blocking the
-            # whole export. ``status_recognised: false`` marks that value; it is only added when this
-            # version did not understand the stored status, so the format is unchanged otherwise.
-            stored_status = tracker_rows[job.listing_id]
-            if stored_status is None:
-                record["application_tracker"] = None
-            else:
-                try:
-                    ApplicationStatus(stored_status["status"])
-                except ValueError:
-                    stored_status["status_recognised"] = False
-                record["application_tracker"] = stored_status
-            # The history goes out as stored, for the same reason: an entry a later version wrote must
-            # be exportable rather than blocking the file. ``kind_recognised: false`` marks a value
-            # this version cannot label, and is only added in that case.
-            entries = []
-            for stored_entry in activity_rows[job.listing_id]:
-                entry = dict(stored_entry)
-                try:
-                    ActivityKind(entry["kind"])
-                except ValueError:
-                    entry["kind_recognised"] = False
-                entries.append(entry)
-            record["activity"] = entries
-            payload["jobs"].append(record)
         try:
             # Owner-only from the first byte, and never through a symbolic link: the export holds
             # profile facts and application history, so it must not inherit a permissive umask or
@@ -1881,6 +1860,65 @@ class CareerAgentApp:
             "JSON export created with owner-only permissions where the file system supports them. "
             "Keep it private; it may contain personal data. A synced or shared folder can still "
             "expose it, so export to a folder only you can access.",
+            parent=self.root,
+        )
+
+    def _import_data(self):
+        """Read a JSON export back in, showing what it would do before anything is written.
+
+        Two steps on purpose. The plan is computed first, shown in full, and only applied after the
+        person agrees - so an import into a database that already holds their applications is a decision
+        they make with the consequences in front of them rather than a surprise.
+        """
+        chosen = filedialog.askopenfilename(
+            parent=self.root, title="Choose an export to import",
+            filetypes=[("JSON export", "*.json"), ("All files", "*.*")])
+        if not chosen:
+            return
+        try:
+            document = import_export.read_export(chosen)
+            plan = import_export.plan_import(self.store, document, source=chosen)
+        except import_export.ImportRefused as exc:
+            messagebox.showerror("Nothing was imported", str(exc), parent=self.root)
+            self.status.set("Import refused; nothing was read into the database.")
+            self._record("import.refused", f"reason={type(exc).__name__}")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        summary = "\n".join(plan.describe())
+        if not messagebox.askyesno(
+                "Import this file?",
+                f"{summary}\n\nApply it now?", parent=self.root):
+            self.status.set("Import cancelled; nothing was written.")
+            return
+        try:
+            outcome = import_export.apply_import(self.store, document, source=chosen)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        except ValueError as exc:
+            messagebox.showerror("Import stopped", f"{exc}\n\nWhat was listed above was applied; "
+                                                  "nothing else was.", parent=self.root)
+            self._record("import.failed", "reason=a stored record was refused")
+            return
+        self._refresh_jobs()
+        self._refresh_tracker()
+        self._refresh_follow_ups()
+        self._record("import.written", f"jobs={outcome.added_jobs} linked={outcome.linked_jobs} "
+                                       f"rejected={outcome.rejected}")
+        self.status.set(f"Import complete: {outcome.describe()}.")
+        messagebox.showinfo(
+            "Import complete",
+            f"{outcome.describe()}.\n\nA stored listing or profile was never replaced: your records "
+            "win over the file's. Records that could not be read are reported in the plan above and "
+            "were skipped.",
             parent=self.root,
         )
 

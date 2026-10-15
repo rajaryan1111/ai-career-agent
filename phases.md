@@ -157,6 +157,28 @@ version cannot label instead of blocking the export). An entry is deliberately n
 change a status, create a tracker record, or satisfy the confirmation floor — each of those is a test.
 Reminders and notifications that would build on the dates are not implemented (Phase F).
 
+Local JSON export and import are implemented as one versioned format owned by `career_agent/importer.py`,
+with a plan the caller must show before anything is written. Export is the same document it always was
+(profile, listings, application records, follow-up days, activity) plus `EXPORT_FORMAT_VERSION`, written
+owner-only through the store's private-write path and still refusing to replace an existing file or to
+follow a symbolic link; the window's *Data safety* tab and `--export-to` both call that single function,
+so the two surfaces cannot produce different files. Reading a file back is the new part: `read_export`
+refuses a missing path, a folder, non-UTF-8 bytes, invalid JSON (with line and column), a document that is
+not an object, a missing or different format version, and a non-list `jobs` value before any write is
+attempted; `plan_import` is read-only and returns what would be added, linked, kept or refused;
+`apply_import` recomputes that plan instead of trusting the caller. The rules it keeps are the point:
+the profile is imported only into an empty profile, a stored listing is linked by the same duplicate key
+the rest of the app uses and keeps its first-seen time, an application record is always created at
+`discovered` while a later status in the file is *reported* as not imported (a status here is only ever
+reached through the guarded transition path, and the store's initial-status rule was not weakened for
+imports), a follow-up day travels as data and an unreadable day or history entry is reported rather than
+dropped, and activity is appended with (day, kind, text) deduplication so importing the same file twice
+cannot double a timeline. Both surfaces are wired: the *Data safety* tab has **Import an exported file
+(JSON)**, which shows the plan and asks before applying, and `--import-from PATH` dry-runs unless `--yes`
+is given, refusing before it touches a database that does not exist. `import.written`, `import.refused`
+and `import.failed` join the event log, so an import that changed the data is as visible as any other
+write.
+
 Configuration and diagnostics are implemented for the local alpha: `career_agent.config` resolves the
 database path from one rule (an explicit path, then the `CAREER_AGENT_DATABASE` setting, then the data
 folder chosen by `CAREER_AGENT_HOME` or the platform), creates nothing while resolving, creates only the

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+from enum import Enum
 from typing import Callable
 import errno
 import json
@@ -148,6 +149,25 @@ class StoredRecordError(ValueError):
             f"The saved {noun} could not be read ({detail}). It was not changed. Use the export tool or "
             "restore a verified backup if the record is wrong."
         )
+
+
+class FollowUpWrite(str, Enum):
+    """Whether a tracker write touches the follow-up plan the person recorded.
+
+    A status change and a reminder are independent facts about the same application, and the row holds
+    both. Writing the whole row from a tracker object made a status update silently clear the plan,
+    because the object a caller built from a status alone carries no day. So the default,
+    :attr:`KEEP`, means "this save is not about the reminder": a stored plan stays as it is.
+
+    ``WRITE`` says "use the plan on this tracker", including clearing it - a planless tracker written
+    with ``WRITE`` removes the stored day, which is why :meth:`CareerStore.clear_follow_up` exists.
+    Under ``KEEP``, a tracker that carries a plan is stored when the row had none, and a plan that
+    *differs* from a stored one raises instead of winning quietly: the caller either meant it or did not
+    notice the stored reminder, and guessing would lose or invent a day.
+    """
+
+    KEEP = "keep"
+    WRITE = "write"
 
 
 class TaskRunConflict(ValueError):
@@ -935,7 +955,8 @@ class CareerStore:
         ).fetchall()
         return tuple(self._decode_job(row["payload"]) for row in rows)
 
-    def save_tracker(self, tracker: ApplicationTracker, *, expected: dict | None = None) -> None:
+    def save_tracker(self, tracker: ApplicationTracker, *, expected: dict | None = None,
+                     follow_up: FollowUpWrite = FollowUpWrite.KEEP) -> None:
         """Persist tracker state, enforcing the domain invariants at the storage boundary.
 
         Creating a record always starts at :data:`~career_agent.core.INITIAL_APPLICATION_STATUS`
@@ -955,9 +976,42 @@ class CareerStore:
         makes the update match no row and raise :class:`StaleTrackerRecord` instead of silently
         overwriting the newer data. Re-checking only the transition rules cannot catch that: a
         forward move usually leaves the intended transition permitted.
+
+        ``follow_up`` decides what happens to the recorded reminder, and the default protects it. A
+        tracker built from a status alone carries no plan, so an ordinary save - a status change, a new
+        confirmation - leaves a stored day and note exactly as they are; moving an application on cannot
+        silently cancel the reminder the person set. A tracker that *does* carry a plan was built with
+        ``ApplicationTracker.with_follow_up``, so that plan is stored, because ignoring it would drop a
+        day the caller had just set. Two things are therefore explicit rather than guessed: clearing an
+        existing plan (``clear_follow_up``, or :attr:`FollowUpWrite.WRITE` with a planless tracker), and
+        replacing one with different values (always ``WRITE``, otherwise the write is refused and nothing
+        changes).
         """
         stored = self.get_tracker(tracker.listing_id)
         self._check_tracker_invariants(tracker, stored)
+        stored_day = stored.follow_up_on if stored else None
+        stored_note = stored.follow_up_note if stored else None
+        if follow_up is FollowUpWrite.WRITE:
+            write_plan = True
+        elif not tracker.has_follow_up:
+            # An ordinary save cannot clear a reminder: a tracker with no day says nothing about the day
+            # that is stored, and most of them are built from a status alone. Clearing is explicit -
+            # ``clear_follow_up`` or ``FollowUpWrite.WRITE``.
+            write_plan = False
+        elif stored_day is None:
+            # The stored record has no plan and this one carries one, which means the caller called
+            # ``with_follow_up``. Storing it cannot lose anything, and ignoring it would drop a day they
+            # just set.
+            write_plan = True
+        elif (tracker.follow_up_on, tracker.follow_up_note) == (stored_day, stored_note):
+            write_plan = True  # the same plan, written again: a no-op either way
+        else:
+            raise ValueError(
+                f"The tracker for {tracker.listing_id} carries a follow-up day and note that differ from "
+                "the stored ones, and this save was not asked to write a plan. Nothing was written: pass "
+                "follow_up=FollowUpWrite.WRITE if the new plan is the one you mean, so a status update "
+                "and a reminder change can never be confused for each other."
+            )
         timestamp = _now()
         if expected is not None:
             # One statement, so there is no window between checking and writing, and it is committed
@@ -971,8 +1025,8 @@ class CareerStore:
             follow_up_guard = ""
             parameters: list[object] = [
                 tracker.status.value, tracker.status_evidence, int(tracker.candidate_confirmed),
-                tracker.follow_up_on.isoformat() if tracker.follow_up_on else None,
-                tracker.follow_up_note, timestamp, tracker.listing_id, str(expected.get("status")),
+                *self._follow_up_columns(tracker, stored, write=write_plan),
+                timestamp, tracker.listing_id, str(expected.get("status")),
                 str(expected.get("status_evidence") or ""), int(bool(expected.get("candidate_confirmed"))),
             ]
             if "follow_up_on" in expected:
@@ -1009,14 +1063,51 @@ class CareerStore:
                          updated_at=excluded.updated_at""",
                     (tracker.listing_id, tracker.status.value, tracker.status_evidence,
                      int(tracker.candidate_confirmed),
-                     tracker.follow_up_on.isoformat() if tracker.follow_up_on else None,
-                     tracker.follow_up_note, timestamp),
+                     *self._follow_up_columns(tracker, stored, write=write_plan),
+                     timestamp),
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("Save the job listing before its application tracker.") from exc
+        effective_day = tracker.follow_up_on if write_plan else stored_day
         self._record("tracker.saved", f"id={tracker.listing_id} status={tracker.status.value} "
                                       f"confirmed={int(bool(tracker.candidate_confirmed))}"
-                                      f" follow_up={tracker.follow_up_on.isoformat() if tracker.follow_up_on else 'none'}")
+                                      f" follow_up={effective_day.isoformat() if effective_day else 'none'}"
+                                      f" follow_up_write={follow_up.value}")
+
+    def _follow_up_columns(self, tracker: ApplicationTracker, stored: ApplicationTracker | None,
+                           *, write: bool) -> tuple[str | None, str | None]:
+        """The two follow-up values a write should store: the tracker's, or the row's own.
+
+        Kept in one place so both write paths (the conditional update and the insert-or-update) make the
+        same decision, and so an ordinary save can only ever repeat what is already stored.
+        """
+        source = tracker if write else stored
+        if source is None:
+            return (None, None)
+        return (source.follow_up_on.isoformat() if source.follow_up_on else None, source.follow_up_note)
+
+    def set_follow_up(self, listing_id: str, on: date | None, *, note: str | None = None
+                      ) -> ApplicationTracker:
+        """Record (or change) the day this application should be chased, and return the stored record.
+
+        Reading and writing the plan in one method keeps the two columns and the status row in step: the
+        caller names the day, the store decides how it is written. A listing with no application record is
+        refused - a reminder is a plan to act on an application, and inventing a record to hold it would
+        put an application in the tracker that nobody applied for.
+        """
+        stored = self.get_tracker(listing_id)
+        if stored is None:
+            raise ValueError(
+                f"There is no application record for {listing_id} yet, so there is nothing to plan a "
+                "follow-up for. Record the application first."
+            )
+        planned = stored.with_follow_up(on, note=note)
+        self.save_tracker(planned, follow_up=FollowUpWrite.WRITE)
+        return planned
+
+    def clear_follow_up(self, listing_id: str) -> ApplicationTracker:
+        """Remove a recorded follow-up day, keeping the application and its status untouched."""
+        return self.set_follow_up(listing_id, None, note=None)
 
     def add_activity(self, listing_id: str, activity: ApplicationActivity) -> int:
         """Append one dated entry to a listing's history and return its ``activity_id``.

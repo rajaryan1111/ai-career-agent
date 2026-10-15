@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export, and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -144,7 +144,8 @@ verified, owner-only backup path described below. To use the core tests in a hea
 
 The JSON export is written owner-only (`0600`) on systems that support POSIX permissions, tightened
 even when the chosen file already existed, and it refuses to write through a symbolic link so a link
-cannot redirect candidate data into another file. If the permissions cannot be applied, the export is
+cannot redirect candidate data into another file. Reading one back is documented in
+[Move your data to another computer](#move-your-data-to-another-computer-json-export-and-import). If the permissions cannot be applied, the export is
 not kept and the app says so instead of writing readable data. A synced or shared destination folder
 can still expose the file, so export to a folder only you can access.
 
@@ -331,6 +332,57 @@ so a backup always names the file the app itself would open. Restoring replaces 
   place yourself.
 
 
+## Move your data to another computer (JSON export and import)
+
+A backup is a copy of the whole database in SQLite's own format, so it is the right thing for keeping
+your own data — and the wrong thing for handing someone a file to read. The **JSON export** is the
+portable, readable format: the candidate profile, every saved listing, the application records, the
+follow-up days and the activity history in an ordinary text file, with no code and no credentials in it.
+Reading one back is the import, which is also how you move your data to a second computer.
+
+In the window, the **Data safety** tab has **Export data to a JSON file** and, beside it,
+**Import an exported file (JSON)**. The import always shows you what it would do and asks before it
+writes anything. The import of a file this app did not write is refused: the format carries a version,
+and a missing or different version is an error, not a guess.
+
+Without the window:
+
+```bash
+python -m career_agent --export-to "$HOME/Documents/career-agent-export.json"
+python -m career_agent --import-from "$HOME/Documents/career-agent-export.json"        # shows the plan
+python -m career_agent --import-from "$HOME/Documents/career-agent-export.json" --yes  # applies it
+```
+
+`--export-to` refuses to replace a file that already exists, so a second export cannot destroy the first
+by accident: choose another name. `--import-from` is a **dry run** until you add `--yes`, and it prints
+the same plan the window shows. Refusals exit with status `2`.
+
+**What the import does with your existing data**
+
+- The profile is imported only when you have none stored. If your database already has a profile, it is
+  kept and the plan says so — an import never silently replaces the profile you filled in.
+- A listing that is already stored is **linked, never replaced**: identity is the same duplicate key the
+  rest of the app uses (source and listing id), the stored copy stays as it is, and the time it was first
+  seen here is not touched. An export therefore cannot overwrite a listing you edited or hide work you
+  did after it was written.
+- Every application record in the file becomes a record here at `discovered`, the status a new record
+  must start at. A later status in the file (say `shortlisted`) is **reported as not imported** rather
+  than used: a confirmation you did not make in this app is exactly the evidence the tracker refuses to
+  invent. The listing, its facts, the follow-up day and the history still come across.
+- Follow-up days travel as data. A day that cannot be read as a date is reported as a refusal — the
+  listing itself still imports — rather than being dropped or guessed, and the same is true of a history
+  entry that cannot be read.
+- Activity history is appended, and an entry already present (same day, same kind, same text) is not
+  duplicated, so importing the same file twice does not double your timeline.
+- What was refused is listed in full when there are few of them, and with a count when there are many.
+  Importing the same file a second time is safe and says so: `left N already-stored listing(s) as they
+  were`.
+
+The window writes `import.written`, `import.refused` or `import.failed` to the activity log, so an import
+that changed your data is visible in the same place as every other write. Nothing about an import leaves
+the machine, and the file you read is the file you chose.
+
+
 ## Where listings would come from (and why nothing is fetched yet)
 
 `python -m career_agent --sources` prints what this version could fetch, from where, and under what
@@ -408,7 +460,11 @@ entry and never records that an employer replied — silence is not a reply, and
 reminder. The row shows the application's real status beside your note so you can see both. Clearing a
 follow-up asks first and keeps the application, its status and its history exactly as they were. A note
 without a day is refused rather than stored, because a reminder with no day is never shown at the right
-time.
+time. The day also survives everything else you do to the application: moving a status forward, adding
+evidence or confirming a submission all leave the reminder where it was, and the only way it disappears is
+that you clear it. (This was a real defect until 2026-10-15: a status change wrote the reminder out of the
+database without a word. The storage boundary now treats the plan as its own field that an ordinary save
+cannot touch, and both the fix and the defect are pinned by tests.)
 
 Three ways to meet your own reminders:
 

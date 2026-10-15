@@ -193,6 +193,41 @@ the store behind the widgets, and the checklist is where the widgets themselves 
 52. [ ] With the app open, pause `follow-up-digest` in the Background tasks tab, confirm it asks first and
     that pausing keeps its times and its history, then resume it and confirm the next run is scheduled.
 
+## Moving data with the JSON export and import (added 2026-10-15)
+
+53. [ ] On a disposable copy of the app (`CAREER_AGENT_HOME` pointed at a temporary folder), open **Data
+    safety** and press **Export data to a JSON file**. Choose a new name. The status line must report what
+    was written, and on POSIX `ls -l` must show `-rw-------`. If the platform's save dialog offers to
+    replace that name on a second press, decline it and confirm the first file is unchanged. (Refusing an
+    existing file outright is the *command line* rule — see step 57 — because the save dialog asks on the
+    window's behalf, differently on each platform.)
+54. [ ] Add nothing, then press **Import an exported file (JSON)** and choose that same file. A dialog must
+    appear describing the plan (listings that would be linked, the profile, the application record) and
+    must not have written anything yet. Press **No**: nothing may change and the status line must say the
+    import was cancelled.
+55. [ ] Press **Import an exported file (JSON)** again, choose the same file and press **Yes**. The status
+    line must report the result including `left 1 already-stored listing(s) as they were`, the Jobs tab
+    must still show exactly one listing with its original first-seen time, and the Tracker tab must show
+    the record at `discovered` with its follow-up day and its activity entry.
+56. [ ] Without editing anything, export the profile-carrying file from a *different* disposable database
+    (`--export-to`), import it into the database that already has a profile, and confirm the dialog says
+    your stored profile is kept and that the profile is unchanged afterwards.
+57. [ ] In a terminal, on two disposable databases: `python -m career_agent --database a.sqlite3
+    --export-to out.json`, then `--database b.sqlite3 --import-from out.json` (plan only — nothing must be
+    created) and finally the same command with `--yes`. Then run `--import-from out.json --yes` again and
+    confirm the second apply reports the listing was left as it was rather than adding a duplicate. Run
+    `--export-to out.json` a second time and confirm it refuses with status `2` and leaves the file alone.
+58. [ ] Point `--import-from` at a text file that is not an export (for example `{}`), at a path that does
+    not exist, and at a database path that does not exist. Each must refuse with status `2`, name the
+    reason in plain language, and create no file.
+
+59. [ ] Set a follow-up on an application (say three days from today), then change that application's
+    status through **Update status** and confirm afterwards, in the **Follow-ups** tab, that the day and
+    the note are still listed — and that the row still shows the new status beside them. Then clear the
+    follow-up and confirm the application, its status and its history are untouched.
+60. [ ] While a follow-up is recorded, edit the listing (save it again from the Jobs tab) and confirm the
+    reminder survives that too, then confirm the **Follow-ups** tab is what changes, not the application.
+
 ## Record results
 
 For each operating system tested, record:

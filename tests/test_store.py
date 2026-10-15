@@ -469,6 +469,132 @@ class TrackerInvariantTests(unittest.TestCase):
         self.assertEqual(self.store.get_tracker("j1").status, ApplicationStatus.CONFIRMED)
 
 
+class FollowUpIsIndependentOfStatusTests(unittest.TestCase):
+    """A recorded follow-up day must survive every other change to the application.
+
+    The regression this locks: ``save_tracker`` wrote the whole row from the tracker it was handed, and
+    ``ApplicationTracker.transition`` returned a record built from the status and the evidence alone. So
+    a status change - the most ordinary update there is - wrote the follow-up columns back to NULL and the
+    person's reminder was gone. Reproduced against a file-backed database before the fix: set a day,
+    transition to shortlisted, re-read, and both columns were empty.
+    """
+
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.store.save_job(sample_job())
+
+    def _planned(self, day=date(2026, 10, 20), note="chase the reply"):
+        self.store.save_tracker(ApplicationTracker("j1"))
+        return self.store.set_follow_up("j1", day, note=note)
+
+    def test_a_status_change_keeps_the_recorded_day_and_note(self):
+        self._planned()
+
+        self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED))
+
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertEqual(stored.follow_up_on, date(2026, 10, 20))
+        self.assertEqual(stored.follow_up_note, "chase the reply")
+
+    def test_the_transitioned_object_and_the_stored_row_agree(self):
+        planned = self._planned()
+
+        moved = planned.transition(ApplicationStatus.SHORTLISTED)
+        self.store.save_tracker(moved)
+
+        self.assertEqual(self.store.get_tracker("j1"), moved)
+
+    def test_a_conditional_write_keeps_the_plan_too(self):
+        self._planned(day=date(2026, 11, 1), note="ask for feedback")
+        expected = self.store.get_tracker_raw("j1")
+
+        self.store.save_tracker(
+            self.store.get_tracker("j1").transition(ApplicationStatus.SHORTLISTED), expected=expected)
+
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.follow_up_on, date(2026, 11, 1))
+        self.assertEqual(stored.follow_up_note, "ask for feedback")
+
+    def test_a_new_record_may_carry_a_plan_without_being_asked_twice(self):
+        """``with_follow_up`` is an explicit act, so a fresh record's plan is stored, not ignored."""
+        self.store.save_tracker(ApplicationTracker("j1").with_follow_up(date(2026, 12, 24), note="nudge"))
+
+        self.assertEqual(self.store.get_tracker("j1").follow_up_on, date(2026, 12, 24))
+
+    def test_a_different_plan_without_permission_to_write_it_is_refused(self):
+        self._planned()
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.save_tracker(ApplicationTracker("j1").with_follow_up(date(2027, 1, 5)))
+
+        self.assertIn("FollowUpWrite.WRITE", str(caught.exception))
+        self.assertEqual(self.store.get_tracker("j1").follow_up_on, date(2026, 10, 20),
+                         "the refused write must leave the stored day exactly as it was")
+
+    def test_a_write_that_means_to_replace_the_plan_replaces_it(self):
+        self._planned()
+
+        self.store.set_follow_up("j1", date(2026, 10, 25), note="second attempt")
+
+        stored = self.store.get_tracker("j1")
+        self.assertEqual(stored.follow_up_on, date(2026, 10, 25))
+        self.assertEqual(stored.follow_up_note, "second attempt")
+
+    def test_a_save_with_no_plan_of_its_own_cannot_clear_a_stored_one(self):
+        """Clearing is explicit: a tracker built from a status must not be able to cancel a reminder."""
+        self._planned()
+
+        self.store.save_tracker(ApplicationTracker("j1"))
+
+        self.assertEqual(self.store.get_tracker("j1").follow_up_on, date(2026, 10, 20))
+
+    def test_clearing_removes_the_day_and_the_note_and_leaves_the_status(self):
+        self._planned()
+        self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.SHORTLISTED))
+
+        cleared = self.store.clear_follow_up("j1")
+
+        stored = self.store.get_tracker("j1")
+        self.assertFalse(stored.has_follow_up)
+        self.assertIsNone(stored.follow_up_note)
+        self.assertEqual(stored.status, ApplicationStatus.SHORTLISTED)
+        self.assertFalse(cleared.has_follow_up)
+
+    def test_clearing_a_record_that_has_no_plan_is_a_no_op_rather_than_an_error(self):
+        self.store.save_tracker(ApplicationTracker("j1"))
+
+        self.store.clear_follow_up("j1")
+
+        self.assertFalse(self.store.get_tracker("j1").has_follow_up)
+
+    def test_a_plan_without_an_application_record_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.set_follow_up("j1", date(2026, 10, 20))
+
+        self.assertIn("nothing to plan a follow-up for", str(caught.exception))
+        self.assertIsNone(self.store.get_tracker("j1"), "refusing must not create a record")
+
+    def test_a_mistyped_day_is_refused_at_the_storage_boundary(self):
+        self.store.save_tracker(ApplicationTracker("j1"))
+
+        with self.assertRaises(ValueError):
+            self.store.set_follow_up("j1", date(202, 1, 1))
+
+        self.assertFalse(self.store.get_tracker("j1").has_follow_up)
+
+    def test_a_save_without_a_plan_reports_the_plan_it_left_alone_in_the_event_log(self):
+        self._planned()
+        with mock.patch("career_agent.event_log.record_event") as events:
+            self.store.save_tracker(ApplicationTracker("j1").transition(ApplicationStatus.WITHDRAWN))
+
+        saved = [call for call in events.call_args_list if call.args and call.args[0] == "tracker.saved"]
+        self.assertTrue(saved, "the write must be recorded")
+        self.assertIn("follow_up=2026-10-20", saved[0].kwargs["detail"])
+        self.assertIn("follow_up_write=keep", saved[0].kwargs["detail"])
+
+
 class ConditionalTrackerWriteTests(unittest.TestCase):
     """``save_tracker(..., expected=...)``: a compare-and-set read at the storage boundary.
 
