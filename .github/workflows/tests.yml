@@ -61,7 +61,7 @@ jobs:
   # on sys.path), and runs the installed command from outside the checkout. Its assertions mirror the
   # ones tests/test_packaging.py makes from the source tree, so the *behaviour* is proven once - but it
   # runs twice, on the floor the metadata declares (3.10) and on the newest interpreter the suite is run
-  # on (3.13), because a build backend, a wheel or a console script that only works on the version used
+  # on (3.14), because a build backend, a wheel or a console script that only works on the version used
   # to build it is exactly the release defect installing from a checkout would hide.
       # The run's log is served from a host a restricted network cannot reach, and the API reports a
       # failed step as "Process completed with exit code 1". These steps turn what the steps above
@@ -94,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.13"]
+        python-version: ["3.10", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
