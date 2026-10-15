@@ -513,6 +513,13 @@ figure. The **Work history & study** tab is the record underneath it: each role 
 qualification you have. It is the CV-shaped list, in the order a CV reads, and it is written by you,
 stored on this machine, and used for nothing else.
 
+This is the one tab whose content grows with your career, so it is the one tab that scrolls: the form and the
+two lists share a scrolling area, and the form's fields are pinned to the width you can see, so a long employer
+name or note wraps instead of pushing the buttons off the edge. The add, save, select and delete controls sit in
+two rows rather than one, on this tab and on the two tabs with the longest button rows (**Next actions** and
+**Follow-ups**), so nothing is squeezed or cut off at the smallest window size the app allows (900x600). The
+other tabs are fixed forms and lists that fit the window they are opened in.
+
 **Employment.** Employer, job title, employment type (full time, part time, contract, internship,
 apprenticeship, self-employed, unknown), a start date, an end date *if you know it*, an explicit **current
 role** flag, and an optional note about what you did.
@@ -913,10 +920,17 @@ window and connection, deletes its own folder and leaves the person's database b
 a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 82 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
-the tab they are drawn in, how many text widgets were given less room than their text asked for; and for the
-keyboard: how many stops the focus order makes and how many of the tab's controls it reaches. Those are
-measurements, not judgements: whether a layout reads well, whether the tab order feels right and what a screen
-reader announces are a person's answers, and the report says so. Given `--screenshots DIR` and a capture tool,
+the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by
+scrolling; content wider than that frame is still reported, because scrolling sideways is not something a form
+offers), how many text widgets were given less room than their text asked for; and for the keyboard: how many
+stops the focus order makes and how many of the tab's controls it reaches. Layout is judged at the size the
+window is asked for (its own declared minimum, the size it opens with, and larger) and at the size it actually
+gets; a window a platform will not let grow to the minimum the application declares for itself - measured on the
+macOS runners, where a 1400x900 request produced a 950x502 page - is reported with both sizes and not judged,
+because below that minimum there is no layout this application promises. The Windows runner's 1024x768 screen
+gives a 1004x631 page, above the minimum, so that leg is judged. Those are measurements, not judgements: whether a
+layout reads well, whether the tab order feels right and what a screen reader announces are a person's answers,
+and the report says so. Given `--screenshots DIR` and a capture tool,
 it writes one image per tab and per window size, which is what makes reviewing layout possible without opening
 the window yourself. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
 the confirmation - and every one of them is recorded and reported. On a machine with no display,

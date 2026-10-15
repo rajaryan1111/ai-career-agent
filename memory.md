@@ -2996,3 +2996,40 @@ the source tree, and on the next suite run `importlib.metadata.version("ai-caree
 script now exports the tracked revision with `git archive` into `/tmp` before building, and the folder was
 removed: a checkout that is also a build directory is not the state any measurement should be taken in.
 
+**2026-10-16, this session — workflow K's first real-display results found D32: content drawn outside its
+tab.** CI run `38814625351` at `dd92918` came back 10/13 jobs green, and the three jobs that failed are the
+three that had never had layout measured on them before: the Linux display-backed smoke job (K1 at 900x600 and
+K2 at 1120x760) and all four cross-platform legs (K3 on macOS, K2/K3 on Windows). The numbers were the
+diagnosis: on Linux the **Work history & study** tab's employment entry sat 117 px past the tab's right edge
+and the education form's widgets ~174 px past it, while `Next actions`' *Delete the selected record* had been
+squeezed from 200x28 to 29x28 and `Follow-ups`' *Export to a calendar file* from 181x28 to 13x28; on Windows
+and macOS the same tab overflowed *downwards* (28-43 px), because the one tab whose content grows with a career
+was the one tab built without a scrolling area. The cause was mechanical: two `fill=X` forms in four grid
+columns with no `columnconfigure`, so nothing could shrink, and four- and six-button rows packed into one line
+each. The fix extracts the read-only dialogs' canvas into a shared `_scrollable_body(parent)`, puts the history
+tab's content in it with the inner frame pinned to the canvas width, gives both forms
+`columnconfigure(1/3, weight=1)`, wraps labels at 830 px, and splits the long button rows in two on the history,
+**Next actions** and **Follow-ups** tabs. No handler, record, wording or dialog changed.
+
+Two of workflow K's own rules were wrong and were fixed with it, and this is the part worth remembering:
+a widget inside a scrolling area was measured against the *tab*, so a working scrollable tab would have been
+reported as clipped - measurement is now against the box a widget is drawn in (the tab, or the frame a
+scrolling area scrolls), while content *wider* than that frame is still reported because a form that scrolls
+down does not scroll sideways; and a window smaller than the minimum the application declares for itself was
+judged anyway, which turned the macOS runners' screen (a 950x502 page for a 1400x900 request) into a layout
+failure that no layout fix could ever clear. `judge_layout_at` now prints both sizes, states in one line that
+layout was not judged and why, and judges at every size the application can be shown at - Linux (Xvfb
+1280x1024) and Windows (a 1004x631 page) are judged. `_LAYOUT_TOLERANCE_PIXELS` is untouched at 1.
+`tests/test_desktop_acceptance.py` gained `LayoutMeasurementTests` (8 tests) covering the measurement box, the
+below-the-fold case, the wider-than-the-frame case, the declared-minimum predicate and the
+report-rather-than-judge path. Full suite 1727 tests, OK (skipped=13); `compileall` clean; the stand-in
+development run still performs all 82 checks and still exits 2. D32 is section 22 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`. The real-display verdict is the next CI run's K1,
+K2 and K3: nothing here is evidence that the fixed layout fits on a screen, only that the rules that measure
+it are right.
+
+**Left open by that run, next in the register.** `SuiteConnectionLeakTests` - the child process that counts
+never-closed SQLite connections - failed on all four macOS and Windows legs while being green on every Linux
+leg and locally, and `gh run download` of the screenshot artifact fails with `EOF`, so the images cannot be
+fetched through that route. Both are recorded in section 22 rather than left as footnotes.
+

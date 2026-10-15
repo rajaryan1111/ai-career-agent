@@ -19,6 +19,8 @@ pass or failure in CI's display-backed Linux job and on the Windows and macOS ru
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -488,6 +490,169 @@ class DisplayBackedWorkflowTests(unittest.TestCase):
         for name, workflow in acceptance.WORKFLOWS:
             self.assertTrue(callable(workflow), f"{name} is not runnable")
             self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")
+
+class LayoutMeasurementTests(unittest.TestCase):
+    """What workflow K measures a widget against, and what it refuses to call a layout failure.
+
+    The rule is a unit test rather than a comment because it decides what a display-backed run means. Two
+    cases it must not conflate: content below the fold of a scrolling area is reachable - that is what
+    scrolling is for - and a control wider than the frame that scrolls it is not reachable however far the
+    wheel turns. Both were added after the measurement of 2026-10-16, where the tab that holds more than a
+    small window shows needed a scrolling area and the harness had no notion of one.
+    """
+
+    class FakeWidget:
+        """A widget answering the geometry questions the harness asks, with numbers a test chooses."""
+
+        def __init__(self, klass, *, master=None, x=0, y=0, width=100, height=30):
+            self.tk_class = klass
+            self.master = master
+            self.rectangle = (x, y, width, height)
+            self.children = []
+            if master is not None:
+                master.children.append(self)
+
+        def winfo_class(self):
+            return self.tk_class
+
+        def winfo_children(self):
+            return list(self.children)
+
+        def winfo_exists(self):
+            return True
+
+        def winfo_ismapped(self):
+            return True
+
+        def winfo_viewable(self):
+            return True
+
+        def winfo_width(self):
+            return self.rectangle[2]
+
+        def winfo_height(self):
+            return self.rectangle[3]
+
+        def winfo_rootx(self):
+            return self.rectangle[0]
+
+        def winfo_rooty(self):
+            return self.rectangle[1]
+
+        def winfo_reqwidth(self):
+            return self.rectangle[2]
+
+        def winfo_reqheight(self):
+            return self.rectangle[3]
+
+        def cget(self, _name):
+            return ""
+
+    def scrolling_pair(self, page_width=400, page_height=200, content_height=900):
+        """A tab with a canvas in it, and the frame that canvas scrolls."""
+        page = self.FakeWidget("TFrame", width=page_width, height=page_height)
+        canvas = self.FakeWidget("Canvas", master=page, width=page_width, height=page_height)
+        scrolled = self.FakeWidget("TFrame", master=canvas, width=page_width, height=content_height)
+        return page, canvas, scrolled
+
+    def test_a_widget_inside_a_scrolling_area_is_measured_against_the_frame_that_scrolls(self):
+        page, canvas, scrolled = self.scrolling_pair()
+        inner = self.FakeWidget("TFrame", master=scrolled)
+        entry = self.FakeWidget("TEntry", master=inner)
+
+        self.assertTrue(acceptance.is_scrolled_frame(scrolled),
+                        "the frame a canvas scrolls is the content root of that scrolling area")
+        self.assertIs(acceptance.layout_container(entry, page), scrolled)
+        self.assertIs(acceptance.layout_container(inner, page), scrolled,
+                      "a frame nested in the content root is measured against the content root too")
+        self.assertIs(acceptance.layout_container(canvas, page), page,
+                      "the canvas itself is laid out in the tab, not in the area it scrolls")
+
+    def test_content_below_the_fold_of_a_scrolling_area_is_reachable_and_not_a_failure(self):
+        page, _canvas, scrolled = self.scrolling_pair()
+        below_the_fold = self.FakeWidget("TFrame", master=scrolled, y=600, width=380, height=40)
+
+        measured, problems = acceptance.layout_problems(None, page)
+
+        self.assertEqual(problems, [], "content a person can scroll to is not clipped content")
+        self.assertGreaterEqual(measured, 2, "the canvas and the widget below the fold are both measured")
+        self.assertIn(below_the_fold, acceptance.descendants(page))
+
+    def test_a_control_wider_than_the_frame_that_scrolls_it_is_still_reported(self):
+        page, _canvas, scrolled = self.scrolling_pair(page_width=400)
+        too_wide = self.FakeWidget("TButton", master=scrolled, x=350, width=200, height=30)
+
+        _measured, problems = acceptance.layout_problems(None, page)
+
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("is outside the scrolling area it is in", problems[0])
+        self.assertIn(str(too_wide), problems[0])
+
+    def test_the_content_root_of_a_scrolling_area_is_not_measured_itself(self):
+        page, canvas, scrolled = self.scrolling_pair(content_height=900)
+        inside = self.FakeWidget("TFrame", master=scrolled, width=380, height=40)
+
+        measured, problems = acceptance.layout_problems(None, page)
+
+        self.assertNotIn(scrolled, acceptance.measurable_widgets(page),
+                         "the scrolled frame is the box the content is measured in, not content")
+        self.assertEqual(problems, [])
+        self.assertEqual(measured, 2, "the canvas and the widget inside the scrolling area are measured")
+        self.assertIn(canvas, acceptance.measurable_widgets(page))
+        self.assertIn(inside, acceptance.measurable_widgets(page))
+
+    def test_a_window_smaller_than_its_own_minimum_is_recognised(self):
+        self.assertTrue(acceptance.window_below((950, 502), (900, 600)),
+                        "shorter than the minimum counts, even when it is wider")
+        self.assertTrue(acceptance.window_below((800, 700), (900, 600)))
+        self.assertFalse(acceptance.window_below((900, 600), (900, 600)))
+        self.assertFalse(acceptance.window_below((1400, 900), (900, 600)))
+
+    def judge_through(self, page, *, asked, achieved, minimum, message="content outside:"):
+        """Run ``judge_layout_at`` over one stand-in page and return what it returned and printed."""
+        app = types.SimpleNamespace(tabs=self.FakeWidget("TNotebook"))
+        printed = io.StringIO()
+        with mock.patch.object(acceptance, "tab_pages", return_value=[("the tab", page)]), \
+                mock.patch.object(acceptance, "show_tab", lambda *_args: None), \
+                contextlib.redirect_stdout(printed):
+            judged = acceptance.judge_layout_at(app, app, "at the declared minimum", asked, achieved,
+                                                minimum, message)
+        return judged, printed.getvalue()
+
+    def test_a_window_below_its_own_declared_minimum_is_reported_rather_than_judged(self):
+        # The macOS runners in run 38814625351 answered a 1400x900 request with a 950x502 page: a display
+        # that cannot show this window's own 900x600 minimum. Below that minimum there is no layout to hold
+        # the application to, so what the run must do is say so - with both sizes - not call it a defect.
+        page, _canvas, scrolled = self.scrolling_pair(page_width=400, page_height=200)
+        self.FakeWidget("TButton", master=scrolled, x=350, width=200, height=30)
+
+        judged, printed = self.judge_through(page, asked=(900, 600), achieved=(950, 502), minimum=(900, 600))
+
+        self.assertIsNone(judged)
+        self.assertIn("NOT judged", printed)
+        self.assertIn("950x502", printed, "the size the window has must be in the report")
+        self.assertIn("900x600", printed, "so must the size the application declares")
+
+    def test_content_outside_the_tab_is_a_failure_at_a_size_the_window_can_be_shown_at(self):
+        page, _canvas, scrolled = self.scrolling_pair(page_width=400, page_height=200)
+        self.FakeWidget("TButton", master=scrolled, x=350, width=200, height=30)
+
+        with self.assertRaises(acceptance.SmokeFailure) as caught:
+            self.judge_through(page, asked=(900, 600), achieved=(900, 600), minimum=(900, 600),
+                               message="content sits outside its tab at the smallest size this window allows:")
+
+        self.assertIn("content sits outside its tab at the smallest size this window allows:", str(caught.exception))
+        self.assertIn("the tab: TButton", str(caught.exception))
+
+    def test_nothing_outside_the_tab_is_not_a_failure(self):
+        page, _canvas, _scrolled = self.scrolling_pair(page_width=400, page_height=200)
+        self.FakeWidget("TFrame", master=page, width=200, height=40)
+
+        judged, printed = self.judge_through(page, asked=(900, 600), achieved=(900, 600), minimum=(900, 600))
+
+        self.assertEqual(judged, 2, "both widgets were measured and neither was outside")
+        self.assertIn("layout judged", printed)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

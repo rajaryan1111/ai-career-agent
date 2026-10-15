@@ -331,8 +331,22 @@ class CareerAgentApp:
 
         body = ttk.Frame(dialog)
         body.pack(fill=BOTH, expand=True, padx=12, pady=(0, 4))
-        canvas = tk.Canvas(body, borderwidth=0, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        return self._scrollable_body(body)
+
+    def _scrollable_body(self, parent):
+        """A scrollable area filling ``parent``, and the frame inside it to fill with content.
+
+        One implementation for the read-only dialogs and for the tab that holds more than a small window
+        can show. The inner frame is pinned to the canvas's own width, which is what stops a form wider
+        than the window from pushing its right-hand columns outside the area it is drawn in: the grid
+        inside shrinks its own columns instead. Measured by the display-backed harness on 2026-10-16,
+        before this existed: at the window's own minimum size the employment and education forms reached
+        174 pixels past the Work history and study tab's right edge, and at the size the window opens
+        with, the education form's tree sat 18 pixels below the tab - packed content below the fold is
+        drawn outside the window and, with nothing to scroll, could not be reached at all.
+        """
+        canvas = tk.Canvas(parent, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill=BOTH, expand=True)
@@ -482,15 +496,20 @@ class CareerAgentApp:
         mind. The buttons say what they do to the *selected row*, and a row has to be selected before an edit
         or a deletion can happen at all.
         """
+        body = self._scrollable_body(self.history_tab)
         ttk.Label(
-            self.history_tab, wraplength=960, justify=LEFT,
+            body, wraplength=830, justify=LEFT,
             text=("Your own record, in the order a CV reads: the current role first, then the most recent. "
                   "These are notes you keep, not verified facts, and nothing here is checked against any "
                   "employer or document. Blank fields stay unknown rather than being guessed."),
         ).pack(anchor=W, pady=(0, 8))
 
-        work_form = ttk.LabelFrame(self.history_tab, text="Employment", padding=8)
+        work_form = ttk.LabelFrame(body, text="Employment", padding=8)
         work_form.pack(fill=X, pady=(0, 8))
+        # The two field columns take the slack and absorb a shortfall, so a narrow window shortens the
+        # fields instead of pushing them past the tab's right edge.
+        work_form.columnconfigure(1, weight=1)
+        work_form.columnconfigure(3, weight=1)
         self.work_vars = {}
         self._history_entry(work_form, "Employer", "employer", 0, 0, self.work_vars)
         self._history_entry(work_form, "Job title", "job_title", 0, 1, self.work_vars)
@@ -509,12 +528,22 @@ class CareerAgentApp:
             row=3, column=1, columnspan=3, sticky=W, pady=4)
         work_actions = ttk.Frame(work_form)
         work_actions.grid(row=4, column=0, columnspan=4, sticky=W, pady=(8, 0))
-        ttk.Button(work_actions, text="Add this role", command=self._add_work_history).pack(side="left", padx=(0, 8))
-        ttk.Button(work_actions, text="Save changes to the selected role",
+        # Two rows rather than one: four buttons whose labels each say what they do to the selected row
+        # ask for more width than the tab has, and Tk squeezes whichever one comes last to whatever is
+        # left - a control a person cannot read. Measured on the Linux leg of run 38814625351: on the Next
+        # actions tab, a 200-pixel label was drawn in a 29-pixel button at the size the window opens with,
+        # and the six-button rows there and on the Follow-ups tab were split for the same reason.
+        work_row_one = ttk.Frame(work_actions)
+        work_row_one.pack(anchor=W)
+        work_row_two = ttk.Frame(work_actions)
+        work_row_two.pack(anchor=W, pady=(4, 0))
+        ttk.Button(work_row_one, text="Add this role", command=self._add_work_history).pack(side="left",
+                                                                                           padx=(0, 8))
+        ttk.Button(work_row_one, text="Save changes to the selected role",
                    command=self._update_work_history).pack(side="left", padx=8)
-        ttk.Button(work_actions, text="Select the selected role for editing", command=self._load_work_history
-                   ).pack(side="left", padx=8)
-        ttk.Button(work_actions, text="Delete the selected role", command=self._delete_work_history
+        ttk.Button(work_row_two, text="Select the selected role for editing", command=self._load_work_history
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(work_row_two, text="Delete the selected role", command=self._delete_work_history
                    ).pack(side="left", padx=8)
         self.work_tree = ttk.Treeview(work_form, columns=("employer", "title", "type", "period", "current"),
                                       show="headings", height=5)
@@ -526,8 +555,10 @@ class CareerAgentApp:
         self.work_tree.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         self.work_tree.bind("<<TreeviewSelect>>", self._select_work_history)
 
-        study_form = ttk.LabelFrame(self.history_tab, text="Education", padding=8)
+        study_form = ttk.LabelFrame(body, text="Education", padding=8)
         study_form.pack(fill=X)
+        study_form.columnconfigure(1, weight=1)
+        study_form.columnconfigure(3, weight=1)
         self.study_vars = {}
         self._history_entry(study_form, "Institution", "institution", 0, 0, self.study_vars)
         self._history_entry(study_form, "Qualification", "qualification", 0, 1, self.study_vars)
@@ -539,13 +570,17 @@ class CareerAgentApp:
                         ).grid(row=2, column=2, columnspan=2, sticky=W, padx=(12, 0), pady=4)
         study_actions = ttk.Frame(study_form)
         study_actions.grid(row=3, column=0, columnspan=4, sticky=W, pady=(8, 0))
-        ttk.Button(study_actions, text="Add this qualification", command=self._add_education
+        study_row_one = ttk.Frame(study_actions)
+        study_row_one.pack(anchor=W)
+        study_row_two = ttk.Frame(study_actions)
+        study_row_two.pack(anchor=W, pady=(4, 0))
+        ttk.Button(study_row_one, text="Add this qualification", command=self._add_education
                    ).pack(side="left", padx=(0, 8))
-        ttk.Button(study_actions, text="Save changes to the selected qualification",
+        ttk.Button(study_row_one, text="Save changes to the selected qualification",
                    command=self._update_education).pack(side="left", padx=8)
-        ttk.Button(study_actions, text="Select the selected qualification for editing",
-                   command=self._load_education).pack(side="left", padx=8)
-        ttk.Button(study_actions, text="Delete the selected qualification", command=self._delete_education
+        ttk.Button(study_row_two, text="Select the selected qualification for editing",
+                   command=self._load_education).pack(side="left", padx=(0, 8))
+        ttk.Button(study_row_two, text="Delete the selected qualification", command=self._delete_education
                    ).pack(side="left", padx=8)
         self.study_tree = ttk.Treeview(study_form, columns=("institution", "qualification", "discipline",
                                                             "period", "ongoing"),
@@ -560,10 +595,10 @@ class CareerAgentApp:
         self.study_tree.bind("<<TreeviewSelect>>", self._select_education)
 
         self.history_summary = tk.StringVar()
-        ttk.Label(self.history_tab, textvariable=self.history_summary, wraplength=960,
+        ttk.Label(body, textvariable=self.history_summary, wraplength=830,
                   justify="left").pack(anchor=W, pady=(8, 0))
         ttk.Label(
-            self.history_tab, wraplength=960, justify=LEFT,
+            body, wraplength=830, justify=LEFT,
             text=("Deleting the saved profile deletes these records too, in one step, because they are the "
                   "detail behind it - the confirmation names how many. Nothing here is uploaded, and no "
                   "employer is contacted about any of it."),
@@ -879,16 +914,24 @@ class CareerAgentApp:
         """
         controls = ttk.Frame(self.actions_tab)
         controls.pack(fill=X, pady=(0, 8))
-        ttk.Button(controls, text="Refresh", command=self._refresh_actions).pack(side="left", padx=(0, 8))
-        ttk.Button(controls, text="Add a preparation item", command=self._add_preparation
+        # Six buttons on one line do not fit: at the size this window opens with the last one was drawn
+        # 29 pixels wide instead of the 200 its label asked for (run 38814625351, Linux leg), which is a
+        # label nobody can read. Two rows of three, so the widest label is not the one that pays.
+        controls_row_one = ttk.Frame(controls)
+        controls_row_one.pack(anchor=W)
+        controls_row_two = ttk.Frame(controls)
+        controls_row_two.pack(anchor=W, pady=(4, 0))
+        ttk.Button(controls_row_one, text="Refresh", command=self._refresh_actions).pack(side="left",
+                                                                                         padx=(0, 8))
+        ttk.Button(controls_row_one, text="Add a preparation item", command=self._add_preparation
                    ).pack(side="left", padx=8)
-        ttk.Button(controls, text="Record an interview round", command=self._record_interview_round
+        ttk.Button(controls_row_one, text="Record an interview round", command=self._record_interview_round
                    ).pack(side="left", padx=8)
-        ttk.Button(controls, text="Mark the selected item done", command=self._complete_preparation
+        ttk.Button(controls_row_two, text="Mark the selected item done", command=self._complete_preparation
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(controls_row_two, text="Record the selected round's outcome", command=self._set_round_outcome
                    ).pack(side="left", padx=8)
-        ttk.Button(controls, text="Record the selected round's outcome", command=self._set_round_outcome
-                   ).pack(side="left", padx=8)
-        ttk.Button(controls, text="Delete the selected record", command=self._delete_action_record
+        ttk.Button(controls_row_two, text="Delete the selected record", command=self._delete_action_record
                    ).pack(side="left", padx=8)
         ttk.Label(
             self.actions_tab, wraplength=900, justify=LEFT,
@@ -1303,16 +1346,23 @@ class CareerAgentApp:
         """
         actions = ttk.Frame(self.follow_up_tab)
         actions.pack(fill=X, pady=(0, 8))
-        ttk.Button(actions, text="Refresh", command=self._refresh_follow_ups).pack(side="left", padx=(0, 8))
-        ttk.Button(actions, text="Set the day for the selected application",
+        # Same reason as the Next actions tab: six labels on one line ask for more than the window has,
+        # and the measurement showed "Export to a calendar file" squeezed to 13 pixels at the opening size.
+        actions_row_one = ttk.Frame(actions)
+        actions_row_one.pack(anchor=W)
+        actions_row_two = ttk.Frame(actions)
+        actions_row_two.pack(anchor=W, pady=(4, 0))
+        ttk.Button(actions_row_one, text="Refresh", command=self._refresh_follow_ups).pack(side="left",
+                                                                                           padx=(0, 8))
+        ttk.Button(actions_row_one, text="Set the day for the selected application",
                    command=self._set_follow_up).pack(side="left", padx=8)
-        ttk.Button(actions, text="Clear the selected follow-up",
+        ttk.Button(actions_row_one, text="Clear the selected follow-up",
                    command=self._clear_follow_up).pack(side="left", padx=8)
-        ttk.Button(actions, text="Preview the calendar export",
-                   command=self._preview_calendar_export).pack(side="left", padx=8)
-        ttk.Button(actions, text="Draft a follow-up email",
+        ttk.Button(actions_row_two, text="Preview the calendar export",
+                   command=self._preview_calendar_export).pack(side="left", padx=(0, 8))
+        ttk.Button(actions_row_two, text="Draft a follow-up email",
                    command=self._draft_follow_up_email).pack(side="left", padx=8)
-        ttk.Button(actions, text="Export to a calendar file",
+        ttk.Button(actions_row_two, text="Export to a calendar file",
                    command=self._export_follow_ups).pack(side="left", padx=8)
         ttk.Label(
             self.follow_up_tab, wraplength=900,

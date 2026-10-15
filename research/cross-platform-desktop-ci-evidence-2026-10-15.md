@@ -789,3 +789,72 @@ a report") promised all along.
 about the commands that explain a *user* refusal on stdout on purpose (`--draft-follow-up nope`'s "no
 application is stored" is a sentence about the request, not a failed report): those still print what they
 explain. It says nothing about the desktop window, which does not use these commands.
+
+## 22. D32 — content drawn outside its tab, and a measurement that blamed the window (run 38814625351 at `dd92918`, 2026-10-16)
+
+**How it was found.** Workflow K reported its first real-display results, and it failed on the leg whose display
+the run controls and on both cross-platform legs:
+
+| Leg | What K reported | Numbers |
+| --- | --- | --- |
+| Linux (Xvfb 1280x1024) | K1 and K2 failed; K3 passed | at 900x600: `Work history & study`'s employment entry 117 px past the tab's right edge, the education entry 117 px, the education treeview 129 px, the education form's widgets ~174 px; at 1120x760: the second form's frame 7 px past the right edge, its treeview 7 px wide-past and 18 px down, `Next actions`' *Delete the selected record* squeezed from 200x28 to 29x28, `Follow-ups`' *Export to a calendar file* from 181x28 to 13x28 |
+| macOS 3.10 and 3.13 | K3 failed on both legs, and the connection-leak watch failed with it | against a 950x502 page (3.10): 27 px for both employment entries, 39 px for the employment treeview, 77 px for the education entry, and `Background tasks`' treeview 34 px past the *bottom* edge; the 3.13 leg reported the same shapes against its 950x498 page |
+| Windows 3.10 and 3.13 | K2 and K3 failed on both legs, and the connection-leak watch failed with them | against a 1004x631 page: the education treeview 28 px past the bottom edge; against an 876x482 page: the education form's button row and two of its buttons 43 px past the bottom edge, and an entry and a checkbutton 5-6 px past it |
+
+**The defect.** `_build_history` packed two `fill=X` forms into frames with four grid columns and no
+`columnconfigure`, so every field kept its requested width and the row's right edge was pushed past the frame
+that holds it: the tab the notebook shows clips it, which is what "outside the tab by 174 pixels" means. The
+same shape of mistake sat in the button rows: four buttons in one packed row want ~860 px and six want ~1130 px,
+so Tk shrank them below the width of their own single-line text (200x28 to 29x28 is a button a person cannot
+read). The vertical cases on Windows and macOS are the same class one row further down: at a 631-px page the
+education form and its tree simply did not fit, and nothing in that tab could be scrolled - the tab that grows
+with a career was the one tab built without a scrolling area.
+
+**The smallest correct fix.** `_open_read_only_dialog`'s scrolling area was extracted into
+`_scrollable_body(parent)` (canvas, scrollbar, inner frame pinned to the canvas's width, mouse wheel, scroll
+region from the content's own bounding box) and the **Work history & study** tab's content now goes into it, so
+content taller than the page is reachable rather than clipped. Both forms gained `columnconfigure(1, weight=1)`
+and `(3, weight=1)`, so an over-long field shrinks its own column instead of overrunning the frame, and the
+width pinning is what makes that column have a width to shrink to. Labels wrap at 830 instead of 960 px. The
+long button rows were split into two rows each - history (Add this role / Save changes, then Select for editing
+/ Delete) and study the same shape, `Next actions` (Refresh / Add a preparation item / Record an interview
+round, then Mark done / Record outcome / Delete record) and `Follow-ups` (Refresh / Set the day / Clear, then
+Preview calendar export / Draft email / Export file). No handler, record, wording or dialog changed; the
+measurements that motivated each replacement are in the helper's own docstring.
+
+**The harness change, which is a truthfulness fix rather than a feature.** Two of K's own rules were wrong, and
+both were found by reading its output rather than by the failures:
+
+* A widget was measured against the *tab* even when it sat inside a scrolling area. Content below the fold of a
+  scrolling area is reachable - that is what scrolling is for - so K1/K2/K3 would have reported a working
+  scrollable tab as a defect. Measurement is now against the box a widget is drawn in: the tab, or the frame a
+  scrolling area scrolls. Content *wider* than that frame is still reported, because a form that scrolls down
+  does not scroll sideways, and the scrolled frame itself is the box rather than a measured widget.
+* A window smaller than the minimum the application declares for itself (900x600) was judged anyway. The macOS
+  runners answered a 1400x900 request with a 950x502 page: below the application's own minimum there is no
+  layout it promises, so the previous rule turned the runner's screen into a layout failure and would have kept
+  turning it into one after any layout fix. `judge_layout_at` now prints both sizes, says in one line that
+  layout was **not** judged and why, and judges at every size the application can actually be shown at. The
+  Linux job (Xvfb 1280x1024) and the Windows legs (a 1004x631 page) are judged, and the tolerance
+  (`_LAYOUT_TOLERANCE_PIXELS = 1`) is unchanged.
+
+**Regression tests (fail before, pass after).** `tests/test_desktop_acceptance.py` gained
+`LayoutMeasurementTests`: a widget inside a scrolling area is measured against the frame that scrolls it; a
+widget below the fold of a scrolling area is not a failure while one *wider* than that frame still is; the
+content root of a scrolling area is the box and not content; a window smaller than its own declared minimum is
+recognised; and `judge_layout_at` reports rather than judges at such a size (printing both), fails at a size the
+window can be shown at, and returns its widget count when nothing is outside. The real-display half of this
+defect cannot be tested here - this machine has no display - so what these tests establish is what the harness
+means by "outside", not that the fix fits on a screen.
+
+**What this does not establish.** Whether the fixed layout fits at 900x600, 1120x760 and 1400x900 on a real
+display: that is what the next CI run's workflow K measures, on Linux, Windows and macOS. Whether it reads
+well, whether the two-row button groups are where a person would look for them, and whether the keyboard order
+through the new scrolling area feels right are a reviewer's judgements, not this harness's.
+
+**Open defect found in the same run, not yet fixed.** `test_the_suite_leaves_no_sqlite_connection_open`
+(`tests/test_resource_lifecycle.py::SuiteConnectionLeakTests`) failed on all four cross-platform legs: the child
+process that counts never-closed connections found one or more connections left to the garbage collector. It is
+green on every Linux leg of the matrix and in a local checkout, so it is platform-specific. It is the next item in this
+register rather than a footnote: the leak watch exists to catch exactly this, and a failure of it is not
+something to leave standing in a green matrix.
