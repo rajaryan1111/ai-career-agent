@@ -25,7 +25,7 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import __main__ as cli
-from career_agent.backup import validate_app_database
+from career_agent.backup import automatic_backup_snapshots, validate_app_database
 from career_agent.config import DATABASE_ENV
 from career_agent.core import ApplicationTracker, Availability, CandidateProfile, JobListing
 import career_agent.store as store_module
@@ -307,6 +307,28 @@ class RestoreCommandTests(CommandLineTestCase):
         self.assertEqual(code, cli.EXIT_OK)
         self.assertEqual(err, "")
         self.assertNotIn("older schema", out)
+
+    def test_the_database_is_refused_as_its_own_backup_on_the_command_line(self):
+        """D19 through the front end: the path a person is most likely to paste back in is the database.
+
+        The command reported ``Restored <the database>`` for this, replaced the file with a copy of
+        itself and wrote an automatic snapshot beside it. What a person sees now is a refusal, the
+        documented refused exit code, and a database whose bytes are exactly what they were.
+        """
+        before = self.database.read_bytes()
+        snapshots_before = automatic_backup_snapshots(self.database)
+
+        code, out, err = self.run_command(["--restore-from", str(self.database), "--yes"])
+
+        self.assertEqual(code, cli.EXIT_REFUSED)
+        self.assertIn("the live database itself", err)
+        self.assertIn("nothing was changed", err)
+        self.assertNotIn("Restored", out)
+        self.assertEqual(self.database.read_bytes(), before, "the database must be byte-identical")
+        self.assertEqual(automatic_backup_snapshots(self.database), snapshots_before,
+                         "no snapshot may be left beside the database")
+        self.assertEqual([p.name for p in self.directory.iterdir() if ".partial" in p.name], [],
+                         "no staging file may be left behind")
 
     def test_a_corrupt_backup_is_refused_and_the_database_is_untouched(self):
         corrupt = self.directory / "corrupt.sqlite3"

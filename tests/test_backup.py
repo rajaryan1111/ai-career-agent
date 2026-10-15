@@ -27,7 +27,8 @@ from career_agent import backup as backup_module
 from career_agent.__main__ import main as cli_main
 import career_agent.backup as backup_module
 from career_agent.backup import (
-    BackupError, automatic_backup_path, create_backup, next_automatic_backup_path, restore_backup,
+    BackupError, automatic_backup_path, automatic_backup_snapshots, create_backup,
+    next_automatic_backup_path, restore_backup,
     suggested_backup_name,
     validate_app_database,
 )
@@ -599,6 +600,53 @@ class RestoreTests(BackupTestCase):
         chosen = self.directory / "chosen-backup.sqlite3"
         create_backup(live, chosen, timestamp=STAMP)
         return live, chosen
+
+    def test_a_database_is_never_restored_from_itself(self):
+        """D19: naming the database where a backup was meant must refuse, not "restore" it.
+
+        The command line accepted its own database as the chosen backup, reported
+        ``Restored <the same path>``, replaced the file with a copy of itself and left an automatic
+        snapshot beside it - a success message for a no-op, and a file the person did not ask for. Every
+        way a person can spell "this same file" is refused here, the chosen file is never touched, and
+        nothing is written anywhere.
+        """
+        live = populate(self.directory / "career_agent.sqlite3", job_ids=("j1", "j2"))
+        cases = {
+            "the same path": live,
+            "a path spelled differently": live.parent / "." / live.name,
+            "a hard link to it": self.directory / "hard-link.sqlite3",
+        }
+        try:
+            os.link(live, cases["a hard link to it"])
+        except (OSError, NotImplementedError, AttributeError) as exc:  # pragma: no cover - platform
+            self.skipTest(f"this platform cannot make a hard link: {exc}")
+        before = live.read_bytes()
+
+        for description, chosen in cases.items():
+            with self.subTest(description):
+                with self.assertRaises(BackupError) as caught:
+                    restore_backup(chosen, live, timestamp=STAMP)
+                self.assertIn("the live database itself", str(caught.exception))
+                self.assertIn("nothing was changed", str(caught.exception))
+                self.assertEqual(live.read_bytes(), before, "the database must be byte-identical")
+                self.assertEqual(automatic_backup_snapshots(live), (),
+                                 f"{description} must not leave a snapshot beside the database")
+                self.assert_no_leftovers(live)
+
+        with CareerStore(str(live)) as store:  # the records are still the ones that were there
+            self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1", "j2"])
+
+    def test_a_restore_from_a_copy_of_the_database_still_works(self):
+        """The refusal is about the *same file*, not about equal contents: a real backup is restored."""
+        live, chosen = self.prepare()
+        with CareerStore(str(live)) as store:
+            store.save_job(sample_job("added-after-backup"))
+
+        result = restore_backup(chosen, live, timestamp=STAMP)
+
+        self.assertEqual(result.info.job_count, 1)
+        with CareerStore(str(live)) as store:  # closed through the context manager, like every other test here
+            self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
 
     def test_a_restore_replaces_profile_jobs_and_tracker_and_reopens_cleanly(self):
         live, chosen = self.prepare()

@@ -20,6 +20,9 @@ Guarantees implemented here
   ``-wal``/``-shm`` sidecars, opens correctly wherever it is copied, and a restored database never
   silently switches the application to WAL (whose sidecars would be created with ordinary,
   non-owner-only permissions).
+* Restore refuses a chosen file that *is* the live database (same path, or the same file through a
+  hard link or symlinked folder), so restoring a database from itself cannot report success and rewrite
+  the file while writing a snapshot nobody asked for.
 * Restore validates the chosen file *before* the live database is touched, copies it into a staged
   file beside the live database, validates that exact staged file, snapshots the current database
   (verified when it is readable, raw but owner-only when it is not), refuses while another
@@ -212,6 +215,27 @@ def next_automatic_backup_path(database_path: str | Path, timestamp: datetime | 
         f"after {_MAX_AUTOMATIC_BACKUP_NAMES} names. Nothing was changed; move or delete some of the "
         "existing copies first."
     )
+
+
+def _is_the_same_file(source: Path, database: Path) -> bool:
+    """Whether the chosen backup and the live database are the same file.
+
+    ``os.path.samefile`` compares the device and inode, so a hard link, a symlinked folder and a
+    differently spelled path to the same file are all caught - the three ways a person can name their
+    own database while believing they named a backup. It answers only for files that exist, which is
+    why the resolved-path comparison follows it: that covers the paths the platform can spell out but
+    not stat, and either answer is enough to refuse.
+    """
+    if source.exists() and database.exists():
+        try:
+            if os.path.samefile(source, database):
+                return True
+        except OSError:
+            pass  # an unstattable path is not a reason to guess; the comparison below still answers
+    try:
+        return source.resolve() == database.resolve()
+    except OSError:
+        return False
 
 
 def _staged_path(database_path: Path, timestamp: datetime | None) -> Path:
@@ -627,6 +651,9 @@ def _restore_backup(backup_path: str | Path, database_path: str | Path, *,
     file has been validated, a staged copy of it has been validated, and the current database has
     been preserved:
 
+    0. refuse when the chosen file *is* the live database, before anything is validated or staged:
+       restoring a database from itself reports success and rewrites the file for no reason, and the
+       person who typed their own database path meant to name a backup (D19);
     1. validate the chosen backup (never modified: it is opened read-only and copied from there);
     2. write and validate a staged file beside the live database, so the file that is installed is
        exactly the file that was checked;
@@ -640,6 +667,15 @@ def _restore_backup(backup_path: str | Path, database_path: str | Path, *,
     """
     source = Path(backup_path)
     database = Path(database_path)
+    if _is_the_same_file(source, database):
+        # Checked before the chosen file is validated, because validating the live database is work
+        # that answers a question nobody asked, and because a refusal has to happen before the first
+        # staging file exists. Restoring a database from itself changes nothing worth changing while
+        # still rewriting the file and leaving an automatic snapshot beside it.
+        raise BackupError(
+            f"{source} is the live database itself, so there is nothing to restore from it and nothing "
+            "was changed. Choose a backup file written by this application."
+        )
     source_info = validate_app_database(source)
     if database.is_symlink():
         raise BackupError(f"{database} is a symbolic link. Refusing to replace it; use the real path.")
