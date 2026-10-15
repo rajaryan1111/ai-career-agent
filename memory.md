@@ -2409,3 +2409,93 @@ produced for an application with no day, and a preview writing the file it previ
 suite.
 
 **Test reading.** 1527 tests, `OK (skipped=13)` - 1399 before this increment. No assertion was weakened.
+
+## 2026-10-15 — Release rehearsal: the doctor cleared a file the app refused, and the policy that was missing
+
+**The rehearsal found a real defect, which is the point of doing it.** An installed wheel was built, installed
+into a clean environment, and driven from a folder under `/tmp` with synthetic records. The first failure probe
+built a database whose tracker row held a status no version of the app knows (the shape a hand-edited file or a
+file from a later build has). Every read path refused that record — and `--doctor` answered
+**"No problems found" with exit 0** on the same file, because it checked structure (schema version, required
+tables, foreign keys, counts) and never decoded a row. `--analytics` and `--follow-ups` exited **3** — the
+"unexpected failure" status — with a sanitised start-up note written to `logs/startup-diagnostics.log`, while
+`--history` (which does not read tracker rows) exited 0. A report that clears a file the application refuses is
+worse than no report: it is the one place a person would look before trusting their data.
+
+**The fix has one mechanism, not two.** `store.unreadable_stored_records(path)` decodes every stored record of
+every kind through the **same decoder functions the read paths use** — the profile, listing, tracker, activity,
+preparation, interview, work-history, education, scheduled-task, task-run and lease decoders became
+`@staticmethod`s taking a row, which is what makes them callable without a store, and the profile payload
+decoder was extracted from `get_profile` so the rules exist once. The sweep runs over a `mode=ro` connection,
+skips tables a file does not have (an older file simply has fewer), caps at 5000 rows per table, reuses the
+backup module's read-only URI helper (renamed `read_only_uri`, no second implementation), and returns one
+plain sentence per unreadable record naming the table and the record id — never its contents. `--doctor` runs it
+only when the structural check is clean *and* the file records the current schema: a file recording an older
+schema is reported by version, not decoded, because the doctor promises never to change a file and therefore
+cannot migrate it, and decoding an old layout could report problems the upgrade itself resolves. The doctor
+prints exactly that instead of implying the data is fine. On the read side, `--analytics`, `--follow-ups`,
+`--next-actions`, `--interviews`, `--history` and `--worker-status` now answer an unreadable record with
+`_refuse_unreadable_records`: one sanitised sentence, exit status `2` (`EXIT_REFUSED`), no half-printed report,
+and a pointer at `--doctor`.
+
+**Measured before and after, on the same file.** `--doctor`: exit 0 → exit 1 naming
+`application_tracker`, record `'j1'`. `--analytics`: exit 3 → exit 2 with `REFUSED: this database holds a
+record this version cannot read: …`. `--follow-ups`: exit 3 → exit 2. `--history`: 0 → 0, unchanged, because it
+never reads that record. The database's SHA-256 was identical before and after every command. Reverting
+`career_agent/store.py` and `career_agent/__main__.py` to `dc20325` makes the new test file fail
+(`ImportError: cannot import name 'unreadable_stored_records'`), so the regression tests fail before the fix.
+The export path needed no change and was verified not to need one: `--export-to` on the damaged database exits
+0, writes the record with `"status_recognised": false`, and keeps the follow-up day and note — an export must
+always be able to take the data out.
+
+**The rehearsal that produced a real schema upgrade.** An earlier attempt was invalid and is recorded as such:
+the copied file already recorded `user_version = 6`, so nothing migrated. A genuine schema-5 database was built
+by running this build's real migration steps and stopping at 5, then opened by the installed CLI. Result:
+`user_version` 6, a verified snapshot taken first (`old2.sqlite3.backup-20261015T070533Z`, 110592 bytes,
+`user_version 5`, 10 tables — the pre-upgrade file), and the listing, tracker (status, follow-up day and note)
+and activity entry all intact, with the same table set the current build declares. Row survival after an
+upgrade is now proven against a file the previous version really wrote, not against a current file with the
+version number lowered.
+
+**One probe's expectation was wrong, and that is recorded too.** A database file at mode `444` was expected to
+produce a write refusal. It does not: opening a database re-applies owner-only permissions
+(`_restrict_to_owner`, best-effort, POSIX-only), so the file was observed changing from `-r--r--r--` to
+`-rw-------` on a read-only command and writes then succeed. That is a deliberate privacy measure with a
+documented side effect, not a defect; the write-refusal paths that exist are around *targets* (a backup or
+export destination) and around damaged files, and a read-only *filesystem* was not available on this machine to
+exercise the remaining case.
+
+**The written policy that was missing piece 4.** The README now states what a version number promises about
+data: no stability promise while no build is released, a newer build opens an older database, an older build
+refuses a newer one, an existing file is verified-copied before the first step changes it, steps are additive
+and transactional with no separate migration command, backups are accepted across versions and upgraded when
+opened, export documents carry `format_version` and import never overwrites a stored record, an unreadable
+record is reported rather than repaired, and there is no downgrade path. `architecture.md`, `prd.md`,
+`rules.md` and `design.md` were updated in the same increment, and `rules.md` gained the invariant this
+rehearsal earned: a diagnostic must not clear data the app refuses to read.
+
+**CI coverage audit.** The matrix is now the floor and the newest interpreter that has actually run
+(`3.10`–`3.13`) rather than an open-ended claim, and the installed-package job runs on `3.10` and `3.13` — a
+wheel or console script that only works on the interpreter that built it is exactly what installing from a
+checkout hides. A new test, `tests/test_documented_commands.py`, reads every `--flag` this README and the
+manual checklist tell a person to run (30 in the README, 20 in the checklist) and looks it up in the real
+`--help` output, so a documented command that no longer exists fails the suite; its own guards are tested too
+(a planted unknown flag must be reported). No 3.14 leg exists: `uv python install 3.13` and a direct download
+from the `python-build-standalone` releases were both refused by this sandbox's network policy
+(`UnknownIssuer` / `SSL_ERROR_SYSCALL`), so the newest leg can only be proven by CI, and the audit says so.
+
+**Evidence, and what is still missing.** `research/release-readiness-audit-2026-10-15.md` holds the commands
+and observed output for install, `--doctor`, backup, restore, export, import, the schema upgrade, eleven
+failure paths, the defect with its before/after exit codes, the CI audit and the reproducibility recipe —
+repository half only. Still open: per-platform launch artefacts and signing, the interpreter-bundling decision,
+the per-operating-system half of the rehearsal (macOS and Windows), real GUI coverage, a 3.14 and a
+macOS/Windows CI leg, the read-only-filesystem case, and branch protection/release archives. Nothing here is a
+production-readiness claim.
+
+**Test reading.** 1550 tests, `OK (skipped=13)` — 12 of the skips need the optional `pypdf` extra (absent
+here) and one runs only where the project is installed (a source checkout carries no metadata); 1532 before
+this increment (1527 plus the five documented-command tests). Before the ignored `build/` and
+`ai_career_agent.egg-info/` directories from an earlier in-checkout build were removed, that packaging test
+ran instead of skipping (which is why an intermediate run read `skipped=12`). No assertion was
+weakened. Mutation checks re-run on the new code: reverting the two source files was executed and fails the new
+tests, and the before/after exit codes were measured on the same database.

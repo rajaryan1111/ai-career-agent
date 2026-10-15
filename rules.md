@@ -29,6 +29,16 @@
 - Preserve an explanation for each match and exclusion.
 - Deduplicate before ranking and applying.
 - Flag stale, suspicious, or incomplete listings; do not present unverified claims as facts.
+- A health, doctor or diagnostic report must not clear data the application itself refuses to read: a check
+  that says "no problems found" has to read every record the read paths read, and a read-only report must
+  answer an unreadable record with a clear refusal instead of a raw failure.
+  **Implemented as an invariant (2026-10-15):** `--doctor` decodes every stored record through the same
+  decoders the read paths use, over a `mode=ro` connection, and names the table and record it cannot read;
+  `--analytics`, `--follow-ups`, `--next-actions`, `--interviews`, `--history` and `--worker-status` answer
+  such a record with one sanitised sentence and exit status 2, changing nothing. Found by the release
+  rehearsal rather than by reading the code: the doctor reported "no problems found" on a database every read
+  path refused (evidence and before/after exit codes in
+  `research/release-readiness-audit-2026-10-15.md`).
 - Optimize for relevant opportunities and outcomes, not raw application count.
 
 ## 4. Platform compliance

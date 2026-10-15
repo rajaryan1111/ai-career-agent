@@ -361,6 +361,28 @@ account was touched, which is why they are here and not in the suite.
     nothing. While both runs happen, watch the machine's network activity and any calendar client: there must
     be no connection to a mail or calendar provider and no new event in any calendar.
 
+## Reporting on a database the app cannot fully read (added 2026-10-15)
+
+Make a **copy** of a database for these steps and edit the copy with `sqlite3` or DB Browser; never edit the
+file the app is using. Set one tracker row's `status` to a value no version of this app knows (for example
+`UPDATE application_tracker SET status = 'sent-somewhere';`). Then:
+
+95. [ ] Open the window on that copy and use **Progress report**: the dialog must show the app's own refusal
+    sentence ("The saved status '…' is not one this version of the application recognises…"), not a raw
+    traceback, not an empty report and not a crash. The window must stay open, and the status line must not
+    claim anything was repaired.
+96. [ ] Run `career-agent --doctor --database <copy>`: it must exit `1`, print
+    `PROBLEM: 1 stored record(s) cannot be read by this version`, name the table (`application_tracker`) and
+    the record (`j1`), and end with `Nothing was changed or repaired by this check.` Compare the file's
+    SHA-256 before and after: it must be identical.
+97. [ ] Run `--analytics` and `--follow-ups` against the copy: each must exit `2` with the sanitised refusal
+    and a pointer to `--doctor`. Run `--history`: it must still run and exit `0`, because it does not read
+    that record. On macOS and Windows, confirm no crash report dialog appears for any of the four.
+98. [ ] Open a *healthy* database and run `--doctor`: it must print
+    `Every stored record could be decoded by this version.` and exit `0` — the check must not turn a normal
+    file into a warning. Then run `--doctor` on a copy whose `PRAGMA user_version` is set to `5`: it must
+    report version 5, say its records are not decoded here, exit `0`, and leave the recorded version at 5.
+
 ## Record results
 
 For each operating system tested, record:

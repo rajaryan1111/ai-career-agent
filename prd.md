@@ -173,7 +173,12 @@ compensation is not compared because no compensation field exists yet.
   cannot disagree about which file is in use; a relative setting is ignored and reported rather than
   resolved against the working directory. `--doctor` prints the version, the paths, and what the
   database contains — or the same refusal the app itself would give — without a display, creating or
-  changing nothing, and exits non-zero when it finds a problem. Start-up failures are explained in
+  changing nothing, and exits non-zero when it finds a problem. It does not stop at structure: on a file
+  whose schema is current it decodes every stored record with the same functions the read paths use, so a
+  status, availability value or payload this build cannot interpret is reported with the table and the
+  record rather than passing the check, and the read-only reports answer such a record with one sanitised
+  refusal and exit status 2 instead of an unexpected failure. A file recording an older schema is reported
+  by version and not decoded, because the check never migrates it. Start-up failures are explained in
   plain language with local paths redacted, plus one bounded owner-only local note. An event log
   (`logs/application.log`, beside the database) records what the application did - opened, migrated,
   saved, deleted, imported, exported, backed up, restored, failed - as one bounded, rotated line per

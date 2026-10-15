@@ -101,7 +101,12 @@ python -m career_agent --doctor       # the same, from a checkout
 it is safe to run when the app will not start. It reports the version and the Python it is running on,
 the resolved database path *and which rule chose it*, whether the data folder exists and is writable,
 and what the database contains (or the exact refusal the app itself would show if the file is damaged,
-empty, or written for a newer schema). It exits `1` when it finds a problem and `0` when it does not,
+empty, or written for a newer schema). It does not stop at structure: on a file whose schema is the one
+this build writes, it also decodes every stored record — profile, listings, application records, activity,
+preparation, interview rounds, employment and education, and the scheduled work — with the same functions
+the read paths use, and reports the table and the record it cannot read instead of clearing the file. A
+file written by an *older* schema is reported by version and not decoded, because this check never changes
+a file and therefore never migrates one. It exits `1` when it finds a problem and `0` when it does not,
 which makes it usable from a launcher or a script. Its report lists file locations, so remove them
 before sharing it; the start-up note described below is the redacted one.
 
@@ -806,8 +811,21 @@ repository claims one. What exists today:
 - **A build and install exercised in CI.** The `installed-package` job builds the wheel, checks that it
   contains the application package and nothing else, installs it into a clean environment, and runs the
   installed command from *outside* the checkout — version report, `--help`, a throwaway database, backup,
-  restore. Its assertions mirror the ones `tests/test_packaging.py` makes from the source tree, which is
-  why it needs one interpreter rather than the whole matrix.
+  restore. Its assertions mirror the ones `tests/test_packaging.py` makes from the source tree, so the
+  behaviour is proven by one run; it is executed on two interpreters anyway, the floor the metadata
+  declares (3.10) and the newest one the suite is run on (3.13), because a wheel or a console script that
+  only works on the version used to build it is exactly the defect that installing from a checkout hides.
+- **Which interpreters are tested, and which are not.** CI runs the full suite, `compileall` and the CSV
+  audit on **3.10, 3.11, 3.12 and 3.13**. `requires-python = ">=3.10"` has no upper bound — a newer
+  interpreter is not forbidden — but nothing here claims one: 3.14 has not been run, so it is untested
+  rather than supported, and the same is true of every interpreter the workflow does not name. The window
+  itself is only exercised through handler tests with stubbed widgets on Linux; a real Tk run on any
+  platform is [the manual checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md), not
+  CI. There is also no lint, formatter or type-check step configured, so none is claimed.
+- **The documented commands are checked against the program.** `tests/test_documented_commands.py` reads
+  every `--flag` this README and the manual checklist tell a person to run and looks it up in the real
+  `--help` output, so a documented command that no longer exists fails the suite instead of failing in
+  somebody's terminal.
 - The app runs from a source checkout with `python -m career_agent` and needs the standard library plus
   Tkinter. Reading PDF résumés additionally needs the optional `pypdf` library; every other feature,
   including DOCX résumé import, works without it. A packaged build would need a decision on whether to
@@ -831,18 +849,47 @@ Missing pieces, in the order they are needed, for a packaged desktop alpha:
 2. A decision on bundling the interpreter (PyInstaller/Briefcase-style) versus requiring a system Python
    with Tkinter — including the size, update, and Tk-availability consequences of each choice.
 3. A release checklist that runs this repository's suite, the manual desktop checklist, and a
-   backup/restore rehearsal on each supported operating system from the packaged build.
-4. A written version and data-compatibility policy for released builds: what a version number promises
-   and how someone upgrades. The database half of that story exists — schema steps are recorded, applied
-   one at a time in a transaction, copied to a verified snapshot before an existing file is updated,
-   rolled back on failure and reported honestly, and an older backup is
-   accepted and updated when it is opened (see "What a restore guarantees") — but nothing yet promises
-   what a release number means across versions. (Until that exists, an installed copy is a development
-   build of the same "local alpha".)
+   backup/restore rehearsal on each supported operating system from the packaged build. What exists today
+   is the repository half of that rehearsal, run on this machine and recorded in [the release-readiness
+   audit](research/release-readiness-audit-2026-10-15.md): install from the built wheel, `--doctor`,
+   backup, restore, export, import, a real schema upgrade, and the failure paths — each with the exact
+   command and its observed result. The per-operating-system half needs machines this project does not
+   have.
 
 Nothing is published to a package index and no release archive is attached anywhere, so "install from
 this checkout into your own Python environment, or run it from the checkout directly" is the accurate
 description — not a downloadable product, and not a packaged desktop app.
+
+### What a version number promises about your data
+
+There is no released build yet, so `career_agent.__version__` names a development build of the same local
+alpha and carries **no stability promise**: any version may change the database schema. What it does
+promise is narrower and enforced by the code, so a newer build never has to guess at your data:
+
+- **A newer build opens an older database, an older build refuses a newer one.** The file records the
+  schema version it holds (`PRAGMA user_version`); a build that finds a *higher* number refuses to open it
+  and says which version wrote it. Nothing is read partially and nothing is downgraded — install the newer
+  build, or restore a backup from before the upgrade.
+- **An existing file is copied before it is changed.** Before the first step updates a database in place,
+  a verified copy is taken beside it (`<name>.backup-<timestamp>.sqlite3`) and the step is recorded. A
+  copy that cannot be written stops the upgrade instead of changing a file that has no second copy.
+- **Steps are additive and run one at a time.** Each recorded step runs in its own transaction, and a step
+  that fails leaves the file at the version it reached, with the failure reported rather than swallowed.
+  Opening an older file is the only upgrade path; there is no separate migration command.
+- **Backups are accepted across versions.** A backup written by an older schema version is validated
+  against the tables *its* version declared and is updated when it is opened; a file written for a newer
+  schema is refused rather than half-read (see "What a restore guarantees").
+- **Export documents carry their format version.** A file whose `format_version` this build does not know
+  is refused with that reason, and an export always writes a version. Importing never overwrites a stored
+  listing or profile — an existing record wins over the file's copy.
+- **An unreadable record is reported, never repaired.** A status, activity kind or payload this build
+  cannot interpret is refused by name, on the read paths and in `--doctor`, without being rewritten or
+  deleted; the export still takes the data out, marking the value it could not label.
+
+Before upgrading, run `career-agent --backup-to <somewhere-private>`; after upgrading, run
+`career-agent --doctor`, which reports the schema version the file now records. The rehearsal behind these
+claims — including a real schema-5 file opened by an installed wheel — is recorded with commands and
+observed output in the [release-readiness audit](research/release-readiness-audit-2026-10-15.md).
 
 ## Safety and product principles
 

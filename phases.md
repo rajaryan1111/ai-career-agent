@@ -126,10 +126,13 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1527 tests passing locally (13 skip without the optional `pypdf` library) and a
-Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
+implemented, with 1550 tests passing locally (13 skipped in a checkout: 12 of them need the optional
+`pypdf` library and one runs only where the project is installed) and a
+Python 3.10–3.13 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
-the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
+the installed `career-agent` command from outside the checkout — on the declared floor (3.10) and on the
+newest interpreter the suite is run on (3.13), because a wheel or a console script that only works on the
+version that built it is exactly what installing from a checkout hides. The suite also holds the safety properties an audit
 turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
 the form and can never make an experience requirement pass, no test may resolve this machine's real
 database path, every malformed or mis-shaped restore target is refused with the current database left
@@ -311,8 +314,17 @@ that `python -m career_agent` runs; only `career_agent/` is packaged, not `tests
 version stays a single literal in `career_agent.__version__` that setuptools reads statically, so the
 installed metadata and `--version` cannot drift (a test refuses a computed version). The build and the
 installed command are exercised in CI, and `tests/test_packaging.py` holds the metadata invariants from
-the source tree. Still missing: per-platform launch artefacts, code signing/notarisation, a decision on
-bundling the interpreter, a release checklist, and a written version/data-compatibility policy — so
-this is an installable alpha, not a packaged desktop release.
+the source tree. The repository half of the release rehearsal is now recorded with commands and observed
+results in [the release-readiness audit](research/release-readiness-audit-2026-10-15.md): install from the
+built wheel, `--doctor`, backup, restore, export, import, a genuine schema-5 file upgraded by the installed
+build (row-preserving, snapshotted first), and the failure paths — including the defect that rehearsal
+found, where `--doctor` reported "no problems found" on a database every read path refused; the doctor now
+decodes every stored record read-only and names what it cannot read, and the read-only reports answer such a
+record with one sanitised refusal and exit status 2 instead of an unexpected failure. The
+version/data-compatibility policy that was missing is written in the README ("What a version number
+promises about your data"). Still missing: per-platform launch artefacts, code signing/notarisation, a
+decision on bundling the interpreter, the per-operating-system half of the release checklist (a real
+desktop, macOS and Windows), and a macOS/Windows CI leg — so this is an installable alpha, not a packaged
+desktop release.
 
 Résumé import is local and text-only: there is no OCR, so a scanned PDF with no text layer is refused with an explanation rather than guessed at, and PDF reading needs the optional `pypdf` library (DOCX import uses the standard library alone). A remote scheduler, live source connectors, email integration, and real application adapters are not yet implemented/verified. The source-quality gate remains NOT PASSED; no live integration or application automation should be represented as production-ready. Safe local product implementation is authorized and should proceed now.
