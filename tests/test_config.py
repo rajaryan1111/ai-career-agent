@@ -197,7 +197,26 @@ class DoctorCommandTests(unittest.TestCase):
 
     @property
     def default_database(self) -> Path:
-        return self.home_override / "ai-career-agent" / DATABASE_FILE_NAME
+        """Where the application itself would keep its database under this environment override.
+
+        Resolved by the module that decides it rather than spelled out here: the folder is
+        ``AI Career Agent`` on macOS and Windows and ``ai-career-agent`` elsewhere, so a test that
+        spells the name out can only pass on the platform it was written on. That is precisely how this
+        property failed the first time the suite ran on macOS and on Windows.
+        """
+        return resolve_settings(environ={"CAREER_AGENT_HOME": str(self.home_override)},
+                                home=self.home).database_path
+
+    def test_the_expected_path_is_the_one_the_application_resolves(self) -> None:
+        """The check above is only meaningful if the test and the app agree on where the file goes.
+
+        On Linux they did, because the folder name there matched the string this test used to spell out.
+        On macOS and Windows the application uses ``AI Career Agent`` and the test did not, so the doctor
+        looked in an empty folder and six tests reported failures that were the test's own.
+        """
+        with mock.patch.dict(os.environ, {"CAREER_AGENT_HOME": str(self.home_override)}):
+            expected = resolve_settings().database_path
+        self.assertEqual(self.default_database, expected)
 
     def test_a_missing_database_is_reported_as_not_created_yet(self) -> None:
         code, out, _ = self.run_doctor()
@@ -277,7 +296,7 @@ class DoctorCommandTests(unittest.TestCase):
         code, out, _ = self.run_doctor()
         self.assertEqual(code, cli.EXIT_PROBLEM_FOUND)
         self.assertIn("is not writable", out)
-        self.assertFalse((self.home_override / "ai-career-agent").exists())
+        self.assertFalse(self.default_database.parent.exists(), "the doctor created the data folder")
 
     def test_the_doctor_reports_the_event_log_and_the_last_event(self) -> None:
         """Someone asking "what has this app been doing?" must be able to find the answer."""

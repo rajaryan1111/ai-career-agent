@@ -2027,6 +2027,65 @@ class DatabaseFilePermissionTests(unittest.TestCase):
             self.assertEqual(store.list_jobs(), ())
 
 
+class _OsWithoutPosixModeBits:
+    """The parts of ``os`` a Windows interpreter presents, with everything else delegated.
+
+    ``os.fchmod`` is UNIX-only: on Windows the attribute is not there at all, so looking it up raises
+    ``AttributeError`` rather than ``OSError``. Everything else is the real module, so the code under
+    test still opens, writes and closes real files on the machine running the test.
+    """
+
+    name = "nt"
+
+    def __getattr__(self, attribute):
+        if attribute == "fchmod":
+            raise AttributeError("module 'os' has no attribute 'fchmod'")
+        return getattr(os, attribute)
+
+
+class PlatformWithoutPosixModeBitsTests(unittest.TestCase):
+    """The private writers must work where there are no POSIX mode bits to apply.
+
+    Found by running the suite on Windows for the first time: ``CareerStore`` construction failed 949
+    times on that leg, because every store records its own start in the event log, the event log is
+    written through :func:`career_agent.store.append_private_text_file`, and that function treated
+    "the owner-only mode could not be applied" as a reason to refuse - while on Windows there is no
+    descriptor mode to apply and the lookup itself raised. The module says elsewhere that the
+    owner-only guarantee is POSIX-only and is not claimed elsewhere; these tests hold the *writing*
+    paths to that same rule. The POSIX refusal itself is not re-tested here: ``PrivateFileWriteTests``
+    already pins that an ``os.fchmod`` which raises ``OSError`` writes no candidate data.
+    """
+
+    secret = '{"degree_discipline": "ECE", "application_history": "confirmed 2026-10-14"}'
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.directory = Path(self._directory.name)
+
+    def test_a_store_opens_where_there_are_no_posix_mode_bits(self):
+        path = self.directory / "windows-shaped.sqlite3"
+        with mock.patch.object(store_module, "os", _OsWithoutPosixModeBits()):
+            with CareerStore(path) as store:
+                self.assertEqual(store.list_jobs(), ())
+        self.assertTrue(path.exists(), "the database was not created")
+        self.assertEqual(path.read_bytes()[:16], b"SQLite format 3\x00")
+
+    def test_a_private_file_is_still_written_there(self):
+        target = self.directory / "export.json"
+        with mock.patch.object(store_module, "os", _OsWithoutPosixModeBits()):
+            write_private_text_file(target, self.secret)
+        self.assertEqual(target.read_text(encoding="utf-8"), self.secret)
+
+    def test_the_event_log_is_still_appended_there(self):
+        """The log is what the store records its own start in; on Windows it was the first thing to fail."""
+        target = self.directory / "logs" / "application.log"
+        target.parent.mkdir()
+        with mock.patch.object(store_module, "os", _OsWithoutPosixModeBits()):
+            store_module.append_private_text_file(target, "app.started\n")
+            store_module.append_private_text_file(target, "app.stopped\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "app.started\napp.stopped\n")
+
 class PrivateFileWriteTests(unittest.TestCase):
     """Exported candidate data must reach disk owner-only, or not reach disk at all.
 

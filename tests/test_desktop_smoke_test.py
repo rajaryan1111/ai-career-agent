@@ -150,6 +150,41 @@ class WidgetInspectionTests(unittest.TestCase):
                 self.assertIn(label, smoke.EXPECTED_TABS)
 
 
+class TabFrameTests(unittest.TestCase):
+    """``Notebook.tabs()`` answers with widget names, and the script must resolve them.
+
+    The first display-backed CI run of the entry point failed here: thirteen checks passed on a real
+    display and the check that every tab was built raised ``AttributeError: 'str' object has no
+    attribute 'winfo_children'``. A helper exists so this can be pinned on a machine with no display.
+    """
+
+    def test_each_reported_name_is_resolved_to_the_frame_it_names(self):
+        frames = [FakeWidget("TFrame", children=[FakeWidget("TLabel")]),
+                  FakeWidget("TFrame", children=[FakeWidget("TButton", text="Refresh")])]
+        notebook = FakeNotebook({"!notebook.!frame": frames[0], "!notebook.!frame2": frames[1]})
+        self.assertEqual(smoke.tab_frames(notebook), frames)
+
+    def test_a_tab_name_is_not_treated_as_a_widget(self):
+        """The failure itself: the names cannot be inspected directly."""
+        notebook = FakeNotebook({"!notebook.!frame": FakeWidget("TFrame")})
+        with self.assertRaises(AttributeError):
+            [name.winfo_children() for name in notebook.tabs()]
+        self.assertEqual(len(smoke.tab_frames(notebook)), 1)
+
+
+class FakeNotebook:
+    """A notebook as Tk presents one: stable widget names, resolvable to the widgets behind them."""
+
+    def __init__(self, frames_by_name: dict):
+        self._frames_by_name = frames_by_name
+
+    def tabs(self) -> tuple:
+        return tuple(self._frames_by_name)
+
+    def nametowidget(self, name: str):
+        return self._frames_by_name[name]
+
+
 class ExpectationsMatchTheWindowTests(unittest.TestCase):
     """The script's expectations must still describe the window it is pointed at.
 

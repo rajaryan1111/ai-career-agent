@@ -333,7 +333,19 @@ def _apply_owner_only_mode(target: int | str) -> bool:
 
     A descriptor (used when writing new files) is preferred where available because it cannot be
     redirected by swapping the path, but the path form is kept for existing callers.
+
+    A platform without POSIX mode bits has nothing to apply and no protection to claim, so this
+    reports success without doing anything - the rule :func:`require_owner_only` already follows when
+    it returns immediately on non-POSIX. Reporting failure there would refuse every private write,
+    including the event log the store records its own start in, so the application could not open its
+    database at all: the first Windows run of the suite failed exactly that way, with 949 errors,
+    because ``os.fchmod`` does not exist on Windows and looking it up raised ``AttributeError`` (the
+    open descriptor leaked with it). Nothing on the POSIX path changed: a filesystem there that
+    refuses the mode still reports the refusal, and the callers that must not write
+    unprotected - :func:`create_private_file`, :func:`append_private_text_file` - still refuse.
     """
+    if os.name != "posix" or not hasattr(os, "fchmod"):
+        return True
     try:
         if isinstance(target, int):
             os.fchmod(target, _OWNER_ONLY_MODE)

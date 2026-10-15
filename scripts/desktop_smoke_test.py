@@ -194,6 +194,18 @@ def buttons_under(widget) -> list:
     return found
 
 
+def tab_frames(notebook) -> list:
+    """The tab frames a notebook holds, resolved from the names it reports.
+
+    ``Notebook.tabs()`` answers with widget *names* - strings like ``.!notebook.!frame`` - not with
+    widgets, so anything that wants to look inside a tab has to resolve them first. The first
+    display-backed CI run of this script failed on exactly that: thirteen checks passed on a real
+    display and the fourteenth raised ``AttributeError: 'str' object has no attribute
+    'winfo_children'``, which says the check had never actually run anywhere.
+    """
+    return [notebook.nametowidget(name) for name in notebook.tabs()]
+
+
 def screen_description(root) -> str:
     """What the display answered, so the log shows a window-system reply rather than a variable's value."""
     try:
@@ -308,7 +320,9 @@ def main() -> int:
             require(labels == EXPECTED_TABS, f"the tabs are {labels!r}")
 
         with results.step("every tab was built, with at least one widget inside it"):
-            empty = [app.tabs.tab(tab, "text") for tab in app.tabs.tabs() if not tab.winfo_children()]
+            frames = tab_frames(app.tabs)
+            require(len(frames) == len(EXPECTED_TABS), f"the notebook reported {len(frames)} tabs")
+            empty = [app.tabs.tab(frame, "text") for frame in frames if not frame.winfo_children()]
             require(not empty, f"these tabs are empty: {empty}")
 
         with results.step("the lists the tabs are read from exist with their documented columns"):

@@ -296,6 +296,18 @@ jobs:
           else:
               print("tkinter: Tk", tkinter.TkVersion, "Tcl", tkinter.TclVersion)
           PY
+      - name: Provide the timezone database this platform may not ship
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The application refuses to schedule a task whose IANA zone it cannot load, and its message
+          # names this package as the fix (career_agent/tasks.py, pinned by tests/test_tasks.py). A
+          # Windows installation has no system timezone database, so installing it is what that message
+          # asks a person to do - and without it the scheduling tests describe the refusal instead of the
+          # behaviour they are about.
+          python -m pip install --quiet tzdata
+          python -c "import zoneinfo; zoneinfo.ZoneInfo('Asia/Kolkata'); print('the timezone database is installed')"
+
       - name: Run the standard-library test suite on this platform
         run: |
           notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
