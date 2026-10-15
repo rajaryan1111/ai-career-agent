@@ -11,7 +11,7 @@ evidence to capture, and where to write the result.
 window. 22 of the 98 steps passed on a headless machine (the ones needing no window), 76 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
-**What automation already established, so a tester does not re-do it by hand.** Ten workflows and **77 checks**
+**What automation already established, so a tester does not re-do it by hand.** Eleven workflows and **82 checks**
 now (76 when the per-leg table below was recorded; one check was added to workflow I on 2026-10-16)
 (`scripts/desktop_acceptance.py`) drove the real window's own widgets on five display-backed CI legs — Linux
 under Xvfb, Windows 2025 and macOS 26, on CPython 3.10 and 3.13 — every leg reporting
@@ -60,7 +60,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, eight tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 77 checks: ten workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 82 checks: eleven workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -286,7 +286,7 @@ result this project has recorded for every window step so far.
 | [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 98 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
-| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the ten workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the eleven workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added), per-leg platform/Tk/screen strings, and the defects only a real display could show |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |
 
 **The distinction this handoff keeps.** Implemented is not automated-tested; automated-tested is not

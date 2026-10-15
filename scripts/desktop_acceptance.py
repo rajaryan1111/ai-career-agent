@@ -4,7 +4,7 @@ The manual checklist in ``research/`` is what a *person* has to do, and this scr
 replace it. What it does is narrower and still worth having: it builds the real ``CareerAgentApp`` window on
 a disposable synthetic database, types into the real ``Entry`` widgets, presses the real buttons through
 Tk's own ``invoke``, answers the dialogs a person would answer, and then checks the *stored* result and what
-the window says about it. Ten workflows run, in the order a first-time user would meet them:
+the window says about it. Eleven workflows run, in the order a first-time user would meet them:
 
 * **A - the candidate profile.** Type a synthetic profile, add a role and a qualification through the
   window's own forms, save, close the window, open a second window on the same database, and check that the
@@ -37,14 +37,26 @@ the window says about it. Ten workflows run, in the order a first-time user woul
   file with the live database untouched, decline a restore and check nothing moved, then restore a valid
   backup and check the records came back, the previous database was kept as a readable copy and nothing
   temporary was left behind.
+* **K - layout, focus order and labelling, measured.** Nothing here is judged: what a person would call
+  readable, sensible to tab through or clearly worded is theirs to say. What the run does is measure - the
+  window at its own declared minimum size, at the size it opens with and larger, printing for every tab how
+  many widgets are on screen, how many sit outside the tab they are drawn in and how many text widgets were
+  given less room than their own text asked for; the keyboard's focus order for every tab, how many stops it
+  makes and how many of the tab's controls it reaches; and whether every control carries text of its own or a
+  label beside it. It also writes a screenshot per tab when a capture tool is available and the run was asked
+  for one (``--screenshots DIR``), because a picture is what a person reviewing layout actually needs.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 
 Four properties are deliberate, and they are the reason this file is safe to run in CI.
 
 * **Nothing is reported as done that a machine cannot see.** Every check reads a stored record, a widget's
-  text, or the line the window wrote into its status bar. No check inspects pixels, layout, focus order,
-  dialog wording or how anything feels, because none of those can be judged from here.
+  text, or the line the window wrote into its status bar. Workflow K measures the window itself - rectangles,
+  allocated against requested sizes, which widgets the focus order reaches - and every one of those numbers
+  is printed rather than scored, with failures only where a shortage cannot be a design choice (a button's
+  single line of text with nowhere to go). No check inspects pixels, and nothing here judges readability,
+  the feel of the tab order, dialog wording or assistive technology: those are a person's, and the report
+  says so. A screenshot is an artifact for that person, never a check.
 * **A machine without a window is BLOCKED, never a pass.** Without ``tkinter``, or without a display, the
   run exits :data:`EXIT_BLOCKED` and names the missing capability, in the same 0/1/2 convention
   ``scripts/desktop_smoke_test.py`` and ``career_agent.__main__`` use.
@@ -76,7 +88,9 @@ and must never be read as any. CI runs it once, in a step that requires exactly 
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -3024,6 +3038,458 @@ def workflow_f_cleanup(run: Run) -> None:
         scratch.require_default_database_untouched()
 
 
+# --------------------------------------------------------------------------------------------------
+# Workflow K - what a machine can measure about layout, focus order and labelling
+# --------------------------------------------------------------------------------------------------
+#: Widget classes a person can put the keyboard into. The same list the test suite's stand-in uses, so a
+#: control cannot be interactive in one place and invisible in the other.
+_INTERACTIVE_CLASSES = (
+    "TButton", "Button", "TEntry", "Entry", "TCombobox", "Combobox",
+    "TCheckbutton", "Checkbutton", "Text", "Treeview",
+)
+
+#: Widget classes that carry text a person reads. A widget allocated less room than the text needs is
+#: where clipping shows up: Tk shrinks the widget rather than overflowing its container, so comparing
+#: rectangles alone would find nothing.
+_TEXT_CLASSES = ("TLabel", "Label", "TButton", "Button", "TCheckbutton", "Checkbutton")
+
+#: Widget classes whose text cannot wrap, so a shortage of room cuts it off whatever else is true. A
+#: label may legitimately be capped by its own ``wraplength`` or by a narrow column, which is why the
+#: buttons are the ones this run refuses to accept a squeeze on.
+_UNWRAPPABLE_TEXT_CLASSES = ("TButton", "Button", "TCheckbutton", "Checkbutton")
+
+#: How much smaller than its own request a widget may be before the shortage is reported. Tk's own
+#: padding arithmetic rounds by a few pixels - a theme's border, a grid cell one pixel narrow - and a
+#: shortage of that size is not text a person cannot read; more than this is room that was taken away.
+_SQUEEZE_TOLERANCE_PIXELS = 4
+
+#: Widget classes whose children scroll by design: a row below the visible edge of a tree, or a form
+#: inside a canvas, is not clipped content - that is what the scrollbar is for. A widget under one of
+#: these is skipped by the layout measurement rather than reported as sitting outside the window.
+_SCROLLING_CLASSES = ("Canvas", "Treeview", "TScrollbar", "Scrollbar")
+
+#: A widget one pixel past its container's edge is a rounding detail, not a control a person cannot
+#: reach. Anything further out is reported.
+_LAYOUT_TOLERANCE_PIXELS = 1
+
+#: Where screenshots are written when the run is asked for them (``--screenshots DIR``). ``None`` means
+#: nobody asked, which is the default: a picture is an artifact for a person to look at later, and the
+#: run must behave identically whether or not one is being taken.
+SCREENSHOTS_FOLDER: Path | None = None
+
+
+def screenshot_tools() -> tuple[str, ...] | None:
+    """The capture pipeline this machine has, or ``None``.
+
+    ImageMagick's ``import`` is tried first because it is one command; the fallback is X11's own ``xwd``
+    piped through netpbm, which is what the Linux CI job installs instead of ImageMagick's footprint.
+    """
+    if shutil.which("import"):
+        return ("import",)
+    if all(shutil.which(tool) for tool in ("xwd", "xwdtopnm", "pnmtopng")):
+        return ("xwd", "xwdtopnm", "pnmtopng")
+    return None
+
+
+def capture_screenshot(host, label: str) -> str:
+    """Write one PNG of the screen, and return an empty string or the reason it was not written.
+
+    Never raises: a screenshot is an artifact, not a check. A run that cannot take one says so and
+    carries on, because a picture this script failed to take proves nothing about the window either.
+    """
+    if SCREENSHOTS_FOLDER is None:
+        return "nobody asked for screenshots"
+    path = SCREENSHOTS_FOLDER / f"{label}.png"
+    tools = screenshot_tools()
+    if tools is None:
+        return "no capture tool here (looked for ImageMagick's 'import' and for xwd + netpbm)"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        host.deiconify()
+        host.lift()
+        host.update_idletasks()
+        host.update()
+        if tools == ("import",):
+            result = subprocess.run(["import", "-window", "root", str(path)],
+                                    capture_output=True, text=True, timeout=120)
+        else:
+            pipeline = f"xwd -root -silent | xwdtopnm 2>/dev/null | pnmtopng > {shlex.quote(str(path))}"
+            result = subprocess.run(["bash", "-c", pipeline], capture_output=True, text=True, timeout=120)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised: this is not a check
+        return f"the capture tool raised {exc!r}"
+    if result.returncode != 0:
+        return f"the capture tool exited {result.returncode}: {(result.stderr or '').strip()[:200]}"
+    if not path.is_file() or path.stat().st_size == 0:
+        return f"the capture tool reported success but wrote nothing to {path}"
+    return ""
+
+#: How many steps the focus walk may take before it is treated as not returning to its start. The
+#: largest tab holds a few dozen controls; a walk that has not closed by here is a defect, not a slow
+#: machine.
+_FOCUS_WALK_LIMIT = 600
+
+
+def tab_names(notebook) -> list:
+    """What a notebook reports its pages as: names from real Tk, frames from the test suite's stand-in.
+
+    Real ``ttk.Notebook.tabs()`` is a method answering with widget *names*; the stand-in keeps a list of
+    ``(frame, label)`` pairs under the same attribute. Reading it through this one function is how the
+    development run and a display-backed run exercise the same check rather than two different ones.
+    """
+    reported = notebook.tabs() if callable(getattr(notebook, "tabs", None)) else list(notebook.tabs)
+    names = []
+    for entry in reported:
+        names.append(entry[0] if isinstance(entry, tuple) else entry)
+    return names
+
+
+def tab_pages(app) -> list[tuple[str, object]]:
+    """The application's tabs, in the order the window shows them, as ``(label, frame)`` pairs."""
+    notebook = app.tabs
+    pages = []
+    for name in tab_names(notebook):
+        try:
+            widget = notebook.nametowidget(name)
+        except Exception:  # noqa: BLE001 - a page that cannot be resolved is reported by name
+            continue
+        try:
+            text = str(notebook.tab(name, "text"))
+        except Exception:  # noqa: BLE001 - a tab without a label is still measurable
+            text = str(name)
+        pages.append((text, widget))
+    return pages
+
+
+def show_tab(app, page) -> None:
+    """Select one tab and let Tk lay it out, so what is measured is the page a person is looking at."""
+    notebook = app.tabs
+    notebook.select(page)
+    # Two rounds of the event loop, in this order: the first resolves the layout the selection asked
+    # for, the second applies anything that layout triggered. No sleep, so the measurement cannot
+    # depend on how fast the machine is.
+    notebook.update_idletasks()
+    notebook.update()
+
+
+def sits_outside(widget, container) -> tuple[int, int, int, int] | None:
+    """The widget's offset outside ``container``'s visible rectangle, or ``None`` when it is inside.
+
+    Root coordinates are used, so a widget inside a nested frame is measured against the tab it is
+    drawn in rather than against its immediate parent: content that runs off the tab is content the
+    notebook clips, whatever the frame in between believes.
+    """
+    left, top = container.winfo_rootx(), container.winfo_rooty()
+    right, bottom = left + container.winfo_width(), top + container.winfo_height()
+    x, y = widget.winfo_rootx(), widget.winfo_rooty()
+    width, height = widget.winfo_width(), widget.winfo_height()
+    over_left = left - x
+    over_top = top - y
+    over_right = (x + width) - right
+    over_bottom = (y + height) - bottom
+    if max(over_left, over_top, over_right, over_bottom) <= _LAYOUT_TOLERANCE_PIXELS:
+        return None
+    return (max(0, over_left), max(0, over_top), max(0, over_right), max(0, over_bottom))
+
+
+def scrolls_inside(widget, container) -> bool:
+    """Whether this widget sits inside a scrolling area under ``container``.
+
+    A tree's rows and a canvas's contents live outside the visible rectangle by design; reporting them
+    as clipped would be reporting the scrollbar as a defect.
+    """
+    parent = getattr(widget, "master", None)
+    while parent is not None and parent is not container:
+        if getattr(parent, "winfo_class", None) is not None and parent.winfo_class() in _SCROLLING_CLASSES:
+            return True
+        parent = getattr(parent, "master", None)
+    return False
+
+
+def squeezed_text_widgets(container) -> list[str]:
+    """Text-bearing widgets on screen that were given less room than their own text asked for.
+
+    Reported as measurements, and asserted only where a shortage cannot be a design choice: a button's
+    label is one line that either fits or is cut off. A label with a ``wraplength`` or a narrow grid
+    column may be sized that way on purpose, so it is listed for a person to judge rather than failed.
+    """
+    squeezed = []
+    for widget in measurable_widgets(container):
+        klass = widget.winfo_class()
+        if klass not in _TEXT_CLASSES:
+            continue
+        short_width = widget.winfo_reqwidth() - widget.winfo_width()
+        short_height = widget.winfo_reqheight() - widget.winfo_height()
+        if max(short_width, short_height) <= _SQUEEZE_TOLERANCE_PIXELS:
+            continue
+        text = ""
+        try:
+            text = str(widget.cget("text") or "")[:60]
+        except Exception:  # noqa: BLE001 - a widget that will not say what it holds is still measured
+            text = ""
+        squeezed.append(
+            f"{klass} {widget} asked for {widget.winfo_reqwidth()}x{widget.winfo_reqheight()} and got "
+            f"{widget.winfo_width()}x{widget.winfo_height()} ({text!r})"
+        )
+    return squeezed
+
+
+def measurable_widgets(container) -> list:
+    """The widgets under ``container`` that are on screen: mapped, viewable and big enough to see."""
+    found = []
+    for widget in descendants(container):
+        try:
+            if not widget.winfo_exists() or not widget.winfo_ismapped() or not widget.winfo_viewable():
+                continue
+            if widget.winfo_width() <= 1 or widget.winfo_height() <= 1:
+                continue
+        except Exception:  # noqa: BLE001 - a widget Tk will not answer for is a widget to skip
+            continue
+        if scrolls_inside(widget, container):
+            continue
+        found.append(widget)
+    return found
+
+
+def layout_problems(app, page) -> tuple[int, list[str]]:
+    """Measure one tab: how many widgets were looked at, and how any of them sit outside it."""
+    measured = measurable_widgets(page)
+    problems = []
+    for widget in measured:
+        overflow = sits_outside(widget, page)
+        if overflow is not None:
+            problems.append(
+                f"{widget.winfo_class()} {widget} is outside the tab by {overflow} pixels "
+                f"(widget {widget.winfo_width()}x{widget.winfo_height()} at "
+                f"{widget.winfo_rootx()},{widget.winfo_rooty()}; tab "
+                f"{page.winfo_width()}x{page.winfo_height()} at "
+                f"{page.winfo_rootx()},{page.winfo_rooty()})"
+            )
+    return len(measured), problems
+
+
+def measure_every_tab(host, app, label: str) -> tuple[int, list[str]]:
+    """Measure every tab of one window at the size it is now, and print what was seen.
+
+    The numbers are printed rather than only asserted: a figure a person can read ("0 of 61 widgets
+    outside the tab") is evidence about layout that a pass/fail line alone does not carry, and the CI
+    steps publish these lines as annotations so they are readable without the run's log.
+    """
+    total, problems = 0, []
+    for name, page in tab_pages(app):
+        show_tab(app, page)
+        measured, outside = layout_problems(app, page)
+        total += measured
+        problems.extend(f"{name}: {item}" for item in outside)
+        squeezed = squeezed_text_widgets(page)
+        cut_off = [item for item in squeezed
+                   if item.split(" ", 1)[0] in _UNWRAPPABLE_TEXT_CLASSES]
+        if squeezed:
+            for item in squeezed[:4]:
+                print(f"measurement: squeezed {label} '{name}' -> {item}")
+            if len(squeezed) > 4:
+                print(f"measurement: squeezed {label} '{name}' -> and {len(squeezed) - 4} more")
+        print(
+            f"measurement: layout {label} '{name}' -> {measured} widget(s) on screen, "
+            f"{len(outside)} outside the tab, {len(squeezed)} text widget(s) short of their request "
+            f"({len(cut_off)} of them unwrappable), tab {page.winfo_width()}x{page.winfo_height()}"
+        )
+        problems.extend(f"{name}: {item}" for item in cut_off)
+    return total, problems
+
+
+def inside_window(widget, host) -> bool:
+    """Whether ``widget`` is drawn inside ``host``, by walking the widget tree it belongs to."""
+    current = widget
+    while current is not None:
+        if current is host:
+            return True
+        current = getattr(current, "master", None)
+    return False
+
+
+def focus_order(host, start, limit: int = _FOCUS_WALK_LIMIT) -> list:
+    """The widgets the keyboard reaches from ``start``, in order, up to the point it comes back."""
+    order = []
+    current = start
+    for _step in range(limit):
+        try:
+            following = current.tk_focusNext()
+        except Exception as exc:  # noqa: BLE001 - reported as the defect it is
+            raise SmokeFailure(f"tk_focusNext raised {exc!r} after {len(order)} step(s)") from exc
+        if following is None:
+            break
+        try:
+            current = host.nametowidget(following)
+        except Exception:  # noqa: BLE001 - a name that cannot be resolved is a dead end
+            raise SmokeFailure(f"the focus order points at {following!r}, which is not a widget") from None
+        if current is start:
+            return order
+        if current in order:
+            raise SmokeFailure(
+                f"the focus order leads back to a control it has already visited after {len(order)} "
+                "step(s) without ever returning to where it started"
+            )
+        order.append(current)
+    raise SmokeFailure(
+        f"the focus order did not return to its start within {limit} steps, so a control may be "
+        "unreachable or the order may not close"
+    )
+
+
+def _report_screenshot(host, label: str) -> None:
+    """Take one picture if one was asked for, and print what happened either way."""
+    if SCREENSHOTS_FOLDER is None:
+        return
+    problem = capture_screenshot(host, label)
+    if problem:
+        print(f"measurement: screenshot '{label}' was not taken: {problem}")
+    else:
+        taken = SCREENSHOTS_FOLDER / f"{label}.png"
+        print(f"measurement: screenshot '{label}' written ({taken.stat().st_size} bytes)")
+
+
+def workflow_k_layout_focus_labels(run: Run) -> None:
+    """Layout, focus order and labelling, measured by a machine - and nothing more than that.
+
+    What this workflow does *not* do is judge any of it. Whether a tab reads well, whether the focus
+    order is sensible to use, whether the wording of a label is clear and whether a screen reader
+    announces the right thing are judgements a person makes; these checks measure only what a program
+    can: whether content sits outside the area it is drawn in, whether the keyboard can reach the
+    controls, and whether every control carries some visible text of its own or beside it.
+    """
+    workspace, results = run.workspace, run.results
+    host, app = workspace.open_window()
+    declared_minimum = (900, 600)
+
+    with results.step("K1 the window declares a minimum size it can actually show its content in"):
+        minimum = host.minsize()
+        require(
+            minimum and len(minimum) == 2 and int(minimum[0]) > 0 and int(minimum[1]) > 0,
+            f"the window declares no usable minimum size (it reports {minimum!r})",
+        )
+        declared_minimum = (int(minimum[0]), int(minimum[1]))
+        # The window is asked for exactly its own declared minimum, which is the smallest size a person
+        # can reach by dragging its edge - so this is the worst case the application itself permits.
+        host.geometry(f"{declared_minimum[0]}x{declared_minimum[1]}")
+        host.update_idletasks()
+        host.update()
+        actual = (host.winfo_width(), host.winfo_height())
+        measured, problems = measure_every_tab(host, app, "at the declared minimum")
+        require(
+            not problems,
+            "content sits outside its tab at the smallest size this window allows:\n  "
+            + "\n  ".join(problems),
+        )
+        print(
+            f"measurement: window minimum declared {declared_minimum[0]}x{declared_minimum[1]}, "
+            f"achieved {actual[0]}x{actual[1]}, {measured} widget(s) measured"
+        )
+        _report_screenshot(host, "01-at-the-declared-minimum")
+
+    with results.step("K2 at the size the window opens with, nothing is drawn outside its tab"):
+        host.geometry("1120x760")
+        host.update_idletasks()
+        host.update()
+        measured, problems = measure_every_tab(host, app, "at the opening size")
+        require(
+            not problems,
+            "content sits outside its tab at the size the window opens with:\n  " + "\n  ".join(problems),
+        )
+        require(measured > 20, f"only {measured} widget(s) were on screen to measure at all")
+        _report_screenshot(host, "02-at-the-opening-size")
+        # One picture per tab, at the size the window opens with: what a person reviewing the layout
+        # would otherwise have to click through the window to see.
+        for index, (name, page) in enumerate(tab_pages(app), start=1):
+            show_tab(app, page)
+            safe = "".join(character if character.isalnum() else "-" for character in name).strip("-")
+            _report_screenshot(host, f"03-tab-{index:02d}-{safe.lower()}")
+
+    with results.step("K3 a larger window never pushes content outside its tab"):
+        # Grown by a size a person might drag to. A window manager may cap this (a small screen, a
+        # tiling WM, macOS's own limits), so what is asserted is the measurement, not the size asked
+        # for: whatever size the window ends up, its content is inside it.
+        host.geometry("1400x900")
+        host.update_idletasks()
+        host.update()
+        grown = (host.winfo_width(), host.winfo_height())
+        measured, problems = measure_every_tab(host, app, "grown")
+        require(
+            not problems,
+            "content sits outside its tab after the window was made larger:\n  " + "\n  ".join(problems),
+        )
+        print(f"measurement: window grown to {grown[0]}x{grown[1]}, {measured} widget(s) measured")
+        _report_screenshot(host, "04-grown")
+
+    with results.step("K4 the keyboard's focus order reaches the controls and stays in the window"):
+        for name, page in tab_pages(app):
+            show_tab(app, page)
+            interactive = [
+                widget for widget in measurable_widgets(page)
+                if widget.winfo_class() in _INTERACTIVE_CLASSES
+            ]
+            require(interactive, f"the '{name}' tab holds no control the keyboard can reach")
+            order = focus_order(host, interactive[0])
+            # The walk starts at the first control and must come back to it. Membership is decided by
+            # walking the widget tree rather than by comparing Tk path names, so real Tk and the test
+            # suite's stand-in are judged the same way.
+            here = [widget for widget in order if inside_window(widget, host)]
+            require(
+                len(here) >= 1,
+                f"the focus order of the '{name}' tab never reaches a widget of this window at all",
+            )
+            require(
+                len(order) >= 2,
+                f"the '{name}' tab's focus order closes after {len(order)} step(s), so only one control "
+                "can be reached by keyboard",
+            )
+            # The counts are printed rather than asserted as equalities: Tcl decides for itself which
+            # widgets take the focus (a list may be reachable, a read-only field may not), so a control
+            # that is missing from the order is something for the report to show a person, not something
+            # this check can call a defect on its own.
+            # The control the walk started from counts as reached: it is where the keyboard order was
+            # entered, so a walk that begins there cannot have missed it.
+            reachable = [widget for widget in interactive if widget in here or widget is interactive[0]]
+            print(
+                f"measurement: focus '{name}' -> {len(order)} stop(s) in the order, {len(here)} of them "
+                f"in this window, {len(reachable)}/{len(interactive)} interactive control(s) reached"
+            )
+
+    with results.step("K5 every interactive control carries visible text of its own or beside it"):
+        unlabelled = []
+        for name, page in tab_pages(app):
+            show_tab(app, page)
+            for widget in measurable_widgets(page):
+                klass = widget.winfo_class()
+                if klass not in _INTERACTIVE_CLASSES:
+                    continue
+                if klass in ("TButton", "Button", "TCheckbutton", "Checkbutton"):
+                    text = str(widget.cget("text") or "").strip()
+                    if not text:
+                        unlabelled.append(f"{name}: a {klass} with no text")
+                    continue
+                # An entry, a combobox or a list is labelled by something near it rather than by itself.
+                frame = getattr(widget, "master", None)
+                siblings = [frame] + ([parent for parent in descendants(frame)] if frame else [])
+                labelled = any(
+                    getattr(sibling, "winfo_class", None) is not None
+                    and sibling.winfo_class() in ("TLabel", "Label")
+                    and str(sibling.cget("text") or "").strip()
+                    for sibling in siblings
+                )
+                if not labelled:
+                    unlabelled.append(f"{name}: a {klass} with no label next to it")
+        require(
+            not unlabelled,
+            "a control a person is expected to use carries nothing to read:\n  " + "\n  ".join(unlabelled),
+        )
+        print(
+            "measurement: labelling checked on every tab; a control's own text or a label beside it was "
+            "found for each (whether the wording is clear is a person's judgement, not this check's)"
+        )
+
+    workspace.close_window(host, app)
+
+
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
 #: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
 #: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
@@ -3038,6 +3504,7 @@ WORKFLOWS = (
     ("H - follow-up reminders and next actions", workflow_h_follow_ups_and_actions),
     ("I - the schedule, paused and resumed", workflow_i_scheduler),
     ("J - data safety: backup and restore", workflow_j_data_safety),
+    ("K - layout, focus order and labelling, measured", workflow_k_layout_focus_labels),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
@@ -3112,12 +3579,20 @@ def main(argv=None) -> int:
     the test suite, whose command line is the test runner's, and reading it here would make a test run
     print a usage message instead of the workflows. The command-line entry point passes its own arguments.
     """
+    global SCREENSHOTS_FOLDER
+
     arguments = [] if argv is None else list(argv)
     stand_in_requested = "--stand-in-tk" in arguments
     if stand_in_requested:
         arguments.remove("--stand-in-tk")
+    if arguments and arguments[0] == "--screenshots":
+        if len(arguments) != 2:
+            print(f"usage: {Path(__file__).name} [--stand-in-tk] [--screenshots DIR]")
+            return EXIT_FAIL
+        SCREENSHOTS_FOLDER = Path(arguments[1]).expanduser().resolve()
+        arguments = []
     if arguments:
-        print(f"usage: {Path(__file__).name} [--stand-in-tk]")
+        print(f"usage: {Path(__file__).name} [--stand-in-tk] [--screenshots DIR]")
         return EXIT_FAIL
 
     print("AI Career Agent - desktop acceptance run")

@@ -480,8 +480,11 @@ class DisplayBackedWorkflowTests(unittest.TestCase):
         # The order is the run's own, and H sits before F because F releases the Tk root the run works
         # through: a workflow that needs a window has to come before the one that takes it away.
         names = [name for name, _workflow in acceptance.WORKFLOWS]
+        # K is the measured half of the layout, keyboard and labelling checks: unlike the workflows
+        # before it, it asserts nothing about the records and only reports numbers about the window, so
+        # it runs after them and before F for the same reason they do.
         self.assertEqual([name[0] for name in names],
-                         ["A", "B", "C", "D", "E", "G", "H", "I", "J", "F"])
+                         ["A", "B", "C", "D", "E", "G", "H", "I", "J", "K", "F"])
         for name, workflow in acceptance.WORKFLOWS:
             self.assertTrue(callable(workflow), f"{name} is not runnable")
             self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")

@@ -908,8 +908,15 @@ readable copy, and nothing temporary is left behind on success or failure; what 
 nothing was running, reported from the same status lines the tab already shows, with the overdue occurrence named
 separately as the one a worker will still claim; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 77 checks, and compares that
-number against the checks its own source declares so a check that stops running fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 82 checks, and compares that
+number against the checks its own source declares so a check that stops running fails the run. It also
+**measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
+the tab they are drawn in, how many text widgets were given less room than their text asked for; and for the
+keyboard: how many stops the focus order makes and how many of the tab's controls it reaches. Those are
+measurements, not judgements: whether a layout reads well, whether the tab order feels right and what a screen
+reader announces are a person's answers, and the report says so. Given `--screenshots DIR` and a capture tool,
+it writes one image per tab and per window size, which is what makes reviewing layout possible without opening
+the window yourself. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
 the confirmation - and every one of them is recorded and reported. On a machine with no display,
 `--stand-in-tk` runs the same workflows against the test suite's stand-in widget module for development: it
 prints DEVELOPMENT RUN, never prints a pass or a failure, and exits 2, and CI has a step that requires exactly

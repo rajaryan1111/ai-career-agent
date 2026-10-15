@@ -114,6 +114,24 @@ class TclOptionError(Exception):
     """Stands in for the ``_tkinter.TclError`` real Tk raises for an option a widget does not have."""
 
 
+#: The widget classes a person can put the keyboard into. Spelled once, because both the focus-order
+#: stub below and the acceptance harness's own focus check read the same list, and a class missing here
+#: would make a control invisible to a check about controls.
+INTERACTIVE_WIDGET_CLASSES = (
+    "TButton", "Button", "TEntry", "Entry", "TCombobox", "Combobox",
+    "TCheckbutton", "Checkbutton", "Text", "Treeview", "TNotebook",
+)
+
+
+def _stand_in_descendants(widget):
+    """Every widget under ``widget``, deepest last, in the order the tree holds them."""
+    found = []
+    for child in widget.winfo_children():
+        found.append(child)
+        found.extend(_stand_in_descendants(child))
+    return found
+
+
 class Widget:
     #: What real Tk answers for ``winfo_class()``. Every subclass names its own, so a test (or the
     #: acceptance harness) can find widgets the way a person sees them - "the button", "the entry" -
@@ -164,6 +182,53 @@ class Widget:
     def winfo_exists(self):
         return not self.destroyed
 
+    #: What a widget reports when asked for the size it would like to be. Real Tk measures the text and
+    #: the padding; this is a constant, which is the honest limit of a stub. These numbers exist so that
+    #: code which *measures* a window - the acceptance harness's layout checks - can be exercised on a
+    #: machine with no display, and such a run reports itself as a development run, not as evidence
+    #: about layout.
+    stand_in_requested_size = (120, 30)
+
+    def winfo_reqwidth(self):
+        return int(self.options.get("width") or self.stand_in_requested_size[0])
+
+    def winfo_reqheight(self):
+        return int(self.options.get("height") or self.stand_in_requested_size[1])
+
+    def winfo_width(self):
+        """The allocated width: this stub is laid out exactly as large as it asked to be."""
+        return self.winfo_reqwidth()
+
+    def winfo_height(self):
+        return self.winfo_reqheight()
+
+    def winfo_x(self):
+        return 0
+
+    def winfo_y(self):
+        return 0
+
+    def winfo_rootx(self):
+        """Where this widget sits on the screen: its parent's origin, since nothing here is offset."""
+        return self.master.winfo_rootx() + self.winfo_x() if isinstance(self.master, Widget) else 0
+
+    def winfo_rooty(self):
+        return self.master.winfo_rooty() + self.winfo_y() if isinstance(self.master, Widget) else 0
+
+    def winfo_ismapped(self):
+        """Real ``winfo ismapped``: a destroyed widget is not on the screen; nothing else is hidden."""
+        return not self.destroyed
+
+    def winfo_viewable(self):
+        return not self.destroyed
+
+    def winfo_screenwidth(self):
+        """The screen a stand-in run pretends to have; no window is created to have a real one."""
+        return 1280
+
+    def winfo_screenheight(self):
+        return 1024
+
     def update(self, *args, **kwargs):
         return None
 
@@ -183,7 +248,44 @@ class Widget:
         return "withdrawn" if getattr(self, "withdrawn", False) else "normal"
 
     def focus_set(self, *args, **kwargs):
+        """Record where the focus went, so code that reads it back can be exercised here.
+
+        Real Tk asks the window manager; this records the widget on the window that owns it, which is
+        what ``focus_get`` then answers. Nothing in the application reads focus, so this is additive:
+        it exists for the acceptance harness's focus checks, which cannot run against real Tk on a
+        machine with no display.
+        """
+        owner = self
+        while isinstance(owner.master, Widget):
+            owner = owner.master
+        owner.focused_widget = self
         return None
+
+    def focus_force(self, *args, **kwargs):
+        return self.focus_set()
+
+    def focus_get(self):
+        return getattr(self, "focused_widget", None)
+
+    def tk_focusNext(self):
+        """The next focusable widget after this one, in this stub's own tree order.
+
+        Tk computes the real order - skipping hidden and ``takefocus=0`` widgets, and honouring
+        bindings - and the stand-in does not model any of that. It answers with the next interactive
+        widget so the harness's focus-order check can run to completion on a machine with no display,
+        where the run reports itself as a development run rather than as evidence.
+        """
+        # The window this widget belongs to, which is what Tk's own focus order is computed within:
+        # climbing stops at a Toplevel rather than at the root of the whole stub, so a widget in one
+        # window can never be handed back as the next stop for a widget in another.
+        owner = self
+        while isinstance(getattr(owner, "master", None), Widget) and owner.winfo_class() != "Toplevel":
+            owner = owner.master
+        order = [widget for widget in _stand_in_descendants(owner)
+                 if widget.winfo_class() in INTERACTIVE_WIDGET_CLASSES]
+        if self in order:
+            return order[(order.index(self) + 1) % len(order)]
+        return order[0] if order else None
 
     def see(self, *args, **kwargs):
         return None

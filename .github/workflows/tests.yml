@@ -219,7 +219,10 @@ jobs:
       - name: Install a virtual display and Tkinter for the system interpreter
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb python3-tk
+          # x11-apps brings xwd and netpbm brings xwdtopnm/pnmtopng: together they are the smallest way
+          # to turn the virtual display into a PNG a person can look at, which is what the screenshots
+          # below are for. They are not needed by any check - a run without them still runs everything.
+          sudo apt-get install -y --no-install-recommends xvfb python3-tk x11-apps netpbm
       - name: Report the interpreter and the Tk that is now importable
         run: |
           set -euo pipefail
@@ -279,6 +282,7 @@ jobs:
         run: |
           set +e
           xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_acceptance.py \
+            --screenshots "${RUNNER_TEMP:-$HOME}/career-agent-screenshots" \
             > "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" 2>&1
           status=$?
           set -e
@@ -290,10 +294,13 @@ jobs:
           # Every workflow ran, and none of its checks failed. The script compares the checks it performed
           # against the number its own source declares, so a check that silently stopped running fails the
           # run rather than shrinking it - there is no count to keep in step here.
-          for workflow in A B C D E F G H I J; do
+          for workflow in A B C D E F G H I J K; do
             grep -q -- "--- workflow $workflow" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" \
               || { echo "workflow $workflow did not run"; exit 1; }
           done
+          # The measured numbers - widget counts, window sizes, focus stops, whether a screenshot was
+          # written - are what makes the layout evidence readable rather than only assertable.
+          grep -E '^measurement: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" | tail -40 || true
           if grep -qE '^\[ *fail *\]|^FAILED: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"; then
             echo "a check failed but the run reported PASS"; exit 1
           fi
@@ -330,13 +337,25 @@ jobs:
           grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
             "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
           python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
+      - name: Keep the screenshots this run took, for a person to review later
+        # A picture is for a person to look at, not evidence a program can judge: it is kept so that
+        # reviewing layout, clipping and wording does not require re-running a display-backed job. It
+        # never fails the build - a run with no capture tool available says so in its own notes.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-screenshots-${{ github.run_id }}
+          path: ${{ runner.temp }}/career-agent-screenshots
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Record what the acceptance workflows reported, step by step
         if: always()
         shell: bash
         run: |
           # One line per workflow and per check, plus the failures, so the acceptance evidence is
           # readable through the API on a restricted network as well as in the log.
-          grep -E '^(--- workflow |\[ *fail *\]|\[ ok \]|FAILED: |RESULT: |DEVELOPMENT RESULT:)' \
+          grep -E '^(--- workflow |\[ *fail *\]|\[ ok \]|FAILED: |RESULT: |DEVELOPMENT RESULT:|measurement: )' \
             "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" > "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" || true
           python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" --tail 24 --level notice
       - name: Annotate the first failures so they are readable outside the run
