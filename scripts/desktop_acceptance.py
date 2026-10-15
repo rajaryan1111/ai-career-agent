@@ -642,6 +642,9 @@ class Workspace:
         #: other two so that a day recorded here cannot be read as part of an export or import workflow,
         #: and so that the damaged-record checks below damage a database nothing else depends on.
         self.third_database = self.folder / "synthetic-third.sqlite3"
+        #: A fourth database for the schedule: the worker's tables are the worker's business, and a
+        #: paused task here must not be readable as part of any other workflow's results.
+        self.scheduler_database = self.folder / "synthetic-scheduler.sqlite3"
         self.root = None
         self.windows: list[tuple[object, object]] = []
         #: Recorded before anything opens: the application's own database location must come out of this
@@ -2440,8 +2443,6 @@ def workflow_h_follow_ups_and_actions(run: Run) -> None:
         require(listing_c in listed, f"the tab lost the reminders it can still show: {listed}")
 
     with results.step("H14 nothing here is recorded as an employer decision or as a career outcome"):
-        import re  # noqa: PLC0415 - only this check reads the recorded events
-
         from career_agent import analytics  # noqa: PLC0415
 
         for tracker in app.store.list_trackers():
@@ -2450,11 +2451,209 @@ def workflow_h_follow_ups_and_actions(run: Run) -> None:
         report = analytics.report_from_store(app.store, today=date.today())
         require(report.applications_recorded == 0,
                 f"{report.applications_recorded} application(s) are counted as sent by this workflow")
-        names = set(re.findall(r"event=([a-z_.]+)", event_lines(workspace.third_database)))
+        names = recorded_events(workspace.third_database)
         require("preparation.added" in names and "preparation.completed" in names,
                 f"the preparation events are missing from the log: {sorted(names)}")
         require(not any("confirm" in name for name in names),
                 f"a confirmation event was recorded by this workflow: {sorted(names)}")
+
+    workspace.close_window(host, app)
+
+
+# --------------------------------------------------------------------------------------------------
+# Workflow I - the schedule: what the window shows, what pausing does, and what it never starts
+# --------------------------------------------------------------------------------------------------
+def task_rows(app) -> list[tuple[str, tuple]]:
+    """Every row on the Scheduler tab in the order the tab built it: (row id, cell values)."""
+    return [(str(item), app.tasks_tree.item(item, "values"))
+            for item in app.tasks_tree.get_children()]
+
+
+def attempt_rows(app) -> list[tuple[str, tuple]]:
+    """Every row in the Scheduler tab's attempt list: (row id, cell values)."""
+    return [(str(item), app.task_runs_tree.item(item, "values"))
+            for item in app.task_runs_tree.get_children()]
+
+
+def select_task_row(app, task_id: str, root) -> None:
+    """Select a scheduled-task row, which is what that tab's own buttons act on."""
+    app.tasks_tree.selection_set(task_id)
+    root.update()
+    require(
+        list(app.tasks_tree.selection())[:1] == [task_id],
+        f"the scheduled task {task_id!r} is not selected",
+    )
+
+
+def label_text_in(parent) -> str:
+    """Everything the labels under ``parent`` say, joined: what the tab itself tells the person."""
+    said = []
+    for widget in find_widgets(parent, klass=LABEL):
+        try:
+            said.append(str(widget.cget("text")))
+        except Exception:  # noqa: BLE001 - a label with no readable text contributes nothing
+            continue
+    return "\n".join(line for line in said if line)
+
+
+def recorded_events(database) -> set[str]:
+    """The name of every event the application recorded in the log beside this database."""
+    import re  # noqa: PLC0415 - only the checks that read the log need it
+
+    return set(re.findall(r"event=([a-z_.]+)", event_lines(database)))
+
+
+def workflow_i_scheduler(run: Run) -> None:
+    """The Scheduler tab, driven through the window: the schedule, pausing, resuming, and no side effects.
+
+    The window is a control panel for the schedule; it is deliberately not the scheduler. Running a task
+    loop on the interface's thread would freeze the window, and closing the window would be closing a
+    worker mid-attempt - so the worker runs in its own process and the tab reads the same tables the
+    worker reads. What this workflow therefore checks is what the window *shows* and what its own writes
+    do: an empty schedule, the default tasks added once and kept the second time, a declined pause that
+    changes nothing, a real pause that keeps the definition and the history, the paused state surviving a
+    restart, a resume that schedules the next occurrence from now instead of replaying what was missed,
+    a task whose record has gone reported rather than acted on, and - the check that matters most - that
+    using this tab starts no worker, takes no lease and records no attempt of any kind.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415 - the next run is an instant
+
+    from career_agent.worker import worker_status  # noqa: PLC0415 - the same read the worker uses
+
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window(database=workspace.scheduler_database)
+
+    with results.step("I1 the schedule starts empty, and the window says nothing is running"):
+        require(task_rows(app) == [], f"the schedule is not empty to begin with: {task_rows(app)}")
+        require(attempt_rows(app) == [],
+                f"the attempt list is not empty to begin with: {attempt_rows(app)}")
+        summary = app.scheduler_summary.get()
+        require("No worker holds the lease" in summary,
+                f"the tab does not say that no worker is running: {summary!r}")
+        require("No task is scheduled to run." in summary,
+                f"the tab does not say that nothing is scheduled yet: {summary!r}")
+        require(worker_status(app.store).lease is None, "a lease exists before any worker was started")
+
+    with results.step("I2 the default tasks are added through the window, and adding them again keeps them"):
+        policy.reset()
+        press(app.scheduler_tab, "Add the default tasks", workspace.root)
+        require("Default tasks" in policy.titles(),
+                f"adding the defaults was not reported; dialogs raised: {policy.titles()}")
+        said = policy.said("Default tasks")
+        require("Created:" in said and "Left exactly as they were:" in said,
+                f"the dialog does not say what was created and what was left alone: {said!r}")
+        rows = task_rows(app)
+        require(bool(rows), "no task is listed after the defaults were added")
+        stored = app.store.list_scheduled_tasks()
+        require(len(stored) == len(rows), f"{len(stored)} task(s) are stored and {len(rows)} are listed")
+        for task in stored:
+            require(task.enabled and task.next_run_at is not None,
+                    f"the default task {task.task_id} is stored as enabled={task.enabled!r}, "
+                    f"next={task.next_run_at!r}")
+        policy.reset()
+        press(app.scheduler_tab, "Add the default tasks", workspace.root)
+        said_again = policy.said("Default tasks")
+        require("Created: nothing" in said_again,
+                f"adding the defaults twice does not say that nothing was created: {said_again!r}")
+        require(task_rows(app) == rows, "adding the defaults again changed the listed schedule")
+        require(app.store.list_scheduled_tasks() == stored,
+                "adding the defaults again rewrote a task that was already stored")
+
+    with results.step("I3 pausing asks first, and a declined confirmation changes nothing"):
+        task_id = str(task_rows(app)[0][0])
+        before = app.store.get_scheduled_task(task_id)
+        require(before is not None, f"the listed task {task_id!r} is not stored")
+        select_task_row(app, task_id, workspace.root)
+        policy.reset()
+        policy.answers["Pause this task"] = False
+        press(app.scheduler_tab, "Enable or disable the selected task", workspace.root)
+        require("Pause cancelled; nothing was changed." in app.status.get(),
+                f"the window says {app.status.get()!r} after a declined pause")
+        require(app.store.get_scheduled_task(task_id).enabled is True,
+                "a declined pause disabled the task anyway")
+
+    with results.step("I4 a real pause keeps the task, its times and its history, and says it is paused"):
+        select_task_row(app, task_id, workspace.root)
+        policy.reset()
+        policy.answers["Pause this task"] = True
+        press(app.scheduler_tab, "Enable or disable the selected task", workspace.root)
+        paused = app.store.get_scheduled_task(task_id)
+        require(paused.enabled is False, f"the task is stored as enabled={paused.enabled!r} after pausing")
+        require("is paused; no occurrence will run until it is resumed" in app.status.get(),
+                f"the window says {app.status.get()!r} after pausing")
+        require((paused.name, paused.kind, paused.times, paused.timezone)
+                == (before.name, before.kind, before.times, before.timezone),
+                "pausing rewrote the task's own definition")
+        require((paused.last_outcome, paused.last_run_at, paused.consecutive_failures)
+                == (before.last_outcome, before.last_run_at, before.consecutive_failures),
+                "pausing changed the task's history")
+        row = dict(task_rows(app))[task_id]
+        require(str(row[5]) == "paused", f"the paused row's next-run cell reads {row[5]!r}")
+        require(attempt_rows(app) == [], "pausing recorded an attempt")
+
+    with results.step("I5 the paused task is still paused after the window is closed and opened again"):
+        rows_before = task_rows(app)
+        workspace.close_window(host, app)
+        host, app = workspace.open_window(database=workspace.scheduler_database)
+        press(app.scheduler_tab, "Refresh", workspace.root)
+        require(task_rows(app) == rows_before, "the schedule changed across a restart")
+        require(str(dict(task_rows(app))[task_id][5]) == "paused",
+                "the task is no longer shown as paused after the window was reopened")
+        stored = app.store.get_scheduled_task(task_id)
+        require(stored is not None and stored.enabled is False,
+                f"the task came back enabled after the window was reopened: {stored!r}")
+
+    with results.step("I6 resuming schedules the next occurrence from now and replays nothing"):
+        select_task_row(app, task_id, workspace.root)
+        policy.reset()
+        press(app.scheduler_tab, "Enable or disable the selected task", workspace.root)
+        resumed = app.store.get_scheduled_task(task_id)
+        require(resumed.enabled is True, f"the task is stored as enabled={resumed.enabled!r} after resuming")
+        require("is enabled; its next run is" in app.status.get(),
+                f"the window says {app.status.get()!r} after resuming")
+        moment = datetime.now(timezone.utc)
+        require(resumed.next_run_at is not None and resumed.next_run_at > moment,
+                f"resuming left the next run at {resumed.next_run_at!r}, which is not ahead of "
+                f"{moment.isoformat()}")
+        require(app.store.list_task_runs(task_id=task_id) == (),
+                "resuming replayed an occurrence that was missed while the task was paused")
+        require(str(dict(task_rows(app))[task_id][5]) != "paused",
+                "the resumed row still says the task is paused")
+
+    with results.step("I7 a task whose record is gone is reported, and nothing else is changed"):
+        others = [row_id for row_id, _values in task_rows(app) if row_id != task_id]
+        require(bool(others), "the schedule holds one task, so this check cannot tell two apart")
+        victim = others[0]
+        change_the_synthetic_database(workspace.scheduler_database, [
+            ("DELETE FROM scheduled_task WHERE task_id = ?", (victim,)),
+        ])
+        select_task_row(app, victim, workspace.root)
+        policy.reset()
+        press(app.scheduler_tab, "Enable or disable the selected task", workspace.root)
+        require("no longer in the schedule; nothing was changed" in app.status.get(),
+                f"the window says {app.status.get()!r} for a task that is gone")
+        require(all(row_id != victim for row_id, _values in task_rows(app)),
+                "the task that was removed behind the window is still listed")
+        require(app.store.get_scheduled_task(victim) is None, "the removed task was written back")
+        require(app.store.get_scheduled_task(task_id).enabled is True,
+                "another task was changed instead of the one selected")
+
+    with results.step("I8 using this tab starts no worker, takes no lease and records no attempt"):
+        require(worker_status(app.store).lease is None, "the window took the worker's lease")
+        require(app.store.get_worker_lease() is None, "a lease is stored after the tab was used")
+        require(app.store.list_task_runs() == (), "the window recorded a task attempt")
+        require(attempt_rows(app) == [], "the attempt list is not empty after using the tab")
+        names = recorded_events(workspace.scheduler_database)
+        require(not any(name.startswith("task.run_") or name.startswith("worker.") for name in names),
+                f"a task run or a worker lease was recorded by this workflow: {sorted(names)}")
+        require("task.scheduled" in names,
+                f"the schedule write is missing from the recorded events: {sorted(names)}")
+        said = label_text_in(app.scheduler_tab)
+        require("python -m career_agent --worker" in said,
+                "the tab does not say which command runs the schedule")
+        require("gate is closed" in said and "fetches nothing" in said,
+                "the tab does not say that the source-quality gate is closed and that a scheduled "
+                "discovery run fetches nothing")
 
     workspace.close_window(host, app)
 
@@ -2510,7 +2709,7 @@ def workflow_f_cleanup(run: Run) -> None:
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
 #: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
 #: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
-#: before it - G and H included, which is why the letters are not alphabetical here.
+#: before it - G, H and I included, which is why the letters are not alphabetical here.
 WORKFLOWS = (
     ("A - candidate profile persistence", workflow_a_profile),
     ("B - the two job URLs", workflow_b_job_urls),
@@ -2519,6 +2718,7 @@ WORKFLOWS = (
     ("E - export, import and refusal", workflow_e_export_import),
     ("G - work history and study records", workflow_g_history_records),
     ("H - follow-up reminders and next actions", workflow_h_follow_ups_and_actions),
+    ("I - the schedule, paused and resumed", workflow_i_scheduler),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
@@ -2680,7 +2880,11 @@ def main(argv=None) -> int:
         "and cleared on an application nothing else moved, with overdue, due-today and later days read "
         "back in words from fixed days, the list read back after the window was closed and reopened, a "
         "preparation item added through its own dialog and ticked off, and reminders whose records had "
-        "gone reported instead of acted on; and every window, connection and temporary file was "
+        "gone reported instead of acted on; the default schedule added once and kept the second time, a "
+        "paused task keeping its times and its history across a restart, a resume scheduling the next "
+        "occurrence instead of replaying what was missed, a task whose record had gone reported rather "
+        "than acted on, and no worker, lease or attempt started by any of it; and every window, "
+        "connection and temporary file was "
         "released. The dialogs a person would answer - a file chooser and the confirmations - were "
         "answered by the run and are listed above. This is not the manual checklist: no check has judged "
         "layout, wording, focus order, accessibility, or how any of it feels to use."
