@@ -18,9 +18,10 @@ Four properties are deliberate.
   read-only paths return to the main loop.
 * **The person's own database is never opened or touched.** The window is constructed against a synthetic
   database in a fresh temporary folder; the path the window is bound to is checked to be inside that
-  folder; the default database's state is recorded before and after and must be identical; and the
-  temporary folder is deleted at the end - which, on the platforms where an open file cannot be deleted,
-  is also the proof that the window released its connection.
+  folder; the default database's state is recorded before and after - without resolving that location in
+  a way that would create its folder - and must be identical; and the temporary folder is deleted at the
+  end, which, on the platforms where an open file cannot be deleted, is also the proof that the window
+  released its connection.
 * **A failure is a failure.** Every check is independent and any exception, including one from Tk itself,
   is reported as a failed check with its traceback rather than being swallowed.
 
@@ -205,15 +206,24 @@ def screen_description(root) -> str:
         return size
 
 
-def default_database_state() -> tuple[bool, int, int] | None:
+def default_database_state(*, environ=None, home=None, system=None) -> tuple[bool, int, int] | None:
     """The size and modification time of the database this application would open on its own.
+
+    Resolved with :func:`career_agent.config.resolve_settings`, which touches no directory: asking where
+    the person's database is must never be the thing that creates it. The application's own
+    ``database_path_for_run`` does create that folder, deliberately, on a first run - so it is the wrong
+    function to ask this question with, and asking it here would make a check that is supposed to leave
+    no trace leave one.
 
     ``None`` in place of a state means the location could not be resolved at all, which is reported as
     itself rather than being treated as "unchanged".
     """
-    from career_agent.config import database_path_for_run  # noqa: PLC0415 - kept out of import cost
+    from career_agent.config import resolve_settings  # noqa: PLC0415 - kept out of import cost
 
-    path = Path(database_path_for_run(None))
+    try:
+        path = Path(resolve_settings(environ=environ, home=home, system=system).database_path)
+    except Exception:  # noqa: BLE001 - an unresolvable location is itself the answer
+        return None
     if not path.exists():
         return False, 0, 0
     information = path.stat()
@@ -355,10 +365,16 @@ def main() -> int:
             require(not temporary.exists(), "the temporary folder survived the run")
 
         with results.step("the person's own database was not created, opened or modified"):
-            require(
-                default_database_state() == default_database_before,
-                "the default database changed during the run",
-            )
+            if default_database_before is None:
+                print(
+                    "[skip] the person's own database could not be resolved on this machine, so whether "
+                    "this run touched it was not checked"
+                )
+            else:
+                require(
+                    default_database_state() == default_database_before,
+                    "the database this application opens on its own changed during the run",
+                )
     finally:
         # The cleanup is also attempted on the way out of an unexpected error: a smoke test that leaves a
         # window or a folder behind is not repeatable, and a repeatable entry point is the whole point.

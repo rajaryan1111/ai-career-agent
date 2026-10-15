@@ -155,17 +155,50 @@ jobs:
           fi
       - name: Run the desktop smoke test against the virtual display
         run: |
-          set -euo pipefail
-          output="$(xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_smoke_test.py 2>&1)"
-          echo "$output"
-          grep -q "RESULT: PASS" <<< "$output" || { echo "the smoke test did not pass under a real display"; exit 1; }
+          set +e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_smoke_test.py \
+            > "${RUNNER_TEMP:-$HOME}/ci-notes.txt" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          test "$status" -eq 0 \
+            || { echo "the smoke test did not pass under a real display (exit $status)"; exit 1; }
+          grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
       - name: Confirm the smoke test left no window, database or temporary folder behind
         run: |
           set -euo pipefail
           test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-desktop-smoke-*' -print -quit)" \
             || { echo "a disposable folder survived the smoke run"; exit 1; }
-          test ! -e "$HOME/.local/share/ai-career-agent" \
-            || { echo "the smoke run created the per-user data folder"; exit 1; }
+          # Ask the application where it would keep its own files on this system rather than guessing
+          # the folder: the point of the check is that the run left nothing there, and resolving that
+          # path touches nothing.
+          person_database="$(python3 -c "from career_agent.config import resolve_settings; print(resolve_settings().database_path)")"
+          echo "the person's own database would be $person_database"
+          test ! -e "$person_database" \
+            || { echo "the smoke run created $person_database"; exit 1; }
+          test ! -e "$(dirname "$person_database")" \
+            || { echo "the smoke run created the per-user folder $(dirname "$person_database")"; exit 1; }
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These three steps turn what the steps above
+      # recorded into annotations, which the API does return - so the failing test or the failed smoke
+      # check stays readable from outside a browser. Two slices because a step may carry at most ten
+      # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate the next failures, if the first group did not reach them
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
 
   # The optional extra is the difference between a résumé PDF being readable and not, and a "skipped"
   # line is exactly the kind of green that hides a missing capability. This job proves both directions on
@@ -186,6 +219,7 @@ jobs:
           set -euo pipefail
           python -m venv bare
           output="$(bare/bin/python -m unittest discover -s tests -p "test_resume.py" 2>&1)"
+          printf '%s\n' "$output" >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
           echo "$output" | tail -3
           grep -q "skipped=" <<< "$output" || { echo "without pypdf the PDF cases did not skip"; exit 1; }
       - name: With the extra installed, nothing may skip
@@ -195,8 +229,30 @@ jobs:
           python -m pip install --quiet ".[pdf]"
           python -c "import pypdf; print('pypdf', pypdf.__version__)"
           output="$(python -m unittest discover -s tests -p "test_resume.py" -v 2>&1)"
+          printf '%s\n' "$output" >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
           echo "$output" | tail -6
           grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These three steps turn what the steps above
+      # recorded into annotations, which the API does return - so the failing test or the failed smoke
+      # check stays readable from outside a browser. Two slices because a step may carry at most ten
+      # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate the next failures, if the first group did not reach them
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
 
   # The suite is the same everywhere; the operating system is not. These legs run the suite and the
   # desktop smoke test on the two platforms the metadata claims besides Linux, and exercise the installed
@@ -241,7 +297,14 @@ jobs:
               print("tkinter: Tk", tkinter.TkVersion, "Tcl", tkinter.TclVersion)
           PY
       - name: Run the standard-library test suite on this platform
-        run: python -m unittest discover -s tests -v
+        run: |
+          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          set +e
+          python -m unittest discover -s tests -v > "$notes" 2>&1
+          status=$?
+          set -e
+          tail -25 "$notes"
+          exit "$status"
       - name: Compile all Python modules
         run: python -m compileall -q career_agent scripts tests
       - name: Audit research CSV integrity
@@ -405,8 +468,9 @@ jobs:
           "$VENV_BIN/career-agent" --integration-status | grep -q "Integration state: nothing is enabled."
       - name: Tkinter availability and a minimal Tk widget lifecycle on this platform
         run: |
+          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
           set +e
-          python - <<'PY'
+          python - > "$notes" 2>&1 <<'PY'
           import sys
 
           try:
@@ -434,6 +498,7 @@ jobs:
           PY
           status=$?
           set -e
+          cat "$notes" | tail -3
           if [ "$status" -eq 2 ]; then
             echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)"
           elif [ "$status" -ne 0 ]; then
@@ -441,10 +506,13 @@ jobs:
           fi
       - name: Desktop smoke test (the real window, or an honest BLOCKED)
         run: |
+          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
           set +e
-          python scripts/desktop_smoke_test.py
+          python scripts/desktop_smoke_test.py > "$notes.smoke" 2>&1
           status=$?
           set -e
+          cat "$notes.smoke" >> "$notes"
+          tail -5 "$notes.smoke"
           if [ "$status" -eq 0 ]; then
             echo "the desktop smoke test passed on this runner"
           elif [ "$status" -eq 2 ]; then
@@ -456,3 +524,23 @@ jobs:
             echo "the desktop smoke test failed on this runner"
             exit "$status"
           fi
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a failed
+      # step as "Process completed with exit code 1". These three steps turn what the steps above recorded
+      # into annotations, which the API does return, so a red leg on a platform this checkout cannot run
+      # locally still says which test failed and why.
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate the next failures, if the first group did not reach them
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice

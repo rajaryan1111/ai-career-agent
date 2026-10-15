@@ -20,6 +20,7 @@ import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -184,6 +185,50 @@ class ExpectationsMatchTheWindowTests(unittest.TestCase):
         self.assertIn("RESULT: PASS", workflow)
         self.assertEqual(smoke.EXIT_PASS, 0)
         self.assertEqual(smoke.EXIT_BLOCKED, 2)
+
+
+class DefaultDatabaseStateTests(unittest.TestCase):
+    """Asking where the person's database is must not be the thing that creates it.
+
+    ``career_agent.config.database_path_for_run`` *does* create that folder, deliberately, on a first run.
+    It is therefore the wrong function for a check that is supposed to leave no trace - and this script
+    used it until a CI run made the difference visible: the smoke test is expected to leave the per-user
+    application folder absent, and it could not, because merely asking for the default database's state
+    created it.
+    """
+
+    def resolve(self, home: Path) -> Path:
+        from career_agent.config import resolve_settings
+
+        return resolve_settings(environ={}, home=home, system="linux").database_path
+
+    def test_resolving_the_default_database_creates_nothing(self):
+        with TemporaryDirectory() as folder:
+            home = Path(folder) / "home"
+            home.mkdir()
+            self.assertEqual(smoke.default_database_state(environ={}, home=home, system="linux"),
+                             (False, 0, 0))
+            self.assertEqual([entry.name for entry in home.iterdir()], [],
+                             "resolving the default database location created a folder or a file")
+
+    def test_a_database_that_is_there_is_reported_by_size_and_modification_time(self):
+        with TemporaryDirectory() as folder:
+            home = Path(folder) / "home"
+            home.mkdir()
+            database = self.resolve(home)
+            database.parent.mkdir(parents=True)
+            database.write_bytes(b"synthetic")
+            exists, size, modified = smoke.default_database_state(environ={}, home=home, system="linux")
+            self.assertTrue(exists)
+            self.assertEqual(size, len(b"synthetic"))
+            self.assertGreater(modified, 0)
+
+    def test_a_location_that_cannot_be_resolved_at_all_is_reported_as_unknown(self):
+        """Resolution is purely computational, so this branch needs a failure to reach - and if it is
+        reached, "unknown" must not be mistaken for "unchanged"."""
+        with mock.patch("career_agent.config.resolve_settings",
+                        side_effect=RuntimeError("no home is known for this account")):
+            self.assertIsNone(smoke.default_database_state(environ={}, system="linux"))
 
 
 class FakeWidget:
