@@ -220,3 +220,41 @@ Separate the desktop experience from the optional always-on execution worker. Th
 ### 12.4 Production readiness
 
 Require schema migrations, backup/restore and export/delete flows, secure secret storage, structured redacted logs, supported-platform packaging and update strategy, adapter health/version tracking, deterministic tests plus integration tests, and pilot evidence. Each source's discovery permission and submission permission are distinct. A supported adapter must have current permission evidence, documented limitations, fixtures, error handling, and a regression path. No feature is production-ready solely because a happy-path demo succeeds.
+
+---
+
+## Target Architecture Addendum — Autonomous Career Operations (2026-10-16)
+
+### Architectural objective
+Evolve the existing local-first desktop alpha into a policy-driven career agent while reusing the current profile, importer, SQLite store, activity history, backup/restore and fail-closed source gates. Inspect current modules and migrations before adding abstractions; do not create parallel stores, schedulers, ledgers or importers without proving existing components are insufficient.
+
+### Logical components
+- **Profile & Resume Intelligence:** parsers, normalized profile facts, fact provenance, confidence/uncertainty, profile versioning and missing-field onboarding.
+- **Career Policy Engine:** target-role taxonomy, location/work preferences, eligibility constraints, exclusions, per-source capabilities, global action authorization, limits and stop conditions.
+- **Discovery Scheduler:** timezone-aware twice-daily runs, per-source jobs, run history, bounded retries, cancellation, next-run visibility and pause/stop control.
+- **Source Adapters:** independently assessed adapters for permitted public feeds, official company career pages, supported ATS APIs and platform-approved workflows. Each declares capabilities, permission/terms review, freshness, rate limits, authentication needs and evidence quality.
+- **Job Normalization & Matching:** canonical job identity, duplicate clustering, stale/expired detection, explainable matching, eligibility assessment and evidence-backed fit.
+- **Application Orchestrator:** deterministic state machine, tailored artifact versioning, required-answer validation, source-specific execution, idempotency keys and reconciliation of uncertain outcomes.
+- **Private Contact & Outreach Service:** CSV import/review, provenance, email normalization, conflict queue, suppression/opt-out, campaign policy, contact-level idempotency, authorized mail provider and delivery/bounce state.
+- **Application/Communication Ledger:** durable activity events and current projections; persist source evidence, timestamps, external IDs, artifacts, attempts and final/unknown states.
+- **Inbox/Reconciliation Service:** only with separately authorized mailbox access; associate actual replies with contacts/applications and preserve message references.
+- **Notification & Reporting Service:** run summaries, failures, responses, deadlines, follow-up queue and configurable daily/weekly reporting.
+- **Integration & Secrets Boundary:** least-privilege OAuth/API credentials or supported local credential mechanisms; no plaintext passwords or committed tokens.
+- **Safety/Policy Gate:** centralized decision before any network, email or submission side effect; default deny when permissions, source support, required facts or outcome confidence are insufficient.
+
+### State and execution invariants
+1. Discovery, preparation, sending and submission are separate capabilities and separate gates.
+2. A discoverable source does not imply automated submission is supported.
+3. External side effects must have persisted intent and policy evaluation; completion is recorded only after evidence is observed.
+4. Use stable deduplication keys for jobs, applications, contacts and outreach campaigns. Never blindly retry an ambiguous external submission.
+5. Preserve a durable submission-unknown state and reconcile before retrying.
+6. Preserve suppression/opt-out history across re-imports and migrations.
+7. Record decisions and transitions with timestamps, evidence references, results and reasons; redact secrets and contact details from diagnostics.
+8. Real external actions are never performed in tests.
+
+### Implementation constraints
+- Preserve the existing schema migration contract and backup/restore guarantees.
+- Reuse the current SQLite schema/store where possible; introduce migrations only after inspection and migration/restore tests.
+- Keep source quality gates disabled until the source is individually assessed, permitted and tested.
+- Respect platform terms, rate limits, authentication and human-verification requirements. No CAPTCHA/OTP bypass, anti-bot evasion or prohibited scraping.
+- Support one-time global authorization for routine eligible actions, with revocation, limits, pause and stop-all.
