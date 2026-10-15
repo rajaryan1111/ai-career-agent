@@ -190,9 +190,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
-            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -253,9 +253,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
-            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -633,9 +633,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
-            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
