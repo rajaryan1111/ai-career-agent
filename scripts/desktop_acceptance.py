@@ -1331,6 +1331,18 @@ def workflow_e_export_import(run: Run) -> None:
             f"Exported {len(stored)} jobs" in app.status.get(),
             f"the status line says {app.status.get()!r} for {len(stored)} stored listing(s)",
         )
+        # The window tells the person what kind of file it has just made, and this is the step that says
+        # the warning exists: a chosen file that may hold personal data must come with that said out loud.
+        require(
+            "Export complete" in policy.titles(),
+            f"no confirmation was shown after the export; dialogs: {policy.titles()}",
+        )
+        warning = policy.said("Export complete")
+        for phrase in ("personal data", "owner-only", "private"):
+            require(
+                phrase in warning.lower(),
+                f"the export confirmation does not mention {phrase!r}: {warning!r}",
+            )
         document = json.loads(export_path.read_text(encoding="utf-8"))
         require("format_version" in document, "the export carries no format version")
         require(
@@ -1349,6 +1361,27 @@ def workflow_e_export_import(run: Run) -> None:
             f"the exported listing's application URL is {record.get('employer_apply_url')!r}",
         )
         require(document.get("profile"), "the export carries no profile")
+        from career_agent.importer import EXPORT_FORMAT_VERSION  # noqa: PLC0415
+
+        require(
+            document.get("format_version") == EXPORT_FORMAT_VERSION,
+            f"the export declares format version {document.get('format_version')!r}",
+        )
+        # The person's own history travels in the file too, at the top level: this run added a role and a
+        # qualification through the window in workflow A, so a file that dropped them would be visible here.
+        stored_work = app.store.list_work_history()
+        stored_study = app.store.list_education()
+        require(stored_work and stored_study, "the earlier workflows added no history to this database")
+        require(
+            {entry.get("employer") for entry in document.get("work_history", [])}
+            == {entry.employer for entry in stored_work},
+            "the exported work history is not the stored one",
+        )
+        require(
+            len(document.get("education", [])) == len(stored_study),
+            f"the export holds {len(document.get('education', []))} education record(s), "
+            f"the database holds {len(stored_study)}",
+        )
         # The application record travels with the listing, and what travels is the *stored* record - which
         # earlier workflows have advanced, so the check is that the file agrees with the database rather
         # than that the status is any particular value. An export that dropped it, or wrote a status of its
@@ -1510,6 +1543,36 @@ def workflow_e_export_import(run: Run) -> None:
             f"the repeated import reports {app5.status.get()!r}",
         )
         workspace.close_window(host5, app5)
+
+    with results.step("E9 declining the import plan changes nothing at all"):
+        host6, app6 = workspace.open_window(database=workspace.second_database)
+        before_digest = file_digest(workspace.second_database)
+        before_jobs = [job.listing_id for job in app6.store.list_jobs()]
+        policy.reset()
+        policy.files.append(str(export_path))
+        # The one answer this run gives differently: a person declining the plan they were shown.
+        policy.answers["Import this file?"] = False
+        try:
+            press(app6.data_tab, "Import an exported file (JSON)", workspace.root)
+        finally:
+            policy.answers.pop("Import this file?", None)
+        require(
+            "Import this file?" in policy.titles(),
+            f"the plan was not shown before anything was written; dialogs: {policy.titles()}",
+        )
+        require(
+            "cancel" in app6.status.get().lower(),
+            f"declining the import reports {app6.status.get()!r}",
+        )
+        require(
+            [job.listing_id for job in app6.store.list_jobs()] == before_jobs,
+            "declining the import changed the stored listings",
+        )
+        workspace.close_window(host6, app6)
+        require(
+            file_digest(workspace.second_database) == before_digest and before_digest != "missing",
+            "declining the import still wrote to the database file",
+        )
 
     with results.step("E7 a document with a damaged record imports the good part and names the rest"):
         host4, app4 = workspace.open_window(database=workspace.second_database)
