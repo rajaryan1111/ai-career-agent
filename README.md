@@ -844,9 +844,11 @@ no lease taken and no attempt recorded; data safety, where a backup is written t
 before success is reported, an existing file is never overwritten, a cancelled chooser writes nothing, a
 malformed, foreign, truncated or too-new file is refused with the live database unchanged, a declined restore
 changes nothing, a confirmed restore brings the backed-up records back while keeping the previous database as a
-readable copy, and nothing temporary is left behind on success or failure; and cleanup that releases every
+readable copy, and nothing temporary is left behind on success or failure; what the schedule walked past while
+nothing was running, reported from the same status lines the tab already shows, with the overdue occurrence named
+separately as the one a worker will still claim; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 76 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 77 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
 the confirmation - and every one of them is recorded and reported. On a machine with no display,
 `--stand-in-tk` runs the same workflows against the test suite's stand-in widget module for development: it
@@ -873,7 +875,9 @@ remain outstanding, and every one of their statuses is in
 is the record, with one line per step and its result. How to get to a state where those steps can be run, what
 to capture for each area, and where to write the result is
 [the human desktop acceptance handoff](research/human-desktop-acceptance-handoff-2026-10-16.md); the status of
-each delivery phase, with the evidence beside it, is the table in [phases.md](phases.md).
+each delivery phase, with the evidence beside it, is the table in [phases.md](phases.md). Which of the ~50
+research artefacts answers what, and which of them are current guidance rather than dated evidence, is
+[the research index](research/README.md).
 
 ## Packaging status
 

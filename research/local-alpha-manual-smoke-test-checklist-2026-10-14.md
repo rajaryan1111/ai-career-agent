@@ -25,6 +25,16 @@ first time. It is fixed (`480dca1`) with a regression test at the handler level,
 display-backed proof.
 
 **Update, 2026-10-15 (later the same day):** the numbered steps' verdicts are unchanged — 22 PASS, 76 BLOCKED, 0 FAIL — and **no box has been ticked**. What is new is 14 steps whose *functional* claim is now checked automatically, through the real window, on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26; CPython 3.10–3.13): each of those steps now carries an "Automated coverage" line naming the checks, the run and the commit. Nothing about layout, wording, focus order, accessibility, mouse-driven use or native feel is covered by those checks, which is what the remaining BLOCKED verdicts are about; see "Automated coverage of numbered steps" below.  
+**Update, 2026-10-16 (later the same day: one new check, no verdict changed):** the verdicts are unchanged —
+22 PASS, 76 BLOCKED, 0 FAIL, no box ticked — and the harness gained **one check inside an existing workflow**
+rather than a new workflow: `scripts/desktop_acceptance.py` now declares **77 checks**, and workflow I gained
+I9, which adds a task whose schedule nobody ever ran and requires the **Background tasks** tab's summary to
+name what the schedule walked past while nothing was running — while starting no worker, taking no lease and
+recording no attempt. Steps 1–I8 keep their numbers and their meaning, so every coverage line below that
+names a step still names the same check. The behaviour itself (``worker.missed_occurrences``, surfaced by
+``--worker-status`` and the tab's summary) is new in this increment, and it is a *report*: nothing catches up
+on a missed occurrence, which is why the numbered step 51's manual half stays BLOCKED.
+
 **Update, 2026-10-16 (coverage gaps closed, no verdict changed):** the verdicts are unchanged — 22 PASS,
 76 BLOCKED, 0 FAIL, no box ticked — and **no acceptance workflow was added or extended**: the milestone's
 harness stays at ten workflows and 76 checks. What changed is that five claims previously marked *partial* now
@@ -308,6 +318,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     due application and does not change any application's status.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the three tasks were seeded and read back with their times and zones.**
     → **Automated coverage (2026-10-15): I1–I2 and I8 (the schedule starts empty with the tab saying nothing is scheduled and no worker holds the lease; the defaults are added through the tab, created, enabled, with a next run, and adding them again creates nothing and leaves the stored tasks untouched; using the tab takes no lease, records no attempt and writes no `task.run_*` or `worker.*` event). The three tasks' names, times and timezone are asserted at two other levels: `tests/test_handlers.py::DefaultTaskTests::test_the_defaults_are_the_product_cadence_and_a_daily_backup` (all three ids in order, `00:00, 12:00`, `23:30`, the digest cadence, and every task in `Asia/Kolkata`) and `tests/test_desktop_handlers.py::SchedulerTabTests::test_the_tab_lists_the_tasks_and_says_no_worker_holds_the_lease` (the cells the tab itself shows: `00:00, 12:00`, `23:30`, `09:00` and the zone for every row). The workflow drove its half on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
+    → **Automated coverage (2026-10-16): I9 (a task whose schedule nobody ran is added with a three-day-old clock, the tab is refreshed through its own button, and the summary is required to report the occurrences the schedule walked past while nothing was running, with the count the schedule holds, the sentence that nothing is catching up on them, and no lease, attempt or event recorded by the read) drove this through the real window on the five display-backed CI legs; the same read is asserted at the worker level (`tests/test_worker.py::StatusTests`, eight tests) and on the command line (`tests/test_cli_worker.py::WorkerStatusCommandTests::test_the_report_says_what_the_schedule_walked_past_while_nothing_ran`). The harness now declares 77 checks per leg; this line was added after the run that produced it is cited in the update above.**
 52. [ ] With the app open, pause `follow-up-digest` in the Background tasks tab, confirm it asks first and
     that pausing keeps its times and its history, then resume it and confirm the next run is scheduled.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; a task saved as paused read back paused with its times intact.**

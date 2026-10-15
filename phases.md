@@ -91,7 +91,7 @@ Exit criteria: reproducible evaluation results and explicit coverage gaps by occ
 ## Phase 5 — Background execution and scheduled discovery
 
 **Status: Partially complete** — the engine and both local surfaces exist and are tested; a deployed
-always-on worker and laptop-off operation are unimplemented and unverified (audited 2026-10-16).
+always-on worker and laptop-off operation are unimplemented and unverified; what was missed is now reported, not run (audited 2026-10-16).
 
 **Goal:** Deliver reliable 00:00/12:00 IST runs, including when the user's laptop is off.
 
@@ -161,12 +161,12 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 | Phase | Status | Evidence, and what is missing |
 | --- | --- | --- |
 | **0 — Product contract and risk controls** | **Complete** | `prd.md`, `architecture.md`, `rules.md`, `design.md`, `phases.md`, `memory.md` and `README.md` agree; no document says the implementation is unauthorized or research-only. |
-| **1 — Usable local desktop workflow** | **Partially complete** | The workflow exists and is exercised end to end automatically: ten workflows, 76 checks, on five display-backed CI legs (run `38784018777` at `eba6b4f2`, 12/12 jobs), over a 1652-test suite. The exit criterion "automated tests **and manual GUI smoke tests** cover critical workflows" is **half met**: no human has run the window on any platform, so all 76 window steps of the checklist stay BLOCKED (22 steps passed, all of them needing no window). |
+| **1 — Usable local desktop workflow** | **Partially complete** | The workflow exists and is exercised end to end automatically: ten workflows, 77 checks, on five display-backed CI legs (run `38784018777` at `eba6b4f2`, 12/12 jobs), over a 1665-test suite. The exit criterion "automated tests **and manual GUI smoke tests** cover critical workflows" is **half met**: no human has run the window on any platform, so all 76 window steps of the checklist stay BLOCKED (22 steps passed, all of them needing no window). |
 | **1B — Local resume import and profile review** | **Partially complete** | Implemented locally and text-only: `career_agent/resume.py` extracts from DOCX with the standard library and from PDF through the optional `pypdf`, proposes values with their evidence and confidence, and writes **only** the values the person selects and confirms. Automated coverage: the reader and proposal layers, encrypted/damaged/empty/oversized/textless refusals, a socket-blocked local-only run, and workflow H/I-independent handler tests for the review dialog. Missing: a human import review through the real window (checklist steps 24–31, all BLOCKED), a scanned-PDF path (OCR is deliberately out of scope, so a textless PDF is refused), and the 12 PDF-dependent tests skip in a checkout without the `pdf` extra. |
 | **2 — Product reliability and security foundation** | **Partially complete** | Schema migrations with a pre-update verified snapshot and honest refusals (newer/unrecognised files refused by type), backup/restore with validation, owner-only export and database permissions where the platform has them, redacted one-line event log, JSON export/import with a preview plan, packaging metadata and an installed-command rehearsal on three platforms. Missing: **encryption at rest**, a written release/upgrade policy beyond the README's data-compatibility section, a diagnostics/threat-model document, and per-platform launch artefacts. |
 | **3 — Source permission and job-quality validation** | **Blocked** | The gate is closed (`SOURCE_QUALITY_GATE_PASSED = False`) and `enabled_discovery_sources()` is empty, by design: the 50-record validation sample is not finished, and no source has current permission evidence. Nothing may be enabled from this repository state. |
 | **4 — Cross-industry matching validation** | **Not started** | Transparent matching exists (`career_agent/matching.py`) with synthetic fixtures across software/data, embedded/VLSI, mechanical, civil, design, a sparse record and a near-silent listing — but the phase's own thresholds (95% extraction accuracy, 80% top-10 precision against a human-reviewed standard) need human-reviewed, privacy-safe test sets across occupations. No such set exists and no threshold is claimed as met. |
-| **5 — Background execution and scheduled discovery** | **Partially complete (foreground and local only)** | The scheduler engine, the task/run/lease schema, crash recovery as *interrupted*, retries that never retry a refusal, the two built-in handlers and both surfaces (`--worker` in the foreground and the window's **Background tasks** tab) are implemented and tested, and the window's tab is now driven end to end by workflow I. **A deployed always-on worker, the missed-run report and therefore laptop-off operation remain unimplemented and unverified** — the phase's exit criterion is not met, and a foreground worker is not an always-on one. |
+| **5 — Background execution and scheduled discovery** | **Partially complete (foreground and local only)** | The scheduler engine, the task/run/lease schema, crash recovery as *interrupted*, retries that never retry a refusal, the two built-in handlers and both surfaces (`--worker` in the foreground and the window's **Background tasks** tab) are implemented and tested, and the window's tab is now driven end to end by workflow I. **A deployed always-on worker and therefore laptop-off operation remain unimplemented and unverified** — the phase's exit criterion is not met, and a foreground worker is not an always-on one. What the schedule walked past while nothing ran is now *reported* (`worker.missed_occurrences`, surfaced by `--worker-status` and the window's Background tasks tab, checked through the real window by workflow I9) — reporting a missed occurrence is not running it, and nothing catches up on one. |
 | **6 — Permitted platform adapters and application automation** | **Blocked** | The adapter framework is implemented (capabilities with submission refused by construction, bounded request budget, retries for transient outcomes only, per-record validation, cross-source dedup, honest run outcomes) and 0 adapters are built in, because no source has passed both reviews. Live discovery and any application automation stay disabled. |
 | **7 — Email, interview lifecycle and career intelligence** | **Partially complete** | Implemented without any integration: follow-up reminders and the next-action list, interview rounds with an outcome vocabulary that has no `passed`/`rejected`, typed draft/preview/perform contracts whose only implementation is a local mock that contacts nothing, calendar export and its preview, and activity-vs-outcome analytics that names denominators and refuses to print unobservable metrics. Missing: any real provider connection, confirmation/interview detection from real email, and résumé/cover-letter versions per application. |
 | **8 — Pilot, release and continuous maintenance** | **Not started** | No pilot user, no consenting participant, no release notes process, no packaging/signing/notarisation, and no human desktop acceptance on any platform. Nothing is deployed. |
@@ -175,7 +175,7 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 
 * **Implemented:** the domain core, storage, migrations and backup/restore, the Tk window with its tabs, the
   scheduler engine, the adapter framework, analytics, export/import, résumé reading, the event log.
-* **Automated-tested:** 1652 unit and integration tests plus the two scripted desktop entry points, green on
+* **Automated-tested:** 1665 unit and integration tests plus the two scripted desktop entry points, green on
   five display-backed legs and four interpreter versions — **and the checks are about records, widget cells and
   status lines, never about pixels, wording or focus**.
 * **Human-accepted:** **nothing.** No person has opened this window on any platform.
@@ -186,7 +186,7 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1652 tests passing locally (13 skipped in a checkout: 12 of them need the optional
+implemented, with 1665 tests passing locally (13 skipped in a checkout: 12 of them need the optional
 `pypdf` library and one runs only where the project is installed) and a
 Python 3.10–3.13 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
@@ -326,8 +326,12 @@ gate is closed and reaches no network. Both surfaces exist: `python -m career_ag
 winds the current attempt up, records it, and releases the lease), `--worker-status` reports it
 read-only, `--seed-tasks` adds the defaults without rewriting anything, and the window's **Background
 tasks** tab shows the same summary, the task list and the recent attempts and can pause or resume a task.
-The missed-run report, a deployed always-on worker, and therefore any claim of laptop-off operation
-remain outstanding.
+The status surfaces also report the occurrences the schedule walked past while nothing was running
+(``worker.missed_occurrences``): due instants that are occurrences of the task's own schedule, have no
+attempt row, owe no retry and are not the instant the next claim will take - because a finished attempt
+plans its next run from the moment it finished, those are occurrences nothing will come back to. Reporting
+one is not running it: a deployed always-on worker, missed-run *catch-up*, and therefore any claim of
+laptop-off operation remain outstanding, and the report says so in the window and on the command line.
 
 The work around an application is now recorded rather than remembered: schema 5 adds
 `application_preparation` (a checklist item with a kind, an optional day and the moment the person said it

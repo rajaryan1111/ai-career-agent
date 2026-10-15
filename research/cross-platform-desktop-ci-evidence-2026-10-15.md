@@ -560,3 +560,93 @@ this branch; the suite total moved 1651 → 1652.
 **What this does not establish.** This is a unit-level verdict about a test's own arrangement. It adds no
 window coverage: the checklist's window steps remain BLOCKED for the reasons in section 15, and no run in
 this file is a human acceptance.
+
+## 17. D19 — a database restored from itself (found by probing the command line, not by CI)
+
+**What was done.** A disposable synthetic database in `/tmp` was opened through the real entry point and
+each file-taking command was given a path a person might plausibly paste: an existing directory, a file that
+already exists, and — the case that mattered — **the database's own path**. Everything refused cleanly except
+that last one:
+
+```
+$ python -m career_agent --database /tmp/probe/live.db --restore-from /tmp/probe/live.db --yes
+Restored /tmp/probe/live.db
+from     /tmp/probe/live.db
+Contents: no profile · 0 jobs · 0 tracker records · 0 activity entries · schema version 6
+Previous database kept as a verified copy: /tmp/probe/live.db.backup-20261015T185238Z      (exit 0)
+```
+
+The recorded digest of the database changed (`f1583463…` → `99e03cfe…`), and a snapshot file that nobody
+asked for was left beside it. No data was lost — the file was replaced by a copy of itself — but three
+things were wrong: the command reported success for a no-op, it rewrote a file it had no reason to touch,
+and it wrote into the folder the database lives in. The most likely way to reach it is to paste back the
+path the product's own refusal advice suggests (`--restore-from "<backup file>"`), which is exactly what a
+person does after reading a start-up failure message.
+
+**Classification: product defect**, in the data-safety path, found by probing rather than by reading.
+
+**The smallest correct fix.** `career_agent/backup.py` compares the chosen file with the live database
+*before* validating or staging anything, and refuses with
+
+```
+REFUSED: /tmp/probe/live.db is the live database itself, so there is nothing to restore from it and
+nothing was changed. Choose a backup file written by this application.
+```
+
+The comparison uses device and inode (`os.path.samefile`), so a hard link and a symlinked folder are caught
+as well as the same path spelled twice, and falls back to comparing resolved paths for the cases the
+platform will not stat. A real backup whose *contents* happen to match is still restored — the refusal is
+about the same file, not about equal data.
+
+**Regression tests (both fail before the fix, both pass after).**
+`tests/test_backup.py::RestoreTests::test_a_database_is_never_restored_from_itself` covers the same path, a
+differently spelled path and a hard link, and requires the database to be byte-identical, no snapshot beside
+it and no staging file left behind; before the fix it fails with `BackupError not raised` (three subtests
+behind one `subTest` loop). `tests/test_cli_backup_restore.py::
+RestoreCommandTests::test_the_database_is_refused_as_its_own_backup_on_the_command_line` pins the
+user-facing half — exit code 2, the refusal on stderr, `Restored` absent from stdout, bytes unchanged — and
+fails before the fix with `AssertionError: 0 != 2`. `test_a_restore_from_a_copy_of_the_database_still_works`
+is the guard against over-refusing. Fix and tests are in commit `a29d2d4`.
+
+**What this does not establish.** The same-file case is refused, not "handled": a person who really does
+want to re-install their own database from a copy of it must point at that copy, which is the intended path.
+Nothing here says anything about restores on Windows (the legs run, but no check replaces a file another
+handle holds) beyond what section 15 already recorded.
+
+## 18. The missed-occurrence report: what the schedule walked past while nothing ran
+
+**What it is.** `career_agent/worker.py` gains `missed_occurrences(store)`, a read-only report of the
+occurrences the schedule has walked past with nothing recorded for them, and `WorkerStatus.describe()` prints
+it. Because both surfaces already share those lines, the window's **Background tasks** tab shows the report
+without a second implementation, and `--worker-status` prints exactly what the tab shows.
+
+**What counts as missed, precisely.** A due instant that is an occurrence of that task's own schedule
+(enumerated with the same `next_run_after` the scheduler books with, so zone gaps and repeats are the
+scheduler's answers rather than a second implementation's), has no attempt row for it — a refusal, a failure
+and an interruption were all attempts — owes no retry, and is not the instant the next claim will take. The
+last exclusion is what makes this different from the `(due now)` marker: `plan_after_run` schedules the run
+after a finished attempt from the moment the process finished, so every *other* occurrence between there and
+now is one nothing will ever come back to. The window is bounded to seven days, cut off at each task's own
+creation, and the report says which window it used. Reading it takes no lease, writes no run row and records
+no event — a test asserts each of those.
+
+**It is not a catch-up.** Nothing runs a missed occurrence, and the report says so in the surface that
+displays it ("Nothing is catching up on these: a worker that is not running cannot run what it missed"). A
+catch-up would start a day-old backup on the next launch; that is a behaviour change nobody asked for and it
+stays unimplemented, which is why phase 5's laptop-off exit criterion is still unmet (see `phases.md`).
+
+**Coverage.** Eight module tests in `tests/test_worker.py` (the walked-past occurrence with its exact
+instant and count; the attempt-of-any-state exclusion; a retry owed rather than lost; a paused task accused
+of nothing; occurrences from before the task existed; the bounded window; the argument check; and the
+read-only proof across the lease, the run table and the event log), the tab-level test
+`tests/test_desktop_handlers.py::SchedulerTabTests::test_the_tab_reports_what_the_schedule_walked_past_while_nothing_ran`,
+the command-line test
+`tests/test_cli_worker.py::WorkerStatusCommandTests::test_the_report_says_what_the_schedule_walked_past_while_nothing_ran`,
+and one new check inside workflow I of the acceptance harness — **I9**, which adds a task whose schedule
+nobody ran and requires the tab's own summary to name what was missed, with no worker started, no lease taken
+and no attempt recorded. The harness now declares 77 checks; step numbering inside workflow I was left alone,
+so I1–I8 keep their meaning and every earlier citation of them still names the same check.
+
+**What this does not establish.** That a person wants this report, or understands it: that judgement is one
+of the human-only items in the acceptance handoff. And it establishes nothing about laptop-off operation
+itself — a reported missed occurrence is still a missed occurrence.

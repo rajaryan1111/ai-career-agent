@@ -2656,7 +2656,24 @@ def workflow_i_scheduler(run: Run) -> None:
         require(app.store.get_scheduled_task(task_id).enabled is True,
                 "another task was changed instead of the one selected")
 
-    with results.step("I8 the window reports what the schedule walked past while nothing was running"):
+    with results.step("I8 using this tab starts no worker, takes no lease and records no attempt"):
+        require(worker_status(app.store).lease is None, "the window took the worker's lease")
+        require(app.store.get_worker_lease() is None, "a lease is stored after the tab was used")
+        require(app.store.list_task_runs() == (), "the window recorded a task attempt")
+        require(attempt_rows(app) == [], "the attempt list is not empty after using the tab")
+        names = recorded_events(workspace.scheduler_database)
+        require(not any(name.startswith("task.run_") or name.startswith("worker.") for name in names),
+                f"a task run or a worker lease was recorded by this workflow: {sorted(names)}")
+        require("task.scheduled" in names,
+                f"the schedule write is missing from the recorded events: {sorted(names)}")
+        said = label_text_in(app.scheduler_tab)
+        require("python -m career_agent --worker" in said,
+                "the tab does not say which command runs the schedule")
+        require("gate is closed" in said and "fetches nothing" in said,
+                "the tab does not say that the source-quality gate is closed and that a scheduled "
+                "discovery run fetches nothing")
+
+    with results.step("I9 the window reports what the schedule walked past while nothing was running"):
         from datetime import timedelta  # noqa: PLC0415 - the probe is three days old on purpose
 
         from career_agent.tasks import build_task  # noqa: PLC0415 - the product's own task builder
@@ -2685,22 +2702,6 @@ def workflow_i_scheduler(run: Run) -> None:
                 "reading the report must not start a worker or take a lease")
         require(app.store.list_task_runs() == (), "reading the report recorded a task attempt")
 
-    with results.step("I9 using this tab starts no worker, takes no lease and records no attempt"):
-        require(worker_status(app.store).lease is None, "the window took the worker's lease")
-        require(app.store.get_worker_lease() is None, "a lease is stored after the tab was used")
-        require(app.store.list_task_runs() == (), "the window recorded a task attempt")
-        require(attempt_rows(app) == [], "the attempt list is not empty after using the tab")
-        names = recorded_events(workspace.scheduler_database)
-        require(not any(name.startswith("task.run_") or name.startswith("worker.") for name in names),
-                f"a task run or a worker lease was recorded by this workflow: {sorted(names)}")
-        require("task.scheduled" in names,
-                f"the schedule write is missing from the recorded events: {sorted(names)}")
-        said = label_text_in(app.scheduler_tab)
-        require("python -m career_agent --worker" in said,
-                "the tab does not say which command runs the schedule")
-        require("gate is closed" in said and "fetches nothing" in said,
-                "the tab does not say that the source-quality gate is closed and that a scheduled "
-                "discovery run fetches nothing")
 
     workspace.close_window(host, app)
 

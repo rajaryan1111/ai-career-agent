@@ -2769,3 +2769,47 @@ IST and the Windows legs ran to 23:53 and 23:56 - the same window that had broke
 earlier in the evening - so the fix is confirmed at the hour of the failure, not just at the hour it was written.
 `main` is still `127244b5`; the branch also carries the small docs cross-reference from the release-readiness
 audit to `phases.md`'s audited phase table and to the handoff.
+
+**2026-10-16, second session of the day - one defect found by probing, one Phase 5 gap closed, and the
+metadata swept (D19).** The audit that opened this session changed nothing, and the first real finding came
+from *probing* the command line rather than reading it: `--restore-from` given the live database itself
+reported `Restored <the same path>`, replaced the file with a copy of itself and left an automatic snapshot
+beside it - exit 0 for a no-op, and a file nobody asked for. The likeliest way to reach it is pasting back the
+path the product's own refusal advice prints. It is written up as **D19** in
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md` section 17, with the exact output, the changed
+digest, and the classification (product defect, data-safety path). The fix refuses before validating or
+staging anything, comparing device and inode so a hard link or symlinked folder is caught as well as a
+respellable path, and falls back to resolved paths where the platform will not stat; a real backup whose
+contents happen to match is still restored. Two regression tests fail before it - `BackupError not raised` at
+the module level (same path, differently spelled path, hard link; byte-identical database, no snapshot, no
+staging file) and `0 != 2` on the command line - and pass after. Commit `a29d2d4`.
+
+**The Phase 5 gap that needed no deployment: what the schedule walked past while nothing ran.** A read-only
+report (`worker.missed_occurrences`) now answers that question, and `WorkerStatus.describe()` prints it, so
+the window's Background tasks tab and `--worker-status` show the same thing without a second implementation.
+The definition is exact and was corrected once during the work: a due occurrence of the task's own schedule
+with no attempt row, no retry owed, and not the instant the next claim will take. The last exclusion is the
+whole point - `plan_after_run` plans the next run from the moment the previous one finished, so every other
+occurrence between then and now is one nothing will come back to, while the occurrence at `next_run_at` is
+merely overdue and stays named "(due now)". A first attempt at the horizon (everything strictly before
+`next_run_at`) turned out to be vacuous - it can never match, because the scheduler always plans the next
+occurrence after the last finish - and was replaced after a scenario test showed 0 reported where 3 were
+skipped. The window is bounded to seven days, cut off at each task's creation, and the report says which
+window it used. Nothing catches up on a missed occurrence, and the surface says so; that is why phase 5's
+laptop-off exit criterion is still unmet. Coverage: eight module tests (including a read-only proof over the
+lease, the run table and the event log), the tab-level test, the command-line test, and **one new check in
+workflow I** (I9) that drives it through a real window and real widgets on the five display-backed legs -
+which moved the harness from 76 to **77 declared checks**. I1-I8 were deliberately left numbered as they
+were, so every earlier citation still names the same check. Commit `e6f01dd`; full suite 1665 tests, OK.
+
+**Metadata swept, and what was already correct.** The acceptance script's docstring already described ten
+workflows (the "six workflows" report was stale before this session), and the checklist and handoff were
+already current on the phase table. What actually moved: `phases.md` (1665 tests, 77 checks, and a Phase 5 row
+that now distinguishes *reporting* a missed occurrence from *running* it), `README.md` and `design.md` (77
+checks, and the scheduler clause names the report), the manual checklist (a new dated update plus step 51's
+coverage line for I9; verdicts unchanged at 22 PASS / 76 BLOCKED / 0 FAIL, **no box ticked**, and the earlier
+76-check citations left standing as the historical records they are), the handoff (77 checks, and area F now
+says the summary names both the overdue occurrence and what was missed), and a new **`research/README.md`**
+index that says, for every artefact in that folder, what question it answers and whether it is current
+guidance or dated evidence - linked from `README.md` and from the handoff.
+
