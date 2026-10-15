@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import math
 import re
@@ -791,6 +791,318 @@ class InterviewRound:
 
     def days_away(self, today: date) -> int:
         return (self.scheduled_on - today).days
+
+
+# ------------------------------------------------------------------ the candidate's own history
+#
+# Employment and study are the two things a job application is *about*, and until now the profile could
+# only hold one summary number and one degree string. These records are the detail behind those summary
+# fields: many rows per candidate, each editable and deletable on its own.
+#
+# Three rules shape them, and each one exists because of a specific way this kind of data lies:
+#
+# * **A contradiction is refused where it is typed.** "This role ended in 2023 and I still work there" is
+#   not a formatting problem, and storing it would put a claim in the person's own record that they would
+#   then be shown as fact. The refusal names both values so the person can see which one to fix.
+# * **Missing is not zero.** An end date nobody supplied stays absent rather than becoming "ended today" or
+#   "ended at the start date"; a role with no end date and ``is_current`` false means exactly that - it
+#   ended and the person has not said when. Nothing is inferred.
+# * **A free-text field is a note, not evidence.** ``summary`` is the person's words about what they did. It
+#   is never parsed, never matched against a listing, and never treated as proof of anything.
+
+class EmploymentType(str, Enum):
+    """How a role was held. ``UNKNOWN`` is the default and means the person has not said."""
+
+    UNKNOWN = "unknown"
+    FULL_TIME = "full_time"
+    PART_TIME = "part_time"
+    INTERNSHIP = "internship"
+    CONTRACT = "contract"
+    FREELANCE = "freelance"
+    APPRENTICESHIP = "apprenticeship"
+    VOLUNTEER = "volunteer"
+    OTHER = "other"
+
+
+EMPLOYMENT_TYPE_LABELS = {
+    EmploymentType.UNKNOWN: "Not recorded",
+    EmploymentType.FULL_TIME: "Full time",
+    EmploymentType.PART_TIME: "Part time",
+    EmploymentType.INTERNSHIP: "Internship",
+    EmploymentType.CONTRACT: "Contract",
+    EmploymentType.FREELANCE: "Freelance",
+    EmploymentType.APPRENTICESHIP: "Apprenticeship",
+    EmploymentType.VOLUNTEER: "Volunteering",
+    EmploymentType.OTHER: "Something else",
+}
+
+#: Bounds on the text a person types. Chosen to match the fields already in this module (a 200-character
+#: name, a 500-character note) so the interface has one idea of how long a line of a record is.
+MAX_EMPLOYER_LENGTH = 200
+MAX_JOB_TITLE_LENGTH = 200
+MAX_WORK_SUMMARY_LENGTH = 500
+MAX_INSTITUTION_LENGTH = 200
+MAX_QUALIFICATION_LENGTH = 200
+MAX_DISCIPLINE_LENGTH = 200
+
+
+def _record_day(value: object, *, noun: str) -> date:
+    """A day a person typed, or a refusal naming which field was wrong and why it looks wrong."""
+    if not isinstance(value, date) or isinstance(value, datetime):
+        raise ValueError(f"Give the {noun} as a calendar date (YYYY-MM-DD).")
+    if not _MIN_ACTIVITY_YEAR <= value.year <= _MAX_ACTIVITY_YEAR:
+        raise ValueError(
+            f"The {noun} must be a real calendar date between {_MIN_ACTIVITY_YEAR} and "
+            f"{_MAX_ACTIVITY_YEAR}; {value.isoformat()} looks like a typo."
+        )
+    return value
+
+
+def _required_record_text(value: object, *, noun: str, limit: int) -> str:
+    """Trimmed, non-empty, bounded text for a field a record cannot do without."""
+    if not isinstance(value, str):
+        raise ValueError(f"A {noun} must be text.")
+    text = " ".join(value.split())
+    if not text:
+        raise ValueError(f"Enter the {noun}: a record with an empty one names nothing.")
+    if len(text) > limit:
+        raise ValueError(
+            f"The {noun} can hold at most {limit} characters (this one is {len(text)}). Keep it to what "
+            "you would put on a CV line."
+        )
+    return text
+
+
+def _optional_record_text(value: object, *, noun: str, limit: int) -> str | None:
+    """Trimmed text or ``None``, for a field the record can do without."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"The {noun} must be text.")
+    text = " ".join(value.split())
+    if not text:
+        return None
+    if len(text) > limit:
+        raise ValueError(
+            f"The {noun} can hold at most {limit} characters (this one is {len(text)})."
+        )
+    return text
+
+
+def validate_work_dates(start: date, end: date | None, *, is_current: bool) -> tuple[date, date | None]:
+    """Check one employment period, refusing an impossible range or a contradictory current flag.
+
+    Returns the validated pair so a caller can use what was checked rather than re-deriving it. The two
+    refusals this exists for:
+
+    * **An end before a start.** Not a formatting problem - it is a period that cannot have happened, and
+      storing it would make every later question about "time in this role" wrong.
+    * **A current role that has an end date.** One of the two is a mistake, and the interface cannot know
+      which, so it refuses and names both rather than choosing for the person.
+
+    A role with *no* end date and ``is_current`` false is accepted: it ended, and the person has not said
+    when. That is a real answer, and inventing a date for it would be worse than the gap.
+    """
+    checked_start = _record_day(start, noun="start date")
+    if end is None:
+        return checked_start, None
+    checked_end = _record_day(end, noun="end date")
+    if checked_end < checked_start:
+        raise ValueError(
+            f"The end date ({checked_end.isoformat()}) is before the start date "
+            f"({checked_start.isoformat()}). Fix the dates so the period makes sense, or clear the end "
+            "date if the role has not finished."
+        )
+    if is_current:
+        raise ValueError(
+            f"This is marked as your current role, and it has an end date ({checked_end.isoformat()}). "
+            "A role you are still in has not ended: clear the end date, or untick the current-role box."
+        )
+    return checked_start, checked_end
+
+
+def validate_study_dates(start: date | None, completion: date | None, *,
+                         is_ongoing: bool) -> tuple[date | None, date | None]:
+    """Check one period of study, refusing an impossible range or a contradictory ongoing flag.
+
+    Both dates are optional here, because people remember their qualification and their institution far
+    more reliably than the month a course began, and a required field would be filled with a guess. What
+    is refused is a completion before a start, and "still studying" next to a completion date.
+    """
+    checked_start = None if start is None else _record_day(start, noun="start date")
+    checked_completion = None if completion is None else _record_day(completion, noun="completion date")
+    if checked_start is not None and checked_completion is not None and checked_completion < checked_start:
+        raise ValueError(
+            f"The completion date ({checked_completion.isoformat()}) is before the start date "
+            f"({checked_start.isoformat()}). Fix the dates so the period makes sense."
+        )
+    if is_ongoing and checked_completion is not None:
+        raise ValueError(
+            f"This is marked as ongoing study, and it has a completion date "
+            f"({checked_completion.isoformat()}). A course you are still on has not finished: clear the "
+            "completion date, or untick the ongoing box."
+        )
+    return checked_start, checked_completion
+
+
+@dataclass(frozen=True)
+class WorkHistoryEntry:
+    """One job, as the candidate describes it. A record they own, not a verified fact.
+
+    ``is_current`` is stated rather than derived from ``end_date``: a role with no end date might be the
+    current one, or one that ended at a time the person did not record, and only they know which.
+    """
+
+    employer: str
+    job_title: str
+    start_date: date
+    end_date: date | None = None
+    is_current: bool = False
+    employment_type: EmploymentType = EmploymentType.UNKNOWN
+    summary: str | None = None
+    entry_id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "employer",
+                           _required_record_text(self.employer, noun="employer", limit=MAX_EMPLOYER_LENGTH))
+        object.__setattr__(self, "job_title",
+                           _required_record_text(self.job_title, noun="job title", limit=MAX_JOB_TITLE_LENGTH))
+        if not isinstance(self.employment_type, EmploymentType):
+            object.__setattr__(self, "employment_type", EmploymentType(self.employment_type))
+        object.__setattr__(self, "summary", _optional_record_text(
+            self.summary, noun="summary of the role", limit=MAX_WORK_SUMMARY_LENGTH))
+        if not isinstance(self.is_current, bool):
+            raise ValueError("The current-role flag must be true or false.")
+        start, end = validate_work_dates(self.start_date, self.end_date, is_current=self.is_current)
+        object.__setattr__(self, "start_date", start)
+        object.__setattr__(self, "end_date", end)
+
+    @property
+    def employment_type_label(self) -> str:
+        return EMPLOYMENT_TYPE_LABELS[self.employment_type]
+
+    @property
+    def period(self) -> str:
+        """The period as a CV writes it, with an unknown end stated as unknown rather than guessed."""
+        if self.is_current:
+            return f"{self.start_date.isoformat()} - present"
+        if self.end_date is None:
+            return f"{self.start_date.isoformat()} - end date not recorded"
+        return f"{self.start_date.isoformat()} - {self.end_date.isoformat()}"
+
+    def months_covered(self, *, today: date | None = None) -> int:
+        """Whole months this role covers, for a factual total a person can read.
+
+        A current role is counted up to ``today``, which the caller supplies - never this machine's clock
+        inside the function. A role that has ended with no recorded end date returns 0, because the period
+        is unknown and counting it to today would assert employment that nobody stated. The answer is a
+        *duration of one employment period*, not a claim about experience: overlaps between roles are not
+        merged, and nothing here is ever written back into the profile's own ``experience_years``.
+        """
+        if self.end_date is not None:
+            end = self.end_date
+        elif self.is_current:
+            if today is None:
+                raise ValueError("Give the day to measure a current role up to.")
+            end = today
+        else:
+            # The role has ended and nobody recorded when. Counting it up to today would claim the person
+            # is still there, so the honest answer is zero months *known*, and the caller can say how many
+            # roles are in that state instead of quietly including them.
+            return 0
+        if end < self.start_date:
+            return 0
+        # Whole months completed: the difference in months, less one when the day of the month has not
+        # been reached yet. The reverse (adding one when it has) counts the starting day itself as a
+        # finished month, which reads a same-day start-and-end as one month of work.
+        months = (end.year - self.start_date.year) * 12 + (end.month - self.start_date.month)
+        if end.day < self.start_date.day:
+            months -= 1
+        return max(0, months)
+
+
+def months_covered_by(entries: Iterable[WorkHistoryEntry], *, today: date | None = None) -> int:
+    """The whole months covered by these roles together, counting months covered twice only once.
+
+    Adding up each role's own duration would overstate somebody who changed employer without a gap, or
+    who held two roles at once - and it would overstate them in the direction of "more experience",
+    which is the direction to be wrong in last. This returns the span of months in which at least one
+    of the recorded roles was running, which is what "these periods cover N months" claims.
+
+    A role whose end is not recorded contributes nothing unless it is marked current, exactly as
+    :meth:`WorkHistoryEntry.months_covered` decides: nothing states that it continued.
+    """
+    spans: list[tuple[int, int]] = []
+    for entry in entries:
+        months = entry.months_covered(today=today)
+        if months <= 0:
+            continue
+        # A month is identified by the count of months since year zero, so two roles can be compared
+        # without any calendar arithmetic in the comparison itself.
+        first = entry.start_date.year * 12 + entry.start_date.month
+        spans.append((first, first + months - 1))
+    if not spans:
+        return 0
+    spans.sort()
+    total = 0
+    running_start, running_end = spans[0]
+    for start, end in spans[1:]:
+        if start <= running_end + 1:
+            running_end = max(running_end, end)
+        else:
+            total += running_end - running_start + 1
+            running_start, running_end = start, end
+    return total + (running_end - running_start + 1)
+
+
+@dataclass(frozen=True)
+class EducationEntry:
+    """One qualification or course, as the candidate describes it.
+
+    ``qualification`` and ``institution`` are required because a record without them names nothing a person
+    could check; the dates and the discipline are not, because a guess there would be stored as a fact.
+    """
+
+    institution: str
+    qualification: str
+    discipline: str | None = None
+    start_date: date | None = None
+    completion_date: date | None = None
+    is_ongoing: bool = False
+    entry_id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "institution", _required_record_text(
+            self.institution, noun="institution", limit=MAX_INSTITUTION_LENGTH))
+        object.__setattr__(self, "qualification", _required_record_text(
+            self.qualification, noun="qualification", limit=MAX_QUALIFICATION_LENGTH))
+        object.__setattr__(self, "discipline", _optional_record_text(
+            self.discipline, noun="discipline", limit=MAX_DISCIPLINE_LENGTH))
+        if not isinstance(self.is_ongoing, bool):
+            raise ValueError("The ongoing-study flag must be true or false.")
+        start, completion = validate_study_dates(self.start_date, self.completion_date,
+                                                 is_ongoing=self.is_ongoing)
+        object.__setattr__(self, "start_date", start)
+        object.__setattr__(self, "completion_date", completion)
+
+    @property
+    def period(self) -> str:
+        """The period as a CV writes it, distinguishing "still studying" from "dates not recorded"."""
+        start = self.start_date.isoformat() if self.start_date is not None else "start not recorded"
+        if self.is_ongoing:
+            return f"{start} - ongoing"
+        if self.completion_date is None:
+            return f"{start} - completion not recorded"
+        return f"{start} - {self.completion_date.isoformat()}"
+
+    @property
+    def label(self) -> str:
+        """The one-line description: qualification, then discipline when there is one."""
+        return f"{self.qualification} - {self.discipline}" if self.discipline else self.qualification
 
 
 def canonicalize_url(url: str) -> str:

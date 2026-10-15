@@ -204,8 +204,37 @@ class Frame(ValidatedWidget):
     allowed_options = TTK_FRAME_OPTIONS
 
 
+class LabelFrame(Frame):
+    """``ttk.LabelFrame``: a frame that also accepts the option naming it.
+
+    The real widget's own option list, so a typo in the window's code is still caught here - and the title
+    is recorded, which is how a test can tell one labelled group from another.
+    """
+
+    allowed_options = TTK_FRAME_OPTIONS | {"text"}
+
+    @property
+    def title(self):
+        return self.options.get("text")
+
+
 class Notebook(ValidatedWidget):
+    """Notebook stand-in; records each tab as ``(frame, label)`` in the order it was added."""
+
     allowed_options = TTK_NOTEBOOK_OPTIONS
+    created = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tabs = []
+        Notebook.created.append(self)
+
+    def add(self, frame, **kwargs):
+        self.tabs.append((frame, kwargs.get("text")))
+        return None
+
+    def labels(self):
+        return [text for _frame, text in self.tabs]
 
 
 class Canvas(ValidatedWidget):
@@ -482,6 +511,7 @@ _tkinter.messagebox = MESSAGES
 _tkinter.ttk = types.SimpleNamespace(
     Frame=Frame, Label=RecordingLabel, Notebook=Notebook, Combobox=RecordingCombobox, Entry=Entry,
     Treeview=Tree, Checkbutton=RecordingCheckbutton, Scrollbar=RecordingScrollbar,
+    LabelFrame=LabelFrame,
     Button=BUTTONS.button,
 )
 
@@ -574,6 +604,7 @@ class HandlerTestCase(unittest.TestCase):
         RecordingCheckbutton.created = []
         RecordingLabel.created = []
         RecordingScrollbar.created = []
+        Notebook.created = []
         RecordingToplevel.created = []
         Canvas.created = []
         FILEDIALOG.path = ""
@@ -594,10 +625,22 @@ class HandlerTestCase(unittest.TestCase):
         app.job_edit_baseline = None
         app.jobs_tree = Tree()
         app.tracker_tree = Tree()
+        app.work_tree = Tree()
+        app.study_tree = Tree()
+        # The history tab's own widgets, so its handlers run against real state rather than a stand-in.
+        app.history_summary = StringVar()
+        app.work_vars = {key: StringVar() for key in ("employer", "job_title", "start_date", "end_date",
+                                                      "summary")}
+        app.study_vars = {key: StringVar() for key in ("institution", "qualification", "discipline",
+                                                       "start_date", "completion_date")}
+        app.work_type = StringVar(value="unknown")
+        app.work_current = BooleanVar()
+        app.study_ongoing = BooleanVar()
         app.profile_tab = Widget()
         app.jobs_tab = Widget()
         app.tracker_tab = Widget()
         app.data_tab = Widget()
+        app.history_tab = Widget()
         selected_tabs = []
         app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
@@ -901,6 +944,321 @@ class DatabaseErrorTests(HandlerTestCase):
         self.assertIsNone(self.store.get_tracker("j1"))
 
 
+class HistoryTabTests(HandlerTestCase):
+    """The Work history & study tab: the handlers behind its buttons.
+
+    Handler-level, like the rest of this file: the widgets are stubs, so nothing here is evidence about
+    how the tab renders or looks. What is checked is what each button does to the database and what it
+    tells the person - including the refusals, which are the paths most likely to be wrong.
+    """
+
+    def fill_work(self, app, **values):
+        defaults = {"employer": "Sandbox Systems", "job_title": "Data Engineer", "start_date": "2023-04-01",
+                    "end_date": "", "summary": ""}
+        for key, value in {**defaults, **values}.items():
+            app.work_vars[key].set(value)
+
+    def fill_study(self, app, **values):
+        defaults = {"institution": "IIT Delhi", "qualification": "B.Tech", "discipline": "ECE",
+                    "start_date": "2015-08-01", "completion_date": "2019-05-31"}
+        for key, value in {**defaults, **values}.items():
+            app.study_vars[key].set(value)
+
+    def test_adding_a_role_writes_it_and_reports_what_was_saved(self):
+        app = self.make_app()
+        self.fill_work(app, summary="built the pipeline")
+
+        app._add_work_history()
+
+        stored = self.store.list_work_history()
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0].employer, "Sandbox Systems")
+        self.assertEqual(stored[0].summary, "built the pipeline")
+        self.assertIn("Data Engineer at Sandbox Systems", app.status.get())
+
+    def test_a_current_role_is_saved_as_current_and_reads_as_present(self):
+        app = self.make_app()
+        self.fill_work(app, end_date="")
+        app.work_current.set(True)
+        app.work_type.set("full_time")
+
+        app._add_work_history()
+
+        stored = self.store.list_work_history()[0]
+        self.assertTrue(stored.is_current)
+        self.assertEqual(stored.period, "2023-04-01 - present")
+        self.assertIn("2023-04-01 - present", app.status.get())
+
+    def test_an_impossible_period_is_refused_with_a_dialog_and_writes_nothing(self):
+        app = self.make_app()
+        self.fill_work(app, end_date="2019-01-01")
+
+        app._add_work_history()
+
+        self.assertIn("Role not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(self.store.list_work_history(), ())
+        self.assertNotIn("added", app.status.get())
+
+    def test_a_current_role_with_an_end_date_is_refused_the_same_way(self):
+        app = self.make_app()
+        self.fill_work(app, end_date="2025-01-01")
+        app.work_current.set(True)
+
+        app._add_work_history()
+
+        self.assertIn("Role not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_an_end_date_that_is_not_a_date_is_refused_before_it_reaches_the_store(self):
+        app = self.make_app()
+        self.fill_work(app, end_date="last winter")
+
+        app._add_work_history()
+
+        self.assertIn("Role not saved", MESSAGES.titles("showerror"))
+        self.assertIn("YYYY-MM-DD", MESSAGES.text("showerror"))
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_a_missing_start_date_is_refused_for_an_employment_record(self):
+        app = self.make_app()
+        self.fill_work(app, start_date="   ")
+
+        app._add_work_history()
+
+        self.assertIn("Role not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_education_dates_are_optional_and_an_ongoing_course_needs_no_completion(self):
+        app = self.make_app()
+        self.fill_study(app, start_date="", completion_date="")
+        app.study_ongoing.set(True)
+
+        app._add_education()
+
+        stored = self.store.list_education()[0]
+        self.assertTrue(stored.is_ongoing)
+        self.assertIsNone(stored.start_date)
+        self.assertEqual(stored.period, "start not recorded - ongoing")
+        self.assertIn("ongoing", app.status.get())
+
+    def test_ongoing_study_with_a_completion_date_is_refused(self):
+        app = self.make_app()
+        self.fill_study(app)
+        app.study_ongoing.set(True)
+
+        app._add_education()
+
+        self.assertIn("Qualification not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(self.store.list_education(), ())
+
+    def test_editing_a_role_requires_a_selected_row_and_says_so(self):
+        self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        app = self.make_app()
+        self.fill_work(app, job_title="Senior Data Engineer")
+
+        app._update_work_history()
+
+        self.assertIn("Select a row first", MESSAGES.titles("showinfo"))
+        self.assertEqual(self.store.list_work_history()[0].job_title, "Data Engineer",
+                         "nothing is saved without a row to save it to")
+
+    def test_editing_a_role_saves_the_typed_values_over_the_selected_row(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        app = self.make_app()
+        app.work_tree.selected = (str(added.entry_id),)
+        self.fill_work(app, job_title="Senior Data Engineer", summary="led the migration")
+        app.work_type.set("full_time")
+
+        app._update_work_history()
+
+        stored = self.store.get_work_history(added.entry_id)
+        self.assertEqual(stored.job_title, "Senior Data Engineer")
+        self.assertEqual(stored.summary, "led the migration")
+        self.assertIn("saved", app.status.get())
+
+    def test_editing_a_qualification_saves_the_typed_values_over_the_selected_row(self):
+        added = self.store.add_education("IIT Delhi", "B.Tech", discipline="ECE",
+                                         completion_date=date(2019, 5, 31))
+        app = self.make_app()
+        app.study_tree.selected = (str(added.entry_id),)
+        self.fill_study(app, discipline="Electrical Engineering")
+
+        app._update_education()
+
+        self.assertEqual(self.store.get_education(added.entry_id).discipline,
+                         "Electrical Engineering")
+
+    def test_editing_something_that_is_gone_reports_it_rather_than_recreating_it(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        app = self.make_app()
+        app.work_tree.selected = (str(added.entry_id),)
+        self.store.delete_work_history(added.entry_id)
+        self.fill_work(app)
+
+        app._update_work_history()
+
+        self.assertIn("Role not updated", MESSAGES.titles("showerror"))
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_deleting_a_role_asks_first_and_then_deletes_only_with_consent(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        app = self.make_app()
+        app.work_tree.selected = (str(added.entry_id),)
+
+        CONFIG["Delete this role?"] = False
+        app._delete_work_history()
+        self.assertEqual(len(self.store.list_work_history()), 1, "a refused confirmation deletes nothing")
+
+        CONFIG["Delete this role?"] = True
+        app._delete_work_history()
+        self.assertEqual(self.store.list_work_history(), ())
+        self.assertIn("Employment record deleted", app.status.get())
+
+    def test_deleting_a_qualification_asks_first_and_reports_a_row_that_was_already_gone(self):
+        added = self.store.add_education("IIT Delhi", "B.Tech")
+        app = self.make_app()
+        app.study_tree.selected = (str(added.entry_id),)
+        CONFIG["Delete this qualification?"] = True
+        self.store.delete_education(added.entry_id)
+
+        app._delete_education()
+
+        self.assertIn("That education record was already gone; nothing was deleted.", app.status.get())
+
+    def test_the_delete_question_says_what_else_is_not_touched(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        app = self.make_app()
+        app.work_tree.selected = (str(added.entry_id),)
+        CONFIG["Delete this role?"] = False
+
+        app._delete_work_history()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("cannot be brought back", asked)
+        self.assertIn("not changed", asked, "the question says what it leaves alone, not only what it takes")
+
+    def test_selecting_a_row_loads_its_own_values_into_the_form(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1),
+                                            end_date=date(2024, 4, 1), employment_type="contract",
+                                            summary="built the pipeline")
+        app = self.make_app()
+        app.work_tree.selected = (str(added.entry_id),)
+
+        app._load_work_history()
+
+        self.assertEqual(app.work_vars["employer"].get(), "Sandbox Systems")
+        self.assertEqual(app.work_vars["end_date"].get(), "2024-04-01")
+        self.assertEqual(app.work_type.get(), "contract")
+        self.assertEqual(app.work_vars["summary"].get(), "built the pipeline")
+
+    def test_the_list_shows_the_current_role_first_and_an_unknown_end_honestly(self):
+        self.store.add_work_history("Old Co", "Analyst", date(2020, 1, 6))
+        self.store.add_work_history("Now", "Lead", date(2022, 6, 1), is_current=True)
+        app = self.make_app()
+
+        app._refresh_history()
+
+        expected = [str(entry.entry_id) for entry in self.store.list_work_history()]
+        self.assertEqual(list(app.work_tree.children), expected, "both roles are listed, newest first")
+        periods = [app.work_tree.item(item, "values")[3] for item in expected]
+        self.assertEqual(periods, ["2022-06-01 - present", "2020-01-06 - end date not recorded"],
+                         "a missing end date is shown as missing, not as today")
+        self.assertIn("2 employment record(s)", app.history_summary.get())
+
+    def test_the_summary_counts_months_but_never_calls_them_years_of_experience(self):
+        self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True)
+        self.store.add_work_history("Old Co", "Analyst", date(2015, 1, 1), end_date=date(2020, 1, 1))
+        app = self.make_app()
+
+        app._refresh_history()
+
+        summary = app.history_summary.get()
+        self.assertIn("employment record(s)", summary)
+        self.assertIn("month(s) of recorded employment", summary)
+        self.assertIn("not a claim about experience", summary)
+        self.assertNotIn("years of experience", summary)
+
+    def test_the_summary_says_which_records_it_could_not_count(self):
+        self.store.add_work_history("Old Co", "Analyst", date(2020, 1, 6))
+        app = self.make_app()
+
+        app._refresh_history()
+
+        self.assertIn("no end date recorded", app.history_summary.get())
+        self.assertIn("no duration is counted", app.history_summary.get())
+
+    def test_an_empty_history_says_so_instead_of_showing_a_zero(self):
+        app = self.make_app()
+
+        app._refresh_history()
+
+        summary = app.history_summary.get()
+        self.assertIn("No employment or education records yet", summary)
+        self.assertNotIn("0 month", summary)
+
+    def test_an_unreadable_stored_value_is_reported_rather_than_shown_as_a_blank_row(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        reader = sqlite3.connect(self.store.database_path)
+        with reader:
+            reader.execute("UPDATE candidate_work_history SET employment_type='side-hustle'")
+        reader.close()
+        app = self.make_app()
+
+        app._refresh_history()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertEqual(app.work_tree.children, (),
+                         "a list that cannot be read is left empty rather than shown as if it were fine")
+        self.assertIn("nothing was changed", app.status.get())
+
+    def test_a_database_error_is_reported_without_claiming_the_save_worked(self):
+        app = self.make_app()
+        self.fill_work(app)
+        with mock.patch.object(self.store, "add_work_history",
+                               side_effect=sqlite3.OperationalError("attempt to write a readonly database")):
+            app._add_work_history()
+
+        self.assertIn("Local database unavailable", MESSAGES.titles("showerror"))
+        self.assertNotIn("record added", app.status.get())
+
+    def test_deleting_the_profile_names_the_records_it_takes_with_it(self):
+        self.store.save_profile(PROFILE)
+        self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        self.store.add_education("IIT Delhi", "B.Tech")
+        app = self.make_app()
+        CONFIG["Delete profile"] = True
+
+        app._delete_profile()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("1 employment record(s)", asked)
+        self.assertIn("1 education record(s)", asked)
+        self.assertIn("job listings and applications are not deleted", asked)
+        self.assertIsNone(self.store.get_profile())
+        self.assertEqual(self.store.list_work_history(), (), "the confirmation was not a lie")
+
+    def test_deleting_a_profile_with_no_history_does_not_mention_history(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        CONFIG["Delete profile"] = True
+
+        app._delete_profile()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertNotIn("employment record", asked)
+        self.assertIn("deleted", app.status.get())
+
+    def test_history_records_are_not_listed_as_applications(self):
+        """Adding a role must not make the Jobs tab think there is an application to show."""
+        app = self.make_app()
+        self.fill_work(app)
+
+        app._add_work_history()
+
+        self.assertEqual(self.store.list_jobs(), ())
+        self.assertIsNone(self.store.get_tracker("j1"))
+
+
 class WindowShutdownTests(HandlerTestCase):
     """Closing the window: the store is closed, the window is destroyed, nothing is written.
 
@@ -917,6 +1275,40 @@ class WindowShutdownTests(HandlerTestCase):
         app = desktop.CareerAgentApp(root, database_path=str(database))
         self.addCleanup(app.store.close)  # idempotent, so it is safe after a test already closed it
         return app, root, database
+
+    def test_the_history_tab_is_the_window_s_own_tab_and_not_more_profile_rows(self):
+        """The reason the tab exists: employment and education are records, not ten more form fields.
+
+        The profile form is the summary a person holds in their head, and it was already at the limit of
+        what the window shows at ``1120x760``; records that grow over a career get a list of their own.
+        """
+        app, _root, _database = self.build_app()
+        notebook = Notebook.created[-1]
+
+        self.assertIn("Work history & study", notebook.labels())
+        frames = {text: frame for frame, text in notebook.tabs}
+        self.assertIs(frames["Work history & study"], app.history_tab)
+        self.assertEqual(notebook.labels()[0], "Candidate profile")
+        self.assertIs(frames["Candidate profile"], app.profile_tab)
+        # The tab is built from real widgets, so both lists and both forms exist over the real store.
+        self.assertEqual(app.store.list_work_history(), ())
+        self.assertEqual(sorted(app.work_vars), ["employer", "end_date", "job_title", "start_date",
+                                                 "summary"])
+        self.assertEqual(sorted(app.study_vars), ["completion_date", "discipline", "institution",
+                                                 "qualification", "start_date"])
+        self.assertEqual(app.work_type.get(), "unknown", "a new role starts with no claimed type")
+
+    def test_saving_the_profile_does_not_write_a_history_record(self):
+        """The two are separate on purpose: editing a summary must not invent the records behind it."""
+        app, _root, _database = self.build_app()
+        app.profile_vars["country"].set("India")
+        app.profile_vars["experience"].set("3")
+
+        app._save_profile()
+
+        self.assertIsNotNone(app.store.get_profile())
+        self.assertEqual(app.store.list_work_history(), ())
+        self.assertEqual(app.store.list_education(), ())
 
     def test_the_window_manager_close_handler_closes_the_store_and_destroys_the_window(self):
         app, root, _database = self.build_app()
@@ -1917,7 +2309,7 @@ class ExportPrivacyTests(HandlerTestCase):
             self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
         payload = self.exported()
         # Format and workflow are preserved: same keys, version, privacy note and content.
-        self.assertEqual(payload["format_version"], 1)
+        self.assertEqual(payload["format_version"], 2)
         self.assertIn("privacy_note", payload)
         self.assertEqual(payload["profile"]["degree_discipline"], "ECE")
         self.assertEqual(len(payload["jobs"]), 1)
@@ -2279,7 +2671,7 @@ class ProfileAndDeletionTests(HandlerTestCase):
         app = self.make_app()
         app._export()
         payload = json.loads(destination.read_text(encoding="utf-8"))
-        self.assertEqual(payload["format_version"], 1)
+        self.assertEqual(payload["format_version"], 2)
         self.assertEqual(payload["profile"]["candidate_country"], "India")
         self.assertEqual(payload["jobs"][0]["application_tracker"]["status_evidence"], "Employer email")
         self.assertIn("personal information", payload["privacy_note"])

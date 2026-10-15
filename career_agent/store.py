@@ -7,7 +7,7 @@ cannot drift apart.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Callable
@@ -21,17 +21,17 @@ from pathlib import Path
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
-    ApplicationTracker, Availability, CandidateProfile, InterviewMode, InterviewOutcome,
-    InterviewRound, InterviewStage, JobListing, PreparationItem, PreparationKind, duplicate_key,
-    is_allowed_tracker_transition, require_confirmation_evidence, validate_activity_detail,
-    validate_activity_date,
+    ApplicationTracker, Availability, CandidateProfile, EducationEntry, EmploymentType, InterviewMode,
+    InterviewOutcome, InterviewRound, InterviewStage, JobListing, PreparationItem, PreparationKind,
+    WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
+    validate_activity_detail, validate_activity_date,
 )
 from .tasks import (
     RunState, ScheduledTask, TaskRun, TaskValidationError, WorkerLease, WorkerLeaseHeld,
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -48,6 +48,9 @@ SCHEMA_TABLES_BY_VERSION = {
         "scheduled_task", "task_run", "worker_lease"),
     5: ("application_activity", "application_preparation", "application_tracker", "candidate_profile",
         "interview_round", "job_listings", "scheduled_task", "task_run", "worker_lease"),
+    6: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+        "candidate_profile", "candidate_work_history", "interview_round", "job_listings",
+        "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -565,6 +568,25 @@ def _stored_date(value: object, listing_id: str) -> date | None:
     return parsed
 
 
+def _stored_day(value: object, noun: str, field: str, *, optional: bool = False) -> date | None:
+    """A stored ``YYYY-MM-DD`` column as a date, or a refusal naming the record and the field.
+
+    The sibling of :func:`_stored_date`, which names a listing because a follow-up day belongs to one. A
+    history record is identified by its own noun and field, and ``optional`` says whether an absent value is
+    "not recorded" (a real answer) or a damaged row.
+    """
+    if value is None:
+        if optional:
+            return None
+        raise StoredRecordError(noun, f"its {field} is missing")
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise StoredRecordError(noun, f"its {field} is {value!r}, which is not a YYYY-MM-DD date") from exc
+
+
 def _stored_text_values(value: object, noun: str, field: str) -> list:
     """A stored list of strings, or refuse. A bare string is refused rather than split into letters.
 
@@ -804,6 +826,61 @@ def _migration_to_v5(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v6(connection: sqlite3.Connection) -> None:
+    """Schema 6: the candidate's own employment history and education, as structured records.
+
+    Two new tables, additive and empty. Until now the profile held one degree string and one number of
+    years; these are the rows behind those summaries - many per candidate, each editable and deletable on
+    its own - and an existing database gains them without a single existing row being touched.
+
+    Neither table references ``job_listings``: this is the candidate's own history, not something attached
+    to an application, so it is not deleted when a listing is. It *is* deleted with the profile itself,
+    because it is profile data - see :meth:`CareerStore.delete_profile`, which says so and counts it.
+
+    ``is_current`` and ``is_ongoing`` are stored flags rather than being derived from a missing end date: a
+    role with no end date might be the current one, or one that ended at a time nobody recorded, and only
+    the person knows which. Storing the flag keeps the record saying what they said.
+
+    ``IF NOT EXISTS`` on both statements keeps the step re-runnable, like every other step, because a step
+    interrupted after its first statement must not leave a database that cannot be opened.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS candidate_work_history (
+               entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               employer TEXT NOT NULL,
+               job_title TEXT NOT NULL,
+               employment_type TEXT NOT NULL,
+               start_date TEXT NOT NULL,
+               end_date TEXT,
+               is_current INTEGER NOT NULL DEFAULT 0,
+               summary TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_candidate_work_history_order
+               ON candidate_work_history(is_current, start_date, entry_id)"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS candidate_education (
+               entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               institution TEXT NOT NULL,
+               qualification TEXT NOT NULL,
+               discipline TEXT,
+               start_date TEXT,
+               completion_date TEXT,
+               is_ongoing INTEGER NOT NULL DEFAULT 0,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_candidate_education_order
+               ON candidate_education(is_ongoing, completion_date, entry_id)"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -814,6 +891,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (3, "add the background task scheduler tables", _migration_to_v3),
     (4, "add the follow-up plan columns to the application tracker", _migration_to_v4),
     (5, "add the preparation checklist and the interview rounds", _migration_to_v5),
+    (6, "add the candidate's own employment history and education", _migration_to_v6),
 )
 
 
@@ -1532,6 +1610,275 @@ class CareerStore:
         except ValueError as exc:
             raise StoredRecordError(noun, f"it cannot be read ({exc})") from exc
 
+    # ------------------------------------------------------- the candidate's own history
+    #
+    # Employment and study records, which belong to the candidate rather than to any application. The rules
+    # enforced here are the ones a repository should own, so every caller gets them: a record cannot be
+    # blank, a period cannot be impossible, and the two "still there / still studying" flags cannot sit next
+    # to an end date. The domain classes already refuse those; these methods refuse them again at the write
+    # boundary, because a store that trusts its caller is one refactor away from storing nonsense.
+
+    def add_work_history(self, employer: str, job_title: str, start_date: date, *, end_date: date | None = None,
+                         is_current: bool = False, employment_type: str | EmploymentType = EmploymentType.UNKNOWN,
+                         summary: str | None = None) -> WorkHistoryEntry:
+        """Add one employment record and return it as stored.
+
+        A record identical to one already stored - same employer, same title, same start date, compared
+        without case - is refused rather than added twice: that is what a double-click looks like, and two
+        identical CV lines are worse than one because a reader cannot tell which is true.
+        """
+        entry = WorkHistoryEntry(employer=employer, job_title=job_title, start_date=start_date,
+                                 end_date=end_date, is_current=is_current, employment_type=employment_type,
+                                 summary=summary)
+        for stored in self.list_work_history():
+            if (stored.employer.casefold() == entry.employer.casefold()
+                    and stored.job_title.casefold() == entry.job_title.casefold()
+                    and stored.start_date == entry.start_date):
+                raise ValueError(
+                    f"You already have a record for {entry.job_title} at {entry.employer} starting "
+                    f"{entry.start_date.isoformat()}. Edit that one instead of adding it twice."
+                )
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO candidate_work_history(employer, job_title, employment_type, start_date,
+                                                      end_date, is_current, summary, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (entry.employer, entry.job_title, entry.employment_type.value, entry.start_date.isoformat(),
+                 entry.end_date.isoformat() if entry.end_date else None, int(entry.is_current),
+                 entry.summary, timestamp, timestamp),
+            )
+        stored = replace(entry, entry_id=int(cursor.lastrowid or 0), created_at=timestamp,
+                         updated_at=timestamp)
+        self._record("history.work_added", f"entry_id={stored.entry_id} current={int(stored.is_current)}")
+        return stored
+
+    def list_work_history(self) -> tuple[WorkHistoryEntry, ...]:
+        """Every employment record, in the order a CV reads: current role first, then most recent first."""
+        rows = self._connection.execute(
+            """SELECT * FROM candidate_work_history
+               ORDER BY is_current DESC, start_date DESC, entry_id DESC"""
+        ).fetchall()
+        return tuple(self._decode_work_history(row) for row in rows)
+
+    def get_work_history(self, entry_id: int) -> WorkHistoryEntry | None:
+        row = self._connection.execute(
+            "SELECT * FROM candidate_work_history WHERE entry_id=?", (int(entry_id),)
+        ).fetchone()
+        return None if row is None else self._decode_work_history(row)
+
+    def update_work_history(self, entry_id: int, employer: str, job_title: str, start_date: date, *,
+                            end_date: date | None = None, is_current: bool = False,
+                            employment_type: str | EmploymentType = EmploymentType.UNKNOWN,
+                            summary: str | None = None) -> WorkHistoryEntry:
+        """Replace one employment record with the values supplied, and return it as stored.
+
+        The caller supplies the whole record, which is why the window fills its form from the stored row
+        before anything is typed: a partial update would have to guess that an omitted field means "leave it"
+        or "clear it", and either guess loses data. ``created_at`` is preserved - it says when the record was
+        first written here, and an edit does not change that.
+        """
+        current = self.get_work_history(entry_id)
+        if current is None:
+            raise ValueError(f"There is no work-history record {entry_id} to change.")
+        updated = WorkHistoryEntry(employer=employer, job_title=job_title, start_date=start_date,
+                                   end_date=end_date, is_current=is_current,
+                                   employment_type=employment_type, summary=summary,
+                                   entry_id=current.entry_id, created_at=current.created_at)
+        for stored in self.list_work_history():
+            if stored.entry_id == updated.entry_id:
+                continue
+            if (stored.employer.casefold() == updated.employer.casefold()
+                    and stored.job_title.casefold() == updated.job_title.casefold()
+                    and stored.start_date == updated.start_date):
+                raise ValueError(
+                    f"Another record already covers {updated.job_title} at {updated.employer} starting "
+                    f"{updated.start_date.isoformat()}. Edit that one, or change this one so the two differ."
+                )
+        timestamp = _now()
+        with self._connection:
+            self._connection.execute(
+                """UPDATE candidate_work_history
+                      SET employer=?, job_title=?, employment_type=?, start_date=?, end_date=?, is_current=?,
+                          summary=?, updated_at=?
+                    WHERE entry_id=?""",
+                (updated.employer, updated.job_title, updated.employment_type.value,
+                 updated.start_date.isoformat(),
+                 updated.end_date.isoformat() if updated.end_date else None, int(updated.is_current),
+                 updated.summary, timestamp, int(entry_id)),
+            )
+        stored = self.get_work_history(entry_id)
+        assert stored is not None  # the row was just written in this connection
+        self._record("history.work_updated", f"entry_id={int(entry_id)} current={int(stored.is_current)}")
+        return stored
+
+    def delete_work_history(self, entry_id: int) -> bool:
+        """Remove one employment record; return whether a row was deleted."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM candidate_work_history WHERE entry_id=?", (int(entry_id),)
+            )
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("history.work_deleted", f"entry_id={int(entry_id)}")
+        return removed
+
+    def add_education(self, institution: str, qualification: str, *, discipline: str | None = None,
+                      start_date: date | None = None, completion_date: date | None = None,
+                      is_ongoing: bool = False) -> EducationEntry:
+        """Add one education record and return it as stored.
+
+        The duplicate rule is the same as employment's, on (institution, qualification, start date): the same
+        qualification from the same place starting the same day is one record, not two.
+        """
+        entry = EducationEntry(institution=institution, qualification=qualification, discipline=discipline,
+                               start_date=start_date, completion_date=completion_date,
+                               is_ongoing=is_ongoing)
+        for stored in self.list_education():
+            if (stored.institution.casefold() == entry.institution.casefold()
+                    and stored.qualification.casefold() == entry.qualification.casefold()
+                    and stored.start_date == entry.start_date):
+                raise ValueError(
+                    f"You already have a record for {entry.qualification} at {entry.institution}"
+                    + (f" starting {entry.start_date.isoformat()}" if entry.start_date else "")
+                    + ". Edit that one instead of adding it twice."
+                )
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO candidate_education(institution, qualification, discipline, start_date,
+                                                    completion_date, is_ongoing, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (entry.institution, entry.qualification, entry.discipline,
+                 entry.start_date.isoformat() if entry.start_date else None,
+                 entry.completion_date.isoformat() if entry.completion_date else None,
+                 int(entry.is_ongoing), timestamp, timestamp),
+            )
+        stored = replace(entry, entry_id=int(cursor.lastrowid or 0), created_at=timestamp,
+                         updated_at=timestamp)
+        self._record("history.education_added", f"entry_id={stored.entry_id} ongoing={int(stored.is_ongoing)}")
+        return stored
+
+    def list_education(self) -> tuple[EducationEntry, ...]:
+        """Every education record: ongoing study first, then the most recently finished ones.
+
+        Within the finished records, a qualification with no completion date sorts after the dated ones
+        rather than being given an invented date to sort by - "finished, date not recorded" is a real
+        answer, and a missing date is not a very old one. This is the same rule the task list uses for a
+        task with no due date (see :meth:`list_scheduled_tasks`).
+        """
+        rows = self._connection.execute(
+            """SELECT * FROM candidate_education
+               ORDER BY is_ongoing DESC, (completion_date IS NULL), completion_date DESC,
+                        institution, entry_id"""
+        ).fetchall()
+        return tuple(self._decode_education(row) for row in rows)
+
+    def get_education(self, entry_id: int) -> EducationEntry | None:
+        row = self._connection.execute(
+            "SELECT * FROM candidate_education WHERE entry_id=?", (int(entry_id),)
+        ).fetchone()
+        return None if row is None else self._decode_education(row)
+
+    def update_education(self, entry_id: int, institution: str, qualification: str, *,
+                         discipline: str | None = None, start_date: date | None = None,
+                         completion_date: date | None = None, is_ongoing: bool = False) -> EducationEntry:
+        """Replace one education record with the values supplied, and return it as stored."""
+        current = self.get_education(entry_id)
+        if current is None:
+            raise ValueError(f"There is no education record {entry_id} to change.")
+        updated = EducationEntry(institution=institution, qualification=qualification, discipline=discipline,
+                                 start_date=start_date, completion_date=completion_date,
+                                 is_ongoing=is_ongoing, entry_id=current.entry_id,
+                                 created_at=current.created_at)
+        for stored in self.list_education():
+            if stored.entry_id == updated.entry_id:
+                continue
+            if (stored.institution.casefold() == updated.institution.casefold()
+                    and stored.qualification.casefold() == updated.qualification.casefold()
+                    and stored.start_date == updated.start_date):
+                raise ValueError(
+                    f"Another record already covers {updated.qualification} at {updated.institution}. "
+                    "Edit that one, or change this one so the two differ."
+                )
+        timestamp = _now()
+        with self._connection:
+            self._connection.execute(
+                """UPDATE candidate_education
+                      SET institution=?, qualification=?, discipline=?, start_date=?, completion_date=?,
+                          is_ongoing=?, updated_at=?
+                    WHERE entry_id=?""",
+                (updated.institution, updated.qualification, updated.discipline,
+                 updated.start_date.isoformat() if updated.start_date else None,
+                 updated.completion_date.isoformat() if updated.completion_date else None,
+                 int(updated.is_ongoing), timestamp, int(entry_id)),
+            )
+        stored = self.get_education(entry_id)
+        assert stored is not None  # the row was just written in this connection
+        self._record("history.education_updated", f"entry_id={int(entry_id)} ongoing={int(stored.is_ongoing)}")
+        return stored
+
+    def delete_education(self, entry_id: int) -> bool:
+        """Remove one education record; return whether a row was deleted."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM candidate_education WHERE entry_id=?", (int(entry_id),)
+            )
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("history.education_deleted", f"entry_id={int(entry_id)}")
+        return removed
+
+    def profile_record_counts(self) -> dict[str, int]:
+        """How many records a profile deletion would take with it. Read-only, for asking first."""
+        return {
+            "work_history": int(self._connection.execute(
+                "SELECT COUNT(*) FROM candidate_work_history").fetchone()[0]),
+            "education": int(self._connection.execute(
+                "SELECT COUNT(*) FROM candidate_education").fetchone()[0]),
+        }
+
+    def _decode_work_history(self, row: sqlite3.Row) -> WorkHistoryEntry:
+        noun = "work-history record"
+        try:
+            employment_type = EmploymentType(row["employment_type"])
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its employment type {row['employment_type']!r} is not one this version recognises"
+            ) from exc
+        try:
+            return WorkHistoryEntry(
+                employer=_stored_text(row["employer"], noun, "employer"),
+                job_title=_stored_text(row["job_title"], noun, "job title"),
+                start_date=_stored_day(row["start_date"], noun, "start date"),
+                end_date=_stored_day(row["end_date"], noun, "end date", optional=True),
+                is_current=bool(row["is_current"]),
+                employment_type=employment_type,
+                summary=row["summary"],
+                entry_id=int(row["entry_id"]), created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+        except ValueError as exc:
+            # The domain refuses a period that cannot have happened, so a stored contradiction means the
+            # row was written by something else or edited by hand: it is reported, never repaired.
+            raise StoredRecordError(noun, f"it does not describe a possible employment period ({exc})") from exc
+
+    def _decode_education(self, row: sqlite3.Row) -> EducationEntry:
+        noun = "education record"
+        try:
+            return EducationEntry(
+                institution=_stored_text(row["institution"], noun, "institution"),
+                qualification=_stored_text(row["qualification"], noun, "qualification"),
+                discipline=row["discipline"],
+                start_date=_stored_day(row["start_date"], noun, "start date", optional=True),
+                completion_date=_stored_day(row["completion_date"], noun, "completion date", optional=True),
+                is_ongoing=bool(row["is_ongoing"]),
+                entry_id=int(row["entry_id"]), created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"it does not describe a possible period of study ({exc})") from exc
+
     # ------------------------------------------------------------------ background tasks
     #
     # The scheduler's persistence layer. Two properties are enforced here rather than by convention,
@@ -2221,11 +2568,28 @@ class CareerStore:
         )
 
     def delete_profile(self) -> bool:
+        """Delete the candidate's profile **and** the history records that belong to it.
+
+        The employment and education records are the detail behind the profile's summary fields, so leaving
+        them behind on a "delete my profile" would keep the most identifying data on disk while telling the
+        person their profile was removed. They go with it, in one transaction - and because that is a
+        destructive decision, the interface asks first using :meth:`profile_record_counts`, which is what
+        makes the counts in the confirmation real rather than guessed.
+
+        Returns whether a profile row was deleted. Records with no profile row are still removed, because the
+        person asked for their candidate data to go, not for a row of it to go.
+        """
+        counts = self.profile_record_counts()
         with self._connection:
+            self._connection.execute("DELETE FROM candidate_work_history")
+            self._connection.execute("DELETE FROM candidate_education")
             cursor = self._connection.execute("DELETE FROM candidate_profile WHERE profile_id=1")
         removed = cursor.rowcount > 0
-        if removed:
-            self._record("profile.deleted")
+        if removed or counts["work_history"] or counts["education"]:
+            # The counts are in the log line because "delete my profile" removing eleven records should be
+            # visible afterwards, in the one place that records what this application did.
+            self._record("profile.deleted", f"work_history={counts['work_history']} "
+                                            f"education={counts['education']}")
         return removed
 
     def delete_job(self, listing_id: str) -> bool:

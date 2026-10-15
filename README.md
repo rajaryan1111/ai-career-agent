@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -336,8 +336,9 @@ so a backup always names the file the app itself would open. Restoring replaces 
 
 A backup is a copy of the whole database in SQLite's own format, so it is the right thing for keeping
 your own data — and the wrong thing for handing someone a file to read. The **JSON export** is the
-portable, readable format: the candidate profile, every saved listing, the application records, the
-follow-up days and the activity history in an ordinary text file, with no code and no credentials in it.
+portable, readable format: the candidate profile, your employment and education records, every saved
+listing, the application records, the follow-up days and the activity history in an ordinary text file,
+with no code and no credentials in it.
 Reading one back is the import, which is also how you move your data to a second computer.
 
 In the window, the **Data safety** tab has **Export data to a JSON file** and, beside it,
@@ -374,6 +375,11 @@ the same plan the window shows. Refusals exit with status `2`.
   entry that cannot be read.
 - Activity history is appended, and an entry already present (same day, same kind, same text) is not
   duplicated, so importing the same file twice does not double your timeline.
+- Employment and education records **either all come across or none do**: if you already have any record
+  of your own stored here, the plan says how many it is keeping and imports none of the file's, because
+  two half-CVs mixed into one list is a record of nobody. Delete the stored records first if you want the
+  file's copies. A file written before this feature existed (format version 1) still imports its profile,
+  listings and history — it simply carries no records, and none are invented for it.
 - What was refused is listed in full when there are few of them, and with a count when there are many.
   Importing the same file a second time is safe and says so: `left N already-stored listing(s) as they
   were`.
@@ -448,6 +454,71 @@ reads like a forecast appears in the output. A listing whose stated requirements
 than guessing from the listing's free text. Also, differently-spelled skill names are only treated as the
 same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
 otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
+
+## Keep your own employment and education record
+
+The profile is a summary you hold in your head — a country, a discipline, a skills list, a years-of-work
+figure. The **Work history & study** tab is the record underneath it: each role you have held, and each
+qualification you have. It is the CV-shaped list, in the order a CV reads, and it is written by you,
+stored on this machine, and used for nothing else.
+
+**Employment.** Employer, job title, employment type (full time, part time, contract, internship,
+apprenticeship, self-employed, unknown), a start date, an end date *if you know it*, an explicit **current
+role** flag, and an optional note about what you did.
+
+**Education.** Institution, qualification, optional discipline, optional start date, completion date if
+you have finished, and an **ongoing study** flag.
+
+**What is refused rather than stored, because it cannot be true:** an end date before the start date (both
+dates are named in the message), a current role that also has an end date, an ongoing qualification that
+also has a completion date, a role or qualification with a blank employer, title, institution or
+qualification, and the same role or qualification twice (employer, title and start date, or institution,
+qualification and start date — capitalisation and spacing do not make it a different record). Dates must
+be written `YYYY-MM-DD`; a field that promises that shape does not quietly accept four other spellings.
+
+**What is left unknown rather than guessed:** an end date you have not recorded. A role that has ended
+but whose end date you do not know stays that way — it is shown as `end date not recorded`, and it
+contributes **no** duration, because nothing states that it continued. The same applies to a missing start
+date or completion date in education: the list says `start not recorded` rather than inventing one.
+
+**The duration line is about periods, not about experience.** The tab reports how many months are
+*covered* by the roles that are current or fully dated — months covered by two roles at once are counted
+once, a gap between roles is not counted, and a role with no recorded end counts nothing. It says which
+records it could not time, and it is never written back into your profile, which keeps its own
+years-of-experience figure that you control. A single confident "years of experience" number derived
+from these records would be a claim the records do not support.
+
+```bash
+python -m career_agent --history                       # both lists, and the months-covered line (read-only)
+python -m career_agent --add-role "Sandbox Systems" --title "Data Engineer" \
+    --start 2023-04-01 --current --employment-type full_time --summary "built the ingestion pipeline"
+python -m career_agent --add-role "Old Co" --title "Analyst" --start 2020-01-06 --end 2023-03-31
+python -m career_agent --add-study "IIT Delhi" --qualification "B.Tech" --discipline ECE \
+    --completed 2019-05-31
+python -m career_agent --add-study "Coursera" --qualification "Specialisation" --ongoing
+```
+
+`--history` is read-only. `--add-role` and `--add-study` add one record each and never edit or delete one;
+a refusal exits with status `2` and writes nothing at all. `--employment-type` defaults to `unknown`,
+which claims nothing, and an unrecognised type in an imported file becomes `unknown` rather than costing
+you the record's employer and dates.
+
+**Deleting.** A record can be deleted from the tab, after a confirmation that says what is being removed
+and that your profile, listings and other records are not. Deleting your **saved profile** also deletes
+these records, in one transaction, because they are the detail behind it — and the confirmation names how
+many of each before you agree, rather than the word "profile" standing in for eleven rows.
+
+**Where these records live and where they travel.** They are two tables in the schema (version 6 added
+`candidate_work_history` and `candidate_education`); an existing database is upgraded to it additively,
+with every existing row preserved and the new tables empty and immediately usable. They are included in
+SQLite backups and restores, in the JSON export (format version 2, top-level `work_history` and
+`education` arrays) and in the import rules described under
+[Move your data to another computer](#move-your-data-to-another-computer-json-export-and-import). Nothing
+here is uploaded, and no employer or institution is contacted about any of it.
+
+**Not implemented:** attaching a document to a role, importing roles from a résumé into this list (résumé
+import proposes the flat profile fields only), any verification of a record against an employer, and any
+use of these records in eligibility or matching. They are your notes.
 
 ## What needs doing next (preparation, interviews and follow-ups in one list)
 

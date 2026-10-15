@@ -71,7 +71,11 @@ class ExportImportCommandTests(unittest.TestCase):
         self.assertIn("Wrote 1 listing(s)", out)
         self.assertIn("nothing was sent anywhere", out)
         document = json.loads(self.export.read_text(encoding="utf-8"))
-        self.assertEqual(document["format_version"], 1)
+        # Pinned on purpose: the number is the wire format other builds read. Version 2 added the
+        # candidate's own work-history and education arrays, and a version 1 file is still read.
+        self.assertEqual(document["format_version"], 2)
+        self.assertIn("work_history", document)
+        self.assertIn("education", document)
         if os.name == "posix":
             self.assertEqual(self.export.stat().st_mode & 0o777, 0o600)
 

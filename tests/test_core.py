@@ -8,6 +8,7 @@ from career_agent import (
     is_substantive_confirmation_evidence, require_confirmation_evidence, selectable_tracker_statuses,
 )
 from career_agent.core import (
+    EducationEntry, EmploymentType, WorkHistoryEntry, months_covered_by,
     ACTIVITY_KIND_LABELS, MAX_ACTIVITY_DETAIL_LENGTH, ActivityKind, ApplicationActivity,
 )
 
@@ -520,3 +521,216 @@ class SelectableTrackerStatusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class WorkHistoryEntryTests(unittest.TestCase):
+    """The employment record: what it refuses, what it leaves unknown, and what it never claims."""
+
+    def test_a_current_role_reads_as_present_and_needs_no_end_date(self):
+        role = WorkHistoryEntry("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True,
+                                employment_type="full_time")
+
+        self.assertEqual(role.period, "2023-04-01 - present")
+        self.assertEqual(role.employment_type_label, "Full time")
+        self.assertFalse(role.is_current is None)
+
+    def test_an_ended_role_with_no_recorded_end_date_says_so(self):
+        role = WorkHistoryEntry("Old Co", "Analyst", date(2020, 1, 6))
+
+        self.assertEqual(role.period, "2020-01-06 - end date not recorded")
+        self.assertNotIn("present", role.period)
+
+    def test_an_end_before_a_start_is_refused_naming_both_dates(self):
+        with self.assertRaises(ValueError) as caught:
+            WorkHistoryEntry("X", "Y", date(2024, 5, 1), end_date=date(2023, 1, 1))
+
+        message = str(caught.exception)
+        self.assertIn("2023-01-01", message)
+        self.assertIn("2024-05-01", message)
+
+    def test_a_current_role_with_an_end_date_is_refused_rather_than_resolved(self):
+        with self.assertRaises(ValueError) as caught:
+            WorkHistoryEntry("X", "Y", date(2024, 1, 1), end_date=date(2025, 1, 1), is_current=True)
+
+        self.assertIn("current role", str(caught.exception))
+        self.assertIn("2025-01-01", str(caught.exception))
+
+    def test_the_same_day_start_and_end_is_allowed(self):
+        """A one-day contract is unusual, not impossible: the rule is order, not duration."""
+        role = WorkHistoryEntry("X", "Y", date(2024, 1, 1), end_date=date(2024, 1, 1))
+
+        self.assertEqual(role.end_date, date(2024, 1, 1))
+
+    def test_empty_required_text_is_refused_with_the_field_named(self):
+        for kwargs, noun in (({"employer": "  ", "job_title": "Y"}, "employer"),
+                             ({"employer": "X", "job_title": ""}, "job title")):
+            with self.subTest(noun=noun), self.assertRaises(ValueError) as caught:
+                WorkHistoryEntry(start_date=date(2024, 1, 1), **kwargs)
+            self.assertIn(noun, str(caught.exception))
+
+    def test_text_is_trimmed_and_inner_whitespace_collapsed(self):
+        role = WorkHistoryEntry("  Sandbox   Systems ", "  Data    Engineer ", date(2024, 1, 1))
+
+        self.assertEqual(role.employer, "Sandbox Systems")
+        self.assertEqual(role.job_title, "Data Engineer")
+
+    def test_an_over_long_field_is_refused_with_its_limit(self):
+        with self.assertRaises(ValueError) as caught:
+            WorkHistoryEntry("X" * 201, "Y", date(2024, 1, 1))
+
+        self.assertIn("200", str(caught.exception))
+
+    def test_a_summary_is_optional_and_blank_becomes_absent(self):
+        self.assertIsNone(WorkHistoryEntry("X", "Y", date(2024, 1, 1), summary="   ").summary)
+        self.assertEqual(WorkHistoryEntry("X", "Y", date(2024, 1, 1), summary=" built things ").summary,
+                         "built things")
+
+    def test_a_mistyped_year_is_refused_where_it_is_typed(self):
+        with self.assertRaises(ValueError):
+            WorkHistoryEntry("X", "Y", date(202, 1, 1))
+
+    def test_a_datetime_is_not_a_start_date(self):
+        with self.assertRaises(ValueError):
+            WorkHistoryEntry("X", "Y", datetime(2024, 1, 1, 9, 0))
+
+    def test_an_unknown_employment_type_is_refused(self):
+        with self.assertRaises(ValueError):
+            WorkHistoryEntry("X", "Y", date(2024, 1, 1), employment_type="freelancing-on-the-side")
+
+    def test_the_current_flag_must_be_a_bool(self):
+        with self.assertRaises(ValueError):
+            WorkHistoryEntry("X", "Y", date(2024, 1, 1), is_current="yes")
+
+    def test_months_covered_counts_a_current_role_up_to_the_day_given(self):
+        role = WorkHistoryEntry("X", "Y", date(2024, 1, 15), is_current=True)
+
+        self.assertEqual(role.months_covered(today=date(2024, 1, 15)), 0)
+        self.assertEqual(role.months_covered(today=date(2024, 2, 14)), 0)
+        self.assertEqual(role.months_covered(today=date(2024, 2, 15)), 1)
+        self.assertEqual(role.months_covered(today=date(2026, 1, 15)), 24)
+
+    def test_a_current_role_needs_a_day_to_measure_up_to(self):
+        with self.assertRaises(ValueError):
+            WorkHistoryEntry("X", "Y", date(2024, 1, 1), is_current=True).months_covered()
+
+    def test_an_ended_role_with_no_end_date_reports_no_duration_rather_than_todays(self):
+        """Counting it to today would claim the person is still there. Zero *known* months is the truth."""
+        role = WorkHistoryEntry("X", "Y", date(2020, 1, 1))
+
+        self.assertEqual(role.months_covered(today=date(2026, 1, 1)), 0)
+
+    def test_an_ended_role_counts_its_own_period_even_when_today_is_given(self):
+        role = WorkHistoryEntry("X", "Y", date(2020, 1, 1), end_date=date(2021, 1, 1))
+
+        self.assertEqual(role.months_covered(today=date(2026, 1, 1)), 12)
+
+
+class EducationEntryTests(unittest.TestCase):
+    """The education record: optional dates, and the two contradictions it refuses."""
+
+    def test_a_completed_qualification_reads_as_a_period(self):
+        entry = EducationEntry("IIT Delhi", "B.Tech", discipline="ECE", start_date=date(2015, 8, 1),
+                              completion_date=date(2019, 5, 31))
+
+        self.assertEqual(entry.period, "2015-08-01 - 2019-05-31")
+        self.assertEqual(entry.label, "B.Tech - ECE")
+
+    def test_ongoing_study_reads_as_ongoing(self):
+        entry = EducationEntry("Coursera", "Specialisation", is_ongoing=True)
+
+        self.assertEqual(entry.period, "start not recorded - ongoing")
+
+    def test_a_qualification_with_no_dates_says_both_are_missing(self):
+        entry = EducationEntry("Some College", "Diploma")
+
+        self.assertEqual(entry.period, "start not recorded - completion not recorded")
+
+    def test_completion_before_start_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            EducationEntry("X", "Y", start_date=date(2020, 1, 1), completion_date=date(2019, 1, 1))
+
+        self.assertIn("before the start date", str(caught.exception))
+
+    def test_ongoing_study_with_a_completion_date_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            EducationEntry("X", "Y", completion_date=date(2026, 1, 1), is_ongoing=True)
+
+        self.assertIn("ongoing", str(caught.exception))
+
+    def test_a_label_without_a_discipline_is_just_the_qualification(self):
+        self.assertEqual(EducationEntry("X", "M.Sc").label, "M.Sc")
+
+    def test_blank_discipline_becomes_absent(self):
+        self.assertIsNone(EducationEntry("X", "Y", discipline="   ").discipline)
+
+    def test_required_fields_are_enforced(self):
+        with self.assertRaises(ValueError) as caught:
+            EducationEntry("   ", "B.Tech")
+        self.assertIn("institution", str(caught.exception))
+
+        with self.assertRaises(ValueError) as caught_qualification:
+            EducationEntry("IIT", "")
+        self.assertIn("qualification", str(caught_qualification.exception))
+
+    def test_a_mistyped_completion_year_is_refused(self):
+        with self.assertRaises(ValueError):
+            EducationEntry("X", "Y", completion_date=date(9999, 1, 1))
+
+
+class MonthsCoveredTogetherTests(unittest.TestCase):
+    """The one duration figure the app shows, and the ways an honest one differs from a sum."""
+
+    def role(self, start, end=None, *, current=False):
+        return WorkHistoryEntry("Employer", "Role", start, end_date=end, is_current=current)
+
+    def test_two_roles_in_sequence_count_all_of_both(self):
+        first = self.role(date(2020, 1, 1), date(2021, 1, 1))
+        second = self.role(date(2021, 1, 1), date(2022, 1, 1))
+
+        self.assertEqual(months_covered_by([first, second]), 24)
+
+    def test_two_roles_at_once_are_not_added_together(self):
+        """The reason this is not a sum: two part-time roles in the same year is one year, not two."""
+        first = self.role(date(2020, 1, 1), date(2021, 1, 1))
+        second = self.role(date(2020, 7, 1), date(2021, 7, 1))
+
+        self.assertEqual(first.months_covered() + second.months_covered(), 24)
+        self.assertEqual(months_covered_by([first, second]), 18)
+
+    def test_a_gap_between_roles_is_not_counted(self):
+        first = self.role(date(2020, 1, 1), date(2021, 1, 1))
+        second = self.role(date(2022, 1, 1), date(2023, 1, 1))
+
+        self.assertEqual(months_covered_by([first, second]), 24, "the year between them is not work")
+
+    def test_a_role_with_no_recorded_end_contributes_nothing(self):
+        self.assertEqual(months_covered_by([self.role(date(2020, 1, 1))]), 0)
+
+    def test_a_current_role_counts_up_to_the_day_given(self):
+        role = self.role(date(2024, 1, 15), current=True)
+
+        self.assertEqual(months_covered_by([role], today=date(2026, 1, 15)), 24)
+
+    def test_a_current_role_measured_without_a_day_is_refused_rather_than_guessed_at(self):
+        with self.assertRaises(ValueError):
+            months_covered_by([self.role(date(2024, 1, 15), current=True)])
+
+    def test_no_records_cover_no_months(self):
+        self.assertEqual(months_covered_by([]), 0)
+
+    def test_a_one_day_role_covers_no_whole_month(self):
+        self.assertEqual(months_covered_by([self.role(date(2024, 1, 1), date(2024, 1, 1))]), 0)
+
+    def test_a_role_contained_inside_another_does_not_extend_the_span(self):
+        outer = self.role(date(2018, 1, 1), date(2024, 1, 1))
+        inner = self.role(date(2020, 1, 1), date(2021, 1, 1))
+
+        self.assertEqual(months_covered_by([outer, inner]), 72)
+
+    def test_the_order_of_the_records_does_not_change_the_answer(self):
+        first = self.role(date(2020, 1, 1), date(2021, 1, 1))
+        second = self.role(date(2020, 7, 1), date(2021, 7, 1))
+        third = self.role(date(2023, 1, 1), date(2024, 1, 1))
+
+        self.assertEqual(months_covered_by([first, second, third]),
+                         months_covered_by([third, second, first]))

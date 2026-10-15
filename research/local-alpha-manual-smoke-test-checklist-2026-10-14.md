@@ -251,6 +251,49 @@ the store behind the widgets, and the checklist is where the widgets themselves 
 67. [ ] Point `--next-actions` at a path that does not exist (`--database /tmp/nothing.sqlite3`): it must say
     there is no database yet and create no file.
 
+## Work history and education (added 2026-10-15)
+
+The records behind the profile's summary fields, on their own tab and on the command line. Everything here
+is a plan the person wrote and nothing contacts an employer.
+
+68. [ ] Open the **Work history & study** tab. Add a current role (employer, job title, start date, tick
+    **This is my current role**, type *Full time*) and confirm it appears at the top of the employment list
+    reading `start - present`, that the summary line under the forms counts it, and that the status line
+    names what was saved.
+69. [ ] Add an ended role with an end date before its start date. It must be refused with a dialog naming
+    both dates, the list must not change, and the employment count must not move. Then add a role that has
+    ended but whose end date you do not know: it must be accepted, list as `end date not recorded`, and the
+    summary line must say that no duration is counted for it.
+70. [ ] Add a role with a start date written as `1 April 2023`. It must be refused with a message naming the
+    `YYYY-MM-DD` shape, and nothing may be written.
+71. [ ] Select the role you added, change its job title, press **Save changes to the selected role**, and
+    confirm the list shows the new title. Then press **Delete the selected role**, answering **No** first
+    (nothing may change) and then **Yes** (only that role may disappear, and the status line must say what
+    was deleted).
+72. [ ] Add an education record ticking **Still studying** with no dates, and confirm it lists as
+    `start not recorded - ongoing`. Then add one with a completion date and no start date, and confirm it
+    lists `start not recorded - <date>` after the ongoing one.
+73. [ ] Add an education record with a completion date while **Still studying** is ticked. It must be
+    refused, and the list must not change.
+74. [ ] Without the window open, run `python -m career_agent --history`. It must print the same records in
+    the same order, state the months covered without calling them years of experience, and say the report
+    is read-only.
+75. [ ] Run `python -m career_agent --add-role "Sandbox Systems" --title "Data Engineer" --start 2023-04-01
+    --current`. It must add the record and report what was saved. Then run the same command again: it must
+    refuse the duplicate, write nothing, and exit with status 2 (`echo $?` on macOS/Linux).
+76. [ ] Run `python -m career_agent --add-study "IIT Delhi" --qualification "B.Tech" --completed 2019-05-31`
+    and confirm it appears in the window after pressing the tab's refresh path (switch tabs or reopen the
+    window).
+77. [ ] Save a profile, add at least one role and one qualification, then press **Delete profile** and read
+    the confirmation before answering. It must name how many employment and education records will be
+    deleted with the profile, and answering **Yes** must remove all of them, leave the job listings and
+    applications untouched, and empty the Work history & study tab.
+78. [ ] Export to JSON (Data safety tab) and open the file in a text editor: it must contain
+    `"format_version": 2` and top-level `work_history` and `education` arrays holding the records you
+    entered. Import it into a second, empty database with `--import-from ... --yes` and confirm the records
+    arrive with the same dates. Import it into the *first* database (which still holds its records) and
+    confirm the plan says the stored records are kept and nothing is duplicated.
+
 ## Record results
 
 For each operating system tested, record:

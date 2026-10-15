@@ -19,8 +19,9 @@ from .backup import (
 )
 from .core import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
-    Decision, InterviewMode, InterviewOutcome, InterviewStage, PreparationKind,
-    evaluate_eligibility, score_relevance, selectable_tracker_statuses,
+    Decision, EducationEntry, EmploymentType, InterviewMode, InterviewOutcome, InterviewStage,
+    PreparationKind, WorkHistoryEntry, evaluate_eligibility, months_covered_by, score_relevance,
+    selectable_tracker_statuses,
 )
 from . import __version__
 from .config import database_path_for_run
@@ -104,9 +105,11 @@ class CareerAgentApp:
         self.scheduler_tab = ttk.Frame(self.tabs, padding=12)
         self.follow_up_tab = ttk.Frame(self.tabs, padding=12)
         self.actions_tab = ttk.Frame(self.tabs, padding=12)
+        self.history_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
+        self.tabs.add(self.history_tab, text="Work history & study")
         self.tabs.add(self.actions_tab, text="Next actions")
         self.tabs.add(self.follow_up_tab, text="Follow-ups")
         self.tabs.add(self.data_tab, text="Data safety")
@@ -116,6 +119,7 @@ class CareerAgentApp:
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
+        self._build_history()
         self._build_actions()
         self._build_follow_ups()
         self._build_data_safety()
@@ -126,6 +130,7 @@ class CareerAgentApp:
         self._refresh_jobs()
         self._refresh_tracker()
         self._refresh_follow_ups()
+        self._refresh_history()
         self._refresh_actions()
         self._refresh_scheduler()
 
@@ -339,6 +344,401 @@ class CareerAgentApp:
             self.task_runs_tree.column(column, width=width, anchor=W)
         self.task_runs_tree.grid(row=6, column=0, columnspan=4, sticky="nsew")
         self.scheduler_tab.columnconfigure(0, weight=1)
+
+    def _build_history(self):
+        """The employment and study records behind the profile's summary fields.
+
+        Two forms, two lists, on their own tab rather than inside the profile form: these are the records a
+        person edits and reorders over years, and the profile form's ten fields are the summary they keep in
+        mind. The buttons say what they do to the *selected row*, and a row has to be selected before an edit
+        or a deletion can happen at all.
+        """
+        ttk.Label(
+            self.history_tab, wraplength=960, justify=LEFT,
+            text=("Your own record, in the order a CV reads: the current role first, then the most recent. "
+                  "These are notes you keep, not verified facts, and nothing here is checked against any "
+                  "employer or document. Blank fields stay unknown rather than being guessed."),
+        ).pack(anchor=W, pady=(0, 8))
+
+        work_form = ttk.LabelFrame(self.history_tab, text="Employment", padding=8)
+        work_form.pack(fill=X, pady=(0, 8))
+        self.work_vars = {}
+        self._history_entry(work_form, "Employer", "employer", 0, 0, self.work_vars)
+        self._history_entry(work_form, "Job title", "job_title", 0, 1, self.work_vars)
+        self._history_entry(work_form, "Start date (YYYY-MM-DD)", "start_date", 1, 0, self.work_vars)
+        self._history_entry(work_form, "End date (blank if not recorded)", "end_date", 1, 1, self.work_vars)
+        ttk.Label(work_form, text="Employment type").grid(row=2, column=0, sticky=W, pady=4)
+        self.work_type = tk.StringVar(value=EmploymentType.UNKNOWN.value)
+        ttk.Combobox(work_form, textvariable=self.work_type, state="readonly", width=22,
+                     values=[kind.value for kind in EmploymentType]).grid(row=2, column=1, sticky=W, pady=4)
+        self.work_current = tk.BooleanVar(value=False)
+        ttk.Checkbutton(work_form, text="This is my current role", variable=self.work_current
+                        ).grid(row=2, column=2, columnspan=2, sticky=W, padx=(12, 0), pady=4)
+        ttk.Label(work_form, text="What you did (optional)").grid(row=3, column=0, sticky=W, pady=4)
+        self.work_vars["summary"] = tk.StringVar()
+        ttk.Entry(work_form, textvariable=self.work_vars["summary"], width=70).grid(
+            row=3, column=1, columnspan=3, sticky=W, pady=4)
+        work_actions = ttk.Frame(work_form)
+        work_actions.grid(row=4, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        ttk.Button(work_actions, text="Add this role", command=self._add_work_history).pack(side="left", padx=(0, 8))
+        ttk.Button(work_actions, text="Save changes to the selected role",
+                   command=self._update_work_history).pack(side="left", padx=8)
+        ttk.Button(work_actions, text="Select the selected role for editing", command=self._load_work_history
+                   ).pack(side="left", padx=8)
+        ttk.Button(work_actions, text="Delete the selected role", command=self._delete_work_history
+                   ).pack(side="left", padx=8)
+        self.work_tree = ttk.Treeview(work_form, columns=("employer", "title", "type", "period", "current"),
+                                      show="headings", height=5)
+        for column, label, width in (("employer", "Employer", 190), ("title", "Job title", 190),
+                                     ("type", "Type", 110), ("period", "Period", 210),
+                                     ("current", "Current", 70)):
+            self.work_tree.heading(column, text=label)
+            self.work_tree.column(column, width=width, anchor=W)
+        self.work_tree.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        self.work_tree.bind("<<TreeviewSelect>>", self._select_work_history)
+
+        study_form = ttk.LabelFrame(self.history_tab, text="Education", padding=8)
+        study_form.pack(fill=X)
+        self.study_vars = {}
+        self._history_entry(study_form, "Institution", "institution", 0, 0, self.study_vars)
+        self._history_entry(study_form, "Qualification", "qualification", 0, 1, self.study_vars)
+        self._history_entry(study_form, "Discipline (optional)", "discipline", 1, 0, self.study_vars)
+        self._history_entry(study_form, "Start date (optional)", "start_date", 1, 1, self.study_vars)
+        self._history_entry(study_form, "Completion date (optional)", "completion_date", 2, 0, self.study_vars)
+        self.study_ongoing = tk.BooleanVar(value=False)
+        ttk.Checkbutton(study_form, text="Still studying", variable=self.study_ongoing
+                        ).grid(row=2, column=2, columnspan=2, sticky=W, padx=(12, 0), pady=4)
+        study_actions = ttk.Frame(study_form)
+        study_actions.grid(row=3, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        ttk.Button(study_actions, text="Add this qualification", command=self._add_education
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(study_actions, text="Save changes to the selected qualification",
+                   command=self._update_education).pack(side="left", padx=8)
+        ttk.Button(study_actions, text="Select the selected qualification for editing",
+                   command=self._load_education).pack(side="left", padx=8)
+        ttk.Button(study_actions, text="Delete the selected qualification", command=self._delete_education
+                   ).pack(side="left", padx=8)
+        self.study_tree = ttk.Treeview(study_form, columns=("institution", "qualification", "discipline",
+                                                            "period", "ongoing"),
+                                       show="headings", height=5)
+        for column, label, width in (("institution", "Institution", 190),
+                                     ("qualification", "Qualification", 190),
+                                     ("discipline", "Discipline", 130), ("period", "Period", 210),
+                                     ("ongoing", "Ongoing", 70)):
+            self.study_tree.heading(column, text=label)
+            self.study_tree.column(column, width=width, anchor=W)
+        self.study_tree.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        self.study_tree.bind("<<TreeviewSelect>>", self._select_education)
+
+        self.history_summary = tk.StringVar()
+        ttk.Label(self.history_tab, textvariable=self.history_summary, wraplength=960,
+                  justify="left").pack(anchor=W, pady=(8, 0))
+        ttk.Label(
+            self.history_tab, wraplength=960, justify=LEFT,
+            text=("Deleting the saved profile deletes these records too, in one step, because they are the "
+                  "detail behind it - the confirmation names how many. Nothing here is uploaded, and no "
+                  "employer is contacted about any of it."),
+        ).pack(anchor=W, pady=(4, 0))
+
+    def _history_entry(self, parent, label, key, row, col, variables):
+        """One labelled text field on the history tab, kept in the same variables dict its form uses."""
+        label_padx = (0, 6) if col == 0 else (12, 6)
+        field_padx = (0, 0) if col == 0 else (0, 12)
+        ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=label_padx, pady=4)
+        variable = tk.StringVar()
+        variables[key] = variable
+        ttk.Entry(parent, textvariable=variable, width=30).grid(
+            row=row, column=col * 2 + 1, sticky=W, padx=field_padx, pady=4)
+        return variable
+
+    def _work_form_values(self) -> dict:
+        return {key: variable.get() for key, variable in self.work_vars.items()}
+
+    def _study_form_values(self) -> dict:
+        return {key: variable.get() for key, variable in self.study_vars.items()}
+
+    def _history_day(self, raw: str, *, label: str, optional: bool) -> date | None:
+        """A day typed into one of these forms, or a refusal the person can act on.
+
+        The shape is checked before parsing, like every other date field in this window: ``fromisoformat``
+        also accepts basic-format and ISO week dates, and a field that promises ``YYYY-MM-DD`` should not
+        quietly accept three other spellings.
+        """
+        text = (raw or "").strip()
+        if not text:
+            if optional:
+                return None
+            raise ValueError(f"Give the {label} as YYYY-MM-DD.")
+        if ACTIVITY_DATE_PATTERN.fullmatch(text) is None:
+            raise ValueError(f"Give the {label} as YYYY-MM-DD, for example {date.today().isoformat()}.")
+        return date.fromisoformat(text)
+
+    def _selected_tree_id(self, tree, *, what: str) -> int | None:
+        """The integer record id behind the selected row, or ``None`` after explaining how to select one."""
+        selection = tree.selection() if tree is not None else ()
+        if not selection:
+            messagebox.showinfo(f"Select a row first",
+                               f"Select the {what} you want to work on in the list, then press the button "
+                               "again.", parent=self.root)
+            return None
+        try:
+            return int(selection[0])
+        except (TypeError, ValueError):
+            messagebox.showinfo("That row cannot be used",
+                               "The selected row is not one of your saved records. Refresh the tab and "
+                               "try again.", parent=self.root)
+            return None
+
+    def _refresh_history(self):
+        """Rebuild both lists and the one-line summary. Read-only: nothing here writes."""
+        if not hasattr(self, "work_tree"):
+            return
+        try:
+            roles = self.store.list_work_history()
+            study = self.store.list_education()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        for tree, rows, values in (
+            (self.work_tree, roles, lambda row: (row.employer, row.job_title, row.employment_type_label,
+                                                 row.period, "yes" if row.is_current else "")),
+            (self.study_tree, study, lambda row: (row.institution, row.qualification, row.discipline or "",
+                                                  row.period, "yes" if row.is_ongoing else "")),
+        ):
+            for item in tree.get_children():
+                tree.delete(item)
+            for row in rows:
+                tree.insert("", END, iid=str(row.entry_id), values=values(row))
+        self.history_summary.set(self._history_summary_line(roles, study))
+
+    def _history_summary_line(self, roles, study) -> str:
+        """What these records add up to, stated as a duration of periods rather than years of experience.
+
+        Deliberately not a single "years of experience" number: a role can have no recorded end, and two
+        roles can run at once, so a sum of job durations would produce a figure that looks authoritative
+        and is not. The line reports the months *covered* by roles that are current or fully dated
+        (overlaps counted once), says how many records it could not count, and is never written back into
+        the profile - which keeps its own figure that the person controls.
+        """
+        today = datetime.now().date()
+        counted = months_covered_by(roles, today=today)
+        unknown = sum(1 for row in roles if row.end_date is None and not row.is_current)
+        parts = []
+        if not roles and not study:
+            return ("No employment or education records yet. Both forms above save to this local database "
+                    "only.")
+        if roles:
+            parts.append(f"{len(roles)} employment record(s)")
+        if study:
+            parts.append(f"{len(study)} education record(s)")
+        line = " · ".join(parts) + ". "
+        if counted:
+            line += (f"Together they cover {counted} month(s) of recorded employment, counting overlaps "
+                     "once each and not a claim about experience. ")
+        if unknown:
+            line += (f"{unknown} ended role(s) have no end date recorded, so no duration is counted for "
+                     "them. ")
+        line += "Your profile's own experience field is unchanged by this tab."
+        return line
+
+    def _select_work_history(self, _event=None):
+        """Put the selected role's own values in the form, so an edit starts from what is stored."""
+        if not self.work_tree.selection():
+            return
+        self._load_work_history(quiet=True)
+
+    def _select_education(self, _event=None):
+        if not self.study_tree.selection():
+            return
+        self._load_education(quiet=True)
+
+    def _load_work_history(self, *, quiet: bool = False):
+        """Fill the employment form from the stored row the list has selected."""
+        entry_id = self._selected_tree_id(self.work_tree, what="role") if not quiet else (
+            int(self.work_tree.selection()[0]) if self.work_tree.selection() else None)
+        if entry_id is None:
+            return
+        try:
+            entry = self.store.get_work_history(entry_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if entry is None:
+            messagebox.showinfo("That record is gone", "Refresh the tab and try again.", parent=self.root)
+            return
+        values = {"employer": entry.employer, "job_title": entry.job_title,
+                  "start_date": entry.start_date.isoformat(),
+                  "end_date": entry.end_date.isoformat() if entry.end_date else "",
+                  "summary": entry.summary or ""}
+        for key, value in values.items():
+            self.work_vars[key].set(value)
+        self.work_type.set(entry.employment_type.value)
+        self.work_current.set(entry.is_current)
+        if not quiet:
+            self.status.set(f"Loaded {entry.job_title} at {entry.employer} into the form. Change what you "
+                            "need, then press Save changes to the selected role.")
+
+    def _load_education(self, *, quiet: bool = False):
+        """Fill the education form from the stored row the list has selected."""
+        selection = self.study_tree.selection()
+        if not selection:
+            if not quiet:
+                self._selected_tree_id(self.study_tree, what="qualification")
+            return
+        entry_id = int(selection[0])
+        try:
+            entry = self.store.get_education(entry_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if entry is None:
+            messagebox.showinfo("That record is gone", "Refresh the tab and try again.", parent=self.root)
+            return
+        values = {"institution": entry.institution, "qualification": entry.qualification,
+                  "discipline": entry.discipline or "",
+                  "start_date": entry.start_date.isoformat() if entry.start_date else "",
+                  "completion_date": entry.completion_date.isoformat() if entry.completion_date else ""}
+        for key, value in values.items():
+            self.study_vars[key].set(value)
+        self.study_ongoing.set(entry.is_ongoing)
+        if not quiet:
+            self.status.set(f"Loaded {entry.label} at {entry.institution} into the form. Change what you "
+                            "need, then press Save changes to the selected qualification.")
+
+    def _add_work_history(self):
+        """Add the role described by the form, with the domain's validation reported as typed."""
+        values = self._work_form_values()
+        try:
+            started = self._history_day(values.get("start_date", ""), label="start date", optional=False)
+            ended = self._history_day(values.get("end_date", ""), label="end date", optional=True)
+            added = self.store.add_work_history(
+                values.get("employer", ""), values.get("job_title", ""), started, end_date=ended,
+                is_current=bool(self.work_current.get()), employment_type=self.work_type.get(),
+                summary=values.get("summary") or None)
+        except ValueError as exc:
+            messagebox.showerror("Role not saved", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set(f"Employment record added: {added.job_title} at {added.employer} ({added.period}).")
+
+    def _update_work_history(self):
+        """Save the form's values over the selected role, keeping the rest of the record as it was."""
+        entry_id = self._selected_tree_id(self.work_tree, what="role")
+        if entry_id is None:
+            return
+        values = self._work_form_values()
+        try:
+            started = self._history_day(values.get("start_date", ""), label="start date", optional=False)
+            ended = self._history_day(values.get("end_date", ""), label="end date", optional=True)
+            updated = self.store.update_work_history(
+                entry_id, values.get("employer", ""), values.get("job_title", ""), started, end_date=ended,
+                is_current=bool(self.work_current.get()), employment_type=self.work_type.get(),
+                summary=values.get("summary") or None)
+        except ValueError as exc:
+            messagebox.showerror("Role not updated", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set(f"Employment record {updated.entry_id} saved: {updated.job_title} at "
+                        f"{updated.employer} ({updated.period}).")
+
+    def _delete_work_history(self):
+        """Delete the selected role, after asking, and say what was actually removed."""
+        entry_id = self._selected_tree_id(self.work_tree, what="role")
+        if entry_id is None:
+            return
+        if not messagebox.askyesno(
+                "Delete this role?",
+                "The employment record will be removed from this database and cannot be brought back. "
+                "Your profile, your applications and your other records are not changed.",
+                parent=self.root):
+            return
+        try:
+            removed = self.store.delete_work_history(entry_id)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set("Employment record deleted." if removed
+                        else "That employment record was already gone; nothing was deleted.")
+
+    def _add_education(self):
+        """Add the qualification described by the form."""
+        values = self._study_form_values()
+        try:
+            started = self._history_day(values.get("start_date", ""), label="start date", optional=True)
+            completed = self._history_day(values.get("completion_date", ""), label="completion date",
+                                          optional=True)
+            added = self.store.add_education(
+                values.get("institution", ""), values.get("qualification", ""),
+                discipline=values.get("discipline") or None, start_date=started,
+                completion_date=completed, is_ongoing=bool(self.study_ongoing.get()))
+        except ValueError as exc:
+            messagebox.showerror("Qualification not saved", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set(f"Education record added: {added.label} at {added.institution} ({added.period}).")
+
+    def _update_education(self):
+        """Save the form's values over the selected qualification."""
+        entry_id = self._selected_tree_id(self.study_tree, what="qualification")
+        if entry_id is None:
+            return
+        values = self._study_form_values()
+        try:
+            started = self._history_day(values.get("start_date", ""), label="start date", optional=True)
+            completed = self._history_day(values.get("completion_date", ""), label="completion date",
+                                          optional=True)
+            updated = self.store.update_education(
+                entry_id, values.get("institution", ""), values.get("qualification", ""),
+                discipline=values.get("discipline") or None, start_date=started,
+                completion_date=completed, is_ongoing=bool(self.study_ongoing.get()))
+        except ValueError as exc:
+            messagebox.showerror("Qualification not updated", str(exc), parent=self.root)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set(f"Education record {updated.entry_id} saved: {updated.label} at "
+                        f"{updated.institution} ({updated.period}).")
+
+    def _delete_education(self):
+        """Delete the selected qualification, after asking."""
+        entry_id = self._selected_tree_id(self.study_tree, what="qualification")
+        if entry_id is None:
+            return
+        if not messagebox.askyesno(
+                "Delete this qualification?",
+                "The education record will be removed from this database and cannot be brought back. Your "
+                "profile, your applications and your other records are not changed.",
+                parent=self.root):
+            return
+        try:
+            removed = self.store.delete_education(entry_id)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_history()
+        self.status.set("Education record deleted." if removed
+                        else "That education record was already gone; nothing was deleted.")
 
     def _build_actions(self):
         """The page that answers "what now?": every open item across applications, ordered.
@@ -1309,7 +1709,26 @@ class CareerAgentApp:
         self.status.set("Candidate profile saved locally.")
 
     def _delete_profile(self):
-        if not messagebox.askyesno("Delete profile", "Permanently delete the saved profile on this device?", parent=self.root):
+        """Delete the profile *and* the history records that are its detail, naming how many first.
+
+        The counts come from the store rather than from the lists on screen, so the dialog is asking about
+        what the next statement will actually delete. A person who has spent an evening entering their jobs
+        deserves to be told that eleven records are going, not "the profile".
+        """
+        try:
+            counts = self.store.profile_record_counts()
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        detail = ""
+        if counts["work_history"] or counts["education"]:
+            detail = (f"\n\nThis also deletes the {counts['work_history']} employment record(s) and "
+                      f"{counts['education']} education record(s) on the Work history & study tab, because "
+                      "they are the detail behind the profile.")
+        if not messagebox.askyesno("Delete profile",
+                                   "Permanently delete the saved profile on this device?"
+                                   + detail + "\n\nYour job listings and applications are not deleted.",
+                                   parent=self.root):
             return
         try:
             deleted = self.store.delete_profile()
@@ -1322,7 +1741,8 @@ class CareerAgentApp:
             return
         for variable in self.profile_vars.values():
             variable.set("")
-        self.status.set("Saved profile deleted.")
+        self._refresh_history()
+        self.status.set("Saved profile deleted, along with its employment and education records.")
 
     def _import_resume(self):
         """Read a chosen resume locally and open the review screen. Nothing is saved here.

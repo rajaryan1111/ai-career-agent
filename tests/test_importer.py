@@ -93,6 +93,217 @@ class ImportTestCase(unittest.TestCase):
         self.assertEqual(record["application_tracker"]["status"], "discovered")
         self.assertEqual(len(record["activity"]), 1)
         self.assertIn("privacy_note", document)
+        # The candidate's own history travels as top-level arrays: it belongs to the person, not to a job.
+        self.assertIn("work_history", document)
+        self.assertIn("education", document)
+
+    def test_a_version_one_file_still_imports_its_listings_and_profile(self):
+        """The promise of a wire format: a file written before this feature is not stranded.
+
+        Version 1 has no history arrays at all. It must read, and it must not invent records the file never
+        contained - an import that fabricates employment history is worse than one that refuses the file.
+        """
+        _, document = self.export_file()
+        del document["work_history"], document["education"]
+        document["format_version"] = 1
+        older = self.folder / "version-1.json"
+        older.write_text(json.dumps(document), encoding="utf-8")
+
+        with self.target_store() as store:
+            parsed = importer.read_export(older)
+            plan = importer.plan_import(store, parsed, source=older.name)
+            outcome = importer.apply_import(store, parsed, source=older.name)
+
+            self.assertEqual(plan.new_work_history, ())
+            self.assertEqual(plan.new_education, ())
+            self.assertEqual(store.list_work_history(), ())
+            self.assertEqual(store.list_education(), ())
+            self.assertEqual(store.get_profile().candidate_country, "India")
+            self.assertIsNotNone(store.get_job("j1"))
+
+        self.assertIn("imported the profile", outcome.describe())
+
+    def test_an_unknown_format_version_is_refused_with_the_number_it_holds(self):
+        _, document = self.export_file()
+        document["format_version"] = 99
+        ahead = self.folder / "from-the-future.json"
+        ahead.write_text(json.dumps(document), encoding="utf-8")
+
+        with self.assertRaises(importer.ImportRefused) as caught:
+            importer.read_export(ahead)
+
+        message = str(caught.exception)
+        self.assertIn("99", message)
+        self.assertIn("2", message, "the refusal names the versions this build does read")
+
+    def test_the_history_round_trips_with_every_field_intact(self):
+        with self.source_store() as store:
+            store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True,
+                                   employment_type="full_time", summary="built the pipeline")
+            store.add_work_history("Old Co", "Analyst", date(2020, 1, 6), end_date=date(2023, 3, 31))
+            store.add_education("IIT Delhi", "B.Tech", discipline="ECE", start_date=date(2015, 8, 1),
+                                completion_date=date(2019, 5, 31))
+            store.add_education("Coursera", "Specialisation", is_ongoing=True)
+            path = self.folder / "history.json"
+            importer.write_export(store, path)
+            document = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertEqual([record["job_title"] for record in document["work_history"]],
+                             ["Data Engineer", "Analyst"], "the export keeps the CV order")
+            self.assertEqual(document["work_history"][0]["is_current"], True)
+            self.assertIsNone(document["work_history"][0]["end_date"])
+            self.assertEqual(document["education"][0]["is_ongoing"], True)
+
+            with self.target_store() as target:
+                importer.apply_import(target, document, source=path.name)
+                roles = target.list_work_history()
+                study = target.list_education()
+
+        self.assertEqual([(role.employer, role.job_title, role.start_date, role.end_date, role.is_current)
+                          for role in roles],
+                         [("Sandbox Systems", "Data Engineer", date(2023, 4, 1), None, True),
+                          ("Old Co", "Analyst", date(2020, 1, 6), date(2023, 3, 31), False)])
+        self.assertEqual(roles[0].employment_type.value, "full_time")
+        self.assertEqual(roles[0].summary, "built the pipeline")
+        self.assertEqual([(entry.institution, entry.qualification, entry.discipline, entry.is_ongoing)
+                          for entry in study],
+                         [("Coursera", "Specialisation", None, True),
+                          ("IIT Delhi", "B.Tech", "ECE", False)])
+        self.assertEqual(study[1].completion_date, date(2019, 5, 31))
+
+    def test_an_unrecognised_employment_type_in_a_file_becomes_unknown_rather_than_refusing_the_record(self):
+        """The person's employer and dates are still true even when the label is not one this build knows."""
+        _, document = self.export_file()
+        document["work_history"] = [{
+            "employer": "Sandbox Systems", "job_title": "Data Engineer", "employment_type": "gig-economy",
+            "start_date": "2024-01-01", "end_date": None, "is_current": True, "summary": None,
+        }]
+
+        with self.target_store() as store:
+            outcome = importer.apply_import(store, document, source="export.json")
+            stored = store.list_work_history()
+
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0].employment_type.value, "unknown")
+        self.assertEqual(stored[0].job_title, "Data Engineer")
+        self.assertIn("added 1 employment record", outcome.describe())
+
+    def test_a_record_with_an_impossible_period_is_rejected_and_the_rest_still_imports(self):
+        """One bad record must not take a person's whole file with it, and the good ones must land."""
+        _, document = self.export_file()
+        document["work_history"] = [
+            {"employer": "Sandbox Systems", "job_title": "Data Engineer", "employment_type": "full_time",
+             "start_date": "2024-01-01", "end_date": None, "is_current": True, "summary": None},
+            {"employer": "Bad Co", "job_title": "Analyst", "employment_type": "full_time",
+             "start_date": "2020-01-01", "end_date": "2019-01-01", "is_current": False, "summary": None},
+        ]
+
+        with self.target_store() as store:
+            plan = importer.plan_import(store, document, source="export.json")
+            self.assertEqual(len(plan.new_work_history), 1)
+            self.assertEqual(len(plan.rejected), 1)
+            outcome = importer.apply_import(store, document, source="export.json")
+            stored = store.list_work_history()
+
+        self.assertEqual([role.employer for role in stored], ["Sandbox Systems"])
+        self.assertIn("Bad Co", outcome.describe() + str(plan.describe()))
+
+    def test_a_record_the_store_refuses_at_write_time_is_reported_rather_than_crashing_the_import(self):
+        """The plan and the write must agree about what is valid; when they cannot, say so."""
+        _, document = self.export_file()
+        document["education"] = [
+            {"institution": "IIT Delhi", "qualification": "B.Tech", "discipline": "ECE",
+             "start_date": "2015-08-01", "completion_date": "2019-05-31", "is_ongoing": False},
+            {"institution": "IIT Delhi", "qualification": "B.Tech", "discipline": "ECE",
+             "start_date": "2015-08-01", "completion_date": "2019-05-31", "is_ongoing": False},
+        ]
+
+        with self.target_store() as store:
+            outcome = importer.apply_import(store, document, source="export.json")
+            stored = store.list_education()
+
+        self.assertEqual(len(stored), 1, "the duplicate is written once")
+        text = outcome.describe()
+        self.assertIn("added 1 education record(s)", text)
+        self.assertIn("skipped 1 unreadable record(s)", text,
+                      "the record the write refused is counted among the skipped, not hidden")
+
+    def test_a_file_full_of_bad_records_imports_no_history_at_all_and_says_so(self):
+        _, document = self.export_file()
+        document["work_history"] = [
+            {"employer": "", "job_title": "Analyst", "start_date": "2020-01-01", "is_current": False},
+            {"employer": "X", "job_title": "Y", "start_date": "not a date", "is_current": False},
+        ]
+
+        with self.target_store() as store:
+            outcome = importer.apply_import(store, document, source="export.json")
+
+            self.assertEqual(store.list_work_history(), (), "no partial writes from a rejected batch")
+
+        text = outcome.describe()
+        self.assertIn("skipped 2 unreadable record(s)", text)
+        self.assertNotIn("employment record", text, "nothing was added, so nothing is claimed")
+
+    def test_an_import_never_mixes_a_files_history_into_records_that_are_already_here(self):
+        """All or nothing: two half-CVs in one list would be a record of nobody."""
+        _, document = self.export_file()
+        document["work_history"] = [
+            {"employer": "From The File", "job_title": "Engineer", "employment_type": "full_time",
+             "start_date": "2019-01-01", "end_date": "2021-01-01", "is_current": False, "summary": None},
+        ]
+
+        with self.target_store() as store:
+            store.add_work_history("Already Here", "Analyst", date(2024, 1, 1), is_current=True)
+            plan = importer.plan_import(store, document, source="export.json")
+            outcome = importer.apply_import(store, document, source="export.json")
+            stored = store.list_work_history()
+
+        self.assertEqual([role.employer for role in stored], ["Already Here"],
+                         "the stored record wins and the file's copy is not added beside it")
+        self.assertTrue(plan.kept_local_history)
+        self.assertEqual(plan.kept_history_counts, (1, 0))
+        text = " ".join(plan.describe())
+        self.assertIn("delete those records first", text)
+        self.assertIn("kept", outcome.describe() + text)
+
+    def test_the_import_reports_how_many_records_it_would_add_before_adding_them(self):
+        _, document = self.export_file()
+        document["work_history"] = [
+            {"employer": "Sandbox Systems", "job_title": "Data Engineer", "employment_type": "full_time",
+             "start_date": "2024-01-01", "end_date": None, "is_current": True, "summary": None},
+        ]
+        document["education"] = [
+            {"institution": "IIT Delhi", "qualification": "B.Tech", "discipline": None,
+             "start_date": None, "completion_date": None, "is_ongoing": True},
+        ]
+
+        with self.target_store() as store:
+            plan = importer.plan_import(store, document, source="export.json")
+            text = " ".join(plan.describe())
+
+            self.assertEqual(store.list_work_history(), (), "planning writes nothing")
+            self.assertEqual(plan.adds_anything, True)
+
+        self.assertIn("Employment history: 1 record(s) would be added (Data Engineer at Sandbox Systems)",
+                      text)
+        self.assertIn("Education: 1 record(s) would be added (B.Tech at IIT Delhi)", text)
+        self.assertIn("Nothing has been written yet", text)
+
+    def test_an_import_whose_history_records_are_identical_to_the_stored_ones_adds_nothing_twice(self):
+        with self.source_store() as store:
+            store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True)
+            path = self.folder / "history.json"
+            importer.write_export(store, path)
+            document = json.loads(path.read_text(encoding="utf-8"))
+
+            with self.target_store() as target:
+                importer.apply_import(target, document, source=path.name)
+                second = importer.plan_import(target, document, source=path.name)
+                importer.apply_import(target, document, source=path.name)
+                roles = target.list_work_history()
+
+        self.assertEqual(len(roles), 1, "importing the same file twice does not duplicate a role")
+        self.assertFalse(second.adds_anything)
 
     def test_the_exported_file_is_owner_only(self):
         path, _ = self.export_file()

@@ -11,6 +11,7 @@ from datetime import date
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.core import (ActivityKind, ApplicationActivity, InterviewOutcome)
+from career_agent.core import EducationEntry, WorkHistoryEntry  # noqa: F401  (named in the history tests)
 import career_agent.store as store_module
 from career_agent.core import duplicate_key
 from career_agent.backup import BackupError, validate_app_database
@@ -914,6 +915,321 @@ class PreparationAndInterviewStoreTests(unittest.TestCase):
                          [f"round_id={recorded.round_id} outcome=unclear"])
 
 
+class CandidateHistoryStoreTests(unittest.TestCase):
+    """Employment and education records: the write boundary, the ordering, and what deletion takes.
+
+    These are the candidate's own records rather than anything attached to an application, so the
+    properties that matter are different from the tracker's: nothing here may move an application on, a
+    contradiction may not be stored, and "delete my profile" has to mean all of it.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "history.sqlite3"
+        self.store = CareerStore(str(self.path))
+        self.addCleanup(self.store.close)
+
+    def test_an_employment_record_round_trips_with_every_field(self):
+        added = self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1),
+                                            end_date=date(2024, 4, 1), employment_type="full_time",
+                                            summary="built the pipeline")
+
+        stored = self.store.get_work_history(added.entry_id)
+        self.assertEqual(stored.employer, "Sandbox Systems")
+        self.assertEqual(stored.job_title, "Data Engineer")
+        self.assertEqual(stored.start_date, date(2023, 4, 1))
+        self.assertEqual(stored.end_date, date(2024, 4, 1))
+        self.assertEqual(stored.employment_type.value, "full_time")
+        self.assertEqual(stored.summary, "built the pipeline")
+        self.assertFalse(stored.is_current)
+        self.assertIsNotNone(stored.created_at)
+
+    def test_a_current_role_is_stored_as_current_rather_than_derived_from_a_missing_end(self):
+        stored = self.store.add_work_history("X", "Y", date(2024, 1, 1), is_current=True)
+
+        self.assertTrue(self.store.get_work_history(stored.entry_id).is_current)
+
+    def test_the_list_puts_the_current_role_first_then_most_recent(self):
+        self.store.add_work_history("Oldest", "Analyst", date(2018, 1, 1), end_date=date(2020, 1, 1))
+        self.store.add_work_history("Middle", "Engineer", date(2020, 1, 1), end_date=date(2022, 1, 1))
+        self.store.add_work_history("Now", "Lead", date(2022, 6, 1), is_current=True)
+
+        titles = [entry.job_title for entry in self.store.list_work_history()]
+
+        self.assertEqual(titles, ["Lead", "Engineer", "Analyst"])
+
+    def test_the_same_role_cannot_be_added_twice_whatever_its_capitalisation(self):
+        self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_work_history("  sandbox   systems ", "data engineer", date(2023, 4, 1))
+
+        self.assertIn("already have a record", str(caught.exception))
+        self.assertEqual(len(self.store.list_work_history()), 1)
+
+    def test_a_promotion_at_the_same_employer_is_a_different_record(self):
+        self.store.add_work_history("Sandbox Systems", "Engineer", date(2020, 1, 1))
+        second = self.store.add_work_history("Sandbox Systems", "Senior Engineer", date(2023, 1, 1))
+
+        self.assertIsNotNone(second.entry_id)
+        self.assertEqual(len(self.store.list_work_history()), 2)
+
+    def test_a_contradictory_period_is_refused_and_nothing_is_written(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_work_history("X", "Y", date(2024, 1, 1), end_date=date(2023, 1, 1))
+
+        self.assertIn("before the start date", str(caught.exception))
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_a_current_role_with_an_end_date_is_refused_at_the_boundary(self):
+        with self.assertRaises(ValueError):
+            self.store.add_work_history("X", "Y", date(2024, 1, 1), end_date=date(2025, 1, 1),
+                                        is_current=True)
+
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_updating_replaces_the_whole_record_and_keeps_when_it_was_first_written(self):
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1), summary="first")
+
+        updated = self.store.update_work_history(added.entry_id, "X Ltd", "Senior Y", date(2024, 1, 1),
+                                                 is_current=True)
+
+        self.assertEqual(updated.employer, "X Ltd")
+        self.assertEqual(updated.job_title, "Senior Y")
+        self.assertTrue(updated.is_current)
+        self.assertIsNone(updated.summary, "the caller supplied no summary, so the record has none")
+        self.assertEqual(updated.created_at, added.created_at)
+
+    def test_an_update_cannot_collide_with_another_record(self):
+        first = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        second = self.store.add_work_history("X", "Y", date(2025, 1, 1))
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.update_work_history(second.entry_id, "X", "Y", date(2024, 1, 1))
+
+        self.assertIn("already covers", str(caught.exception))
+        self.assertEqual(self.store.get_work_history(second.entry_id).start_date, date(2025, 1, 1),
+                         "the refused update changed nothing")
+
+    def test_updating_the_same_record_with_its_own_values_is_allowed(self):
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+
+        updated = self.store.update_work_history(added.entry_id, "X", "Y", date(2024, 1, 1))
+
+        self.assertEqual(updated.entry_id, added.entry_id)
+
+    def test_updating_a_record_that_is_not_there_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.update_work_history(999, "X", "Y", date(2024, 1, 1))
+
+        self.assertIn("no work-history record 999", str(caught.exception))
+
+    def test_deleting_reports_whether_a_row_was_removed(self):
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+
+        self.assertTrue(self.store.delete_work_history(added.entry_id))
+        self.assertFalse(self.store.delete_work_history(added.entry_id), "a second delete removes nothing")
+        self.assertIsNone(self.store.get_work_history(added.entry_id))
+
+    def test_deleting_one_role_leaves_the_education_records_alone(self):
+        role = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        self.store.add_education("IIT", "B.Tech")
+
+        self.store.delete_work_history(role.entry_id)
+
+        self.assertEqual(len(self.store.list_education()), 1)
+
+    def test_an_education_record_round_trips_with_optional_fields_absent(self):
+        added = self.store.add_education("IIT Delhi", "B.Tech")
+
+        stored = self.store.get_education(added.entry_id)
+        self.assertIsNone(stored.discipline)
+        self.assertIsNone(stored.start_date)
+        self.assertIsNone(stored.completion_date)
+        self.assertFalse(stored.is_ongoing)
+
+    def test_ongoing_study_is_listed_before_completed_qualifications(self):
+        self.store.add_education("Older", "Diploma", completion_date=date(2015, 1, 1))
+        self.store.add_education("Newer", "M.Sc", completion_date=date(2020, 1, 1))
+        self.store.add_education("Current", "PhD", is_ongoing=True)
+
+        institutions = [entry.institution for entry in self.store.list_education()]
+
+        self.assertEqual(institutions, ["Current", "Newer", "Older"])
+
+    def test_a_qualification_with_no_completion_date_sorts_after_the_dated_ones(self):
+        """A missing completion date is not a very old one, so it does not sort by it.
+
+        This is the same rule the task list uses for a task with no due date (``due_on IS NULL`` after the
+        dated rows): the records whose position is known come first, in date order, and the undated ones
+        follow rather than pretending to be ancient.
+        """
+        self.store.add_education("Dated", "B.Sc", completion_date=date(2010, 1, 1))
+        self.store.add_education("Undated", "Certificate")
+
+        institutions = [entry.institution for entry in self.store.list_education()]
+
+        self.assertEqual(institutions, ["Dated", "Undated"])
+
+    def test_the_same_qualification_cannot_be_added_twice(self):
+        self.store.add_education("IIT Delhi", "B.Tech", start_date=date(2015, 8, 1))
+
+        with self.assertRaises(ValueError):
+            self.store.add_education("iit delhi", "b.tech", start_date=date(2015, 8, 1))
+
+        self.assertEqual(len(self.store.list_education()), 1)
+
+    def test_a_second_degree_from_the_same_place_is_a_different_record(self):
+        self.store.add_education("IIT Delhi", "B.Tech", start_date=date(2015, 8, 1))
+        second = self.store.add_education("IIT Delhi", "M.Tech", start_date=date(2019, 8, 1))
+
+        self.assertIsNotNone(second.entry_id)
+        self.assertEqual(len(self.store.list_education()), 2)
+
+    def test_completion_before_start_is_refused_at_the_boundary(self):
+        with self.assertRaises(ValueError):
+            self.store.add_education("X", "Y", start_date=date(2020, 1, 1), completion_date=date(2019, 1, 1))
+
+        self.assertEqual(self.store.list_education(), ())
+
+    def test_updating_an_education_record_replaces_its_values(self):
+        added = self.store.add_education("X", "Y", is_ongoing=True)
+
+        updated = self.store.update_education(added.entry_id, "X University", "M.Sc", discipline="Physics",
+                                             start_date=date(2024, 9, 1), completion_date=date(2026, 6, 1))
+
+        self.assertEqual(updated.institution, "X University")
+        self.assertEqual(updated.discipline, "Physics")
+        self.assertFalse(updated.is_ongoing)
+        self.assertEqual(updated.created_at, added.created_at)
+
+    def test_deleting_an_education_record_reports_whether_a_row_was_removed(self):
+        added = self.store.add_education("X", "Y")
+
+        self.assertTrue(self.store.delete_education(added.entry_id))
+        self.assertFalse(self.store.delete_education(added.entry_id))
+
+    def test_the_counts_a_deletion_confirmation_uses_are_real(self):
+        self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        self.store.add_education("IIT", "B.Tech")
+
+        self.assertEqual(self.store.profile_record_counts(), {"work_history": 1, "education": 1})
+
+    def test_deleting_the_profile_takes_the_history_with_it(self):
+        self.store.save_profile(CandidateProfile(candidate_country="India"))
+        self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        self.store.add_education("IIT", "B.Tech")
+
+        self.assertTrue(self.store.delete_profile())
+
+        self.assertIsNone(self.store.get_profile())
+        self.assertEqual(self.store.list_work_history(), (), "records that are the profile's detail go with it")
+        self.assertEqual(self.store.list_education(), ())
+
+    def test_deleting_the_profile_does_not_touch_applications_or_their_records(self):
+        self.store.save_job(sample_job())
+        self.store.save_tracker(ApplicationTracker("j1"))
+        self.store.save_profile(CandidateProfile(candidate_country="India"))
+        self.store.add_work_history("X", "Y", date(2024, 1, 1))
+
+        self.store.delete_profile()
+
+        self.assertIsNotNone(self.store.get_job("j1"))
+        self.assertIsNotNone(self.store.get_tracker("j1"))
+
+    def test_deleting_a_profile_that_is_already_gone_still_clears_the_history(self):
+        """The person asked for their candidate data to go, not for one row of it to go."""
+        self.store.add_work_history("X", "Y", date(2024, 1, 1))
+
+        self.assertFalse(self.store.delete_profile(), "there was no profile row to delete")
+
+        self.assertEqual(self.store.list_work_history(), ())
+
+    def test_every_write_is_recorded_in_the_event_log_by_name(self):
+        with mock.patch("career_agent.event_log.record_event") as events:
+            role = self.store.add_work_history("X", "Y", date(2024, 1, 1), is_current=True)
+            self.store.update_work_history(role.entry_id, "X", "Y", date(2024, 1, 1))
+            self.store.delete_work_history(role.entry_id)
+            study = self.store.add_education("IIT", "B.Tech", is_ongoing=True)
+            self.store.update_education(study.entry_id, "IIT", "B.Tech")
+            self.store.delete_education(study.entry_id)
+
+        names = [call.args[0] for call in events.call_args_list]
+        self.assertEqual(names, ["history.work_added", "history.work_updated", "history.work_deleted",
+                                 "history.education_added", "history.education_updated",
+                                 "history.education_deleted"])
+
+    def test_the_records_survive_a_reopen(self):
+        self.store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True,
+                                    summary="built the pipeline")
+        self.store.add_education("IIT Delhi", "B.Tech", discipline="ECE",
+                                 completion_date=date(2019, 5, 31))
+        self.store.close()
+
+        self.store = CareerStore(str(self.path))
+        self.addCleanup(self.store.close)
+
+        self.assertEqual([row.job_title for row in self.store.list_work_history()], ["Data Engineer"])
+        self.assertEqual(self.store.list_education()[0].discipline, "ECE")
+
+    def test_a_stored_value_this_build_cannot_label_is_reported_rather_than_guessed(self):
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("UPDATE candidate_work_history SET employment_type='side-hustle'")
+        reader.close()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.list_work_history()
+
+        message = str(caught.exception)
+        self.assertIn("employment type", message)
+        self.assertIn("side-hustle", message)
+        self.assertIn("was not changed", message)
+
+        # The row is still there and still usable once the value is corrected: refusing a read never
+        # deletes or rewrites the person's data.
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("UPDATE candidate_work_history SET employment_type='contract'")
+        reader.close()
+        self.assertEqual(self.store.get_work_history(added.entry_id).employment_type.value, "contract")
+
+    def test_an_unreadable_stored_date_is_reported_rather_than_dropped(self):
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("UPDATE candidate_work_history SET start_date='last spring'")
+        reader.close()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_work_history(added.entry_id)
+
+        self.assertIn("start date", str(caught.exception))
+
+    def test_a_stored_contradiction_is_reported_rather_than_repaired(self):
+        """A row written by another program must not be silently fixed on read."""
+        added = self.store.add_work_history("X", "Y", date(2024, 1, 1))
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("UPDATE candidate_work_history SET is_current=1, end_date='2023-01-01'")
+        reader.close()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_work_history(added.entry_id)
+
+        self.assertIn("possible employment period", str(caught.exception))
+
+    def test_neither_record_can_create_or_move_an_application(self):
+        """The property that keeps these records notes about a person rather than claims about a job."""
+        self.store.add_work_history("X", "Y", date(2024, 1, 1), is_current=True)
+        self.store.add_education("IIT", "B.Tech", is_ongoing=True)
+
+        self.assertIsNone(self.store.get_tracker("j1"), "a history record is not an application")
+        self.assertEqual(self.store.list_jobs(), ())
+
+
 class ConditionalTrackerWriteTests(unittest.TestCase):
     """``save_tracker(..., expected=...)``: a compare-and-set read at the storage boundary.
 
@@ -1284,15 +1600,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 5)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 5)
+        self.assertEqual(SCHEMA_VERSION, 6)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 6)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
         # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
         # the current version's contract names - so it is written as the version it is checking.
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[5]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[6]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1356,6 +1672,63 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(upgraded.get_preparation(added.preparation_id).listing_id, "j1")
         round_record = upgraded.record_interview("j1", "screening", date(2026, 11, 3))
         self.assertEqual(upgraded.get_interview(round_record.round_id).stage.value, "screening")
+
+    def test_the_history_step_adds_its_tables_to_a_database_full_of_records(self):
+        """The v5 file a person has been using for weeks: every row stays, the new tables arrive empty.
+
+        The tables are then written to on the *upgraded* file, which is the part a version check alone
+        cannot tell you: an additive step is only correct if the thing it added is immediately usable.
+        """
+        older = self._open_at_version(5)
+        for table in ("candidate_work_history", "candidate_education"):
+            self.assertNotIn(table, {
+                row[0] for row in older._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            }, "version 5 predates the candidate's own history")
+        profile = CandidateProfile(candidate_country="India", skills=frozenset({"Python"}),
+                                  experience_years=2, degree_discipline="ECE")
+        older.save_profile(profile)
+        older.save_job(self._job())
+        older.save_tracker(ApplicationTracker("j1"))
+        older.set_follow_up("j1", date(2026, 11, 5), note="chase the reply")
+        preparation = older.add_preparation("j1", "Tailor the résumé", due_on=date(2026, 11, 1))
+        older.complete_preparation(preparation.preparation_id)
+        older.record_interview("j1", "screening", date(2026, 11, 3))
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_profile(), profile, "the profile is not rebuilt by a migration")
+        self.assertEqual(upgraded.get_job("j1"), self._job())
+        self.assertIsNotNone(upgraded.get_tracker("j1"))
+        self.assertEqual(upgraded.get_tracker("j1").follow_up_note, "chase the reply")
+        self.assertEqual(len(upgraded.list_preparation()), 1)
+        self.assertEqual(len(upgraded.list_interviews()), 1)
+        self.assertEqual(upgraded.list_work_history(), (), "the new tables start empty, not guessed at")
+        self.assertEqual(upgraded.list_education(), ())
+        # Usable at once, on the file that was just upgraded.
+        added = upgraded.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1),
+                                          is_current=True)
+        self.assertEqual(added.entry_id, 1)
+        self.assertEqual(upgraded.add_education("IIT Delhi", "B.Tech").entry_id, 1)
+        self.assertEqual(upgraded.profile_record_counts(), {"work_history": 1, "education": 1})
+
+    def test_the_history_tables_are_deleted_with_the_profile_rather_than_left_behind(self):
+        """A person who deletes their profile must not leave their employment record in the file."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        store.save_profile(CandidateProfile(candidate_country="India"))
+        store.add_work_history("X", "Y", date(2024, 1, 1))
+        store.add_education("IIT", "B.Tech")
+
+        store.delete_profile()
+
+        for table in ("candidate_work_history", "candidate_education"):
+            self.assertEqual(
+                store._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0,
+                f"{table} must not outlive the profile it belongs to")
 
     def test_reopening_an_already_current_database_runs_no_step(self):
         CareerStore(self.path).close()

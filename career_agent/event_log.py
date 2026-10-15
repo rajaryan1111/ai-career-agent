@@ -81,6 +81,14 @@ EVENTS: tuple[str, ...] = (
     "interview.recorded",
     "interview.outcome",
     "interview.deleted",
+    # The candidate's own history: employment and study records. The first word is ``history`` because an
+    # event name's first segment may not contain an underscore, and both kinds belong to one namespace.
+    "history.work_added",
+    "history.work_updated",
+    "history.work_deleted",
+    "history.education_added",
+    "history.education_updated",
+    "history.education_deleted",
     "resume.proposed",
     "resume.failed",
     "export.written",

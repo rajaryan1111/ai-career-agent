@@ -50,6 +50,8 @@ from .config import database_path_for_run, describe_settings, resolve_settings
 from .diagnostics import describe_startup_failure, diagnostic_log_path, record_startup_failure
 from .event_log import LOG_FILE_NAME, MAX_LOG_BYTES, log_path, read_lines
 from .handlers import default_registry, describe_default_handlers, seed_default_tasks
+from .core import EmploymentType, months_covered_by
+from .desktop_logic import ACTIVITY_DATE_PATTERN
 from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
 )
@@ -158,6 +160,18 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="List the interview rounds recorded for your applications, next one first, then exit.",
     )
     actions.add_argument(
+        "--history", action="store_true",
+        help="List your recorded employment and education, most recent first, then exit (read-only).",
+    )
+    actions.add_argument(
+        "--add-role", metavar="EMPLOYER",
+        help="Add an employment record for EMPLOYER (needs --title and --start; see --current, --end).",
+    )
+    actions.add_argument(
+        "--add-study", metavar="INSTITUTION",
+        help="Add an education record for INSTITUTION (needs --qualification; dates are optional).",
+    )
+    actions.add_argument(
         "--calendar-to", metavar="PATH",
         help="Write follow-up reminders to a calendar file (.ics) at PATH, for your own calendar.",
     )
@@ -168,6 +182,47 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--import-from", metavar="PATH",
         help="Show what importing a JSON export at PATH would do (add --yes to apply it).",
+    )
+    parser.add_argument(
+        "--title", metavar="TITLE", default=None,
+        help="Job title for --add-role.",
+    )
+    parser.add_argument(
+        "--start", metavar="YYYY-MM-DD", default=None,
+        help="Start date for --add-role, or the optional start of a qualification for --add-study.",
+    )
+    parser.add_argument(
+        "--end", metavar="YYYY-MM-DD", default=None,
+        help="End date for --add-role (omit while the role is current).",
+    )
+    parser.add_argument(
+        "--current", action="store_true",
+        help="Mark the record added by --add-role as your current role.",
+    )
+    parser.add_argument(
+        "--qualification", metavar="QUALIFICATION", default=None,
+        help="Qualification for --add-study, for example B.Tech or M.Sc.",
+    )
+    parser.add_argument(
+        "--discipline", metavar="SUBJECT", default=None,
+        help="Optional subject or discipline for --add-study.",
+    )
+    parser.add_argument(
+        "--completed", metavar="YYYY-MM-DD", default=None,
+        help="Completion date for --add-study (omit while the study is ongoing).",
+    )
+    parser.add_argument(
+        "--ongoing", action="store_true",
+        help="Mark the qualification added by --add-study as still being studied.",
+    )
+    parser.add_argument(
+        "--employment-type", metavar="TYPE", default="unknown",
+        choices=[kind.value for kind in EmploymentType],
+        help="Employment type for --add-role (default: unknown, which claims nothing).",
+    )
+    parser.add_argument(
+        "--summary", metavar="TEXT", default=None,
+        help="Optional note about what you did in the role added by --add-role.",
     )
     parser.add_argument(
         "--worker-id", metavar="NAME", default=None,
@@ -620,6 +675,133 @@ def _relative_day(days: int) -> str:
     return f"in {days} day(s)" if days > 0 else f"{abs(days)} day(s) ago"
 
 
+def _day_argument(raw: str | None, *, label: str, optional: bool) -> date | None:
+    """Parse a ``YYYY-MM-DD`` option the same way the window's own date fields do.
+
+    ``date.fromisoformat`` also accepts basic-format and ISO week dates; an option that promises
+    ``YYYY-MM-DD`` should not quietly accept four spellings of it, so the shape is checked first. A
+    refusal names the option that was wrong rather than the record that failed.
+    """
+    text = (raw or "").strip()
+    if not text:
+        if optional:
+            return None
+        raise ValueError(f"--{label} is required here and has to be a date, for example "
+                         f"{_local_today().isoformat()}.")
+    if ACTIVITY_DATE_PATTERN.fullmatch(text) is None:
+        raise ValueError(f"--{label} has to be a date written as YYYY-MM-DD, for example "
+                         f"{_local_today().isoformat()}.")
+    return date.fromisoformat(text)
+
+
+def run_history(args: argparse.Namespace) -> int:
+    """List the candidate's own employment and education records, most recent first.
+
+    Read-only, like every other listing command here. The duration line reports months *covered* by
+    current or fully dated roles and says how many records it could not count, rather than adding up to
+    a single confident "years of experience" figure that overlapping or undated roles would falsify.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · your employment and education (local database)")
+    if not database.exists():
+        print("No database yet, so nothing is recorded. Open the app to add your roles as you go; "
+              "nothing is uploaded and no employer is contacted.")
+        return EXIT_OK
+    with CareerStore(database) as store:
+        roles = store.list_work_history()
+        study = store.list_education()
+        print("")
+        print(f"Employment ({len(roles)} record(s), current role first)")
+        if not roles:
+            print("  None recorded. The profile's experience figure is a summary and is kept separate.")
+        for role in roles:
+            print(f"  {role.period}: {role.job_title} at {role.employer}"
+                  f" [{role.employment_type_label}]")
+            if role.summary:
+                print(f"      {role.summary}")
+        counted = months_covered_by(roles, today=today)
+        uncounted = sum(1 for role in roles if role.end_date is None and not role.is_current)
+        if counted:
+            print(f"  These periods cover {counted} month(s) in total; months covered by two roles at "
+                  "once are counted once, a role with no recorded end counts nothing, and this is not a "
+                  "claim about experience.")
+        if uncounted:
+            print(f"  {uncounted} ended role(s) have no end date recorded, so no duration is counted "
+                  "for them.")
+        print("")
+        print(f"Education ({len(study)} record(s), ongoing first)")
+        if not study:
+            print("  None recorded.")
+        for entry in study:
+            print(f"  {entry.period}: {entry.label} at {entry.institution}")
+    print("")
+    print("This report is read-only; nothing was changed, uploaded or sent to anybody.")
+    return EXIT_OK
+
+
+def run_add_role(args: argparse.Namespace) -> int:
+    """Add one employment record, with the same validation the window applies.
+
+    A write, and the only one this command does: it adds a record, and refuses rather than writing
+    anything when the dates contradict each other or the role is already recorded. It never edits or
+    deletes an existing record. Like ``--seed-tasks``, it opens the database rather than refusing when
+    there is none yet, so on a fresh machine this creates the empty schema and then the one record.
+    """
+    database = _database_path(args)
+    if not args.title:
+        print("REFUSED: --add-role needs --title, for example --title 'Data Engineer'. Nothing was "
+              "written.", file=sys.stderr)
+        return EXIT_REFUSED
+    try:
+        started = _day_argument(args.start, label="start", optional=False)
+        ended = _day_argument(args.end, label="end", optional=True)
+    except ValueError as exc:
+        print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        try:
+            added = store.add_work_history(args.add_role, args.title, started, end_date=ended,
+                                          is_current=bool(args.current),
+                                          employment_type=args.employment_type, summary=args.summary)
+        except ValueError as exc:
+            print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
+        print(f"Added employment record {added.entry_id}: {added.job_title} at {added.employer} "
+              f"({added.period}, {added.employment_type_label}).")
+        print(f"{len(store.list_work_history())} employment record(s) are now recorded. Nothing was "
+              "uploaded and no employer was contacted.")
+    return EXIT_OK
+
+
+def run_add_study(args: argparse.Namespace) -> int:
+    """Add one education record. Dates are optional, and ongoing study takes no completion date."""
+    database = _database_path(args)
+    if not args.qualification:
+        print("REFUSED: --add-study needs --qualification, for example --qualification M.Sc. Nothing "
+              "was written.", file=sys.stderr)
+        return EXIT_REFUSED
+    try:
+        started = _day_argument(args.start, label="start", optional=True)
+        completed = _day_argument(args.completed, label="completed", optional=True)
+    except ValueError as exc:
+        print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        try:
+            added = store.add_education(args.add_study, args.qualification, discipline=args.discipline,
+                                        start_date=started, completion_date=completed,
+                                        is_ongoing=bool(args.ongoing))
+        except ValueError as exc:
+            print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
+        print(f"Added education record {added.entry_id}: {added.label} at {added.institution} "
+              f"({added.period}).")
+        print(f"{len(store.list_education())} education record(s) are now recorded. Nothing was "
+              "uploaded and no institution was contacted.")
+    return EXIT_OK
+
+
 def run_calendar_export(args: argparse.Namespace) -> int:
     """Write the recorded follow-ups to a calendar file at the path the person named.
 
@@ -807,6 +989,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_next_actions(args)
         if args.interviews:
             return run_interviews(args)
+        if args.history:
+            return run_history(args)
+        if args.add_role:
+            return run_add_role(args)
+        if args.add_study:
+            return run_add_study(args)
         if args.calendar_to:
             return run_calendar_export(args)
         if args.export_to:

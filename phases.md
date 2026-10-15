@@ -260,6 +260,27 @@ would put words in an employer's mouth. `ApplicationTracker.is_ahead`/`is_past` 
 `has_happened` while this was written, because "today" was being counted as the past and burying the round
 that is about to happen.
 
+The candidate's own record now exists as records rather than a summary. Schema 6 adds
+`candidate_work_history` (employer, job title, employment type, start date, an end date that may be
+absent, an explicit current-role flag, and an optional note) and `candidate_education` (institution,
+qualification, optional discipline, optional start and completion dates, and an ongoing-study flag), and
+`career_agent/core.py` refuses a contradiction at construction: an end before a start, a current role with
+an end date, an ongoing qualification with a completion date, blank required text, an unknown employment
+type, or the same record twice. `career_agent/desktop.py` surfaces them as the **Work history & study**
+tab (two forms, two lists, and the buttons that add, load, save or delete the selected row) and
+`career_agent/__main__.py` as `--history` (read-only), `--add-role` and `--add-study`; the store is the
+only writer, the ordering lives in one query per list, and both tables are deleted with the profile in one
+transaction after a confirmation that names the counts. The one duration the app reports is the union of
+the months covered by current or fully dated roles (`months_covered_by`), which counts a month covered by
+two roles once and a role with no recorded end not at all: a sum of job durations would overstate exactly
+the people with concurrent, part-time or unfinished roles, and the figure is never written back into the
+profile's own years-of-experience field. Deleting a role, a qualification or the profile itself is tested
+for what it does *not* touch (applications, trackers, other records), and the JSON export format moved to
+version 2 with `work_history` and `education` arrays while version 1 files are still read - an import
+whose records would mix into records already stored keeps the stored ones and says so. Not implemented:
+importing these records from a résumé, attaching documents, verifying anything with an employer, or using
+them in eligibility and matching.
+
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra
 (`pypdf>=4.3`), and a `career-agent` console script pointing at the same `career_agent.__main__:main`

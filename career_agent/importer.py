@@ -22,6 +22,10 @@ planned and shown before anything is written.
   is named in the plan. The listing, its facts, its follow-up plan and its history still come across.
 * **A follow-up plan is imported as data.** It is a day the person chose, not an observation, so it
   travels; a plan whose day cannot be read is reported rather than dropped.
+* **The candidate's own employment and education history is imported whole or not at all.** A database
+  that already holds any of these records keeps every one of them - mixing one export's history into
+  records the person has been editing here would produce a CV that is half of each - and the plan says so
+  with the counts. A format-version 1 file predates these records and simply has none.
 * **Activity history is appended, never merged.** Entries are the person's own record; a duplicate is
   detected on (occurred_on, kind, detail) and skipped, and everything else is appended, because their
   history is not this program's to rewrite.
@@ -33,19 +37,28 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .core import (
     ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability,
-    CandidateProfile, JobListing, duplicate_key,
+    CandidateProfile, EducationEntry, EmploymentType, JobListing, WorkHistoryEntry, duplicate_key,
 )
 from .store import CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file
 
-#: The export format this build writes and the only one it reads. A file that records a different
-#: number is refused with the number it holds, because guessing at an unknown format is how a recovery
-#: tool turns into a data-loss tool.
-EXPORT_FORMAT_VERSION = 1
+#: The export format this build writes.
+#:
+#: Version 2 adds the candidate's own ``work_history`` and ``education`` arrays. Version 1 files are still
+#: read - a file written before those records existed simply has none, and the plan says so - but a file
+#: that records any *other* version is refused with the number it holds, because guessing at an unknown
+#: format is how a recovery tool turns into a data-loss tool. The bump is deliberate rather than silent:
+#: an older build reading a version 2 file refuses it with a clear message instead of quietly dropping the
+#: employment history it cannot represent, which is the failure mode that matters here.
+EXPORT_FORMAT_VERSION = 2
+
+#: Every format version this build reads. A version 1 file carries no history records.
+READABLE_FORMAT_VERSIONS = (1, 2)
 
 #: How many rejections are named before the rest are counted. A plan is read by a person; a hundred
 #: lines is not a plan, it is a log, and the count is always given even when the reasons are not.
@@ -88,12 +101,16 @@ class ImportPlan:
     follow_ups: tuple[tuple[str, str], ...] = ()  # (listing id, ISO day)
     activity_entries: tuple[tuple[str, int], ...] = ()  # (listing id, how many would be appended)
     kept_local_profile: bool = False
+    new_work_history: tuple[WorkHistoryEntry, ...] = ()
+    new_education: tuple[EducationEntry, ...] = ()
+    kept_local_history: bool = False
+    kept_history_counts: tuple[int, int] = (0, 0)  # (work-history records, education records) stored
     truncated_rejections: int = 0
 
     @property
     def adds_anything(self) -> bool:
         """Whether applying this plan would write anything at all."""
-        return bool(self.new_jobs or self.new_profiles)
+        return bool(self.new_jobs or self.new_profiles or self.new_work_history or self.new_education)
 
     def describe(self) -> tuple[str, ...]:
         """The plan as lines a person reads, in the order the decisions were made."""
@@ -126,6 +143,21 @@ class ImportPlan:
         if self.activity_entries:
             total = sum(count for _, count in self.activity_entries)
             lines.append(f"Activity history: {total} entr(ies) would be appended where they are missing.")
+        if self.kept_local_history:
+            work, study = self.kept_history_counts
+            lines.append(
+                f"Your own history: the {work} employment record(s) and {study} education record(s) "
+                "already stored here are kept. A file never mixes its history into the one you have "
+                "edited; delete those records first if you want the file's copies instead."
+            )
+        if self.new_work_history:
+            lines.append(f"Employment history: {len(self.new_work_history)} record(s) would be added "
+                         f"({', '.join(_short_history(entry) for entry in self.new_work_history[:3])}"
+                         f"{', ...' if len(self.new_work_history) > 3 else ''}).")
+        if self.new_education:
+            lines.append(f"Education: {len(self.new_education)} record(s) would be added "
+                         f"({', '.join(_short_education(entry) for entry in self.new_education[:3])}"
+                         f"{', ...' if len(self.new_education) > 3 else ''}).")
         if self.rejected:
             lines.append(f"Records that cannot be read: {len(self.rejected)} (nothing is written for "
                          "them):")
@@ -152,6 +184,8 @@ class ImportOutcome:
     follow_ups_imported: int = 0
     activity_added: int = 0
     rejected: int = 0
+    work_history_added: int = 0
+    education_added: int = 0
 
     def describe(self) -> str:
         """One line for a status bar or a command-line report."""
@@ -166,6 +200,10 @@ class ImportOutcome:
             parts.append(f"created {self.trackers_imported} application record(s)")
         if self.follow_ups_imported:
             parts.append(f"recorded {self.follow_ups_imported} follow-up day(s)")
+        if self.work_history_added:
+            parts.append(f"added {self.work_history_added} employment record(s)")
+        if self.education_added:
+            parts.append(f"added {self.education_added} education record(s)")
         if self.activity_added:
             parts.append(f"appended {self.activity_added} activity entr(ies)")
         if self.rejected:
@@ -192,6 +230,11 @@ def export_document(store: CareerStore) -> dict[str, Any]:
     }
     if profile:
         payload["profile"] = _plain(profile)
+    # The candidate's own history travels at the top level beside the profile, because that is what it
+    # belongs to: these records describe the person, not any one application. Dates go out as ISO days -
+    # the stored form - so this file is readable without this program.
+    payload["work_history"] = [_plain_work_history(entry) for entry in store.list_work_history()]
+    payload["education"] = [_plain_education(entry) for entry in store.list_education()]
     for job in jobs:
         record = _plain(job)
         record["availability_status"] = job.availability_status.value
@@ -277,14 +320,16 @@ def read_export(path: str | Path) -> dict[str, Any]:
             "by this app always records one."
         )
     version = document["format_version"]
-    if version != EXPORT_FORMAT_VERSION:
+    if version not in READABLE_FORMAT_VERSIONS:
+        readable = " and ".join(str(item) for item in READABLE_FORMAT_VERSIONS)
         raise ImportRefused(
-            f"{target} records format version {version!r}, and this build reads version "
-            f"{EXPORT_FORMAT_VERSION}. Nothing was imported."
+            f"{target} records format version {version!r}, and this build reads versions {readable}. "
+            "Nothing was imported."
         )
-    if "jobs" in document and not isinstance(document["jobs"], list):
-        raise ImportRefused(f"{target}: its jobs entry is not a list, so it is not an export this app "
-                            "wrote.")
+    for key in ("jobs", "work_history", "education"):
+        if key in document and not isinstance(document[key], list):
+            raise ImportRefused(f"{target}: its {key} entry is not a list, so it is not an export this "
+                                "app wrote.")
     return document
 
 
@@ -310,6 +355,47 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
     elif profile_record is not None:
         plan = _with_rejection(plan, RejectedJob(
             "the profile in the file", f"it is a {type(profile_record).__name__}, not a stored profile"))
+
+    # The candidate's own history follows the same rule as the profile, for the same reason: a stored
+    # employment history is something the person built up here, and merging a file's records into it would
+    # produce a CV that is half one export and half another person's edits. So it is all-or-nothing - a
+    # database that already holds any of these records keeps every one of them, and the plan says so with
+    # the counts. A v1 file has no such arrays, which is not a problem to report: it simply predates them.
+    stored_work = len(store.list_work_history())
+    stored_study = len(store.list_education())
+    file_work = document.get("work_history") or []
+    file_study = document.get("education") or []
+    if stored_work or stored_study:
+        plan.kept_local_history = True
+        plan.kept_history_counts = (stored_work, stored_study)
+    else:
+        parsed_work: list[WorkHistoryEntry] = []
+        for index, record in enumerate(file_work):
+            if not isinstance(record, Mapping):
+                plan = _with_rejection(plan, RejectedJob(
+                    f"work-history record {index}",
+                    f"it is a {type(record).__name__}, not a stored employment record"))
+                continue
+            entry = _work_history_from_record(record, index)
+            if isinstance(entry, RejectedJob):
+                plan = _with_rejection(plan, entry)
+            else:
+                parsed_work.append(entry)
+        plan.new_work_history = tuple(parsed_work)
+        parsed_study: list[EducationEntry] = []
+        for index, record in enumerate(file_study):
+            if not isinstance(record, Mapping):
+                plan = _with_rejection(plan, RejectedJob(
+                    f"education record {index}",
+                    f"it is a {type(record).__name__}, not a stored education record"))
+                continue
+            entry = _education_from_record(record, index)
+            if isinstance(entry, RejectedJob):
+                plan = _with_rejection(plan, entry)
+            else:
+                parsed_study.append(entry)
+        plan.new_education = tuple(parsed_study)
+
     records = document.get("jobs") or []
     if not isinstance(records, list):
         raise ImportRefused("The document's jobs entry is not a list, so nothing was imported.")
@@ -393,12 +479,34 @@ def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str
     plan = plan_import(store, document, source=source)
     added_jobs = 0
     trackers = 0
+    work_history_added = 0
+    education_added = 0
     follow_ups = 0
     activity = 0
     added_profile = False
     for profile in plan.new_profiles:
         store.save_profile(profile)
         added_profile = True
+    # History first: it is the smallest set of writes and the one a person would notice most if it were
+    # half-applied, and the plan already decided everything about it before this function was called.
+    for entry in plan.new_work_history:
+        try:
+            store.add_work_history(entry.employer, entry.job_title, entry.start_date,
+                                   end_date=entry.end_date, is_current=entry.is_current,
+                                   employment_type=entry.employment_type, summary=entry.summary)
+            work_history_added += 1
+        except ValueError as exc:
+            # The plan validated every record, so this can only be a write-time refusal - a duplicate of a
+            # record written between planning and applying. It is reported by name rather than lost.
+            plan = _with_rejection(plan, RejectedJob(f"{entry.job_title} at {entry.employer}", str(exc)))
+    for entry in plan.new_education:
+        try:
+            store.add_education(entry.institution, entry.qualification, discipline=entry.discipline,
+                                start_date=entry.start_date, completion_date=entry.completion_date,
+                                is_ongoing=entry.is_ongoing)
+            education_added += 1
+        except ValueError as exc:
+            plan = _with_rejection(plan, RejectedJob(f"{entry.label} at {entry.institution}", str(exc)))
     for job in plan.new_jobs:
         store.save_job(job)
         added_jobs += 1
@@ -427,6 +535,7 @@ def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str
     return ImportOutcome(
         added_jobs=added_jobs, added_profile=added_profile, linked_jobs=len(plan.linked_jobs),
         trackers_imported=trackers, follow_ups_imported=follow_ups, activity_added=activity,
+        work_history_added=work_history_added, education_added=education_added,
         rejected=len(plan.rejected),
     )
 
@@ -490,6 +599,126 @@ def _job_from_record(record: Mapping[str, Any], index: int) -> JobListing | Reje
     except (ValueError, TypeError) as exc:
         return RejectedJob(identifier, f"it is not a listing this application can store ({exc})")
     return listing
+
+
+def _plain_work_history(entry: WorkHistoryEntry) -> dict[str, Any]:
+    """One employment record as the export writes it: the stored values, dates as ISO days."""
+    return {
+        "employer": entry.employer,
+        "job_title": entry.job_title,
+        "employment_type": entry.employment_type.value,
+        "start_date": entry.start_date.isoformat(),
+        "end_date": entry.end_date.isoformat() if entry.end_date else None,
+        "is_current": entry.is_current,
+        "summary": entry.summary,
+    }
+
+
+def _plain_education(entry: EducationEntry) -> dict[str, Any]:
+    """One education record as the export writes it."""
+    return {
+        "institution": entry.institution,
+        "qualification": entry.qualification,
+        "discipline": entry.discipline,
+        "start_date": entry.start_date.isoformat() if entry.start_date else None,
+        "completion_date": entry.completion_date.isoformat() if entry.completion_date else None,
+        "is_ongoing": entry.is_ongoing,
+    }
+
+
+def _short_history(entry: WorkHistoryEntry) -> str:
+    return f"{entry.job_title} at {entry.employer}"
+
+def _short_education(entry: EducationEntry) -> str:
+    return f"{entry.label} at {entry.institution}"
+
+
+def _work_history_from_record(record: Mapping[str, Any], index: int) -> WorkHistoryEntry | RejectedJob:
+    """One employment record from a file, or a rejection naming what is wrong with it.
+
+    Every field the domain validates is validated here, by constructing the record: a period that runs
+    backwards, a current role with an end date, or an unknown employment type is refused with the domain's
+    own sentence, so the plan can show the person what the file said. Nothing is coerced into shape - a
+    missing start date is reported, never replaced with today.
+    """
+    identifier = _optional_text(record.get("employer")) or f"work-history record {index}"
+    if not _text(record.get("employer")) or not _text(record.get("job_title")):
+        missing = [name for name in ("employer", "job_title") if not _text(record.get(name))]
+        return RejectedJob(identifier, "it does not carry " + ", ".join(missing))
+    start = _day_or_none(record.get("start_date"))
+    if not _text(record.get("start_date")):
+        return RejectedJob(identifier, "it has no start_date, and a role needs the day it began")
+    if start is None:
+        return RejectedJob(identifier, f"its start_date is {record.get('start_date')!r}, which is not a "
+                                       "YYYY-MM-DD date")
+    end_raw = record.get("end_date")
+    end = None
+    if _text(end_raw):
+        end = _day_or_none(end_raw)
+        if end is None:
+            return RejectedJob(identifier, f"its end_date is {end_raw!r}, which is not a YYYY-MM-DD date")
+    try:
+        return WorkHistoryEntry(
+            employer=_text(record["employer"]), job_title=_text(record["job_title"]), start_date=start,
+            end_date=end, is_current=bool(record.get("is_current")),
+            employment_type=_employment_type(record.get("employment_type")),
+            summary=_optional_text(record.get("summary")),
+        )
+    except (ValueError, TypeError) as exc:
+        return RejectedJob(identifier, f"it is not a record this application can store ({exc})")
+
+
+def _education_from_record(record: Mapping[str, Any], index: int) -> EducationEntry | RejectedJob:
+    """One education record from a file, or a rejection naming what is wrong with it."""
+    identifier = _optional_text(record.get("institution")) or f"education record {index}"
+    missing = [name for name in ("institution", "qualification") if not _text(record.get(name))]
+    if missing:
+        return RejectedJob(identifier, "it does not carry " + ", ".join(missing))
+    days: dict[str, Any] = {}
+    for field in ("start_date", "completion_date"):
+        raw = record.get(field)
+        if not _text(raw):
+            days[field] = None
+            continue
+        parsed = _day_or_none(raw)
+        if parsed is None:
+            return RejectedJob(identifier, f"its {field} is {raw!r}, which is not a YYYY-MM-DD date")
+        days[field] = parsed
+    try:
+        return EducationEntry(
+            institution=_text(record["institution"]), qualification=_text(record["qualification"]),
+            discipline=_optional_text(record.get("discipline")), start_date=days["start_date"],
+            completion_date=days["completion_date"], is_ongoing=bool(record.get("is_ongoing")),
+        )
+    except (ValueError, TypeError) as exc:
+        return RejectedJob(identifier, f"it is not a record this application can store ({exc})")
+
+
+def _employment_type(value: Any) -> EmploymentType:
+    """A stored employment type, or ``UNKNOWN`` for one this build does not label.
+
+    Deliberately forgiving in one direction only: an unrecognised *type* is a label, and refusing the whole
+    record over a word would lose an employment history; the record is imported with the type unstated
+    rather than with a type the file did not claim. It is not forgiving about dates or contradictions,
+    which is where a record can actually be wrong.
+    """
+    try:
+        return EmploymentType(str(value))
+    except ValueError:
+        return EmploymentType.UNKNOWN
+
+
+def _day_or_none(value: Any) -> date | None:
+    """A ``YYYY-MM-DD`` string as a date, or ``None`` when it is not one."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if len(text) != 10:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _profile_from_record(record: Mapping[str, Any]) -> CandidateProfile | None:

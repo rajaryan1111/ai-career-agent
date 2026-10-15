@@ -50,6 +50,16 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Mark uncertain, missing, or conflicting extracted fields for review before they affect eligibility or generated material.
 - Allow manual correction and multiple resume versions. Resume parsing is not claimed as implemented in the current alpha.
 - Never fabricate experience, skills, qualifications, or work authorization.
+- Employment and education history as structured records rather than one summary field: employer, job
+  title, employment type, start and end dates, an explicit current-role flag and optional notes; and
+  institution, qualification, optional discipline, start and completion dates and an ongoing-study flag.
+  An impossible period, an inconsistent current-role or ongoing-study flag, blank required text, a
+  mistyped date or a duplicate record is refused rather than stored. A date the person has not recorded
+  stays unknown and contributes no duration; the reported figure is the months covered by current or fully
+  dated roles, counting a month covered twice once, and it is never written back into the profile's own
+  experience figure. See the README section *Keep your own employment and education record*; importing
+  these records from a résumé, attaching documents and using them in eligibility or matching are not
+  implemented.
 
 ### Job discovery
 - Support multiple independently verified sources.

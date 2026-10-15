@@ -2190,3 +2190,75 @@ irrelevant → 1 failure.
 31 in `tests/test_store.py` (including the v4→v5 upgrade on a file that already holds records), and 16
 window-handler tests in `tests/test_desktop_handlers.py`. The new checklist steps 61-67 are unchecked: no
 real GUI session has been run for them.
+
+
+## 2026-10-15 — The candidate's own employment and education, as records rather than a summary
+
+**What changed.** Schema 6 adds `candidate_work_history` and `candidate_education`, and both the window
+and the command line can now read and write them. The profile stays what it was - a summary the person
+holds in their head - and the record underneath it is a list that grows over a career:
+
+- `career_agent/core.py`: `WorkHistoryEntry` (employer, job title, employment type, start date, optional
+  end date, explicit `is_current`, optional note) and `EducationEntry` (institution, qualification,
+  optional discipline, optional start date, optional completion date, `is_ongoing`), both frozen with
+  validation in `__post_init__`. `months_covered(today=...)` and the module-level `months_covered_by` are
+  the only duration arithmetic in the app.
+- `career_agent/store.py`: `_migration_to_v6`, the two tables with one ordering index each, eleven methods
+  (add/list/get/update/delete for both kinds plus `profile_record_counts`), and a `delete_profile` that now
+  deletes both tables in the same transaction and records `work_history=N education=M` in its event.
+- `career_agent/event_log.py`: `history.work_added|work_updated|work_deleted|education_added|
+  education_updated|education_deleted`.
+- `career_agent/importer.py`: `EXPORT_FORMAT_VERSION = 2`, `READABLE_FORMAT_VERSIONS = (1, 2)`, top-level
+  `work_history` and `education` arrays, and an all-or-nothing rule for importing history.
+- `career_agent/desktop.py`: the **Work history & study** tab (two forms, two lists, add/load/save/delete
+  buttons that act on the selected row) and a `_delete_profile` that asks the store how many records the
+  profile has before naming them in the confirmation.
+- `career_agent/__main__.py`: `--history` (read-only), `--add-role`, `--add-study` and their options.
+
+**Three decisions worth keeping.**
+
+- **The profile form did not grow.** The window is fixed at `1120x760` and the profile form is the summary
+  a person keeps in mind; eleven more rows would have made both worse. Employment and education got their
+  own tab, which is what the record is: a list you edit row by row.
+- **`months_covered_by` is a union, not a sum.** Adding up job durations overstates exactly the people with
+  concurrent, part-time or unfinished roles, and it overstates them in the flattering direction. The
+  reported figure is the set of months in which at least one dated or current role was running, a role with
+  no recorded end contributes nothing, and the sentence next to it says so. It is never written into the
+  profile's own `experience_years`, which the person controls.
+- **History imports are all or nothing.** If the store already holds any history record, the file's records
+  are not imported at all and the plan says how many were kept. Merging two half-CVs would produce a list
+  that describes nobody, and a person who wants the file's copy can delete the stored records first - which
+  the message says.
+
+**Bugs found and fixed while building it.**
+
+- The month arithmetic counted the starting day itself as a finished month (`+1` when `end.day >=
+  start.day`), so a role that began and ended on the same day read as one month of work. The correct rule
+  subtracts one when the day of the month has not been reached; the domain test now pins the boundary from
+  both sides.
+- The desktop summary line and the CLI report claimed overlapping roles were "counted once each" while the
+  code summed each role's own duration. That is a false claim in a user-facing sentence, so the union
+  function was written and both front ends now use it; the CLI test asserts the arithmetic for two
+  overlapping roles (18 months, not 24).
+- `_history_entry` passed `padx` twice through a conditional `**` expansion, which raised `TypeError` on the
+  first real call. Rewritten as two explicit values. (A reminder that the stub widget layer catches nonsense
+  the real Tk would have accepted at run time.)
+- Two `ImportPlan` field-name typos (`kept_local_history_counts`, and a field list edit that silently
+  dropped `kept_local_profile`) meant `describe()` raised rather than printing the plan. Both were found by
+  running the code, not by reading it.
+
+**Verified by running, not by reading.** `tests.test_store` builds a database at version 5 by patching
+`_MIGRATIONS[:5]`, fills every table that predates this increment, reopens it with the current build, and
+asserts the version moved to 6, every existing row is unchanged, the new tables are empty, and both are
+immediately writable on the upgraded file. `tests.test_importer` round-trips records with every field,
+imports a version 1 document (no history arrays, nothing invented), refuses version 99 naming the numbers it
+reads, and asserts that a batch of bad records writes no history at all. `tests.test_backup` asserts a
+version 6 file without the new tables is *refused*, which is the check that would have caught the schema
+table contract not being updated. `tests.test_cli_history` runs the real `main()` and asserts the refusals
+exit non-zero with the option named and the database unchanged. `tests.test_desktop_handlers` covers the tab
+handlers (add, load, save, delete, refusals, an unreadable stored value, a closed database), the tab's own
+presence in the notebook through the real `__init__`, and that deleting a profile names the counts.
+
+**Test reading.** 1339 tests, `OK (skipped=13)` - up from 1210 before this increment. The version literals
+that had to move (`SCHEMA_VERSION == 6` in two places, `format_version == 2` in three) were moved with the
+reason left in the message, and no assertion was weakened.

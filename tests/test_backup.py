@@ -15,13 +15,14 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
 )
+from career_agent.store import CareerStore
 from career_agent import backup as backup_module
 from career_agent.__main__ import main as cli_main
 import career_agent.backup as backup_module
@@ -1223,3 +1224,62 @@ class RepositoryHygieneTests(BackupTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class HistoryRecordsInBackupsTests(unittest.TestCase):
+    """A backup of a database holding employment and education records is still a valid backup.
+
+    The validation is version-aware through ``schema_tables``, so this test is the one that would catch a
+    new table being added to the schema without the backup path learning about it.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.folder = Path(self._directory.name)
+        self.path = self.folder / "career_agent.sqlite3"
+
+    def test_a_database_with_history_records_validates_and_restores_with_them_intact(self):
+        with CareerStore(str(self.path)) as store:
+            store.save_profile(CandidateProfile(candidate_country="India"))
+            store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True,
+                                   employment_type="full_time", summary="built the pipeline")
+            store.add_education("IIT Delhi", "B.Tech", discipline="ECE",
+                                completion_date=date(2019, 5, 31))
+        archive = create_backup(self.path, self.folder / "chosen-backup.sqlite3")
+        self.assertEqual(validate_app_database(self.path).schema_version, SCHEMA_VERSION)
+
+        # Open the file with an empty history, then restore over it: the records come back with it.
+        self.path.unlink()
+        with CareerStore(str(self.path)) as fresh:
+            self.assertEqual(fresh.list_work_history(), ())
+        restore_backup(archive.path, self.path)
+        with CareerStore(str(self.path)) as store:
+            roles = store.list_work_history()
+            study = store.list_education()
+
+        self.assertEqual([role.job_title for role in roles], ["Data Engineer"])
+        self.assertTrue(roles[0].is_current)
+        self.assertEqual(roles[0].employment_type.value, "full_time")
+        self.assertEqual(roles[0].summary, "built the pipeline")
+        self.assertEqual([(entry.institution, entry.discipline) for entry in study],
+                         [("IIT Delhi", "ECE")])
+
+    def test_a_version_six_file_without_its_history_tables_is_refused(self):
+        """The other half of the test above: validation knows the tables version 6 must have.
+
+        Without this, "a file with history records validates" would pass even if the current version's
+        table contract had never been updated for the new tables.
+        """
+        with CareerStore(str(self.path)) as store:
+            store.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1))
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("DROP TABLE candidate_work_history")
+            reader.execute("DROP TABLE candidate_education")
+        reader.close()
+
+        with self.assertRaises(BackupError) as caught:
+            validate_app_database(self.path)
+
+        self.assertIn("candidate_work_history", str(caught.exception))
