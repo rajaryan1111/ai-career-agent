@@ -30,6 +30,7 @@ command that did not remove what it listed must not report success.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from glob import escape as escape_glob
 from pathlib import Path
 
 from . import backup as backup_module
@@ -114,13 +115,23 @@ def _candidate_paths(database_path: Path) -> tuple[tuple[Path, str], ...]:
     candidates.append((
         database.with_name(f".{database.name}.rollback.partial"), "a staged restore left behind",
     ))
+    # The database's name is text the person chose, so it is escaped before it goes anywhere near a
+    # glob: ``[1]`` in a name is a character class to ``fnmatch``, which made the snapshot pattern match
+    # ``my1.sqlite3.backup-…`` (another database's file, listed for deletion) while failing to match this
+    # database's own ``my[1].sqlite3.backup-…``. Only the wildcards written here are wildcards, and the
+    # literal prefix is checked as well - the same belt-and-braces rule ``backup.automatic_backup_snapshots``
+    # uses, so the two cannot drift apart.
+    snapshot_prefix = f"{database.name}{backup_module.AUTOMATIC_BACKUP_INFIX}"
+    staged_prefix = f".{database.name}.restore-"
     candidates.extend(
         (path, "a snapshot taken before a restore")
-        for path in sorted(folder.glob(f"{database.name}{backup_module.AUTOMATIC_BACKUP_INFIX}*"))
+        for path in sorted(folder.glob(escape_glob(snapshot_prefix) + "*"))
+        if path.name.startswith(snapshot_prefix)
     )
     candidates.extend(
         (path, "a staged restore left behind")
-        for path in sorted(folder.glob(f".{database.name}.restore-*.partial"))
+        for path in sorted(folder.glob(escape_glob(staged_prefix) + "*.partial"))
+        if path.name.startswith(staged_prefix)
     )
     logs = log_folder(database_path=database)
     candidates.extend((logs / name, "a log this application wrote") for name in _LOG_FILE_NAMES)

@@ -253,6 +253,23 @@ deliberate and now stated in the module: the database's own folder is *not* chec
 person named that path and on some platforms an ordinary folder (`/tmp`, a home directory) is reached through
 a link.
 
+D27 and D28 are the same class of defect one step further out: the database's *name* was interpolated into a
+glob pattern unescaped. A person may call their database `my[1].sqlite3`, and `[1]` is a character class to
+`fnmatch`, so the pattern for the pre-restore snapshots matched `my1.sqlite3.backup-…` — a different
+database's file, which `--forget-local-data` then listed **and deleted** — while failing to match this
+database's own `my[1].sqlite3.backup-…`. That is both D27 (removal reaching a file it should not) and D28
+(the counting half): `backup.automatic_backup_snapshots` used the same pattern, so it reported zero snapshots
+however many were really there, and the `MAX_AUTOMATIC_SNAPSHOTS` refusal in `backup_snapshot` — the thing
+that stops a schedule filling the disk — would never have been reached for such a name. Both are fixed by
+escaping the name before it reaches the glob and keeping the literal prefix check beside it:
+`tests/test_cli_forget.py::ErasurePlanTests::test_a_database_name_with_glob_characters_does_not_capture_another_files_snapshot`
+and `...::test_a_snapshot_of_the_named_database_is_still_found`, plus
+`tests/test_handlers.py::BackupSnapshotTests::test_a_database_name_with_glob_characters_still_finds_its_own_snapshots`
+and `...::test_the_cap_refusal_also_holds_for_a_name_with_glob_characters`. Each fails before the fix and
+passes after it — the second handler test fails by walking past the cap and trying to back up a file that is
+not a database. The other glob in the tree belongs to the desktop harness and interpolates names the harness
+wrote itself.
+
 ## 9. Verdict
 
 The Phase 2 exit criterion "privacy/security boundaries are documented and enforced" is now documented on both

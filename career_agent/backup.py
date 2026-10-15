@@ -52,6 +52,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from glob import escape as escape_glob
 from pathlib import Path
 
 from .store import (
@@ -184,8 +185,13 @@ def automatic_backup_snapshots(database_path: str | Path) -> tuple[Path, ...]:
     """
     database = Path(database_path)
     prefix = f"{database.name}{AUTOMATIC_BACKUP_INFIX}"
+    # The prefix is built from a file name the person chose, so it is escaped before it reaches the glob:
+    # ``[1]`` in a database name is a character class to ``fnmatch``, and an unescaped prefix made this
+    # count zero for ``my[1].sqlite3`` however many snapshots were really there - the cap that exists to
+    # stop a schedule filling the disk would never have been reached. The literal ``startswith`` check
+    # stays: the glob's wildcards belong to the ``*`` written here, and nothing else.
     return tuple(sorted(
-        (candidate for candidate in database.parent.glob(f"{prefix}*")
+        (candidate for candidate in database.parent.glob(escape_glob(prefix) + "*")
          if candidate.name.startswith(prefix)),
         key=lambda candidate: candidate.name,
     ))

@@ -163,6 +163,45 @@ class ErasurePlanTests(ErasureTestCase):
         # folder, not about the path the person chose.
         self.assertIn(self.database, outcome.removed)
 
+    def test_a_database_name_with_glob_characters_does_not_capture_another_files_snapshot(self):
+        # A person may name a database anything the filesystem allows, and ``[1]`` is a character class to
+        # a glob: with the database named ``my[1].sqlite3``, the snapshot pattern matched
+        # ``my1.sqlite3.backup-…``, which belongs to a different database, and the planner listed it for
+        # deletion. The same held for the staged-restore pattern.
+        bracketed = self.folder / "my[1].sqlite3"
+        bracketed.write_bytes(b"synthetic database bytes")
+        other_snapshot = self.folder / "my1.sqlite3.backup-20260101T000000Z"
+        other_snapshot.write_bytes(b"another database's snapshot")
+        other_staged = self.folder / ".my1.sqlite3.restore-20260101T000000Z.partial"
+        other_staged.write_bytes(b"another database's staged restore")
+
+        plan = plan_erasure(bracketed)
+        outcome = erase(plan)
+
+        self.assertTrue(other_snapshot.exists(), "another database's snapshot was deleted")
+        self.assertTrue(other_staged.exists(), "another database's staged restore was deleted")
+        self.assertNotIn(other_snapshot, [item.path for item in plan.data_files])
+        self.assertNotIn(other_staged, [item.path for item in plan.data_files])
+        self.assertIn(bracketed, outcome.removed, "the database that was named is still removed")
+
+    def test_a_snapshot_of_the_named_database_is_still_found(self):
+        # The other half of the rule: escaping the name must not stop the module from finding the files
+        # that really do belong to the database it was pointed at.
+        bracketed = self.folder / "my[1].sqlite3"
+        bracketed.write_bytes(b"synthetic database bytes")
+        own_snapshot = self.folder / "my[1].sqlite3.backup-20260101T000000Z"
+        own_snapshot.write_bytes(b"this database's snapshot")
+        own_staged = self.folder / ".my[1].sqlite3.restore-20260101T000000Z.partial"
+        own_staged.write_bytes(b"this database's staged restore")
+
+        plan = plan_erasure(bracketed)
+        listed = [item.path for item in plan.data_files]
+        outcome = erase(plan)
+
+        self.assertIn(own_snapshot, listed, "the database's own snapshot must still be listed")
+        self.assertIn(own_staged, listed, "the database's own staged restore must still be listed")
+        self.assertTrue(outcome.complete, outcome.failed)
+
 
 class ErasureExecutionTests(ErasureTestCase):
     """Carrying out the plan: complete, honest, and idempotent."""

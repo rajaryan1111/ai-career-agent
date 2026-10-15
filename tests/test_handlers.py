@@ -146,6 +146,40 @@ class BackupSnapshotTests(HandlerTestCase):
 
         self.assertEqual(automatic_backup_snapshots(self.database_path), (wanted,))
 
+    def test_a_database_name_with_glob_characters_still_finds_its_own_snapshots(self):
+        # ``[1]`` is a character class to a glob. The snapshot pattern built from this name matched
+        # ``my1.sqlite3.backup-…`` (a different database's file) while failing to match this database's own
+        # ``my[1].sqlite3.backup-…``, so the count the cap refusal depends on was zero however many
+        # snapshots were really beside it.
+        bracketed = self.directory / "my[1].sqlite3"
+        bracketed.write_bytes(b"x")
+        own = self.directory / "my[1].sqlite3.backup-20261015T000000Z"
+        own.write_bytes(b"x")
+        (self.directory / "my1.sqlite3.backup-20261015T000000Z").write_bytes(b"x")
+
+        self.assertEqual(automatic_backup_snapshots(bracketed), (own,))
+
+    def test_the_cap_refusal_also_holds_for_a_name_with_glob_characters(self):
+        bracketed = self.directory / "my[1].sqlite3"
+        bracketed.write_bytes(b"x")
+        for index in range(2):
+            (self.directory / f"my[1].sqlite3.backup-2026101{index}T000000Z").write_bytes(b"x")
+        original = handlers_module.MAX_AUTOMATIC_SNAPSHOTS
+        handlers_module.MAX_AUTOMATIC_SNAPSHOTS = 2
+        self.addCleanup(setattr, handlers_module, "MAX_AUTOMATIC_SNAPSHOTS", original)
+
+        result = backup_snapshot(TaskContext(
+            task=build_task("daily", "Daily backup", "backup.snapshot", times=("23:30",), now=self.now),
+            slot_at=self.now, attempt=1, started_at=self.now,
+            deadline=self.now + timedelta(seconds=300), database_path=str(bracketed),
+            _now=lambda: self.now,
+        ))
+
+        self.assertEqual(result.outcome, HandlerOutcome.REFUSED)
+        self.assertIn("2 automatic snapshots", result.detail)
+        self.assertEqual(len(automatic_backup_snapshots(bracketed)), 2,
+                         "a refusal must not have deleted or added anything")
+
     def test_the_cap_is_a_positive_number_of_snapshots(self):
         self.assertGreater(MAX_AUTOMATIC_SNAPSHOTS, 1)
         self.assertIsInstance(MAX_AUTOMATIC_SNAPSHOTS, int)
