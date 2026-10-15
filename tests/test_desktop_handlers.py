@@ -25,7 +25,7 @@ from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
-from career_agent.core import ActivityKind, ApplicationActivity
+from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import resume
 from career_agent.event_log import log_path, read_lines
@@ -3829,6 +3829,317 @@ class FollowUpTabTests(HandlerTestCase):
         self.assertNotIn("Wrote", app.status.get())
         self.assertEqual([name for name in os.listdir(Path(self.store.database_path).parent)
                           if name.endswith(".ics")], [])
+
+
+class NextActionsTabTests(HandlerTestCase):
+    """The Next actions tab: the combined list, and what each button does to what it names.
+
+    Driven through the same stub harness as the other tabs, so this is the handler logic behind the
+    widgets rather than pixels. The list itself is a pure function tested in tests/test_preparation.py;
+    what is tested here is that the tab shows those rows, that a button acts on the record its row names,
+    and that nothing in this tab can move an application on.
+    """
+
+    def make_actions_app(self):
+        """The app with the widgets this tab builds, on the shared stub harness."""
+        app = self.make_app()
+        app.actions_tab = Widget()
+        app.actions_summary = StringVar()
+        app.actions_tree = Tree()
+        app.actions_tree.selected = ()
+        app.jobs_tree.selected = ()
+        app.tracker_tree.selected = ()
+        MESSAGES.reset()
+        return app
+
+    def add_application(self, listing_id: str, *, role: str = "Data Engineer") -> None:
+        self.store.save_job(JobListing(listing_id, "fixture", "Fixture",
+                                       f"https://jobs.example.invalid/{listing_id}", "Sandbox Systems",
+                                       role, availability_status=Availability.UNKNOWN))
+
+    def add_preparation(self, listing_id: str, title: str, *, days: int | None = None, kind: str = "tailoring"):
+        self.add_application(listing_id)
+        due = None if days is None else date.today() + timedelta(days=days)
+        return self.store.add_preparation(listing_id, title, kind=kind, due_on=due)
+
+    def test_the_list_shows_the_three_kinds_with_the_record_each_row_names(self):
+        app = self.make_actions_app()
+        item = self.add_preparation("j1", "Tailor the résumé", days=-1)
+        self.store.save_tracker(ApplicationTracker("j1"))
+        self.store.set_follow_up("j1", date.today() - timedelta(days=2), note="chase the reply")
+        recorded = self.store.record_interview("j1", "technical", date.today() + timedelta(days=1))
+
+        app._refresh_actions()
+
+        self.assertEqual([iid for iid, _ in app.actions_tree.inserted],
+                         [f"follow-up:j1", f"preparation:{item.preparation_id}",
+                          f"interview:{recorded.round_id}"])
+        self.assertIn("2 item(s) need you now", app.actions_summary.get())
+        self.assertIn("1 item(s) still to do, 1 overdue", app.actions_summary.get())
+        self.assertIn("Next: Technical interview tomorrow", app.actions_summary.get())
+
+    def test_a_row_says_when_and_what_and_for_which_application(self):
+        app = self.make_actions_app()
+        self.add_preparation("j1", "Tailor the résumé", days=-1)
+
+        app._refresh_actions()
+
+        values = app.actions_tree.inserted[0][1]
+        self.assertIn("1 day(s) overdue", values[0])
+        self.assertEqual(values[1], "Tailor the résumé")
+        self.assertEqual(values[2], "Data Engineer at Sandbox Systems")
+
+    def test_an_undated_item_is_listed_rather_than_hidden(self):
+        app = self.make_actions_app()
+        self.add_preparation("j1", "Read the engineering blog", kind="research")
+
+        app._refresh_actions()
+
+        self.assertEqual(app.actions_tree.inserted[0][1][0], "No day set")
+
+    def test_nothing_recorded_says_what_the_tab_is_for(self):
+        app = self.make_actions_app()
+
+        app._refresh_actions()
+
+        self.assertEqual(app.actions_tree.inserted, ())
+        self.assertIn("Nothing is waiting on you", app.actions_summary.get())
+        self.assertIn("No preparation items are recorded", app.actions_summary.get())
+
+    def test_ticking_off_the_selected_item_changes_nothing_about_the_application(self):
+        app = self.make_actions_app()
+        item = self.add_preparation("j1", "Tailor the résumé", days=0)
+        self.store.save_tracker(ApplicationTracker("j1"))
+        before = self.store.get_tracker("j1")
+        app._refresh_actions()
+        app.actions_tree.selected = (f"preparation:{item.preparation_id}",)
+
+        app._complete_preparation()
+
+        stored = self.store.get_preparation(item.preparation_id)
+        self.assertTrue(stored.is_done)
+        self.assertEqual(self.store.get_tracker("j1"), before, "ticking an item off is not a status change")
+        self.assertIn("was not changed", app.status.get())
+        # ``children`` is the tree's current state (``inserted`` is an append-only record of inserts).
+        self.assertEqual(app.actions_tree.children, (), "the finished item leaves the list")
+
+    def test_ticking_off_a_row_that_is_not_a_preparation_item_explains_instead_of_acting(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        recorded = self.store.record_interview("j1", "technical", date.today())
+        app._refresh_actions()
+        app.actions_tree.selected = (f"interview:{recorded.round_id}",)
+
+        app._complete_preparation()
+
+        self.assertIn("That row is not a preparation item", MESSAGES.titles())
+        self.assertEqual(self.store.get_interview(recorded.round_id).outcome, InterviewOutcome.AWAITING)
+
+    def test_recording_an_outcome_saves_the_persons_reading_and_no_status(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        self.store.save_tracker(ApplicationTracker("j1"))
+        recorded = self.store.record_interview("j1", "technical", date.today() - timedelta(days=1))
+        before = self.store.get_tracker("j1")
+        app._refresh_actions()
+        app.actions_tree.selected = (f"interview:{recorded.round_id}",)
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        app._set_round_outcome()
+        desktop.tk.StringVar = original
+
+        outcome_var, notes_var = created[0], created[1]
+        outcome_var.set("went_well")
+        notes_var.set("they asked about the data pipeline")
+        BUTTONS.command()
+
+        stored = self.store.get_interview(recorded.round_id)
+        self.assertEqual(stored.outcome, InterviewOutcome.WENT_WELL)
+        self.assertEqual(stored.notes, "they asked about the data pipeline")
+        self.assertEqual(self.store.get_tracker("j1"), before, "an outcome is not a status change")
+        self.assertIn("You felt it went well", app.status.get())
+
+    def test_deleting_a_follow_up_row_says_where_that_is_done_and_writes_nothing(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        self.store.save_tracker(ApplicationTracker("j1"))
+        self.store.set_follow_up("j1", date.today(), note="chase")
+        app._refresh_actions()
+        app.actions_tree.selected = ("follow-up:j1",)
+
+        app._delete_action_record()
+
+        self.assertIn("Follow-up days are cleared, not deleted", MESSAGES.titles())
+        self.assertEqual(self.store.get_tracker("j1").follow_up_on, date.today())
+
+    def test_deleting_a_preparation_item_asks_first_and_only_then_removes_it(self):
+        app = self.make_actions_app()
+        item = self.add_preparation("j1", "Tailor the résumé")
+        app._refresh_actions()
+        app.actions_tree.selected = (f"preparation:{item.preparation_id}",)
+        CONFIG["Delete this preparation item?"] = False
+
+        app._delete_action_record()
+        self.assertIsNotNone(self.store.get_preparation(item.preparation_id), "a declined confirmation does nothing")
+
+        CONFIG["Delete this preparation item?"] = True
+        app._delete_action_record()
+
+        self.assertIsNone(self.store.get_preparation(item.preparation_id))
+        self.assertIn("was deleted", app.status.get())
+
+    def test_deleting_a_record_that_is_already_gone_says_so(self):
+        app = self.make_actions_app()
+        item = self.add_preparation("j1", "Tailor the résumé")
+        app._refresh_actions()
+        app.actions_tree.selected = (f"preparation:{item.preparation_id}",)
+        CONFIG["Delete this preparation item?"] = True
+        self.store.delete_preparation(item.preparation_id)
+
+        app._delete_action_record()
+
+        self.assertIn("was already gone", app.status.get())
+        self.assertIn("nothing was deleted", app.status.get())
+
+    def test_adding_a_preparation_item_needs_an_application_selected_first(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+
+        app._add_preparation()
+
+        self.assertIn("Add a preparation item", MESSAGES.titles())
+        self.assertIn("Select the application", MESSAGES.text("showinfo"))
+        self.assertEqual(self.store.list_preparation(), ())
+
+    def test_a_preparation_item_is_added_through_the_dialog_with_its_day_and_kind(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        app.jobs_tree.selected = ("j1",)
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        app._add_preparation()
+        desktop.tk.StringVar = original
+
+        title_var, kind_var, day_var = created[0], created[1], created[2]
+        title_var.set("Write the cover letter")
+        kind_var.set("documents")
+        day_var.set((date.today() + timedelta(days=2)).isoformat())
+        BUTTONS.command()
+
+        stored = self.store.list_preparation("j1")[0]
+        self.assertEqual(stored.title, "Write the cover letter")
+        self.assertEqual(stored.kind.value, "documents")
+        self.assertEqual(stored.due_on, date.today() + timedelta(days=2))
+        self.assertIn("No status was changed", app.status.get())
+
+    def test_a_mistyped_day_is_refused_before_anything_is_written(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        app.jobs_tree.selected = ("j1",)
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        app._add_preparation()
+        desktop.tk.StringVar = original
+
+        created[0].set("Write the cover letter")
+        created[2].set("next tuesday")
+        BUTTONS.command()
+
+        self.assertIn("Preparation item not saved", MESSAGES.titles())
+        self.assertIn("YYYY-MM-DD", MESSAGES.text("showerror"))
+        self.assertEqual(self.store.list_preparation("j1"), ())
+
+    def test_an_interview_round_is_recorded_through_the_dialog_and_moves_no_status(self):
+        app = self.make_actions_app()
+        self.add_application("j1", role="Analyst")
+        self.store.save_tracker(ApplicationTracker("j1"))
+        before = self.store.get_tracker("j1")
+        app.tracker_tree.selected = ("j1",)
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        app._record_interview_round()
+        desktop.tk.StringVar = original
+
+        stage_var, day_var, mode_var, notes_var = created[0], created[1], created[2], created[3]
+        stage_var.set("panel")
+        day_var.set((date.today() + timedelta(days=5)).isoformat())
+        mode_var.set("onsite")
+        notes_var.set("bring the portfolio")
+        BUTTONS.command()
+
+        recorded = self.store.list_interviews("j1")[0]
+        self.assertEqual(recorded.stage.value, "panel")
+        self.assertEqual(recorded.mode.value, "onsite")
+        self.assertEqual(recorded.notes, "bring the portfolio")
+        self.assertEqual(recorded.outcome, InterviewOutcome.AWAITING, "a new round starts waiting")
+        self.assertEqual(self.store.get_tracker("j1"), before)
+        self.assertIn("no status was changed", app.status.get())
+
+    def test_a_round_without_a_day_is_refused_before_anything_is_written(self):
+        app = self.make_actions_app()
+        self.add_application("j1")
+        app.jobs_tree.selected = ("j1",)
+        created = []
+        original = desktop.tk.StringVar
+
+        def recording(*args, **kwargs):
+            variable = original(*args, **kwargs)
+            created.append(variable)
+            return variable
+
+        desktop.tk.StringVar = recording
+        self.addCleanup(setattr, desktop.tk, "StringVar", original)
+        app._record_interview_round()
+        desktop.tk.StringVar = original
+
+        created[1].set("sometime next week")
+        BUTTONS.command()
+
+        self.assertIn("Interview round not saved", MESSAGES.titles())
+        self.assertEqual(self.store.list_interviews("j1"), ())
+
+    def test_an_unreadable_record_is_reported_rather_than_crashing_the_tab(self):
+        app = self.make_actions_app()
+        self.add_preparation("j1", "Tailor the résumé")
+        self.store._connection.execute("UPDATE application_preparation SET kind='astrology'")
+        self.store._connection.commit()
+
+        app._refresh_actions()
+
+        self.assertIn("could not be read", MESSAGES.text("showerror"))
+        self.assertIn("astrology", MESSAGES.text("showerror"))
 
 
 class SchedulerTabTests(HandlerTestCase):

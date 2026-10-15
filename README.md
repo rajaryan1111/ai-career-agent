@@ -449,6 +449,41 @@ than guessing from the listing's free text. Also, differently-spelled skill name
 same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
 otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
 
+## What needs doing next (preparation, interviews and follow-ups in one list)
+
+A job hunt is not a list of jobs, it is a list of things to do. The **Next actions** tab answers that one
+question across every application: the **preparation items** you have written down (tailor the résumé,
+read the engineering blog, get a reference letter ready), the **interview rounds** you have been invited to
+and recorded, and the **follow-up days** that have arrived. Overdue first, then today, then what is coming,
+with interviews ahead of follow-ups and follow-ups ahead of your own checklist - somebody else's calendar
+first.
+
+```bash
+python -m career_agent --next-actions     # what is due, what is coming, and what is recorded
+python -m career_agent --interviews       # the rounds you have recorded, next one first
+```
+
+**A preparation item is a plan.** You write the title, pick a kind (tailoring, research, practice,
+documents, other) and optionally a day. Ticking it off records that *you* said you did it; it never moves
+the application, never writes an activity entry, and is not evidence that anything was sent. A title that is
+already open cannot be added twice - two identical rows in a checklist are almost always a double click -
+but the same title can come back after it is finished, because repeating a step is a real thing people do.
+
+**An interview round is your note, not an employer's decision.** Which round it is, the day it is planned
+for, how it is being held, and afterwards *your own* reading of how it went. The vocabulary has no value
+for "passed" or "rejected" and never will: the application cannot know an employer's decision, so an offer
+or a rejection stays what it is - an activity entry you write and a status change you make yourself, with
+your evidence. A round planned for today is still ahead of you, and the list says so.
+
+Everything on the tab can be deleted, and each deletion asks first. Deleting a follow-up *day* is not the
+same operation: that belongs to the application record, so the tab sends you to **Follow-ups**, which
+clears the day and leaves the application, its status and its history untouched.
+
+**What none of this does.** No status changes, no network, no calendar invite, no email, nothing sent to an
+employer. The list is computed from your own records against *your* local day, and the command line says
+the same thing in one line, `--next-actions`, which is read-only.
+
+
 ## Follow up on an application (and put it in your own calendar)
 
 An application you sent and never heard about is the state most job hunts die in, so each application can

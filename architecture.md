@@ -76,6 +76,17 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   is first copied to a verified snapshot beside itself - because a step that succeeds and is only later
   found to be wrong is already committed, and that copy is then the recovery path. A copy that cannot be
   written stops the update instead of proceeding without one.
+- The work around an application is its own record, in its own module. ``career_agent/preparation.py`` is
+  pure: it takes preparation items, interview rounds, follow-up reminders, the listings and a ``today`` the
+  caller supplies, and returns one ordered action list plus the sentences that describe it. The ordering is
+  a documented decision (overdue first, then today, then the window; an appointment on somebody else's
+  clock ahead of a chase, ahead of your own checklist), the two summary functions distinguish "nothing
+  recorded" from "nothing due", and a capped report always states how many lines it left out. The records
+  themselves live in schema 5's ``application_preparation`` and ``interview_round`` tables, both deleted
+  with their listing, and both deliberately unable to touch an application: the item has no status column,
+  and the round's outcome vocabulary has no value that sounds like an employer's decision. Completing an
+  item is refused a second time so the stored timestamp keeps meaning the first time it was reported, and a
+  duplicate open item or a duplicate round for the same stage and day is refused rather than merged.
 - Local backups and export/import. Back up/restore moves the whole SQLite file and is the local
   durability path; the JSON export/import is the portable, versioned format and is deliberately stricter
   about what it will assert: `career_agent/importer.py` owns both directions of the format

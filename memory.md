@@ -2147,3 +2147,46 @@ through `with_follow_up`, a differing plan under `KEEP` being refused and changi
 replacement, `clear_follow_up` leaving the status alone, clearing a record that has no plan, refusing a plan
 for a listing with no application record, refusing a mistyped day at the boundary, and the event line naming
 the plan it left alone.
+
+## 2026-10-15 — Preparation items and interview rounds: the work around an application
+
+**What changed.** Schema 5 adds two tables and nothing else: `application_preparation` (a checklist item
+with a kind, an optional day, and the moment the person said it was done) and `interview_round` (which
+round, the day it is planned for, how it is held, the candidate's own reading of how it went, notes).
+`career_agent/preparation.py` is pure and turns those records plus the follow-up days into one ordered list;
+the window shows it as a **Next actions** tab with buttons that write only the record they name, and
+`--next-actions` and `--interviews` print it from a terminal, read-only. Both tables are deleted with their
+listing, and the migration was exercised on a real v4 file: the pre-upgrade snapshot was written beside it,
+the version moved to 5, every existing row survived, the new tables came up empty and were usable at once.
+
+**Three rules, each enforced where it belongs.** (1) Neither record can move an application on: the item
+has no status column, the round has no route to the tracker, and a store test asserts the tracker row is
+byte-identical after adding, completing, recording, updating and deleting each of them. (2) "Done" is the
+person's statement, so a second completion is refused rather than re-timestamped - the same rule the
+tracker's no-op path follows - and the same open title/kind cannot be added twice, while a finished one can
+be repeated. (3) An interview outcome is the candidate's reading: the vocabulary is awaiting / went well /
+unclear / went poorly / did not go ahead, and a test refuses `passed`, `rejected`, `offer`, `hired` and
+`accepted`, because an application cannot know an employer's decision and a field offering one would put
+words in an employer's mouth.
+
+**One design correction while writing the tests.** `InterviewRound.has_happened` counted a round scheduled
+for *today* as past, so a summary would have buried the interview that is about to happen. It is replaced by
+`is_ahead`/`is_past`, and the tab's rows read "today" rather than "0 day(s) ago". The name was wrong as well
+as the boundary: the record cannot know whether a round took place - only `outcome` says that, and only the
+person fills it in.
+
+**The action list is a decision, not a sort.** Overdue (most overdue first), then today, then the coming
+week; inside a group an interview outranks a follow-up, which outranks a preparation item, because an
+appointment is on somebody else's clock, a chase is a promise, and your own checklist is yours to arrange.
+Undated items are listed (open work with no day is still work), items beyond the window are counted in one
+line rather than hidden, and two runs over the same data print the same list - each of those is a test.
+
+**Teeth checks.** Three mutations, each caught and reverted with the file hashes verified
+(`preparation.py c65e9d2e…`, `store.py 0abfaaf0…`): keeping finished items on the list → 4 failures;
+completing an item also moving the application to shortlisted → 2 failures; making the kind order
+irrelevant → 1 failure.
+
+**Evidence.** Full suite 1210 tests OK (13 skip without `pypdf`); 31 new tests in `tests/test_preparation.py`,
+31 in `tests/test_store.py` (including the v4→v5 upgrade on a file that already holds records), and 16
+window-handler tests in `tests/test_desktop_handlers.py`. The new checklist steps 61-67 are unchecked: no
+real GUI session has been run for them.

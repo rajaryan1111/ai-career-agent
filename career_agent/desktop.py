@@ -19,7 +19,8 @@ from .backup import (
 )
 from .core import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
-    Decision, evaluate_eligibility, score_relevance, selectable_tracker_statuses,
+    Decision, InterviewMode, InterviewOutcome, InterviewStage, PreparationKind,
+    evaluate_eligibility, score_relevance, selectable_tracker_statuses,
 )
 from . import __version__
 from .config import database_path_for_run
@@ -28,10 +29,15 @@ from .handlers import seed_default_tasks
 from . import importer as import_export
 from .followups import FollowUpState, calendar_file_name, reminders, summary, to_calendar
 from .matching import DISCLAIMER as MATCHING_DISCLAIMER, FactorStatus, assess
+from .preparation import (
+    ActionKind, actions as next_actions, interview_summary, preparation_summary,
+    summary as actions_summary,
+)
 from .store import PrivateWriteError, write_private_text_file
 from .worker import worker_status
 from .desktop_logic import (
-    ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
+    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity,
+    build_candidate_profile,
     format_stored_timestamp, form_values, job_form_values, plan_job_save,
     profile_fields_not_matching, profile_form_values,
 )
@@ -97,9 +103,11 @@ class CareerAgentApp:
         self.data_tab = ttk.Frame(self.tabs, padding=12)
         self.scheduler_tab = ttk.Frame(self.tabs, padding=12)
         self.follow_up_tab = ttk.Frame(self.tabs, padding=12)
+        self.actions_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
+        self.tabs.add(self.actions_tab, text="Next actions")
         self.tabs.add(self.follow_up_tab, text="Follow-ups")
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
@@ -108,6 +116,7 @@ class CareerAgentApp:
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
+        self._build_actions()
         self._build_follow_ups()
         self._build_data_safety()
         self._build_scheduler()
@@ -117,6 +126,7 @@ class CareerAgentApp:
         self._refresh_jobs()
         self._refresh_tracker()
         self._refresh_follow_ups()
+        self._refresh_actions()
         self._refresh_scheduler()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
@@ -329,6 +339,432 @@ class CareerAgentApp:
             self.task_runs_tree.column(column, width=width, anchor=W)
         self.task_runs_tree.grid(row=6, column=0, columnspan=4, sticky="nsew")
         self.scheduler_tab.columnconfigure(0, weight=1)
+
+    def _build_actions(self):
+        """The page that answers "what now?": every open item across applications, ordered.
+
+        One list, because the three things a person can have to do - face a round, chase an answer, finish a
+        preparation item - are only separable in a data model, never at a desk. The rows carry the buttons
+        that apply to them: a preparation item can be ticked off, a round can be recorded, and a follow-up
+        day is changed on its own tab, which the row says rather than offering a button that would not work.
+        """
+        controls = ttk.Frame(self.actions_tab)
+        controls.pack(fill=X, pady=(0, 8))
+        ttk.Button(controls, text="Refresh", command=self._refresh_actions).pack(side="left", padx=(0, 8))
+        ttk.Button(controls, text="Add a preparation item", command=self._add_preparation
+                   ).pack(side="left", padx=8)
+        ttk.Button(controls, text="Record an interview round", command=self._record_interview_round
+                   ).pack(side="left", padx=8)
+        ttk.Button(controls, text="Mark the selected item done", command=self._complete_preparation
+                   ).pack(side="left", padx=8)
+        ttk.Button(controls, text="Record the selected round's outcome", command=self._set_round_outcome
+                   ).pack(side="left", padx=8)
+        ttk.Button(controls, text="Delete the selected record", command=self._delete_action_record
+                   ).pack(side="left", padx=8)
+        ttk.Label(
+            self.actions_tab, wraplength=900, justify=LEFT,
+            text=("Everything here is a plan you wrote: a preparation item, a round you recorded, or a "
+                  "follow-up day. None of it changes an application's status, and no record here is an "
+                  "employer's decision - only you move an application on, and only with your own evidence."),
+        ).pack(anchor=W, pady=(0, 8))
+        self.actions_summary = tk.StringVar()
+        ttk.Label(self.actions_tab, textvariable=self.actions_summary, wraplength=900,
+                  justify="left").pack(anchor=W, pady=(0, 8))
+        columns = ("when", "what", "application", "detail")
+        self.actions_tree = ttk.Treeview(self.actions_tab, columns=columns, show="headings", height=12)
+        for column, label, width in (("when", "When", 190), ("what", "What", 320),
+                                     ("application", "Application", 260), ("detail", "Your note", 320)):
+            self.actions_tree.heading(column, text=label)
+            self.actions_tree.column(column, width=width, anchor=W)
+        self.actions_tree.pack(fill=BOTH, expand=True)
+        self.actions_tab.columnconfigure(0, weight=1)
+
+    def _action_rows(self):
+        """Read the three record kinds and return the rows this tab shows, or ``None`` on a read failure."""
+        try:
+            jobs = {job.listing_id: job for job in self.store.list_jobs()}
+            preparation_items = self.store.list_preparation()
+            rounds = self.store.list_interviews()
+            pairs = [(tracker, jobs.get(tracker.listing_id))
+                     for tracker in self.store.list_follow_up_trackers()]
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return None
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return None
+        today = datetime.now().date()
+        reminders_found = reminders([(tracker, job) for tracker, job in pairs if job is not None], today)
+        shown = next_actions(preparation_items, rounds, reminders_found, jobs, today,
+                             include_later=False, include_undated=True)
+        everything = next_actions(preparation_items, rounds, reminders_found, jobs, today,
+                                  include_later=True, include_undated=True)
+        return jobs, preparation_items, rounds, shown, everything, today
+
+    def _refresh_actions(self):
+        """Rebuild the list. Read-only: nothing here writes, moves a status, or records anything."""
+        if not hasattr(self, "actions_tree"):
+            return
+        rows = self._action_rows()
+        if rows is None:
+            return
+        jobs, preparation_items, rounds, shown, everything, today = rows
+        self.actions_summary.set(
+            actions_summary(shown, today) + f"  {preparation_summary(preparation_items, today)}"
+            f"  {interview_summary(rounds, today)}"
+        )
+        for item in self.actions_tree.get_children():
+            self.actions_tree.delete(item)
+        for index, action in enumerate(shown):
+            identifier = self._action_row_id(action, today)
+            self.actions_tree.insert(
+                "", END, iid=identifier,
+                values=(self._action_when(action), action.what,
+                        f"{action.role_title} at {action.employer_name}", action.detail or ""),
+            )
+        self._shown_action_count = len(shown)
+        later = len(everything) - len(shown)
+        self._later_action_count = later
+
+    @staticmethod
+    def _action_when(action) -> str:
+        """The day as the person reads it: a date, and how far away it is."""
+        if action.on is None:
+            return "No day set"
+        if action.days_away is None:
+            return action.on.isoformat()
+        if action.days_away == 0:
+            return f"{action.on.isoformat()} (today)"
+        if action.days_away < 0:
+            return f"{action.on.isoformat()} ({abs(action.days_away)} day(s) overdue)"
+        return f"{action.on.isoformat()} (in {action.days_away} day(s))"
+
+    @staticmethod
+    def _action_row_id(action, today) -> str:
+        """A row id that names *which record* the row is about, so a button knows what it acts on.
+
+        A preparation item and an interview round are identified by their own ids; a follow-up row is
+        identified by its listing, because that is the record it belongs to.
+        """
+        if action.record_id is None:
+            return f"follow-up:{action.listing_id}"
+        prefix = "preparation" if action.kind is ActionKind.PREPARATION else "interview"
+        return f"{prefix}:{action.record_id}"
+
+    def _selected_action(self) -> tuple[str, int | str] | None:
+        """The selected row as ``(kind, identifier)``, or ``None`` when nothing usable is selected."""
+        if not hasattr(self, "actions_tree"):
+            return None
+        selection = self.actions_tree.selection()
+        if not selection:
+            messagebox.showinfo("Select something first",
+                               "Select the row you want to act on.", parent=self.root)
+            return None
+        raw = str(selection[0])
+        kind, _, identifier = raw.partition(":")
+        if not identifier:
+            return None
+        return kind, identifier
+
+    def _selected_job_id(self) -> str | None:
+        """The listing a new record should belong to: the selected job or tracker row, if any."""
+        for tree_name in ("jobs_tree", "tracker_tree"):
+            tree = getattr(self, tree_name, None)
+            if tree is None:
+                continue
+            try:
+                selection = tree.selection()
+            except Exception:  # noqa: BLE001 - a stub tree in a test may not implement selection()
+                continue
+            if selection:
+                return str(selection[0])
+        return None
+
+    def _require_selected_job(self, title: str) -> str | None:
+        """The listing to attach a new record to, or ``None`` after explaining how to choose one."""
+        listing_id = self._selected_job_id()
+        if listing_id is None:
+            messagebox.showinfo(
+                title,
+                "Select the application this belongs to first: choose its row on the Jobs or "
+                "Application tracker tab, then press this button again.",
+                parent=self.root,
+            )
+            return None
+        try:
+            job = self.store.get_job(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return None
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return None
+        if job is None:
+            messagebox.showinfo(title, "That listing is no longer saved. Refresh the window.",
+                                parent=self.root)
+            return None
+        return listing_id
+
+    def _add_preparation(self):
+        """Add one preparation item to the selected application, with an optional day."""
+        listing_id = self._require_selected_job("Add a preparation item")
+        if listing_id is None:
+            return
+        try:
+            job = self.store.get_job(listing_id)
+        except (StoredRecordError, sqlite3.Error):
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add a preparation item")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        assert job is not None
+        ttk.Label(dialog, text=f"{job.employer_name} — {job.role_title}", wraplength=460).pack(
+            anchor=W, padx=12, pady=(12, 6))
+        ttk.Label(dialog, text="What needs doing").pack(anchor=W, padx=12)
+        title_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=title_var, width=48).pack(fill=X, padx=12, pady=4)
+        ttk.Label(dialog, text="What kind of work it is").pack(anchor=W, padx=12, pady=(8, 0))
+        kind_var = tk.StringVar(value=PreparationKind.TAILORING.value)
+        ttk.Combobox(dialog, textvariable=kind_var, state="readonly", width=30,
+                     values=[kind.value for kind in PreparationKind]).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="Day to do it (YYYY-MM-DD, optional)").pack(anchor=W, padx=12, pady=(8, 0))
+        day_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=day_var, width=20).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(
+            dialog, wraplength=440, justify=LEFT,
+            text=("A checklist item is a plan. Ticking it off records that you did the work; it never "
+                  "changes the application's status and it is not evidence that anything was sent."),
+        ).pack(anchor=W, padx=12, pady=(6, 0))
+
+        def apply():
+            raw_day = day_var.get().strip()
+            try:
+                due_on = None
+                if raw_day:
+                    if ACTIVITY_DATE_PATTERN.fullmatch(raw_day) is None:
+                        raise ValueError(f"Give the day as YYYY-MM-DD, for example "
+                                         f"{datetime.now().date().isoformat()}, or leave it empty.")
+                    due_on = date.fromisoformat(raw_day)
+                added = self.store.add_preparation(listing_id, title_var.get(), kind=kind_var.get(),
+                                                   due_on=due_on)
+            except ValueError as exc:
+                messagebox.showerror("Preparation item not saved", str(exc), parent=dialog)
+                return
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
+            dialog.destroy()
+            self._refresh_actions()
+            when = f" for {added.due_on.isoformat()}" if added.due_on else " with no day set"
+            self.status.set(f"Preparation item added{when}: {added.title}. No status was changed.")
+
+        dialog.bind("<Return>", lambda _event: apply())
+        ttk.Button(dialog, text="Add it", command=apply).pack(anchor="e", padx=12, pady=12)
+
+    def _record_interview_round(self):
+        """Record one round of an employer's process for the selected application."""
+        listing_id = self._require_selected_job("Record an interview round")
+        if listing_id is None:
+            return
+        try:
+            job = self.store.get_job(listing_id)
+        except (StoredRecordError, sqlite3.Error):
+            return
+        assert job is not None
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Record an interview round")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        ttk.Label(dialog, text=f"{job.employer_name} — {job.role_title}", wraplength=460).pack(
+            anchor=W, padx=12, pady=(12, 6))
+        ttk.Label(dialog, text="Which round").pack(anchor=W, padx=12)
+        stage_var = tk.StringVar(value=InterviewStage.SCREENING.value)
+        ttk.Combobox(dialog, textvariable=stage_var, state="readonly", width=30,
+                     values=[stage.value for stage in InterviewStage]).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="Day it is planned for (YYYY-MM-DD)").pack(anchor=W, padx=12, pady=(8, 0))
+        day_var = tk.StringVar(value=datetime.now().date().isoformat())
+        ttk.Entry(dialog, textvariable=day_var, width=20).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="How it is being held").pack(anchor=W, padx=12, pady=(8, 0))
+        mode_var = tk.StringVar(value=InterviewMode.UNKNOWN.value)
+        ttk.Combobox(dialog, textvariable=mode_var, state="readonly", width=30,
+                     values=[mode.value for mode in InterviewMode]).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="Notes for the next round (optional)").pack(anchor=W, padx=12, pady=(8, 0))
+        notes_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=notes_var, width=48).pack(fill=X, padx=12, pady=4)
+        ttk.Label(
+            dialog, wraplength=440, justify=LEFT,
+            text=("This is your own record: a round you have been invited to, and what you want to "
+                  "remember. It does not confirm anything with the employer, and the application's "
+                  "status stays where you put it."),
+        ).pack(anchor=W, padx=12, pady=(6, 0))
+
+        def apply():
+            raw_day = day_var.get().strip()
+            try:
+                if ACTIVITY_DATE_PATTERN.fullmatch(raw_day) is None:
+                    raise ValueError("Give the day the round is planned for as YYYY-MM-DD.")
+                recorded = self.store.record_interview(
+                    listing_id, stage_var.get(), date.fromisoformat(raw_day), mode=mode_var.get(),
+                    notes=notes_var.get() or None)
+            except ValueError as exc:
+                messagebox.showerror("Interview round not saved", str(exc), parent=dialog)
+                return
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
+            dialog.destroy()
+            self._refresh_actions()
+            self.status.set(f"Recorded: {recorded.stage_label} on {recorded.scheduled_on.isoformat()}. "
+                            "How it went is yours to fill in afterwards; no status was changed.")
+
+        dialog.bind("<Return>", lambda _event: apply())
+        ttk.Button(dialog, text="Record it", command=apply).pack(anchor="e", padx=12, pady=12)
+
+    def _complete_preparation(self):
+        """Tick off the selected preparation item."""
+        selection = self._selected_action()
+        if selection is None:
+            return
+        kind, identifier = selection
+        if kind != "preparation":
+            messagebox.showinfo(
+                "That row is not a preparation item",
+                "Only a preparation item can be ticked off. For a round, record how it went; for a "
+                "follow-up day, use the Follow-ups tab.",
+                parent=self.root,
+            )
+            return
+        try:
+            updated = self.store.complete_preparation(int(identifier))
+        except ValueError as exc:
+            messagebox.showinfo("Nothing was changed", str(exc), parent=self.root)
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_actions()
+        self.status.set(f"Done: {updated.title}. The application's status was not changed.")
+
+    def _set_round_outcome(self):
+        """Record how a round went, in the person's own words."""
+        selection = self._selected_action()
+        if selection is None:
+            return
+        kind, identifier = selection
+        if kind != "interview":
+            messagebox.showinfo(
+                "That row is not an interview round",
+                "Only a recorded round has an outcome to fill in. Use the Follow-ups tab for a "
+                "follow-up day, or tick off a preparation item.",
+                parent=self.root,
+            )
+            return
+        try:
+            current = self.store.get_interview(int(identifier))
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if current is None:
+            messagebox.showinfo("That record is gone", "Refresh the window and try again.", parent=self.root)
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("How did the round go?")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        ttk.Label(dialog, text=f"{current.stage_label} on {current.scheduled_on.isoformat()}",
+                  wraplength=460).pack(anchor=W, padx=12, pady=(12, 6))
+        ttk.Label(dialog, text="Your reading of it").pack(anchor=W, padx=12)
+        outcome_var = tk.StringVar(value=current.outcome.value)
+        ttk.Combobox(dialog, textvariable=outcome_var, state="readonly", width=40,
+                     values=[outcome.value for outcome in InterviewOutcome]).pack(anchor=W, padx=12, pady=4)
+        ttk.Label(dialog, text="Notes for next time (leave empty to keep what is there)").pack(
+            anchor=W, padx=12, pady=(8, 0))
+        notes_var = tk.StringVar()
+        ttk.Entry(dialog, textvariable=notes_var, width=48).pack(fill=X, padx=12, pady=4)
+        ttk.Label(
+            dialog, wraplength=440, justify=LEFT,
+            text=("These words are yours. There is deliberately no value for 'passed' or 'rejected': "
+                  "the application cannot know an employer's decision, and an offer or a rejection is "
+                  "recorded as an activity entry and a status change you make yourself."),
+        ).pack(anchor=W, padx=12, pady=(6, 0))
+
+        def apply():
+            try:
+                updated = self.store.set_interview_outcome(
+                    int(identifier), outcome_var.get(), notes=notes_var.get() or None)
+            except ValueError as exc:
+                messagebox.showerror("Outcome not saved", str(exc), parent=dialog)
+                return
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
+            dialog.destroy()
+            self._refresh_actions()
+            self.status.set(f"Recorded for {updated.stage_label} on "
+                            f"{updated.scheduled_on.isoformat()}: {updated.outcome_label}. "
+                            "No status was changed.")
+
+        dialog.bind("<Return>", lambda _event: apply())
+        ttk.Button(dialog, text="Save it", command=apply).pack(anchor="e", padx=12, pady=12)
+
+    def _delete_action_record(self):
+        """Delete the selected preparation item or interview round, after asking."""
+        selection = self._selected_action()
+        if selection is None:
+            return
+        kind, identifier = selection
+        if kind == "follow-up":
+            messagebox.showinfo(
+                "Follow-up days are cleared, not deleted",
+                "A follow-up day belongs to the application record. Clear it on the Follow-ups tab, "
+                "which leaves the application, its status and its history untouched.",
+                parent=self.root,
+            )
+            return
+        label = "preparation item" if kind == "preparation" else "interview round"
+        if not messagebox.askyesno(
+                f"Delete this {label}?",
+                f"The {label} will be removed and cannot be brought back. The application, its status, "
+                "its history and the other records stay exactly as they are.",
+                parent=self.root):
+            return
+        try:
+            if kind == "preparation":
+                removed = self.store.delete_preparation(int(identifier))
+            else:
+                removed = self.store.delete_interview(int(identifier))
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_actions()
+        if removed:
+            self.status.set(f"The {label} was deleted; the application itself was not changed.")
+        else:
+            # Saying it was deleted when the row was already gone would be a claim the database
+            # contradicts, so the message says what actually happened.
+            self.status.set(f"That {label} was already gone; nothing was deleted.")
 
     def _build_follow_ups(self):
         """The reminders tab: the days already recorded, and the two actions that change them.

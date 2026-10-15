@@ -228,6 +228,29 @@ the store behind the widgets, and the checklist is where the widgets themselves 
 60. [ ] While a follow-up is recorded, edit the listing (save it again from the Jobs tab) and confirm the
     reminder survives that too, then confirm the **Follow-ups** tab is what changes, not the application.
 
+61. [ ] Open the **Next actions** tab with at least one saved listing. Select its row on the Jobs tab, press
+    **Add a preparation item**, and add one item with a day of yesterday and one with no day at all. Both
+    must appear at the top of the list (the overdue one first, the undated one after the dated items), and
+    the application's status must be unchanged everywhere in the window.
+62. [ ] Select the item and press **Mark the selected item done**. The row must leave the list, the status
+    line must say the application's status was not changed, and the tracker row on the **Application
+    tracker** tab must be exactly as it was.
+63. [ ] Press **Record an interview round**, choose a stage, a day (tomorrow) and a mode, and save. The round
+    must appear in the list above the preparation items and must read "in 1 day(s)"/"tomorrow" rather than
+    as something that has already happened. Then select it, press **Record the selected round's outcome**,
+    pick "You felt it went well", save, and confirm the outcome text appears in the row and that no status
+    changed.
+64. [ ] Select a **follow-up** row and press **Delete the selected record**. It must explain that a follow-up
+    day is cleared on the Follow-ups tab rather than deleted here, and nothing may change.
+65. [ ] Select an interview round and press **Delete the selected record**, answering **No** first and then
+    **Yes**. Nothing may be removed on the first answer; the second must remove only the round and say so.
+66. [ ] In a terminal with the app closed: `python -m career_agent --next-actions` and
+    `python -m career_agent --interviews`. Both must print the same records the window shows, say the report
+    is read-only, and name the number of records; running `--next-actions --interviews` together must be
+    refused by the argument parser with status 2.
+67. [ ] Point `--next-actions` at a path that does not exist (`--database /tmp/nothing.sqlite3`): it must say
+    there is no database yet and create no file.
+
 ## Record results
 
 For each operating system tested, record:

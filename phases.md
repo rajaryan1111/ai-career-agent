@@ -244,6 +244,22 @@ tasks** tab shows the same summary, the task list and the recent attempts and ca
 The missed-run report, a deployed always-on worker, and therefore any claim of laptop-off operation
 remain outstanding.
 
+The work around an application is now recorded rather than remembered: schema 5 adds
+`application_preparation` (a checklist item with a kind, an optional day and the moment the person said it
+was done) and `interview_round` (which round, the day it is planned for, how it is held, the candidate's
+own reading of how it went, and their notes), and `career_agent/preparation.py` turns those records plus the
+follow-up days into one ordered list - `career_agent` surfaces it as the **Next actions** tab and as
+`--next-actions` / `--interviews`, both read-only apart from the two buttons that write a record the person
+typed. The rules are enforced where they belong: `complete_preparation` refuses a second completion so the
+timestamp keeps meaning the first time it was reported, an open item with the same title and kind cannot be
+added twice, a round cannot be recorded twice for the same stage and day, both tables are deleted with their
+listing, and neither record has any route to an application's status - the store tests assert the tracker
+row is byte-identical after every one of these writes. The interview outcome vocabulary deliberately has no
+`passed` or `rejected`: the application cannot know an employer's decision, so the tests refuse values that
+would put words in an employer's mouth. `ApplicationTracker.is_ahead`/`is_past` replaced a single
+`has_happened` while this was written, because "today" was being counted as the past and burying the round
+that is about to happen.
+
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra
 (`pypdf>=4.3`), and a `career-agent` console script pointing at the same `career_agent.__main__:main`

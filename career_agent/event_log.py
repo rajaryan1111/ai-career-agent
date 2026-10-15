@@ -71,6 +71,16 @@ EVENTS: tuple[str, ...] = (
     "tracker.saved",
     "activity.added",
     "activity.deleted",
+    # Preparation items and interview rounds: the work around an application. Both are the person's own
+    # notes, and neither can move an application's status - the events say what was recorded, never that
+    # anything was decided.
+    "preparation.added",
+    "preparation.completed",
+    "preparation.reopened",
+    "preparation.deleted",
+    "interview.recorded",
+    "interview.outcome",
+    "interview.deleted",
     "resume.proposed",
     "resume.failed",
     "export.written",

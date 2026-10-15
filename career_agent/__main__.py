@@ -53,7 +53,7 @@ from .handlers import default_registry, describe_default_handlers, seed_default_
 from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
 )
-from . import importer
+from . import importer, preparation
 from .followups import calendar_file_name, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
@@ -148,6 +148,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--follow-ups", action="store_true",
         help="List the applications whose follow-up day has arrived or is coming, then exit.",
+    )
+    actions.add_argument(
+        "--next-actions", action="store_true",
+        help="List what needs doing now: due follow-ups, rounds ahead and open preparation items.",
+    )
+    actions.add_argument(
+        "--interviews", action="store_true",
+        help="List the interview rounds recorded for your applications, next one first, then exit.",
     )
     actions.add_argument(
         "--calendar-to", metavar="PATH",
@@ -521,6 +529,97 @@ def run_follow_ups(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_next_actions(args: argparse.Namespace) -> int:
+    """Report what needs doing about these applications, and nothing else.
+
+    This is the one question a career workspace should answer first: not "what do you have" but "what is
+    waiting on you". It combines the three things a person can have to do - a round to prepare for, a
+    follow-up day that has arrived, and an open preparation item - orders them so somebody else's clock
+    comes first, and says how many items are further out rather than hiding them.
+
+    Read-only, and deliberately so: nothing here moves an application's status, and the report says so. The
+    day compared against is this machine's local day, because "due today" is a statement about the person's
+    calendar rather than about UTC.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · what needs doing on {today.isoformat()} (local day)")
+    if not database.exists():
+        print("No database yet, so nothing is recorded. Open the app to save applications, plan "
+              "follow-ups and write down what you have to do.")
+        return EXIT_OK
+    with CareerStore(database) as store:
+        jobs = {job.listing_id: job for job in store.list_jobs()}
+        preparation_items = store.list_preparation()
+        rounds = store.list_interviews()
+        pairs = _follow_up_pairs(store)
+        found = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
+                                    include_later=False, include_undated=True)
+        everything = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
+                                        include_later=True, include_undated=True)
+        print(preparation.summary(found, today))
+        if found:
+            print("")
+            for line in preparation.describe_actions(found):
+                print(f"  {line}")
+        later = len(everything) - len(found)
+        if later:
+            print("")
+            # Only items beyond the window are hidden here: undated ones are listed above, because an
+            # open item with no day is still work a person is carrying.
+            print(f"{later} more item(s) are further out than the coming week; open the app to see them all.")
+        print("")
+        print(f"{len(preparation_items)} preparation item(s) and {len(rounds)} interview round(s) are "
+              "recorded.")
+    print("")
+    print("This report is read-only; no status was changed and nothing was sent.")
+    return EXIT_OK
+
+
+def run_interviews(args: argparse.Namespace) -> int:
+    """List the interview rounds recorded for these applications, next one first.
+
+    Read-only. A round is the candidate's own note: the stage, the day it is planned for, how it is being
+    held, their own reading of how it went, and their notes. Nothing here is an employer's decision, and the
+    report says so rather than letting a stage name look like a result.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · recorded interview rounds ({today.isoformat()}, local day)")
+    if not database.exists():
+        print("No database yet, so no rounds are recorded. Open the app to record one after an employer "
+              "gets in touch.")
+        return EXIT_OK
+    with CareerStore(database) as store:
+        rounds = store.list_interviews()
+        jobs = {job.listing_id: job for job in store.list_jobs()}
+        print(preparation.interview_summary(rounds, today))
+        if rounds:
+            print("")
+            for entry in preparation.rounds_ordered(rounds, today):
+                job = jobs.get(entry.listing_id)
+                where = (f"{job.role_title} at {job.employer_name}" if job is not None
+                         else f"listing {entry.listing_id} (no longer stored)")
+                when = f"{entry.scheduled_on.isoformat()} ({_relative_day(entry.days_away(today))})"
+                print(f"  {when}: {entry.stage_label} - {entry.mode_label} [{where}]")
+                print(f"      {entry.outcome_label}" + (f" - {entry.notes}" if entry.notes else ""))
+        print("")
+        print("These are your own notes about each round, not an employer's decision: nothing here says "
+              "whether you passed, and no status was changed.")
+    return EXIT_OK
+
+
+def _relative_day(days: int) -> str:
+    """A plain-language day offset, so a report does not make a person do arithmetic."""
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    if days == -1:
+        return "yesterday"
+    return f"in {days} day(s)" if days > 0 else f"{abs(days)} day(s) ago"
+
+
 def run_calendar_export(args: argparse.Namespace) -> int:
     """Write the recorded follow-ups to a calendar file at the path the person named.
 
@@ -704,6 +803,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_sources(args)
         if args.follow_ups:
             return run_follow_ups(args)
+        if args.next_actions:
+            return run_next_actions(args)
+        if args.interviews:
+            return run_interviews(args)
         if args.calendar_to:
             return run_calendar_export(args)
         if args.export_to:

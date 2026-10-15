@@ -21,7 +21,8 @@ from pathlib import Path
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
-    ApplicationTracker, Availability, CandidateProfile, JobListing, duplicate_key,
+    ApplicationTracker, Availability, CandidateProfile, InterviewMode, InterviewOutcome,
+    InterviewRound, InterviewStage, JobListing, PreparationItem, PreparationKind, duplicate_key,
     is_allowed_tracker_transition, require_confirmation_evidence, validate_activity_detail,
     validate_activity_date,
 )
@@ -30,7 +31,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -45,6 +46,8 @@ SCHEMA_TABLES_BY_VERSION = {
         "scheduled_task", "task_run", "worker_lease"),
     4: ("application_activity", "application_tracker", "candidate_profile", "job_listings",
         "scheduled_task", "task_run", "worker_lease"),
+    5: ("application_activity", "application_preparation", "application_tracker", "candidate_profile",
+        "interview_round", "job_listings", "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -742,6 +745,65 @@ def _migration_to_v4(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE application_tracker ADD COLUMN follow_up_note TEXT")
 
 
+def _migration_to_v5(connection: sqlite3.Connection) -> None:
+    """Schema 5: the preparation checklist and the interview rounds.
+
+    Two new tables, additive and empty. An existing database gains the ability to record these things
+    without any existing row being touched, and a database that never uses them is unchanged apart from two
+    empty tables - which is what makes this a safe step to run on somebody's real data.
+
+    * ``application_preparation`` - one thing to do before applying or before a round. The title and kind
+      are the person's words; ``done_at`` is when *they* said it was finished, and it is NULL until then.
+      There is no status column: a preparation item cannot move an application on, so there is nowhere to
+      put such a claim.
+    * ``interview_round`` - one round of an employer's process as the candidate recorded it: which stage,
+      the day it is planned for, how it is being held, their own reading of how it went, and their notes.
+      ``outcome`` defaults to ``awaiting`` because that is the truth before anything has happened.
+
+    Both are deleted with their listing (``ON DELETE CASCADE``), and the indexes match the read orders the
+    application actually uses: everything for one listing, and everything due across listings. ``IF NOT
+    EXISTS`` keeps the step re-runnable, like every other step, because a step interrupted after its first
+    statement must not leave a database that cannot be opened.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS application_preparation (
+               preparation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               title TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               due_on TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               done_at TEXT
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_application_preparation_listing
+               ON application_preparation(listing_id, due_on, preparation_id)"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_application_preparation_open
+               ON application_preparation(done_at, due_on)"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS interview_round (
+               round_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               stage TEXT NOT NULL,
+               scheduled_on TEXT NOT NULL,
+               mode TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT 'awaiting',
+               notes TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_interview_round_listing
+               ON interview_round(listing_id, scheduled_on, round_id)"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -751,6 +813,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (2, "add the application activity log", _migration_to_v2),
     (3, "add the background task scheduler tables", _migration_to_v3),
     (4, "add the follow-up plan columns to the application tracker", _migration_to_v4),
+    (5, "add the preparation checklist and the interview rounds", _migration_to_v5),
 )
 
 
@@ -1195,6 +1258,279 @@ class CareerStore:
             )
         except ValueError as exc:
             raise StoredRecordError(noun, f"its detail is not one this version can read ({exc})") from exc
+
+    # ------------------------------------------------------------------ preparation and interviews
+    #
+    # Two records about the *work around* an application rather than the application itself. Both are
+    # deliberately unable to move an application on: a preparation item has no status column, and an
+    # interview round records the candidate's own note rather than an employer's decision. What the store
+    # enforces here is the shape of the data (names this build knows, days that are days, bounded text) and
+    # that a record cannot outlive its listing.
+
+    def add_preparation(self, listing_id: str, title: str, *, kind: str | PreparationKind = PreparationKind.OTHER,
+                        due_on: date | None = None) -> PreparationItem:
+        """Add one thing to do for a listing and return it as stored.
+
+        A listing with no saved row is refused (the foreign key would refuse it anyway, and a ``KeyError``
+        from SQLite is not an explanation), as is a second *open* item with the same title and kind: two
+        identical rows in a checklist are almost always a double click, and merging them afterwards is
+        harder than refusing them at the door. An item that is already done does not block a new one with
+        the same title, because repeating a step is a real thing people do.
+        """
+        item = PreparationItem(listing_id=listing_id, title=title, kind=kind, due_on=due_on)
+        self._require_job(listing_id, "add a preparation item for")
+        if item.is_done:
+            raise ValueError("A new preparation item cannot start out already done.")
+        existing = [row for row in self.list_preparation(listing_id)
+                    if not row.is_done and row.title.casefold() == item.title.casefold()
+                    and row.kind is item.kind]
+        if existing:
+            raise ValueError(
+                f"There is already an open preparation item called {item.title!r} for this listing. "
+                "Finish or delete that one instead of adding it twice."
+            )
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO application_preparation(listing_id, title, kind, due_on, created_at,
+                                                       updated_at, done_at)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL)""",
+                (item.listing_id, item.title, item.kind.value,
+                 item.due_on.isoformat() if item.due_on else None, timestamp, timestamp),
+            )
+        stored = item.__class__(
+            listing_id=item.listing_id, title=item.title, kind=item.kind, due_on=item.due_on,
+            preparation_id=int(cursor.lastrowid or 0), created_at=timestamp, updated_at=timestamp,
+        )
+        self._record("preparation.added", f"id={listing_id} kind={item.kind.value}")
+        return stored
+
+    def list_preparation(self, listing_id: str | None = None) -> tuple[PreparationItem, ...]:
+        """Every preparation item, ordered for a list: open ones first, earliest day first.
+
+        One query per call and no joins: the caller that needs employer names already has the listings, and
+        a store method that returns presentation-ready rows would be the wrong place for that decision.
+        """
+        if listing_id is None:
+            rows = self._connection.execute(
+                """SELECT * FROM application_preparation
+                   ORDER BY (done_at IS NOT NULL), due_on IS NULL, due_on, title, listing_id"""
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                """SELECT * FROM application_preparation WHERE listing_id=?
+                   ORDER BY (done_at IS NOT NULL), due_on IS NULL, due_on, title, listing_id""",
+                (listing_id,),
+            ).fetchall()
+        return tuple(self._decode_preparation(row) for row in rows)
+
+    def get_preparation(self, preparation_id: int) -> PreparationItem | None:
+        row = self._connection.execute(
+            "SELECT * FROM application_preparation WHERE preparation_id=?", (int(preparation_id),)
+        ).fetchone()
+        return None if row is None else self._decode_preparation(row)
+
+    def complete_preparation(self, preparation_id: int, *, done: bool = True) -> PreparationItem:
+        """Mark an item done (or open it again) and return it as stored.
+
+        "Done" is the person's statement that they did the thing, which is why it is their action and not
+        something the application infers. Re-marking an item that is already in the requested state is
+        refused rather than written, so the timestamp on the row always means the first time it was
+        reported - the same rule the tracker's no-op path follows.
+        """
+        current = self.get_preparation(preparation_id)
+        if current is None:
+            raise ValueError(f"There is no preparation item {preparation_id} to change.")
+        if current.is_done == done:
+            state = "already marked done" if done else "not marked done"
+            raise ValueError(f"That preparation item is {state}; nothing was changed.")
+        timestamp = _now()
+        with self._connection:
+            self._connection.execute(
+                "UPDATE application_preparation SET done_at=?, updated_at=? WHERE preparation_id=?",
+                (timestamp if done else None, timestamp, int(preparation_id)),
+            )
+        updated = self.get_preparation(preparation_id)
+        assert updated is not None  # the row was just written in this connection
+        # Two literals rather than one conditional expression: the event vocabulary is checked against the
+        # shipped source, and a name that only appears inside an expression cannot be verified there.
+        if done:
+            self._record("preparation.completed", f"preparation_id={int(preparation_id)}")
+        else:
+            self._record("preparation.reopened", f"preparation_id={int(preparation_id)}")
+        return updated
+
+    def delete_preparation(self, preparation_id: int) -> bool:
+        """Remove one item; return whether a row was deleted. Explicit, like the other deletions."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM application_preparation WHERE preparation_id=?", (int(preparation_id),)
+            )
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("preparation.deleted", f"preparation_id={int(preparation_id)}")
+        return removed
+
+    def record_interview(self, listing_id: str, stage: str | InterviewStage, scheduled_on: date, *,
+                         mode: str | InterviewMode = InterviewMode.UNKNOWN,
+                         notes: str | None = None) -> InterviewRound:
+        """Record one round of an employer's process, as the candidate noted it down.
+
+        The round is stored with ``outcome=awaiting`` whatever else is supplied: how a round went is filled
+        in afterwards, by the person, through :meth:`set_interview_outcome`. Nothing here touches the
+        tracker - an interview being scheduled is a fact the person knows, and moving the application to
+        ``interview`` is their own status change, with their own evidence, through the guarded path.
+        """
+        round_record = InterviewRound(listing_id=listing_id, stage=stage, scheduled_on=scheduled_on,
+                                     mode=mode, notes=notes)
+        self._require_job(listing_id, "record an interview round for")
+        duplicate = [row for row in self.list_interviews(listing_id)
+                     if row.stage is round_record.stage and row.scheduled_on == round_record.scheduled_on]
+        if duplicate:
+            raise ValueError(
+                f"A {round_record.stage_label.lower()} is already recorded for "
+                f"{round_record.scheduled_on.isoformat()} on this listing. Record a different round rather "
+                "than the same one twice."
+            )
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO interview_round(listing_id, stage, scheduled_on, mode, outcome, notes,
+                                               created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (round_record.listing_id, round_record.stage.value, round_record.scheduled_on.isoformat(),
+                 round_record.mode.value, InterviewOutcome.AWAITING.value, round_record.notes,
+                 timestamp, timestamp),
+            )
+        stored = InterviewRound(
+            listing_id=round_record.listing_id, stage=round_record.stage,
+            scheduled_on=round_record.scheduled_on, mode=round_record.mode,
+            outcome=InterviewOutcome.AWAITING, notes=round_record.notes,
+            round_id=int(cursor.lastrowid or 0), created_at=timestamp, updated_at=timestamp,
+        )
+        self._record("interview.recorded", f"id={listing_id} stage={round_record.stage.value}")
+        return stored
+
+    def list_interviews(self, listing_id: str | None = None) -> tuple[InterviewRound, ...]:
+        """Every recorded round, oldest planned day first."""
+        if listing_id is None:
+            rows = self._connection.execute(
+                "SELECT * FROM interview_round ORDER BY scheduled_on, round_id"
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT * FROM interview_round WHERE listing_id=? ORDER BY scheduled_on, round_id",
+                (listing_id,),
+            ).fetchall()
+        return tuple(self._decode_interview(row) for row in rows)
+
+    def get_interview(self, round_id: int) -> InterviewRound | None:
+        row = self._connection.execute(
+            "SELECT * FROM interview_round WHERE round_id=?", (int(round_id),)
+        ).fetchone()
+        return None if row is None else self._decode_interview(row)
+
+    def set_interview_outcome(self, round_id: int, outcome: str | InterviewOutcome, *,
+                              notes: str | None = None) -> InterviewRound:
+        """Record how the person felt a round went, and optionally their notes for next time.
+
+        ``outcome`` is the candidate's own reading; the vocabulary has no value that sounds like an
+        employer's decision, because the application cannot know one. ``notes`` replaces the stored notes
+        only when supplied explicitly (``None`` means "leave them as they are"), so a person can record an
+        outcome without losing the preparation note they wrote earlier.
+        """
+        current = self.get_interview(round_id)
+        if current is None:
+            raise ValueError(f"There is no interview round {round_id} to update.")
+        updated = InterviewRound(
+            listing_id=current.listing_id, stage=current.stage, scheduled_on=current.scheduled_on,
+            mode=current.mode, outcome=outcome, notes=current.notes if notes is None else notes,
+            round_id=current.round_id, created_at=current.created_at,
+        )
+        with self._connection:
+            self._connection.execute(
+                "UPDATE interview_round SET outcome=?, notes=?, updated_at=? WHERE round_id=?",
+                (updated.outcome.value, updated.notes, _now(), int(round_id)),
+            )
+        stored = self.get_interview(round_id)
+        assert stored is not None
+        self._record("interview.outcome", f"round_id={int(round_id)} outcome={updated.outcome.value}")
+        return stored
+
+    def delete_interview(self, round_id: int) -> bool:
+        """Remove one round; return whether a row was deleted."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM interview_round WHERE round_id=?", (int(round_id),)
+            )
+        removed = cursor.rowcount == 1
+        if removed:
+            self._record("interview.deleted", f"round_id={int(round_id)}")
+        return removed
+
+    def preparation_and_interviews_for(self, listing_id: str) -> tuple[tuple[PreparationItem, ...],
+                                                                      tuple[InterviewRound, ...]]:
+        """Both records for one listing in a single call, for a detail view that shows them together."""
+        return (self.list_preparation(listing_id), self.list_interviews(listing_id))
+
+    def _require_job(self, listing_id: str, verb: str) -> None:
+        """Refuse a record for a listing that is not stored, naming the actual problem."""
+        if self.get_job(listing_id) is None:
+            raise ValueError(
+                f"There is no stored listing {listing_id!r} to {verb}. Save the listing first."
+            )
+
+    def _decode_preparation(self, row: sqlite3.Row) -> PreparationItem:
+        noun = "preparation item"
+        try:
+            kind = PreparationKind(row["kind"])
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its kind {row['kind']!r} is not one this version recognises") from exc
+        raw_due = row["due_on"]
+        due_on = None
+        if raw_due is not None:
+            try:
+                due_on = date.fromisoformat(str(raw_due))
+            except ValueError as exc:
+                raise StoredRecordError(noun, f"its day {raw_due!r} is not a calendar date") from exc
+        try:
+            return PreparationItem(
+                listing_id=_stored_text(row["listing_id"], noun, "listing_id"),
+                title=_stored_text(row["title"], noun, "title"), kind=kind, due_on=due_on,
+                preparation_id=int(row["preparation_id"]), done_at=row["done_at"],
+                created_at=str(row["created_at"]), updated_at=str(row["updated_at"]),
+            )
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"it cannot be read ({exc})") from exc
+
+    def _decode_interview(self, row: sqlite3.Row) -> InterviewRound:
+        noun = "interview round"
+        try:
+            stage = InterviewStage(row["stage"])
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its stage {row['stage']!r} is not one this version recognises") from exc
+        try:
+            mode = InterviewMode(row["mode"])
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its mode {row['mode']!r} is not one this version recognises") from exc
+        try:
+            outcome = InterviewOutcome(row["outcome"])
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its outcome {row['outcome']!r} is not one this version recognises") from exc
+        raw_day = str(row["scheduled_on"])
+        try:
+            scheduled_on = date.fromisoformat(raw_day)
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"its day {raw_day!r} is not a calendar date") from exc
+        try:
+            return InterviewRound(
+                listing_id=_stored_text(row["listing_id"], noun, "listing_id"), stage=stage,
+                scheduled_on=scheduled_on, mode=mode, outcome=outcome, notes=row["notes"],
+                round_id=int(row["round_id"]), created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+        except ValueError as exc:
+            raise StoredRecordError(noun, f"it cannot be read ({exc})") from exc
 
     # ------------------------------------------------------------------ background tasks
     #

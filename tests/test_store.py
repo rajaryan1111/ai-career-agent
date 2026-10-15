@@ -10,7 +10,7 @@ from unittest import mock
 from datetime import date
 
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
-from career_agent.core import ActivityKind, ApplicationActivity
+from career_agent.core import (ActivityKind, ApplicationActivity, InterviewOutcome)
 import career_agent.store as store_module
 from career_agent.core import duplicate_key
 from career_agent.backup import BackupError, validate_app_database
@@ -595,6 +595,325 @@ class FollowUpIsIndependentOfStatusTests(unittest.TestCase):
         self.assertIn("follow_up_write=keep", saved[0].kwargs["detail"])
 
 
+class PreparationAndInterviewStoreTests(unittest.TestCase):
+    """Preparation items and interview rounds: what the storage boundary refuses, and what it protects.
+
+    Both records are the person's own notes about the work around an application. The properties tested
+    here are the ones that keep them from becoming something else: they cannot move an application on, they
+    cannot outlive their listing, and a value this build does not understand is reported rather than
+    guessed at.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "preparation.sqlite3"
+        self.store = CareerStore(str(self.path))
+        self.addCleanup(self.store.close)
+        self.store.save_job(sample_job())
+
+    def stored_row(self, table="application_tracker", key="j1"):
+        reader = sqlite3.connect(str(self.path))
+        self.addCleanup(reader.close)
+        return reader.execute(f"SELECT * FROM {table} WHERE listing_id=?", (key,)).fetchone()
+
+    def test_a_preparation_item_round_trips_with_its_day_and_kind(self):
+        added = self.store.add_preparation("j1", "Tailor the résumé", kind="tailoring",
+                                          due_on=date(2026, 11, 1))
+
+        stored = self.store.get_preparation(added.preparation_id)
+        self.assertEqual(stored.title, "Tailor the résumé")
+        self.assertEqual(stored.kind.value, "tailoring")
+        self.assertEqual(stored.due_on, date(2026, 11, 1))
+        self.assertFalse(stored.is_done)
+        self.assertIsNone(stored.done_at)
+
+    def test_an_item_without_a_day_is_allowed_and_reads_as_undated(self):
+        added = self.store.add_preparation("j1", "Read the engineering blog")
+
+        self.assertIsNone(self.store.get_preparation(added.preparation_id).due_on)
+
+    def test_completing_an_item_records_when_the_person_said_so(self):
+        added = self.store.add_preparation("j1", "Tailor the résumé")
+
+        with mock.patch("career_agent.store._now", return_value=_TIMESTAMP):
+            done = self.store.complete_preparation(added.preparation_id)
+
+        self.assertTrue(done.is_done)
+        self.assertEqual(done.done_at, _TIMESTAMP)
+        self.assertEqual(self.store.get_preparation(added.preparation_id).done_at, _TIMESTAMP)
+
+    def test_reopening_clears_the_time_and_a_second_completion_sets_it_again(self):
+        added = self.store.add_preparation("j1", "Tailor the résumé")
+        self.store.complete_preparation(added.preparation_id)
+
+        reopened = self.store.complete_preparation(added.preparation_id, done=False)
+
+        self.assertFalse(reopened.is_done)
+        self.assertIsNone(reopened.done_at)
+        self.assertTrue(self.store.complete_preparation(added.preparation_id).is_done)
+
+    def test_marking_an_item_that_is_already_done_is_refused_rather_than_rewritten(self):
+        """The timestamp means the first time it was reported, so a repeat must not move it."""
+        added = self.store.add_preparation("j1", "Tailor the résumé")
+        with mock.patch("career_agent.store._now", return_value=_TIMESTAMP):
+            self.store.complete_preparation(added.preparation_id)
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.complete_preparation(added.preparation_id)
+
+        self.assertIn("already marked done", str(caught.exception))
+        self.assertEqual(self.store.get_preparation(added.preparation_id).done_at, _TIMESTAMP)
+
+    def test_the_same_open_item_cannot_be_added_twice(self):
+        self.store.add_preparation("j1", "Tailor the résumé", kind="tailoring")
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_preparation("j1", "  tailor the   RÉSUMÉ ", kind="tailoring")
+
+        self.assertIn("already an open preparation item", str(caught.exception))
+        self.assertEqual(len(self.store.list_preparation("j1")), 1)
+
+    def test_the_same_title_may_come_back_after_it_is_finished(self):
+        """Repeating a step is a real thing people do; the refusal is about double clicks, not history."""
+        first = self.store.add_preparation("j1", "Tailor the résumé", kind="tailoring")
+        self.store.complete_preparation(first.preparation_id)
+
+        second = self.store.add_preparation("j1", "Tailor the résumé", kind="tailoring")
+
+        self.assertEqual(len(self.store.list_preparation("j1")), 2)
+        self.assertNotEqual(first.preparation_id, second.preparation_id)
+
+    def test_the_same_title_under_a_different_kind_is_a_different_item(self):
+        self.store.add_preparation("j1", "Prepare questions", kind="research")
+
+        added = self.store.add_preparation("j1", "Prepare questions", kind="practice")
+
+        self.assertEqual(added.kind.value, "practice")
+
+    def test_an_item_for_a_listing_that_is_not_stored_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_preparation("nope", "Tailor the résumé")
+
+        self.assertIn("no stored listing", str(caught.exception))
+        self.assertEqual(self.store.list_preparation(), ())
+
+    def test_an_empty_title_is_refused_at_the_boundary(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.add_preparation("j1", "   ")
+
+        self.assertIn("needs a short title", str(caught.exception))
+
+    def test_a_kind_this_build_does_not_know_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.store.add_preparation("j1", "Tailor the résumé", kind="astrology")
+
+    def test_a_mistyped_day_is_refused_at_the_boundary(self):
+        with self.assertRaises(ValueError):
+            self.store.add_preparation("j1", "Tailor the résumé", due_on=date(202, 1, 1))
+
+        self.assertEqual(self.store.list_preparation(), ())
+
+    def test_an_interview_round_round_trips_and_starts_out_waiting(self):
+        recorded = self.store.record_interview("j1", "technical", date(2026, 11, 3), mode="video",
+                                               notes="ask about on-call")
+
+        stored = self.store.get_interview(recorded.round_id)
+        self.assertEqual(stored.stage_label, "Technical interview")
+        self.assertEqual(stored.mode_label, "Video call")
+        self.assertEqual(stored.outcome, InterviewOutcome.AWAITING)
+        self.assertEqual(stored.scheduled_on, date(2026, 11, 3))
+        self.assertEqual(stored.notes, "ask about on-call")
+
+    def test_the_outcome_is_the_persons_reading_and_keeps_their_notes_by_default(self):
+        recorded = self.store.record_interview("j1", "technical", date(2026, 11, 3), notes="ask about on-call")
+
+        updated = self.store.set_interview_outcome(recorded.round_id, "went_well")
+
+        self.assertEqual(updated.outcome, InterviewOutcome.WENT_WELL)
+        self.assertEqual(updated.notes, "ask about on-call", "notes are only replaced when supplied")
+
+        replaced = self.store.set_interview_outcome(recorded.round_id, "unclear", notes="they went quiet")
+        self.assertEqual(replaced.notes, "they went quiet")
+
+    def test_an_outcome_vocabulary_has_no_value_that_sounds_like_an_employer_decision(self):
+        for value in ("passed", "rejected", "offer", "hired", "accepted"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.store.record_interview("j1", "technical", date(2026, 11, 3))
+                    self.store.set_interview_outcome(1, value)
+
+    def test_the_same_round_cannot_be_recorded_twice(self):
+        self.store.record_interview("j1", "technical", date(2026, 11, 3))
+
+        with self.assertRaises(ValueError) as caught:
+            self.store.record_interview("j1", "technical", date(2026, 11, 3), mode="onsite")
+
+        self.assertIn("already recorded", str(caught.exception))
+        self.assertEqual(len(self.store.list_interviews("j1")), 1)
+
+    def test_the_same_stage_on_another_day_is_a_different_round(self):
+        self.store.record_interview("j1", "technical", date(2026, 11, 3))
+
+        second = self.store.record_interview("j1", "technical", date(2026, 11, 10))
+
+        self.assertIsNotNone(second.round_id)
+        self.assertEqual(len(self.store.list_interviews("j1")), 2)
+
+    def test_a_round_for_a_listing_that_is_not_stored_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as caught:
+            self.store.record_interview("nope", "screening", date(2026, 11, 3))
+
+        self.assertIn("no stored listing", str(caught.exception))
+
+    def test_a_deleted_listing_takes_its_preparation_and_rounds_with_it(self):
+        self.store.add_preparation("j1", "Tailor the résumé")
+        self.store.record_interview("j1", "technical", date(2026, 11, 3))
+
+        self.store.delete_job("j1")
+
+        self.assertEqual(self.store.list_preparation(), ())
+        self.assertEqual(self.store.list_interviews(), ())
+
+    def test_deleting_one_record_leaves_the_other_alone(self):
+        kept = self.store.add_preparation("j1", "Tailor the résumé")
+        removed = self.store.add_preparation("j1", "Read the blog")
+
+        self.assertTrue(self.store.delete_preparation(removed.preparation_id))
+        self.assertFalse(self.store.delete_preparation(removed.preparation_id), "a second delete removes nothing")
+
+        self.assertEqual([row.title for row in self.store.list_preparation("j1")], ["Tailor the résumé"])
+        self.assertIsNotNone(self.store.get_preparation(kept.preparation_id))
+
+    def test_the_records_survive_a_reopen(self):
+        self.store.add_preparation("j1", "Tailor the résumé", kind="tailoring", due_on=date(2026, 11, 1))
+        recorded = self.store.record_interview("j1", "screening", date(2026, 11, 2), mode="phone")
+        self.store.set_interview_outcome(recorded.round_id, "went_well", notes="they liked the project")
+        self.store.close()
+
+        self.store = CareerStore(str(self.path))
+        self.addCleanup(self.store.close)
+
+        self.assertEqual(len(self.store.list_preparation("j1")), 1)
+        self.assertEqual(self.store.list_preparation("j1")[0].due_on, date(2026, 11, 1))
+        self.assertEqual(self.store.get_interview(recorded.round_id).outcome, InterviewOutcome.WENT_WELL)
+        self.assertEqual(self.store.get_interview(recorded.round_id).notes, "they liked the project")
+
+    def test_listing_the_records_of_one_listing_does_not_include_another(self):
+        self.store.save_job(sample_job(listing_id="j2", source_listing_url="https://jobs.example/role/2"))
+        self.store.add_preparation("j1", "Tailor the résumé")
+        self.store.record_interview("j2", "screening", date(2026, 11, 4))
+
+        self.assertEqual([row.listing_id for row in self.store.list_preparation("j1")], ["j1"])
+        self.assertEqual([row.listing_id for row in self.store.list_interviews("j1")], [])
+        self.assertEqual([row.listing_id for row in self.store.list_preparation()], ["j1"])
+
+    def test_one_call_returns_both_records_for_a_listing(self):
+        self.store.add_preparation("j1", "Tailor the résumé")
+        self.store.record_interview("j1", "screening", date(2026, 11, 2))
+
+        preparation, rounds = self.store.preparation_and_interviews_for("j1")
+
+        self.assertEqual(len(preparation), 1)
+        self.assertEqual(len(rounds), 1)
+
+    def test_an_item_is_listed_open_first_then_by_day(self):
+        self.store.add_preparation("j1", "Later thing", due_on=date(2026, 11, 5))
+        soon = self.store.add_preparation("j1", "Sooner thing", due_on=date(2026, 11, 1))
+        undated = self.store.add_preparation("j1", "No day")
+        self.store.complete_preparation(self.store.add_preparation("j1", "Done thing").preparation_id)
+
+        titles = [row.title for row in self.store.list_preparation("j1")]
+
+        self.assertEqual(titles[:3], ["Sooner thing", "Later thing", "No day"])
+        self.assertEqual(titles[3], "Done thing")
+        self.assertLess(soon.preparation_id, undated.preparation_id)
+
+    def test_reading_a_stored_value_this_build_cannot_label_is_reported_not_guessed(self):
+        """One damaged field at a time, so the message names the field that is actually wrong."""
+        self.store.add_preparation("j1", "Tailor the résumé")
+        recorded = self.store.record_interview("j1", "screening", date(2026, 11, 2))
+        cases = [
+            ("application_preparation", "kind", "astrology", "kind", "preparation"),
+            ("interview_round", "stage", "lunch", "stage", "interviews"),
+            ("interview_round", "mode", "telepathy", "mode", "interviews"),
+            ("interview_round", "outcome", "passed", "outcome", "interviews"),
+        ]
+        original = {
+            ("application_preparation", "kind"): "other",
+            ("interview_round", "stage"): "screening",
+            ("interview_round", "mode"): "unknown",
+            ("interview_round", "outcome"): "awaiting",
+        }
+        for table, column, damaged, expected_word, reader_name in cases:
+            with self.subTest(column=column):
+                reader = sqlite3.connect(str(self.path))
+                with reader:
+                    reader.execute(f"UPDATE {table} SET {column}=?", (damaged,))
+                reader.close()
+                try:
+                    with self.assertRaises(StoredRecordError) as caught:
+                        getattr(self.store, f"list_{reader_name}")("j1")
+                    self.assertIn(expected_word, str(caught.exception))
+                    self.assertIn(damaged, str(caught.exception), "the stored value is quoted as itself")
+                    self.assertIn("was not changed", str(caught.exception))
+                finally:
+                    reader = sqlite3.connect(str(self.path))
+                    with reader:
+                        reader.execute(f"UPDATE {table} SET {column}=?", (original[(table, column)],))
+                    reader.close()
+        self.assertIsNotNone(self.store.get_interview(recorded.round_id))
+
+    def test_an_unreadable_day_is_reported_rather_than_dropped(self):
+        self.store.record_interview("j1", "screening", date(2026, 11, 2))
+        reader = sqlite3.connect(str(self.path))
+        with reader:
+            reader.execute("UPDATE interview_round SET scheduled_on='next tuesday'")
+        reader.close()
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.list_interviews("j1")
+
+        self.assertIn("calendar date", str(caught.exception))
+
+    def test_neither_record_can_move_the_application_or_create_one(self):
+        """The property that makes these records safe: they are notes, not status changes."""
+        self.store.save_tracker(ApplicationTracker("j1"))
+        before = self.stored_row()
+        self.store.add_preparation("j1", "Tailor the résumé", due_on=date(2026, 11, 1))
+        done = self.store.add_preparation("j1", "Read the blog")
+        self.store.complete_preparation(done.preparation_id)
+        recorded = self.store.record_interview("j1", "technical", date(2026, 11, 3))
+        self.store.set_interview_outcome(recorded.round_id, "went_well", notes="good practice")
+        self.store.delete_preparation(done.preparation_id)
+        self.store.delete_interview(recorded.round_id)
+
+        self.assertEqual(self.stored_row(), before, "the tracker row must be untouched")
+
+    def test_a_record_cannot_bring_an_application_into_being(self):
+        self.store.add_preparation("j1", "Tailor the résumé")
+        recorded = self.store.record_interview("j1", "technical", date(2026, 11, 3))
+
+        self.assertIsNone(self.store.get_tracker("j1"), "an application is only ever started by the person")
+        self.assertIsNotNone(recorded.round_id)
+
+    def test_every_write_is_recorded_in_the_event_log_by_name(self):
+        with mock.patch("career_agent.event_log.record_event") as events:
+            added = self.store.add_preparation("j1", "Tailor the résumé")
+            self.store.complete_preparation(added.preparation_id)
+            self.store.delete_preparation(added.preparation_id)
+            recorded = self.store.record_interview("j1", "screening", date(2026, 11, 2))
+            self.store.set_interview_outcome(recorded.round_id, "unclear")
+            self.store.delete_interview(recorded.round_id)
+
+        names = [call.args[0] for call in events.call_args_list]
+        self.assertEqual(names, ["preparation.added", "preparation.completed", "preparation.deleted",
+                                 "interview.recorded", "interview.outcome", "interview.deleted"])
+        self.assertEqual([call.kwargs["detail"] for call in events.call_args_list
+                          if call.args[0] == "interview.outcome"],
+                         [f"round_id={recorded.round_id} outcome=unclear"])
+
+
 class ConditionalTrackerWriteTests(unittest.TestCase):
     """``save_tracker(..., expected=...)``: a compare-and-set read at the storage boundary.
 
@@ -965,13 +1284,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 4)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 4)
+        self.assertEqual(SCHEMA_VERSION, 5)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 5)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[3]))
+        # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
+        # the current version's contract names - so it is written as the version it is checking.
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[5]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1003,6 +1324,38 @@ class SchemaMigrationTests(unittest.TestCase):
             row[0] for row in upgraded._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")
         })
+
+    def test_the_newest_step_adds_its_tables_to_a_database_that_already_holds_records(self):
+        """The upgrade a person's real file will run: new tables, and not one existing row touched.
+
+        Written for the newest step specifically, because "the rows survive" is the whole promise of an
+        additive migration and the generic older-version test above cannot see columns that did not exist
+        when it was written.
+        """
+        older = self._open_at_version(4)
+        self.assertNotIn("application_preparation", {
+            row[0] for row in older._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        })
+        older.save_job(self._job())
+        older.save_tracker(ApplicationTracker("j1"))
+        older.set_follow_up("j1", date(2026, 11, 5), note="chase the reply")
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_job("j1"), self._job())
+        tracker = upgraded.get_tracker("j1")
+        self.assertEqual(tracker.follow_up_on, date(2026, 11, 5))
+        self.assertEqual(tracker.follow_up_note, "chase the reply")
+        self.assertEqual(upgraded.list_preparation(), (), "the new tables start empty")
+        self.assertEqual(upgraded.list_interviews(), ())
+        # And they are usable at once, on the file that was just upgraded.
+        added = upgraded.add_preparation("j1", "Tailor the résumé", due_on=date(2026, 11, 1))
+        self.assertEqual(upgraded.get_preparation(added.preparation_id).listing_id, "j1")
+        round_record = upgraded.record_interview("j1", "screening", date(2026, 11, 3))
+        self.assertEqual(upgraded.get_interview(round_record.round_id).stage.value, "screening")
 
     def test_reopening_an_already_current_database_runs_no_step(self):
         CareerStore(self.path).close()

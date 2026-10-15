@@ -579,6 +579,220 @@ class ApplicationTracker:
         )
 
 
+class PreparationKind(str, Enum):
+    """What kind of preparation an item is. A closed set, so the interface can group by it."""
+
+    TAILORING = "tailoring"
+    RESEARCH = "research"
+    PRACTICE = "practice"
+    DOCUMENTS = "documents"
+    OTHER = "other"
+
+
+PREPARATION_KIND_LABELS = {
+    PreparationKind.TAILORING: "Tailor the application",
+    PreparationKind.RESEARCH: "Research the employer",
+    PreparationKind.PRACTICE: "Practise for the interview",
+    PreparationKind.DOCUMENTS: "Get a document ready",
+    PreparationKind.OTHER: "Something else",
+}
+
+MAX_PREPARATION_TITLE_LENGTH = 200
+
+
+def validate_preparation_title(title: str) -> str:
+    """Return the trimmed title, refusing an empty or over-long one where it is typed."""
+    if not isinstance(title, str):
+        raise ValueError("A preparation item needs a short title.")
+    text = " ".join(title.split())
+    if not text:
+        raise ValueError("A preparation item needs a short title; this one is empty.")
+    if len(text) > MAX_PREPARATION_TITLE_LENGTH:
+        raise ValueError(
+            f"A preparation title can hold at most {MAX_PREPARATION_TITLE_LENGTH} characters (this one "
+            f"is {len(text)}). Keep it to something you will recognise in a list."
+        )
+    return text
+
+
+@dataclass(frozen=True)
+class PreparationItem:
+    """One thing to do before applying, or before an interview. A plan, never a claim.
+
+    Nothing here is evidence about an application: finishing an item does not mean anything was sent,
+    and the record carries no status field for exactly that reason. Completing an item is something the
+    *person* did - the row remembers when they said so - and it never moves the application on. That
+    separation is the same rule the activity log and the follow-up day follow.
+    """
+
+    listing_id: str
+    title: str
+    kind: PreparationKind = PreparationKind.OTHER
+    due_on: date | None = None
+    preparation_id: int | None = None
+    done_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "title", validate_preparation_title(self.title))
+        if not isinstance(self.kind, PreparationKind):
+            object.__setattr__(self, "kind", PreparationKind(self.kind))
+        if self.due_on is not None:
+            object.__setattr__(self, "due_on", validate_follow_up_date(self.due_on))
+
+    @property
+    def is_done(self) -> bool:
+        return self.done_at is not None
+
+    @property
+    def label(self) -> str:
+        return PREPARATION_KIND_LABELS[self.kind]
+
+
+class InterviewStage(str, Enum):
+    """Which round of an employer's process a record describes."""
+
+    SCREENING = "screening"
+    TECHNICAL = "technical"
+    SYSTEM_DESIGN = "system_design"
+    BEHAVIOURAL = "behavioural"
+    PANEL = "panel"
+    FINAL = "final"
+    OTHER = "other"
+
+
+INTERVIEW_STAGE_LABELS = {
+    InterviewStage.SCREENING: "Screening call",
+    InterviewStage.TECHNICAL: "Technical interview",
+    InterviewStage.SYSTEM_DESIGN: "Design or case round",
+    InterviewStage.BEHAVIOURAL: "Behavioural interview",
+    InterviewStage.PANEL: "Panel interview",
+    InterviewStage.FINAL: "Final round",
+    InterviewStage.OTHER: "Other round",
+}
+
+
+class InterviewMode(str, Enum):
+    VIDEO = "video"
+    PHONE = "phone"
+    ONSITE = "onsite"
+    TAKE_HOME = "take_home"
+    UNKNOWN = "unknown"
+
+
+INTERVIEW_MODE_LABELS = {
+    InterviewMode.VIDEO: "Video call",
+    InterviewMode.PHONE: "Phone",
+    InterviewMode.ONSITE: "On site",
+    InterviewMode.TAKE_HOME: "Take-home exercise",
+    InterviewMode.UNKNOWN: "Not recorded",
+}
+
+
+class InterviewOutcome(str, Enum):
+    """The person's own view of how a round went, and whether it has happened at all.
+
+    There is deliberately no ``passed`` or ``rejected`` value. The application cannot know what an
+    employer decided - that arrives as a message, it is recorded as an activity entry by the person,
+    and the *status* moves only through the guarded transition path with evidence. Offering an outcome
+    value that sounds like an employer's decision would put words in an employer's mouth.
+    """
+
+    AWAITING = "awaiting"
+    WENT_WELL = "went_well"
+    UNCLEAR = "unclear"
+    WENT_POORLY = "went_poorly"
+    NOT_HELD = "not_held"
+
+
+INTERVIEW_OUTCOME_LABELS = {
+    InterviewOutcome.AWAITING: "Waiting - it has not happened yet",
+    InterviewOutcome.WENT_WELL: "You felt it went well",
+    InterviewOutcome.UNCLEAR: "You could not tell",
+    InterviewOutcome.WENT_POORLY: "You felt it went poorly",
+    InterviewOutcome.NOT_HELD: "It did not go ahead",
+}
+
+MAX_INTERVIEW_NOTES_LENGTH = 500
+
+
+def validate_interview_notes(notes: str | None) -> str | None:
+    """Return trimmed notes (or ``None``), refusing an empty or over-long value."""
+    if notes is None:
+        return None
+    if not isinstance(notes, str):
+        raise ValueError("Interview notes must be text.")
+    text = " ".join(notes.split())
+    if not text:
+        return None
+    if len(text) > MAX_INTERVIEW_NOTES_LENGTH:
+        raise ValueError(
+            f"Interview notes can hold at most {MAX_INTERVIEW_NOTES_LENGTH} characters (this one is "
+            f"{len(text)}). Keep them to what you will want to read before the next round."
+        )
+    return text
+
+
+@dataclass(frozen=True)
+class InterviewRound:
+    """One round of an employer's process, as the candidate recorded it.
+
+    ``scheduled_on`` is the day the round is *planned* for, which is why it is required: a round with no
+    day cannot appear on a timeline or remind anybody. ``outcome`` is the person's own reading of how it
+    went and is filled in after the fact; it is never employer evidence and cannot confirm anything.
+    """
+
+    listing_id: str
+    stage: InterviewStage
+    scheduled_on: date
+    mode: InterviewMode = InterviewMode.UNKNOWN
+    outcome: InterviewOutcome = InterviewOutcome.AWAITING
+    notes: str | None = None
+    round_id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stage, InterviewStage):
+            object.__setattr__(self, "stage", InterviewStage(self.stage))
+        if not isinstance(self.mode, InterviewMode):
+            object.__setattr__(self, "mode", InterviewMode(self.mode))
+        if not isinstance(self.outcome, InterviewOutcome):
+            object.__setattr__(self, "outcome", InterviewOutcome(self.outcome))
+        object.__setattr__(self, "scheduled_on", validate_follow_up_date(self.scheduled_on))
+        object.__setattr__(self, "notes", validate_interview_notes(self.notes))
+
+    @property
+    def stage_label(self) -> str:
+        return INTERVIEW_STAGE_LABELS[self.stage]
+
+    @property
+    def mode_label(self) -> str:
+        return INTERVIEW_MODE_LABELS[self.mode]
+
+    @property
+    def outcome_label(self) -> str:
+        return INTERVIEW_OUTCOME_LABELS[self.outcome]
+
+    def is_ahead(self, today: date) -> bool:
+        """Whether the planned day is today or still to come, in the caller's own calendar.
+
+        Deliberately *not* called "has not happened": this record cannot know whether a round took place,
+        because that is what ``outcome`` is for and only the person fills it in. What it does know is the
+        day it is planned for, and a round planned for today is still ahead of you at breakfast - which is
+        exactly the case a summary must not bury in the past.
+        """
+        return self.scheduled_on >= today
+
+    def is_past(self, today: date) -> bool:
+        """Whether the planned day has gone by: the round is either recorded or it never happened."""
+        return self.scheduled_on < today
+
+    def days_away(self, today: date) -> int:
+        return (self.scheduled_on - today).days
+
+
 def canonicalize_url(url: str) -> str:
     """Normalize obvious URL noise without lowercasing case-sensitive paths."""
     parts = urlsplit(url.strip())
