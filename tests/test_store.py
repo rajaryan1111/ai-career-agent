@@ -2153,7 +2153,9 @@ class PrivateFileWriteTests(unittest.TestCase):
         """The refusal must not depend on O_NOFOLLOW, which is POSIX-only.
 
         With the flag forced to 0 the open would follow the link, so this exercises the explicit
-        pre-check that protects platforms without it.
+        pre-check that protects platforms without it. ``create=True`` because that is the platform this
+        is about: Windows has no ``os.O_NOFOLLOW`` at all, and patching an attribute that is not there
+        raised ``AttributeError`` at ``__enter__`` on the first Windows run.
         """
         victim = self.directory / "victim-flagless.txt"
         victim.write_text("ORIGINAL CONTENT THAT MUST SURVIVE", encoding="utf-8")
@@ -2163,7 +2165,7 @@ class PrivateFileWriteTests(unittest.TestCase):
         except (OSError, NotImplementedError) as exc:
             self.skipTest(f"symbolic links are unavailable here: {exc}")
 
-        with mock.patch.object(os, "O_NOFOLLOW", 0):
+        with mock.patch.object(os, "O_NOFOLLOW", 0, create=True):
             with self.assertRaises(PrivateWriteError) as caught:
                 write_private_text_file(link, self.secret)
 

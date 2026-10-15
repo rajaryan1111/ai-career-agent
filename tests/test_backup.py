@@ -880,24 +880,37 @@ class RestoreTests(BackupTestCase):
         with CareerStore(str(live)) as store:
             self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
 
-    @unittest.skipUnless(
-        os.name == "posix",
-        "replacing a file another connection holds open is refused by the platform itself here, so the idle "
-        "connection is detected after all",
-    )
-    def test_an_idle_connection_is_not_detected_and_sqlite_refuses_its_next_write(self):
+    def test_an_idle_connection_is_not_detected_and_the_limit_is_stated_honestly(self):
         """Documents the limit of the coordination rather than claiming what it cannot establish.
 
         A connection that is open but idle holds **no** SQLite lock, so no check in this module can
         find it and the restore is not refused (refusing here would be a claim the code cannot
-        support). What is verified is the resulting behaviour: the restore proceeds, the idle
-        connection keeps the view it had before the swap, and its next write is refused by SQLite
-        itself (``SQLITE_READONLY``) rather than silently landing in a file nobody can see again.
+        support). What happens next is the platform's answer, and each of them is asserted rather than
+        skipped: where a file another handle holds open can be replaced the restore proceeds, the idle
+        connection keeps the view it had, and SQLite refuses its next write (``SQLITE_READONLY``) rather
+        than letting it land in a file nobody can see again; where the operating system will not replace
+        such a file - Windows, see ``_CAN_REPLACE_AN_OPEN_FILE`` - the swap fails with a sharing
+        violation, the restore reports that the database could not be replaced, and the file is left
+        byte-for-byte as it was. Neither branch claims the idle connection was detected, which is the
+        limit being documented.
         """
         live, chosen = self.prepare()
         idle = sqlite3.connect(str(live), isolation_level=None)
         self.addCleanup(idle.close)
         rows_before = idle.execute("SELECT listing_id FROM job_listings ORDER BY listing_id").fetchall()
+        before = live.read_bytes()
+
+        if not backup_module._CAN_REPLACE_AN_OPEN_FILE:
+            # The platform refuses the replacement itself, which is a refusal with no data lost rather
+            # than a detection of the idle connection.
+            with self.assertRaises(BackupError) as caught:
+                restore_backup(chosen, live, timestamp=STAMP)
+            self.assertIn("could not be replaced", str(caught.exception))
+            self.assertEqual(live.read_bytes(), before, "a refused restore must not have changed the database")
+            self.assert_no_leftovers(live)
+            self.assertEqual(idle.execute("SELECT listing_id FROM job_listings ORDER BY listing_id").fetchall(),
+                             rows_before, "the file was never swapped, so this connection is still current")
+            return
 
         result = restore_backup(chosen, live, timestamp=STAMP)  # not refused: an idle connection is invisible
 
