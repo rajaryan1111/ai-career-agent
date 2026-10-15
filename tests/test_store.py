@@ -1893,12 +1893,20 @@ class PreUpgradeSnapshotTests(unittest.TestCase):
         )
 
     def _build_version_one_database(self, listing_ids=("kept",)):
-        """A real version-1 database holding rows, built by the real first step alone."""
+        """A real version-1 database holding rows, built by the real first step alone.
+
+        The rows are saved with one observation time on purpose. ``list_jobs`` orders by
+        ``first_seen_at`` and then by id, and ``first_seen_at`` is written at whole-second resolution, so
+        two saves that landed either side of a second boundary - which a loaded runner can produce -
+        would come back in the order they were saved instead. Pinning the time in the store's own
+        ``observed_at`` parameter is what makes the order below the store's rule rather than the speed of
+        the machine that ran the test.
+        """
         steps = tuple(step for step in store_module._MIGRATIONS if step[0] == 1)
         with mock.patch.object(store_module, "_MIGRATIONS", steps):
             with CareerStore(self.path) as store:
                 for listing_id in listing_ids:
-                    store.save_job(self._job(listing_id))
+                    store.save_job(self._job(listing_id), observed_at="2026-01-01T00:00:00+00:00")
         return self.snapshots()
 
     def snapshots(self):
@@ -1916,7 +1924,8 @@ class PreUpgradeSnapshotTests(unittest.TestCase):
         info = validate_app_database(copies[0])
         self.assertEqual(info.schema_version, 1, "the copy holds the version the update started from")
         self.assertEqual(info.job_count, 2, "the copy holds the rows the update was about to change")
-        self.assertEqual(listing_ids, ["also-kept", "kept"])
+        self.assertEqual(listing_ids, ["also-kept", "kept"],
+                         "the two rows share an observation time, so they order by listing id")
         self.assertEqual(validate_app_database(self.path).schema_version, SCHEMA_VERSION)
         self.assertIn(
             f"event=database.upgrade_snapshot detail=version=1 file={copies[0].name}",
