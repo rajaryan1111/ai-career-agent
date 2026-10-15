@@ -547,20 +547,24 @@ jobs:
           # can report the step that failed rather than only the first one that failed.
           exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set +e
-          # Captured as well as tee'd, so a BLOCKED day's reason can go into the warning itself: a warning
-          # that says only "could not run" is what left this step's verdict unreadable beside a desktop
-          # smoke test that had just built and driven the window on the same runner.
-          lifecycle="$(python - <<'PY'
+          # Written to its own file as well as tee'd, so a BLOCKED day's reason can go into the warning
+          # itself: a warning that says only "could not run" is what left this step's verdict unreadable
+          # beside a desktop smoke test that had just built and driven the window on the same runner.
+          # A heredoc with a redirect - not a heredoc inside a command substitution, which the bash 3.2
+          # macOS ships does not parse.
+          report="${RUNNER_TEMP:-$HOME}/tk-lifecycle.txt"
+          python - <<'PY' > "$report" 2>&1
           # The classification is the smoke script's, so a platform that cannot open a display is BLOCKED
           # while a platform whose widget graph is wrong is a failure - same phrases, one list. A second
           # copy of the list here is how the two steps would drift apart.
           from scripts.desktop_smoke_test import looks_like_no_display
 
-          try:
-              import tkinter
-          except Exception as exc:
-              print(f"BLOCKED: this interpreter has no tkinter ({exc!r})")
-              raise SystemExit(2)
+          # tkinter does not import its ttk submodule on demand: on the Windows and macOS runners this
+          # step's only ever real runs failed at the first ``tkinter.ttk`` use with AttributeError, which
+          # the step used to publish as "could not run on this runner (BLOCKED)" while the desktop smoke
+          # test one step later built and drove the same window successfully.
+          import tkinter
+          import tkinter.ttk
 
           try:
               root = tkinter.Tk()
@@ -589,12 +593,11 @@ jobs:
 
           print(f"PASS: Tk {tkinter.TkVersion} built a root, a frame and a label and updated them")
           PY
-          )"
           status=$?
-          printf '%s\n' "$lifecycle"
           set -e
+          cat "$report"
           if [ "$status" -eq 2 ]; then
-            reason="$(printf '%s\n' "$lifecycle" | grep -m1 '^BLOCKED: ' || true)"
+            reason="$(grep -m1 '^BLOCKED: ' "$report" || true)"
             echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED): ${reason:-no reason was printed}"
           elif [ "$status" -ne 0 ]; then
             exit "$status"
