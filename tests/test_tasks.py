@@ -115,6 +115,28 @@ class TaskDefinitionTests(unittest.TestCase):
         # and the pair is normalised: no slot means no attempt to remember
         self.assertIsNone(task(pending_attempt=2).pending_attempt)
 
+    def test_building_a_task_without_a_reference_time_reads_the_real_clock(self):
+        """Regression: ``build_task`` takes a parameter called ``timezone``, which hid ``datetime.timezone``.
+
+        The first version of this function wrote ``datetime.now(timezone.utc)`` inside the function that
+        has a ``timezone`` *parameter* holding a zone name, so the only thing that expression could do was
+        look for an attribute on a string. It was caught the first time a task was built without an
+        explicit reference time; this test builds one that way on purpose.
+        """
+        built = build_task("discovery-run", "Scheduled discovery", "discovery.run")
+
+        self.assertIsNotNone(built.next_run_at)
+        self.assertIs(built.next_run_at.tzinfo, timezone.utc)
+        self.assertGreater(built.next_run_at, datetime.now(UTC) - timedelta(minutes=1))
+        self.assertLess(built.next_run_at, datetime.now(UTC) + timedelta(days=2))
+
+    def test_a_named_zone_parameter_and_the_clock_can_be_used_together(self):
+        built = build_task("t", "T", "k", timezone="America/New_York", now=MIDNIGHT_IST)
+
+        self.assertEqual(built.timezone, "America/New_York")
+        self.assertEqual(built.zone.key, "America/New_York")
+        self.assertEqual(built.next_run_at.astimezone(built.zone).date().isoformat(), "2026-10-15")
+
     def test_a_disabled_task_is_stored_with_no_next_run(self):
         built = build_task("discovery-run", "T", "discovery.run", now=MIDNIGHT_IST, enabled=False)
 

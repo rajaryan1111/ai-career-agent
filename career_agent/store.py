@@ -1241,8 +1241,13 @@ class CareerStore:
             task = self._decode_scheduled_task(task_row)
             update = plan_after_run(task, outcome, run.attempt, run.slot_at, moment)
             finished = _iso(moment)
-            cleaned_detail = clean_detail(detail)
-            cleaned_error = clean_detail(error) or None
+            # The run history is read in the window and travels with the export, so it follows the same
+            # rule as the start-up note: a location on this machine is never written into text that is
+            # meant to be safe to share. Local import for the usual reason - ``diagnostics`` reports
+            # *about* this module, and importing it at module level would close a cycle.
+            from .diagnostics import redact_paths
+            cleaned_detail = redact_paths(clean_detail(detail), database_path=self.database_path)
+            cleaned_error = redact_paths(clean_detail(error), database_path=self.database_path) or None
             changed = self._connection.execute(
                 """UPDATE task_run SET state = ?, finished_at = ?, heartbeat_at = ?, detail = ?, error = ?
                     WHERE run_id = ? AND state = ?""",

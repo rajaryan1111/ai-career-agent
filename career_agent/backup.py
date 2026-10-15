@@ -171,6 +171,23 @@ def automatic_backup_path(database_path: str | Path, timestamp: datetime | None 
     return database.with_name(f"{database.name}{AUTOMATIC_BACKUP_INFIX}{_utc_stamp(timestamp)}")
 
 
+def automatic_backup_snapshots(database_path: str | Path) -> tuple[Path, ...]:
+    """The automatic snapshots beside a database, in name order (oldest timestamp first).
+
+    One place knows what an automatic snapshot is called, so the "how many are there?" question has one
+    answer: the scheduled backup counts them to refuse before a disk fills up, and a person looking at
+    their folder sees the same set. This deliberately includes the copies taken before a restore and
+    before a schema update - those are exactly the files a person would want counted.
+    """
+    database = Path(database_path)
+    prefix = f"{database.name}{AUTOMATIC_BACKUP_INFIX}"
+    return tuple(sorted(
+        (candidate for candidate in database.parent.glob(f"{prefix}*")
+         if candidate.name.startswith(prefix)),
+        key=lambda candidate: candidate.name,
+    ))
+
+
 def next_automatic_backup_path(database_path: str | Path, timestamp: datetime | None = None) -> Path:
     """The first free automatic-snapshot name beside ``database_path``.
 

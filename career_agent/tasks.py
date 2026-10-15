@@ -60,6 +60,12 @@ MAX_BACKOFF_SECONDS = 3600
 #: day for a time that falls inside the gap); the cap only exists so a caller cannot loop forever.
 _MAX_DAYS_AHEAD = 8
 
+#: The UTC tzinfo under a name no parameter shadows. ``build_task`` takes a parameter called
+#: ``timezone`` (the task's zone name, a string), which hides the ``datetime.timezone`` class inside
+#: that function - so ``timezone.utc`` there is an attribute lookup on a string, and the first thing it
+#: broke was reading the clock.
+_UTC = timezone.utc
+
 _TIME_PATTERN = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 _IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _KIND_PATTERN = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -560,7 +566,7 @@ def build_task(
     Kept here rather than in the worker so that the desktop, the command line and the tests build a
     task the same way - and so that a task can be constructed and inspected without a database.
     """
-    moment = validate_utc_instant(now or datetime.now(timezone.utc), noun="The reference time")
+    moment = validate_utc_instant(now or datetime.now(_UTC), noun="The reference time")
     assert moment is not None
     task = ScheduledTask(
         task_id=task_id, name=name, kind=kind,

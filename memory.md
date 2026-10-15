@@ -1830,3 +1830,54 @@ is closed). Laptop-off operation remains unimplemented and is not claimed.
 validation, slot identity) and `tests/test_store_tasks.py` (39 tests: upgrade to schema 3 keeping
 existing rows and taking the pre-upgrade copy, claim/finish/heartbeat/recovery, duplicate claims from
 two connections, lease refusal and stale take-over, and damaged rows reported as themselves).
+
+## 2026-10-15 — The worker: running what is due, and recording what actually happened
+
+**What changed.** `career_agent/worker.py` adds the engine (a registry of handlers, a validated
+:class:`WorkerSettings`, a :class:`TaskContext` a handler is given, the tick/run loop, and a read-only
+status report), and `career_agent/handlers.py` adds the two kinds this application registers:
+`backup.snapshot` (writes and verifies a snapshot beside the database) and `discovery.run` (refuses
+while the source-quality gate is closed, and touches no network). `backup.automatic_backup_snapshots`
+became the one place that lists automatic snapshots, because the scheduled backup counts them to refuse
+before a disk fills up.
+
+**Timeouts and cancellation are described as what they are.** A handler runs on the worker's thread and
+is given a deadline and a stop flag; a handler that ignores both keeps running. The module says so
+plainly rather than promising cancellation, and the *record* is still honest: an attempt that finished
+after its deadline is `TIMED_OUT` even when the handler reported success, because reporting a success
+would promise a bound that was broken. Refusing is decided first: a handler that says "no" is recorded
+as a refusal even if it says so late, since a decision is not work that ran out of time.
+
+**Nothing is inferred from a handler's own opinion.** Raising is `FAILED` with the exception's type and
+text; returning something that is not a `HandlerResult` is `FAILED` saying what came back instead;
+returning `STOPPED` because a stop was asked for is `INTERRUPTED`, and `STOPPED` at the deadline is
+`TIMED_OUT`. A kind with no handler fails and names the kinds that *are* registered. In every case the
+run history keeps the distinction the honest reading requires.
+
+**The handlers can only do what they say.** The backup handler refuses when no database file exists
+yet, refuses once 30 automatic snapshots sit beside the database (naming the count and telling the
+person to move some), never deletes an existing file - a scheduled backup must not destroy the recovery
+copies it exists to create - and reports the verified content (`3 jobs · schema version 3`) from
+`DatabaseInfo.summary()`. The discovery handler refuses with the gate's state in the message; a test
+opens the gate in the module and proves the handler still refuses, because no live adapter exists, so
+even an open gate cannot manufacture a run.
+
+**Found while writing it (a real defect, kept as a regression test).** `build_task` has a parameter
+called `timezone` holding a zone *name*, which hid `datetime.timezone` inside that function: the line
+`datetime.now(timezone.utc)` was an attribute lookup on a string, so building a task without an explicit
+reference time crashed. It surfaced the first time a default task was built, and
+`test_building_a_task_without_a_reference_time_reads_the_real_clock` now builds one that way on purpose.
+The alias it was replaced with (`_UTC = timezone.utc`) carries the reason in a comment.
+
+**Also fixed here.** Run details and errors are stored through `diagnostics.redact_paths`, so an
+absolute location cannot reach a database column that the export carries - while relative words, file
+names and public URLs stay exactly as written, which is what makes a message useful.
+
+**Evidence.** Full suite 870 tests OK (13 skipped without the optional `pypdf`), of which
+`tests/test_worker.py` (34) and `tests/test_handlers.py` (17) are new, plus 2 regression tests in
+`tests/test_tasks.py`. One test previously failed because it asserted `len(executed) == 1` while the
+discovery task was legitimately also due at that instant; the test now pauses it explicitly, since that
+test is about the backup.
+
+**Not implied.** Nothing schedules itself yet: the worker is a library, no command line or window starts
+it, and laptop-off operation remains unimplemented and unclaimed.

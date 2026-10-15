@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 817 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 870 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -187,9 +187,15 @@ serves the occurrence a failed attempt still owes, a heartbeat that separates "i
 worker is gone", crash recovery that closes a stale attempt as *interrupted* and re-plans it, and a
 worker lease that refuses a second scheduler over one database while taking over a lease whose
 heartbeat has gone stale. Refusals (a rule saying no, such as the closed source-quality gate) are
-recorded as refusals, not failures, and are never retried. Nothing executes yet: the worker loop, the
-command line and the window surface for these tables, the missed-run report, and laptop-off operation
-remain to be built, so no background execution is claimed.
+recorded as refusals, not failures, and are never retried. The engine that executes it is implemented too
+(`career_agent/worker.py`): a handler registry, validated timings, one claim per occurrence, a
+heartbeat, recovery of an attempt whose worker stopped, and an honest set of outcomes - a handler that
+reports success *after* its deadline is recorded as timed out, a refusal is recorded as a refusal and
+never retried, and a kind with no handler fails naming what is registered. Two kinds are built in
+(`career_agent/handlers.py`): a verified database snapshot, which refuses rather than delete old copies
+once 30 sit beside the database, and a scheduled discovery run that refuses while the source-quality
+gate is closed and reaches no network. The command line and the window surface for all of this, the
+missed-run report, and laptop-off operation remain to be built, so no background execution is claimed.
 
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra
