@@ -645,6 +645,9 @@ class Workspace:
         #: A fourth database for the schedule: the worker's tables are the worker's business, and a
         #: paused task here must not be readable as part of any other workflow's results.
         self.scheduler_database = self.folder / "synthetic-scheduler.sqlite3"
+        #: A fifth database for backup and restore. Restoring replaces a file, so this one is never the
+        #: database any other workflow reads: a mistake here could destroy the run's own results.
+        self.data_safety_database = self.folder / "synthetic-data-safety.sqlite3"
         self.root = None
         self.windows: list[tuple[object, object]] = []
         #: Recorded before anything opens: the application's own database location must come out of this
@@ -2659,6 +2662,267 @@ def workflow_i_scheduler(run: Run) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Workflow J - data safety: a verified backup, a validated restore, and every refusal in between
+# --------------------------------------------------------------------------------------------------
+#: Names that would show a temporary or half-written file left beside a database. A staged restore ends
+#: in ``.partial`` and is hidden, so the check reads the folder's entries by name rather than by look.
+_TEMPORARY_MARKERS = (".partial", ".part", ".tmp", "restore-")
+
+
+def folder_files(workspace) -> set[str]:
+    """Every entry name in the run's disposable folder, as a set, for before-and-after comparisons."""
+    return {path.name for path in workspace.folder.iterdir()}
+
+
+def leftover_temporary_files(workspace) -> list[str]:
+    """Any temporary or half-written file the backup and restore paths left beside the database."""
+    return sorted(
+        name for name in folder_files(workspace) if any(marker in name for marker in _TEMPORARY_MARKERS)
+    )
+
+
+def choose_and_press(parent, button: str, policy, files: list[str], root) -> None:
+    """Answer the next file chooser with ``files`` and press ``button``.
+
+    ``files`` empty means the person closed the chooser without choosing: the policy hands back an empty
+    path, which is exactly what a real chooser does when it is cancelled.
+    """
+    policy.files = list(files)
+    press(parent, button, root)
+
+
+def workflow_j_data_safety(run: Run) -> None:
+    """Backup and restore driven through the window, on a disposable database this run alone owns.
+
+    What this covers: a backup written through the window and verified before success is reported, with
+    the file's own mode checked where the platform expresses one; an existing file never overwritten; a
+    destination that cannot be written refused with nothing left behind; a cancelled chooser that writes
+    nothing; a malformed, foreign, truncated or too-new file refused before the live database is touched;
+    a restore the person declines that changes nothing; a real restore that brings the backed-up records
+    back, undoes what came afterwards, keeps the previous database as a readable copy and leaves the
+    window working; a restore refused while another connection holds the database; and no temporary file
+    left behind by any of it, on success or on failure. It is never pointed at the person's own database:
+    this run does not open that file at all, and the last workflow checks it is untouched.
+    """
+    import os  # noqa: PLC0415 - one check asks what this platform's file modes can express
+    import sqlite3  # noqa: PLC0415 - the held-connection check needs a second connection of its own
+
+    from career_agent import backup as backup_module  # noqa: PLC0415 - the module behind the buttons
+    from career_agent.store import SCHEMA_VERSION  # noqa: PLC0415 - for the too-new file below
+
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window(database=workspace.data_safety_database)
+    backup_file = workspace.folder / "fixture-backup-1.sqlite3"
+
+    with results.step("J1 a backup is written through the window and verified before success is reported"):
+        for key, value in SYNTHETIC_PROFILE.items():
+            set_field(app.profile_tab, app.profile_vars[key], value, what=f"the {key} field")
+        press(app.profile_tab, "Save profile locally", workspace.root)
+        primary = save_listing(app, workspace, follow_up_listing("data-safety"))
+        require(app.store.get_profile() is not None, "the profile was not saved")
+        digest_before = file_digest(workspace.data_safety_database)
+        require(digest_before != "missing", "the window did not create its own database")
+        policy.reset()
+        choose_and_press(app.data_tab, "Back up database", policy, [str(backup_file)], workspace.root)
+        require("Backup verified" in policy.titles(),
+                f"the backup was not reported; dialogs raised: {policy.titles()}")
+        said = policy.said("Backup verified")
+        require(str(backup_file) in said, "the dialog does not name the file it wrote")
+        require(backup_file.is_file(), "no backup file was written")
+        info = backup_module.validate_app_database(backup_file)
+        require(info.profile_present, "the backup does not hold the saved profile")
+        require(info.job_count == 1, f"the backup holds {info.job_count} job(s), expected 1")
+        require(info.summary() in said,
+                f"the dialog's summary is not what the file holds: {said!r} against {info.summary()!r}")
+        require("Backup verified:" in app.status.get(),
+                f"the status line says {app.status.get()!r} after a verified backup")
+        if os.name == "posix":
+            mode = backup_file.stat().st_mode & 0o777
+            require(mode == 0o600, f"the backup was written with mode {oct(mode)}, not owner-only")
+        else:
+            print(f"[skip] {os.name} cannot express owner-only permissions; not claimed on this platform")
+        require(file_digest(workspace.data_safety_database) == digest_before,
+                "writing a backup changed the live database")
+        require(primary in [job.listing_id for job in app.store.list_jobs()],
+                "backing up lost the listing the window had saved")
+
+    with results.step("J2 an existing file is never overwritten, and a failed backup leaves nothing behind"):
+        existing_digest = file_digest(backup_file)
+        policy.reset()
+        choose_and_press(app.data_tab, "Back up database", policy, [str(backup_file)], workspace.root)
+        require("Backup not created" in policy.titles(),
+                f"an existing file was not refused; dialogs raised: {policy.titles()}")
+        refusal = policy.said("Backup not created")
+        require("already exists" in refusal, f"the refusal does not say the file exists: {refusal!r}")
+        require("The destination was left as it was." in refusal,
+                "the refusal does not say the destination was left alone")
+        require(file_digest(backup_file) == existing_digest, "the existing backup was overwritten")
+        require("Backup not created; nothing was written." in app.status.get(),
+                f"the status line says {app.status.get()!r} after a refused backup")
+        files_before = folder_files(workspace)
+        unwritable = workspace.folder / "no-such-folder" / "backup.sqlite3"
+        policy.reset()
+        choose_and_press(app.data_tab, "Back up database", policy, [str(unwritable)], workspace.root)
+        require("Backup not created" in policy.titles(),
+                f"a destination in a folder that does not exist was accepted: {policy.titles()}")
+        require(not unwritable.exists(), "a backup was written into a folder that does not exist")
+        require(folder_files(workspace) == files_before,
+                f"a refused backup left something behind: {sorted(folder_files(workspace) - files_before)}")
+
+    with results.step("J3 a cancelled file chooser writes nothing and raises no dialog"):
+        files_before = folder_files(workspace)
+        policy.reset()
+        choose_and_press(app.data_tab, "Back up database", policy, [], workspace.root)
+        require("Backup cancelled; nothing was written." in app.status.get(),
+                f"the status line says {app.status.get()!r} after a cancelled backup")
+        require(not policy.titles(), f"a cancelled chooser raised a dialog: {policy.titles()}")
+        require(folder_files(workspace) == files_before, "a cancelled backup wrote something")
+
+    with results.step("J4 a malformed, foreign, truncated or too-new file is refused, changing nothing"):
+        live_digest = file_digest(workspace.data_safety_database)
+        not_a_database = workspace.folder / "not-a-database.sqlite3"
+        not_a_database.write_text("A text file that has a database file's name.\n", encoding="utf-8")
+        foreign = workspace.folder / "another-programs.sqlite3"
+        other = sqlite3.connect(foreign)
+        try:
+            other.execute("CREATE TABLE notes (body TEXT)")
+            other.commit()
+        finally:
+            other.close()
+        truncated = workspace.folder / "truncated-backup.sqlite3"
+        truncated.write_bytes(backup_file.read_bytes()[:4096])
+        too_new = workspace.folder / "from-a-newer-version.sqlite3"
+        shutil.copyfile(backup_file, too_new)
+        newer = sqlite3.connect(too_new)
+        try:
+            newer.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+            newer.commit()
+        finally:
+            newer.close()
+        for candidate, explanation in (
+            (not_a_database, "not a database this app can read"),
+            (foreign, "does not recognise"),
+            (truncated, None),
+            (too_new, "newer than this app supports"),
+        ):
+            policy.reset()
+            choose_and_press(app.data_tab, "Restore from backup", policy, [str(candidate)], workspace.root)
+            require("Backup cannot be used" in policy.titles(),
+                    f"{candidate.name} was not refused; dialogs raised: {policy.titles()}")
+            said = policy.said("Backup cannot be used")
+            require("The current database was not changed." in said,
+                    f"the refusal for {candidate.name} does not say the database was left alone")
+            if explanation is not None:
+                require(explanation in said,
+                        f"the refusal for {candidate.name} does not explain why: {said!r}")
+            else:
+                require("integrity check" in said or "not a database" in said,
+                        f"the refusal for {candidate.name} does not say what is wrong: {said!r}")
+            require("Restore refused; the current database was not changed." in app.status.get(),
+                    f"the status line says {app.status.get()!r} after refusing {candidate.name}")
+            require(file_digest(workspace.data_safety_database) == live_digest,
+                    f"a refused file ({candidate.name}) replaced the live database anyway")
+        require(not leftover_temporary_files(workspace),
+                f"a refusal left a temporary file behind: {leftover_temporary_files(workspace)}")
+
+    with results.step("J5 declining the restore confirmation changes nothing at all"):
+        files_before = folder_files(workspace)
+        live_digest = file_digest(workspace.data_safety_database)
+        policy.reset()
+        policy.files = [str(backup_file)]
+        policy.answers["Replace the local database?"] = False
+        press(app.data_tab, "Restore from backup", workspace.root)
+        require("Replace the local database?" in policy.titles(),
+                "the window did not ask before replacing the database")
+        require("Restore cancelled; the current database was not changed." in app.status.get(),
+                f"the status line says {app.status.get()!r} after a declined restore")
+        require(file_digest(workspace.data_safety_database) == live_digest,
+                "a declined restore changed the live database")
+        require(folder_files(workspace) == files_before,
+                f"a decline left files behind: {sorted(folder_files(workspace) - files_before)}")
+
+    with results.step("J6 restoring a valid backup brings the records back and undoes what came after"):
+        added_after_backup = save_listing(app, workspace, follow_up_listing("after-backup"))
+        jobs_before_restore = len(app.store.list_jobs())
+        require(jobs_before_restore == 2, f"{jobs_before_restore} job(s) are stored, expected 2")
+        policy.reset()
+        policy.files = [str(backup_file)]
+        policy.answers["Replace the local database?"] = True
+        press(app.data_tab, "Restore from backup", workspace.root)
+        require("Restore complete" in policy.titles(),
+                f"the restore was not reported; dialogs raised: {policy.titles()}")
+        said = policy.said("Restore complete")
+        require("reopened and verified" in said, f"the report does not say what was verified: {said!r}")
+        require(app.store.get_job(added_after_backup) is None,
+                "the listing saved after the backup is still in the database")
+        require(len(app.store.list_jobs()) == jobs_before_restore - 1,
+                f"the restored database holds {len(app.store.list_jobs())} job(s), expected "
+                f"{jobs_before_restore - 1}")
+        require(app.store.get_profile() is not None, "the restored database has no profile")
+        require("Restored from" in app.status.get(),
+                f"the status line says {app.status.get()!r} after a restore")
+        listed = [str(item) for item in app.jobs_tree.get_children()]
+        require(added_after_backup not in listed,
+                "the window still lists the listing the restore removed")
+        require(len(listed) == len(app.store.list_jobs()),
+                f"the window lists {len(listed)} listing(s) and the database holds "
+                f"{len(app.store.list_jobs())}")
+        kept = sorted(workspace.folder.glob(f"{workspace.data_safety_database.name}.backup-*"))
+        require(len(kept) == 1, f"the previous database was not kept as one copy: {kept}")
+        previous = backup_module.validate_app_database(kept[0])
+        require(previous.job_count == jobs_before_restore,
+                f"the kept copy holds {previous.job_count} job(s), not {jobs_before_restore}")
+        require("Previous database kept as a verified copy" in said,
+                f"the report does not say what happened to the previous database: {said!r}")
+        require(str(kept[0]) in said, f"the report does not name the kept copy: {said!r}")
+        require(info.summary() in said,
+                f"the report does not describe what is now in use: {said!r}")
+        written_after = save_listing(app, workspace, follow_up_listing("after-restore"))
+        require(app.store.get_job(written_after) is not None,
+                "the window could not save a listing after a restore")
+
+    with results.step("J7 a restore is refused while another connection holds the database"):
+        live_digest = file_digest(workspace.data_safety_database)
+        jobs_now = len(app.store.list_jobs())
+        holder = sqlite3.connect(workspace.data_safety_database, isolation_level=None)
+        try:
+            holder.execute("BEGIN IMMEDIATE")
+            policy.reset()
+            policy.files = [str(backup_file)]
+            policy.answers["Replace the local database?"] = True
+            press(app.data_tab, "Restore from backup", workspace.root)
+            require("Restore failed" in policy.titles(),
+                    f"a database another connection holds was replaced anyway: {policy.titles()}")
+            said = policy.said("Restore failed")
+            require("in use" in said or "busy" in said.lower(),
+                    f"the refusal does not say the database is in use: {said!r}")
+            require(file_digest(workspace.data_safety_database) == live_digest,
+                    "the live database changed although another connection held it")
+            require(len(app.store.list_jobs()) == jobs_now,
+                    f"the window's database holds {len(app.store.list_jobs())} job(s) after the refusal")
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    with results.step("J8 nothing temporary is left behind, and the database in place is the app's own"):
+        require(not leftover_temporary_files(workspace),
+                f"temporary files were left behind: {leftover_temporary_files(workspace)}")
+        require(not (workspace.folder / "no-such-folder").exists(),
+                "a folder was created for a destination that could not be written")
+        info = backup_module.validate_app_database(workspace.data_safety_database)
+        require(info.schema_version == SCHEMA_VERSION,
+                f"the database in place records schema version {info.schema_version}")
+        require(info.job_count == len(app.store.list_jobs()),
+                f"the file holds {info.job_count} job(s) and the window reads {len(app.store.list_jobs())}")
+        copies = sorted(workspace.folder.glob(
+            f"{workspace.data_safety_database.name}{backup_module.AUTOMATIC_BACKUP_INFIX}*"))
+        require([path.name for path in copies] == [path.name for path in kept],
+                f"the previous-database copies changed: {[path.name for path in copies]}")
+
+    workspace.close_window(host, app)
+
+
+# --------------------------------------------------------------------------------------------------
 # Workflow F - cleanup, lifecycle, and cleanup after a failure
 # --------------------------------------------------------------------------------------------------
 def workflow_f_cleanup(run: Run) -> None:
@@ -2709,7 +2973,7 @@ def workflow_f_cleanup(run: Run) -> None:
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
 #: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
 #: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
-#: before it - G, H and I included, which is why the letters are not alphabetical here.
+#: before it - G to J included, which is why the letters are not alphabetical here.
 WORKFLOWS = (
     ("A - candidate profile persistence", workflow_a_profile),
     ("B - the two job URLs", workflow_b_job_urls),
@@ -2719,6 +2983,7 @@ WORKFLOWS = (
     ("G - work history and study records", workflow_g_history_records),
     ("H - follow-up reminders and next actions", workflow_h_follow_ups_and_actions),
     ("I - the schedule, paused and resumed", workflow_i_scheduler),
+    ("J - data safety: backup and restore", workflow_j_data_safety),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
@@ -2883,8 +3148,12 @@ def main(argv=None) -> int:
         "gone reported instead of acted on; the default schedule added once and kept the second time, a "
         "paused task keeping its times and its history across a restart, a resume scheduling the next "
         "occurrence instead of replaying what was missed, a task whose record had gone reported rather "
-        "than acted on, and no worker, lease or attempt started by any of it; and every window, "
-        "connection and temporary file was "
+        "than acted on, and no worker, lease or attempt started by any of it; a backup written and "
+        "verified before success was reported, an existing file never overwritten, a malformed, foreign, "
+        "truncated or too-new file refused before the live database was touched, a declined restore that "
+        "changed nothing, a restore that brought the backed-up records back, kept the previous database "
+        "as a readable copy and left the window writing, and a restore refused while another connection "
+        "held the database; and every window, connection and temporary file was released."        "connection and temporary file was "
         "released. The dialogs a person would answer - a file chooser and the confirmations - were "
         "answered by the run and are listed above. This is not the manual checklist: no check has judged "
         "layout, wording, focus order, accessibility, or how any of it feels to use."
