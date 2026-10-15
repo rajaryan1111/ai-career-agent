@@ -357,6 +357,11 @@ class TrackerInvariantTests(unittest.TestCase):
             (listing_id,),
         ).fetchone()
 
+    @staticmethod
+    def _state_of(row):
+        """The record's own state: what it says, without the store's write clock."""
+        return (row["status"], row["status_evidence"], row["candidate_confirmed"])
+
     def test_every_placeholder_evidence_form_is_refused_at_the_storage_boundary(self):
         reach_status(self.store, ApplicationStatus.SUBMISSION_ATTEMPTED)
         before = self._raw_row()
@@ -410,9 +415,34 @@ class TrackerInvariantTests(unittest.TestCase):
                         ApplicationTracker("j1", status, "Employer portal shows Application Received", True)
                     )
         self.assertEqual(self._raw_row(), before, "a terminal record must not move")
-        # Re-applying the same status stays an idempotent no-op, not an error.
+        # Re-applying the same status stays an idempotent no-op, not an error: it is permitted, and it
+        # writes no new state. The row's ``updated_at`` is the store's own write clock - the tracker tab
+        # shows it as when this app last wrote the record - so a re-save that lands in a later second moves
+        # it, and a case comparing the whole row would be asserting that the clock stood still.
         self.store.save_tracker(self.store.get_tracker("j1"))
-        self.assertEqual(self._raw_row(), before)
+        self.assertEqual(self._state_of(self._raw_row()), self._state_of(before))
+
+    def test_an_idempotent_resave_refreshes_the_write_clock_and_writes_no_other_state(self):
+        """What a no-op save does to the row, with the clock held still so the answer is not a race.
+
+        The record the person sees does not move; the write timestamp does, because the row was written.
+        Pinning it here is what keeps the case above about the record rather than about two saves landing
+        inside one second - which is how it failed once, on a loaded macOS runner.
+        """
+        reach_status(self.store, ApplicationStatus.SHORTLISTED)
+        tracker = self.store.get_tracker("j1")
+        with mock.patch.object(store_module, "_now", return_value="2026-01-01T00:00:00+00:00"):
+            self.store.save_tracker(tracker)
+        first = self._raw_row()
+        with mock.patch.object(store_module, "_now", return_value="2026-01-01T00:00:05+00:00"):
+            self.store.save_tracker(tracker)
+        second = self._raw_row()
+
+        self.assertEqual(first["updated_at"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(second["updated_at"], "2026-01-01T00:00:05+00:00",
+                         "a re-save writes the row, so its clock moves with it")
+        self.assertEqual(self._state_of(second), self._state_of(first),
+                         "a re-save of the same status writes no new state")
 
     def test_status_jump_is_refused_and_the_stored_row_is_unchanged(self):
         self.store.save_tracker(ApplicationTracker("j1", ApplicationStatus.DISCOVERED))
