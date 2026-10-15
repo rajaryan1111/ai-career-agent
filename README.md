@@ -943,21 +943,27 @@ repository claims one. What exists today:
   installed command from *outside* the checkout — version report, `--help`, a throwaway database, backup,
   restore. Its assertions mirror the ones `tests/test_packaging.py` makes from the source tree, so the
   behaviour is proven by one run; it is executed on two interpreters anyway, the floor the metadata
-  declares (3.10) and the newest one the suite is run on (3.13), because a wheel or a console script that
+  declares (3.10) and the newest one the suite is run on (3.14), because a wheel or a console script that
   only works on the version used to build it is exactly the defect that installing from a checkout hides.
   The same build-and-install-from-a-wheel rehearsal is repeated on Windows and macOS by the
   `cross-platform` job, and the `pdf-extra` job proves the optional library is what unlocks the résumé
   tests rather than a skip being mistaken for coverage: without `pypdf` the PDF cases skip, and with it
   installed the same module has to finish with a bare `OK`.
 - **Which interpreters are tested, and which are not.** CI runs the full suite, `compileall` and the CSV
-  audit on **3.10, 3.11, 3.12 and 3.13** on Linux, and the same suite on **3.10 and 3.13** on Windows and
-  macOS, where it also exercises the installed command surface from a built wheel: `--version`,
+  audit on **3.10, 3.11, 3.12, 3.13 and 3.14** on Linux, and the same suite on **3.10 and 3.13** on Windows
+  and macOS, where it also exercises the installed command surface from a built wheel: `--version`,
   `--doctor` against a missing database and against a file that is not one, schema creation and
   cross-process persistence, a backup and a restore that really replace data, a JSON export imported into
-  a second database, and the two invariants that keep discovery closed. `requires-python = ">=3.10"` has
-  no upper bound — a newer interpreter is not forbidden — but nothing here claims one: 3.14 has not been
-  run, so it is untested rather than supported, and the same is true of every interpreter the workflow
-  does not name. The window is exercised on three levels, and they are not interchangeable: handler tests
+  a second database, and the two invariants that keep discovery closed. **3.14 was added on 2026-10-16 and
+  is measured**: `unit-tests (3.14)` ran the suite (`Ran 1702 tests … OK (skipped=13)`), `compileall` and
+  the CSV audit in run
+  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342), and
+  `Installed package (3.14)` built the wheel, installed it into a clean environment and ran the installed
+  command from outside the checkout in run
+  [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543). What is *not*
+  measured on 3.14 is Windows and macOS, and the display-backed desktop harness still runs on 3.10 and
+  3.13, so those claims stop where the legs stop. `requires-python = ">=3.10"` has no upper bound — a
+  newer interpreter is not forbidden — but an interpreter no leg names is untested rather than supported. The window is exercised on three levels, and they are not interchangeable: handler tests
   with stubbed widgets on Linux, the scripted smoke test above under a real display (Xvfb) on Linux where
   it must pass, and — the only level that can say a person can use it — [the manual
   checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md), which CI cannot run and

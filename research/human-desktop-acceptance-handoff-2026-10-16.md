@@ -28,7 +28,7 @@ coverage" note, that note says exactly which part a machine checked and which pa
 
 | Requirement | Why | How to confirm |
 | --- | --- | --- |
-| Python 3.10–3.13 with `tkinter` | the window is Tk; 3.13 is the newest interpreter the suite runs on | `python3 -c "import tkinter; print(tkinter.TkVersion)"` prints `8.6` |
+| Python 3.10–3.14 with `tkinter` | the window is Tk; the suite runs up to 3.14 in CI (no 3.14 display leg exists, so a person's own interpreter is what matters here) | `python3 -c "import tkinter; print(tkinter.TkVersion)"` prints `8.6` |
 | A real desktop session | Xvfb and a CI runner are not a person's desktop | the window really appears and can be moved, resized and clicked |
 | A disposable data folder | **never point a manual run at a real database** | `export CAREER_AGENT_HOME="$(mktemp -d)"` before starting the app in that shell |
 | The optional `pdf` extra, for steps 24–31 | PDF import reads text through `pypdf`; DOCX needs nothing extra | `python3 -m pip install "pypdf>=4.3"` into the interpreter running the app |

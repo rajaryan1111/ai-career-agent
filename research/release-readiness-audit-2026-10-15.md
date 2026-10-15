@@ -264,8 +264,8 @@ added on 2026-10-15):
 
 | Job | Matrix | What it proves |
 |---|---|---|
-| `unit-tests` | Ubuntu, Python 3.10, 3.11, 3.12, 3.13 | the suite passes on the floor `pyproject.toml` declares and on the newest interpreter it has been run on; `compileall` over `career_agent/`, `scripts/`, `tests/`; the source-CSV integrity audit |
-| `installed-package` | Ubuntu, Python 3.10 and 3.13 | `python -m build --wheel`, `pip install dist/*.whl` into a clean environment, then `career-agent --version`, `--doctor`, `--database` run **from outside the checkout** — the same strings `tests/test_packaging.py` requires, so a wheel, a console script or a build backend that only works on the interpreter that built it fails CI |
+| `unit-tests` | Ubuntu, Python 3.10, 3.11, 3.12, 3.13, 3.14 (3.14 added 2026-10-16) | the suite passes on the floor `pyproject.toml` declares and on the newest interpreter it has been run on; `compileall` over `career_agent/`, `scripts/`, `tests/`; the source-CSV integrity audit |
+| `installed-package` | Ubuntu, Python 3.10 and 3.14 (3.14 replaced 3.13 on 2026-10-16) | `python -m build --wheel`, `pip install dist/*.whl` into a clean environment, then `career-agent --version`, `--doctor`, `--database` run **from outside the checkout** — the same strings `tests/test_packaging.py` requires, so a wheel, a console script or a build backend that only works on the interpreter that built it fails CI |
 | `desktop-smoke-linux` | Ubuntu, system interpreter, `xvfb` + `python3-tk` | the scripted desktop entry point run twice: with no display it must exit 2 and print `RESULT: BLOCKED` (and must not print a pass), and under a real virtual display it must exit 0 — so a runner that cannot show a window can never be counted as covering one. Then it checks that the run left no window, database or temporary folder behind |
 | `pdf-extra` | Ubuntu, Python 3.13 | the optional `[pdf]` extra is what unlocks the résumé tests, in both directions: without `pypdf` the PDF cases skip, and with it installed the same module finishes with a bare `OK` |
 | `cross-platform` | Windows and macOS, Python 3.10 and 3.13 | the full suite on a real Windows and a real macOS runner; `compileall`; the CSV audit; the résumé tests with the extra installed (no skips); a wheel built and installed into a virtual environment **outside the checkout** with the import path asserted; then the installed command surface — `--version`, `--doctor` on a missing database (exit 0, `no file yet`) and on a file that is not one (exit 1 for the doctor, exit 2 for a read-only report, file byte-identical), schema creation with all eleven tables, cross-process persistence, a backup/restore that really replaces data, a JSON export imported into a second database, the two discovery invariants, a minimal Tk widget lifecycle, and the desktop smoke test |
@@ -275,10 +275,18 @@ Decisions behind the matrix:
 - The range in `requires-python` stays open-ended (`>=3.10`), while the range *tested* is closed and named.
   A version nobody has run is not described as supported; the README's packaging section says which
   interpreters were actually exercised.
-- 3.13 is the newest leg because it is the newest interpreter the suite has been run on. An attempt to obtain
-  3.13 (and 3.14) in this environment failed — `uv python install 3.13` and a direct download from the
-  `python-build-standalone` releases were both blocked by the sandbox's network policy (`UnknownIssuer` /
-  `SSL_ERROR_SYSCALL`) — so the newest leg can only be proven by CI. No 3.14 leg exists, and none is claimed.
+- **3.14 is now measured (2026-10-16).** This entry used to read "3.13 is the newest leg … no 3.14 leg exists,
+  and none is claimed", after attempts to obtain 3.13 and 3.14 in the development environment failed — `uv
+  python install` and a direct download from the `python-build-standalone` releases were both blocked by the
+  sandbox's network policy (`UnknownIssuer` / `SSL_ERROR_SYSCALL`). The gap was closed where it can be closed:
+  a `unit-tests (3.14)` leg was added to the matrix and run the suite (`Ran 1702 tests … OK (skipped=13)`),
+  `compileall` and the CSV audit in run
+  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342), and the
+  `installed-package` leg moved from 3.13 to 3.14 so the wheel is built, installed and run from outside the
+  checkout on the newest claimed interpreter in run
+  [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543). Still not measured:
+  Windows and macOS on 3.14, and the display-backed desktop harness remains 3.10/3.13. An interpreter no leg
+  names is untested rather than supported.
 - `tests/test_documented_commands.py` reads every `--flag` this README and the manual smoke-test checklist
   tell a person to run and looks it up in the real `--help` output, so a documented command that no longer
   exists fails the suite. Current state: README 30 flags, checklist 21 flags, 0 unknown in either. (This

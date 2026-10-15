@@ -698,3 +698,24 @@ killed it (exit 124) and `inf` exited 3.
 **What this does not establish.** Nothing about intervals that are finite but absurd in practice
 (``--poll-seconds 1e9`` starts a worker that will not poll again in this century, which is the operator's own
 choice and is left alone). The refusal is about values the worker cannot run *correctly* with.
+
+## 20. Python 3.14 — the leg the audit listed as missing (2026-10-16)
+
+The release-readiness audit recorded the gap precisely: *"Still missing: a CI leg for Python 3.14"*, because
+the metadata accepts `>=3.10` while the tested claim stopped at 3.13, and the development environment cannot
+obtain a newer interpreter (`uv python install` and a direct download were both blocked by the sandbox's
+network policy). The gap was closed where it can be: in CI.
+
+| Leg | What it runs | Result | Run |
+| --- | --- | --- | --- |
+| `unit-tests (3.14)` | the whole suite, `compileall` over `career_agent/`, `scripts/`, `tests/`, and the research-CSV integrity audit | **success** — `Ran 1702 tests … OK (skipped=13)`, CSV `0356b093ded3…` | [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342) at `709242b` |
+| `Installed package (3.14)` | `python -m build --wheel`, the wheel's contents, installation into a clean environment, and the installed `career-agent` command run from **outside** the checkout (`--version`, `--doctor`, a throwaway database, backup/restore) | **success** | [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543) at `791f9ed` |
+
+The `unit-tests` matrix now names `3.10, 3.11, 3.12, 3.13, 3.14`, and the `installed-package` matrix moved from
+3.13 to 3.14 beside the 3.10 floor, so the interpreter the suite runs on and the interpreter the wheel is
+built and installed on agree.
+
+**What this does not establish.** No 3.14 leg exists on Windows or macOS, and the display-backed desktop
+harness still runs on 3.10 and 3.13 — so "runs on 3.14" is a statement about the Linux suite and the Linux
+build/install rehearsal, not about a 3.14 desktop on every platform. `requires-python` keeps its open upper
+bound, and an interpreter no leg names is untested rather than supported.

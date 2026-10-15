@@ -194,10 +194,10 @@ The offline domain core, the SQLite persistence layer, verified local backup/res
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
 implemented, with 1702 tests passing locally (13 skipped in a checkout: 12 of them need the optional
 `pypdf` library and one runs only where the project is installed) and a
-Python 3.10–3.13 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
+Python 3.10–3.14 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout — on the declared floor (3.10) and on the
-newest interpreter the suite is run on (3.13), because a wheel or a console script that only works on the
+newest interpreter the suite is run on (3.14), because a wheel or a console script that only works on the
 version that built it is exactly what installing from a checkout hides. The suite also holds the safety properties an audit
 turned up by probing rather than reading: a non-finite experience value (`nan`, `inf`) is refused by
 the form and can never make an experience requirement pass, no test may resolve this machine's real

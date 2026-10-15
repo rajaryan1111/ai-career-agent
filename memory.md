@@ -2914,4 +2914,23 @@ in the "left alone" report rather than in the failure list - which is the safer 
 test asserts. `tests/test_cli_forget.py` (15 tests) covers the plan, the preview writing nothing, the delete
 removing exactly the derived files while a foreign file survives, idempotence, and each refusal. Full suite
 1702 tests, OK (skipped=13).
+**2026-10-16, same session - Python 3.14 measured, and one more unbounded read closed.** The release-readiness
+audit had recorded the gap in its own words ("Still missing: a CI leg for Python 3.14"), with the reason the
+development environment cannot close it (`uv python install 3.14` and a direct download are both blocked by
+the sandbox's network policy). It was closed in CI instead: `unit-tests (3.14)` now runs the suite,
+`compileall` and the CSV audit - run 38804198342 at `709242b` reports `Ran 1702 tests ... OK (skipped=13)` and
+the expected CSV hash prefix - and the installed-package leg moved from 3.13 to 3.14, so the wheel is built,
+installed into a clean environment and run from outside the checkout on the newest claimed interpreter (run
+38805511543 at `791f9ed`, green). README, `phases.md`, the audit's coverage table and the handoff's
+interpreter requirement all now say 3.10-3.14, and the CI evidence register gained section 20 with both legs,
+their results and their run ids. What is still not measured is stated rather than glossed: no 3.14 leg on
+Windows or macOS, and the display-backed desktop harness remains 3.10/3.13.
+
+The same pass closed the last unbounded local read: the mock ledger answers "has this already been
+performed?", and it was read whole before being parsed - the same shape as the export importer's gap. It is
+now bounded at 16 MB with the check taken from a `stat` first, and the refusal is fail-closed in the module's
+own words ("Nothing was performed, because this application cannot establish what it has already done and
+will not risk doing it twice"). Measured: refusing a 20 MB file allocates 1.1 KB (tracemalloc peak). Tests
+cover the refusal (with the limit patched small, asserting the shipped 16 MB value as well) and that an
+ordinary ledger still loads and reports its one operation. Full suite 1708 tests, OK (skipped=13).
 
