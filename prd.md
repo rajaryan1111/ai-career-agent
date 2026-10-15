@@ -100,7 +100,9 @@ The intended audience is cross-industry and cross-experience: students, interns,
 
 ### Scheduling
 - Default discovery schedule: 00:00 and 12:00 Asia/Kolkata.
-- Let users configure schedules.
+- Let users configure schedules. (Implemented: times, timezone, enable/disable, timeout and retry
+  limits are stored per task and editable from the Background tasks tab; a device that is off simply
+  does not run them.)
 - Clearly report missed runs, offline periods, partial failures, and retries. (Partially implemented:
   the durable record of scheduled occurrences, attempts, retries, refusals and interruptions exists in
   the database, with a run history per task; the report a person reads, the worker loop, and missed-run

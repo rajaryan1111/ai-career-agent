@@ -294,6 +294,9 @@ so a backup always names the file the app itself would open. Restoring replaces 
 - Each copy describes the state the attempt started from, so an existing file is never reused for a later
   attempt, and snapshots are never overwritten. This is the recovery path for the case a rollback cannot
   reach: a step that succeeded, was committed, and only afterwards turned out to be wrong.
+- A scheduled task's own history is kept: every attempt, with its outcome (succeeded, refused, failed,
+  timed out, or interrupted), how long it took, and the one-line reason - and a refused run is recorded
+  as a refusal rather than as a failure, because a rule that says no is not a malfunction.
 - The schema is updated one recorded step at a time, each in a single transaction that ends by writing
   the version it reached, so a database can never claim a version whose tables are missing or hold
   tables at a version it does not claim.
@@ -327,6 +330,48 @@ so a backup always names the file the app itself would open. Restoring replaces 
 - Old backups are never pruned automatically, and nothing is uploaded anywhere: backups are files you
   place yourself.
 
+
+## Run scheduled tasks (local worker)
+
+The app can keep a schedule of its own work. Two tasks are created for you, and both run on your
+computer while the worker process is running — nothing is sent anywhere, and nothing runs while the
+computer is off or asleep.
+
+| Task | Runs at | What it does |
+| --- | --- | --- |
+| `daily-backup` | 23:30 Asia/Kolkata | Writes a verified snapshot of your database beside it |
+| `scheduled-discovery` | 00:00 and 12:00 Asia/Kolkata | Scheduled job discovery — **refused** while the source-quality gate is closed |
+
+```bash
+career-agent --seed-tasks        # add the default schedule to this database (leaves your edits alone)
+career-agent --worker-status     # what is scheduled, what is running, how the recent attempts ended
+career-agent --worker            # run the schedule in the foreground until you press Ctrl-C
+```
+
+`--worker-status` writes nothing at all — it does not take the worker's lease and does not mark
+anything as running — so it is safe to run whenever you are wondering what the scheduler is doing.
+
+**What the worker guarantees.** A run is identified by the instant the schedule named, not by when it
+happened, and the database holds one attempt per scheduled occurrence: a restart, a retry after a
+failure, or a second copy of the app cannot turn one occurrence into two runs, and cannot lose one
+either. A failure is retried with a bounded, doubling delay up to the task's attempt limit, and the
+retry serves the occurrence it still owes. An attempt whose worker stopped is closed as *interrupted*
+— not as failed and not as successful, because nobody saw it finish — and the occurrence is re-planned.
+While a worker is running it holds a lease, so a second worker started by mistake stops with a message
+instead of running the same tasks twice; a lease whose heartbeat has gone stale is taken over, because
+the alternative is a schedule that can never run again.
+
+**What it does not guarantee.** Background work happens while the worker process runs. This is a local
+worker, not a service: close the terminal, shut the laptop, or sleep the machine, and nothing runs until
+you start it again. Operating while the computer is off needs a separately deployed and verified
+worker, which does not exist yet — so that capability is not claimed anywhere in this project. A handler
+is asked to check its deadline and stop flag, and a long-running handler that ignores them keeps
+running; the *record* still tells the truth (an attempt that finished after its deadline is recorded as
+timed out rather than successful), but the worker cannot force a Python function to return.
+
+**Discovery stays refused.** `--worker` reports the gate's state at startup, and every scheduled
+discovery run is recorded as a refusal with the reason. That is the permission rule working, not a
+fault: no source has passed the quality gate, so nothing is read.
 
 ## Audit research data
 

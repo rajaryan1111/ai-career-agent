@@ -25,6 +25,8 @@ from .core import (
 from . import __version__
 from .config import database_path_for_run
 from .event_log import record_event
+from .handlers import default_registry, describe_default_handlers, seed_default_tasks
+from .worker import WorkerSettings, worker_status
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
     format_stored_timestamp, form_values, job_form_values, plan_job_save,
@@ -89,20 +91,24 @@ class CareerAgentApp:
         self.jobs_tab = ttk.Frame(self.tabs, padding=12)
         self.tracker_tab = ttk.Frame(self.tabs, padding=12)
         self.data_tab = ttk.Frame(self.tabs, padding=12)
+        self.scheduler_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
         self.tabs.add(self.data_tab, text="Data safety")
+        self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.profile_vars = {}
         self.job_vars = {}
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
         self._build_data_safety()
+        self._build_scheduler()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
         self._refresh_jobs()
+        self._refresh_scheduler()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -248,6 +254,200 @@ class CareerAgentApp:
             ),
             wraplength=900,
         ).grid(row=3, column=0, sticky=W, pady=(10, 0))
+
+    # ------------------------------------------------------------------ background tasks
+    #
+    # The window is the control panel for the schedule; it is deliberately not the scheduler. Running a
+    # task loop on the interface's thread would freeze the window for as long as a handler took, and a
+    # person closing the window would then be closing a worker mid-attempt. The worker runs in its own
+    # process (`python -m career_agent --worker`), and this tab shows what that process is doing and
+    # lets the person change what is scheduled - reading the same tables the worker reads, through the
+    # same module, so the two cannot disagree about what is due.
+
+    def _build_scheduler(self):
+        ttk.Label(
+            self.scheduler_tab,
+            text=(
+                "Scheduled tasks run while the worker is running: python -m career_agent --worker "
+                "(Ctrl-C stops it). Nothing here runs while the worker is stopped, and nothing runs "
+                "while the computer is off or asleep. Every task runs locally; the source-quality gate "
+                "is closed, so a scheduled discovery run is recorded as a refusal and fetches nothing."
+            ),
+            wraplength=900, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.scheduler_summary = tk.StringVar(value="Checking the schedule...")
+        ttk.Label(self.scheduler_tab, textvariable=self.scheduler_summary, wraplength=900,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        ttk.Button(self.scheduler_tab, text="Add the default tasks",
+                   command=self._add_default_tasks).grid(row=2, column=0, sticky=W, pady=4)
+        ttk.Button(self.scheduler_tab, text="Enable or disable the selected task",
+                   command=self._toggle_scheduled_task).grid(row=2, column=1, sticky=W, padx=(8, 0), pady=4)
+        ttk.Button(self.scheduler_tab, text="Refresh",
+                   command=self._refresh_scheduler).grid(row=2, column=2, sticky=W, padx=(8, 0), pady=4)
+        ttk.Label(self.scheduler_tab, text="Tasks").grid(row=3, column=0, columnspan=4, sticky=W, pady=(10, 2))
+        task_columns = ("task", "name", "kind", "times", "zone", "next", "last")
+        self.tasks_tree = ttk.Treeview(self.scheduler_tab, columns=task_columns, show="headings", height=6)
+        for column, heading, width in (
+            ("task", "Task", 150), ("name", "What it is", 190), ("kind", "Kind", 140),
+            ("times", "Runs at", 110), ("zone", "Zone", 120), ("next", "Next run (local)", 190),
+            ("last", "Last result", 200),
+        ):
+            self.tasks_tree.heading(column, text=heading)
+            self.tasks_tree.column(column, width=width, anchor=W)
+        self.tasks_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
+        ttk.Label(self.scheduler_tab, text="Recent attempts").grid(row=5, column=0, columnspan=4,
+                                                                  sticky=W, pady=(10, 2))
+        run_columns = ("task", "attempt", "outcome", "when", "took", "note")
+        self.task_runs_tree = ttk.Treeview(self.scheduler_tab, columns=run_columns, show="headings",
+                                          height=6)
+        for column, heading, width in (
+            ("task", "Task", 150), ("attempt", "Attempt", 70), ("outcome", "Outcome", 110),
+            ("when", "Scheduled for (local)", 190), ("took", "Took", 80), ("note", "What happened", 400),
+        ):
+            self.task_runs_tree.heading(column, text=heading)
+            self.task_runs_tree.column(column, width=width, anchor=W)
+        self.task_runs_tree.grid(row=6, column=0, columnspan=4, sticky="nsew")
+        self.scheduler_tab.columnconfigure(0, weight=1)
+
+    def _refresh_scheduler(self):
+        """Re-read the schedule and the run history; change nothing.
+
+        The same reads the worker uses, so this view cannot show a schedule that the worker would not
+        act on. A row whose stored text this version cannot read is reported as that record rather than
+        dropped from the list, and a database this process cannot read at all is reported by the shared
+        handler, which leaves the lists as they are.
+        """
+        if not hasattr(self, "tasks_tree"):
+            return
+        try:
+            status = worker_status(self.store)
+            tasks = self.store.list_scheduled_tasks()
+            runs = self.store.list_task_runs(limit=25)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.scheduler_summary.set("\n".join(status.describe()))
+        for tree in (self.tasks_tree, self.task_runs_tree):
+            for item in tree.get_children():
+                tree.delete(item)
+        for task in tasks:
+            self.tasks_tree.insert(
+                "", END, iid=task.task_id,
+                values=(
+                    task.task_id, task.name, task.kind, ", ".join(task.times), task.timezone,
+                    self._local_instant(task.next_run_at) if task.enabled else "paused",
+                    task.last_outcome.value if task.last_outcome else "never run",
+                ),
+            )
+        for run in runs:
+            self.task_runs_tree.insert(
+                "", END, iid=run.run_id,
+                values=(
+                    run.task_id, str(run.attempt), run.state.value,
+                    self._local_instant(run.slot_at),
+                    f"{run.duration_seconds:.1f}s" if run.duration_seconds is not None else "-",
+                    run.error or run.detail or "-",
+                ),
+            )
+
+    def _local_instant(self, moment):
+        """A stored instant in this machine's local time, because that is when the person sees it run.
+
+        The schedule is stored in UTC with the task's own zone kept beside it; showing local time is a
+        display choice, and the zone column says which clock the task was configured in.
+        """
+        if moment is None:
+            return "-"
+        return moment.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _add_default_tasks(self):
+        """Add the default schedule, reporting exactly what was created and what was left alone."""
+        try:
+            outcome = seed_default_tasks(self.store)
+            self._refresh_scheduler()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        except ValueError as exc:
+            # A task definition this build refuses (an unavailable timezone, for example) is a message,
+            # not a traceback from a button.
+            messagebox.showerror("Default tasks not added", str(exc), parent=self.root)
+            self.status.set("The default tasks were not added; nothing was changed.")
+            return
+        created = ", ".join(outcome.created) if outcome.created else "nothing"
+        kept = ", ".join(outcome.kept) if outcome.kept else "nothing"
+        self.status.set(f"Default tasks: created {created}; left {kept} as they were.")
+        messagebox.showinfo(
+            "Default tasks",
+            f"Created: {created}.\nLeft exactly as they were: {kept}.\n\n"
+            "A task that already existed is never rewritten, so times you chose and tasks you paused "
+            "stay as you set them.\n\nThe schedule runs while the worker is running:\n"
+            "python -m career_agent --worker",
+            parent=self.root,
+        )
+
+    def _selected_scheduled_task_id(self):
+        """The task id selected in the list, or ``None`` when nothing is selected.
+
+        Deliberately does no database lookup: whether the selected task still exists is the caller's
+        question, and it needs a different message. Folding the two cases together here is what made the
+        first version report "select a task first" to somebody who had selected one that had been
+        removed from the schedule - a message about the wrong problem.
+        """
+        if not hasattr(self, "tasks_tree"):
+            return None
+        selection = self.tasks_tree.selection()
+        return selection[0] if selection else None
+
+    def _toggle_scheduled_task(self):
+        """Pause or resume the selected task, with a confirmation, then show the result.
+
+        Pausing is not deleting: the definition, the run history and the time it runs at all stay in the
+        database, and choosing to resume it schedules the next occurrence from now rather than replaying
+        the ones that were missed while it was paused.
+        """
+        task_id = self._selected_scheduled_task_id()
+        if task_id is None:
+            self.status.set("Select a task in the list first; nothing was changed.")
+            return
+        task = self.store.get_scheduled_task(task_id)
+        if task is None:  # re-checked: the list may have changed since the selection was read
+            self.status.set("That task is no longer in the schedule; nothing was changed.")
+            self._refresh_scheduler()
+            return
+        if task.enabled:
+            if not messagebox.askyesno(
+                "Pause this task",
+                f"Pause {task.task_id} ({task.name})?\n\nIt stays in the schedule with its history; "
+                "no occurrence will run until you resume it.",
+                parent=self.root,
+            ):
+                self.status.set("Pause cancelled; nothing was changed.")
+                return
+        try:
+            stored = self.store.save_scheduled_task(task.with_definition(enabled=not task.enabled))
+            self._refresh_scheduler()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        except ValueError as exc:
+            messagebox.showerror("Task not changed", str(exc), parent=self.root)
+            self.status.set("The task was not changed.")
+            return
+        if stored.enabled:
+            when = self._local_instant(stored.next_run_at)
+            self.status.set(f"{stored.task_id} is enabled; its next run is {when} local time.")
+        else:
+            self.status.set(f"{stored.task_id} is paused; no occurrence will run until it is resumed.")
 
     def _backup_database(self):
         destination = filedialog.asksaveasfilename(

@@ -94,7 +94,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 870 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 894 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit
@@ -194,8 +194,12 @@ reports success *after* its deadline is recorded as timed out, a refusal is reco
 never retried, and a kind with no handler fails naming what is registered. Two kinds are built in
 (`career_agent/handlers.py`): a verified database snapshot, which refuses rather than delete old copies
 once 30 sit beside the database, and a scheduled discovery run that refuses while the source-quality
-gate is closed and reaches no network. The command line and the window surface for all of this, the
-missed-run report, and laptop-off operation remain to be built, so no background execution is claimed.
+gate is closed and reaches no network. Both surfaces exist: `python -m career_agent --worker` runs the schedule in the foreground (Ctrl-C
+winds the current attempt up, records it, and releases the lease), `--worker-status` reports it
+read-only, `--seed-tasks` adds the defaults without rewriting anything, and the window's **Background
+tasks** tab shows the same summary, the task list and the recent attempts and can pause or resume a task.
+The missed-run report, a deployed always-on worker, and therefore any claim of laptop-off operation
+remain outstanding.
 
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra

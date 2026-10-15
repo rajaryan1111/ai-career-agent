@@ -1881,3 +1881,45 @@ test is about the backup.
 
 **Not implied.** Nothing schedules itself yet: the worker is a library, no command line or window starts
 it, and laptop-off operation remains unimplemented and unclaimed.
+
+## 2026-10-15 — The schedule a person can actually use: commands and a window
+
+**What changed.** The scheduler is reachable now. `python -m career_agent --worker` runs it in the
+foreground (Ctrl-C stops it: the attempt in progress winds up, its outcome is recorded, and the lease is
+released), `--worker-status` reports the lease, what is in progress, which task is next and the recent
+attempts without claiming or writing anything, and `--seed-tasks` writes the default schedule into a
+database that does not have those tasks. All three import no GUI toolkit, checked by a subprocess test.
+The window gained a **Background tasks** tab: the same summary, the task list (times, zone, next run in
+local time, last result), the fifty most recent attempts with their outcome and duration, buttons to add
+the defaults and to pause/resume the selected task, and a refresh - reading the tables through the same
+module the worker uses, so the view cannot disagree with what the scheduler would act on. The tab
+deliberately does not run the loop: a worker on the interface's thread would freeze the window for as
+long as a handler took, and closing the window would then be closing a worker mid-attempt.
+
+**The boundary, in the product's own words.** `--worker` prints, before it does anything, that it runs
+while the process runs, that it stops when the window or the terminal closes, that it does not run while
+the computer is off or asleep, and that live discovery is disabled so scheduled discovery runs are
+recorded as refusals. A person reading the output cannot come away believing their laptop will run jobs
+overnight - which is the claim this project is not entitled to make until a separately deployed and
+verified worker exists.
+
+**Deliberately not the window's job.** Adding the defaults never rewrites an existing task: a task the
+person configured (their own times, a different zone, paused) is left exactly as it is by both the
+command and the button, and each says so. Pausing asks first, keeps the definition, the times and the run
+history, and resuming schedules the next occurrence from now rather than replaying the missed ones.
+
+**Found while writing it (a real UX flaw the tests caught).** The first version's selection helper folded
+"nothing is selected" into "the selected task no longer exists", so a person who had selected a task that
+had just been removed was told to select a task first - a message about the wrong problem. The helper now
+only reads the selection, and the caller reports the two cases separately; a test deletes the selected
+task and asserts the message that names what actually happened.
+
+**Evidence.** Full suite 894 tests OK (13 skipped without the optional `pypdf`): 12 in
+`tests/test_cli_worker.py` (seeding idempotence and non-overwriting, a read-only status that creates no
+database, the refusal to run beside a lease holder, one real due task run through the command, the
+headless check) and 12 in the new `SchedulerTabTests` (the list and summary, adding the defaults twice,
+never rewriting a configured task, pausing with a declined confirmation, keeping history, resuming,
+an unreadable row reported, a stale selection, and the stored definition winning over a stale row).
+A real end-to-end run outside the tests: a due backup task wrote `career_agent.sqlite3.backup-<stamp>`
+and verified it, status showed the run, and Ctrl-C released the lease - with the log reading
+`worker.lease_taken` → `task.run_started` → `backup.written` → `task.run_succeeded` → `worker.lease_released`.

@@ -489,6 +489,7 @@ _ORIGINAL_TKINTER = sys.modules.get("tkinter")
 sys.modules["tkinter"] = _tkinter
 
 from career_agent import desktop  # noqa: E402  (imported after the stub is installed)
+from career_agent.tasks import RunState  # noqa: E402  (same reason: after the stub)
 from career_agent.desktop_logic import job_form_values, profile_form_values  # noqa: E402
 
 
@@ -3476,6 +3477,229 @@ class UnreadableStoredRecordTests(HandlerTestCase):
         self.assertIn("unconfirmed", message)
         self.assertIn("Profile tab", message)
         self.assertNotIn("Traceback", message)
+
+
+class SchedulerTabTests(HandlerTestCase):
+    """The Background tasks tab: what a person can see and change, through the real handlers.
+
+    The workers' own behaviour is covered in tests/test_worker.py and tests/test_store_tasks.py; what is
+    tested here is the surface - that the tab shows the schedule the worker would act on, that adding
+    the defaults never rewrites a task the person configured, and that pausing asks first and keeps the
+    history.
+    """
+
+    def make_scheduler_app(self):
+        """The app with the scheduler widgets the tab builds, wired to the same stub harness."""
+        app = self.make_app()
+        app.scheduler_summary = StringVar()
+        app.tasks_tree = Tree()
+        app.task_runs_tree = Tree()
+        return app
+
+    def disable(self, task_id: str) -> None:
+        """Pause one task, so a test about a single attempt is not overtaken by the other task.
+
+        A claim takes the earliest due task, and an afternoon clock makes both seeded tasks due; a test
+        that wants one specific attempt therefore removes the other task from contention explicitly
+        rather than depending on which one the scheduler happens to pick.
+        """
+        task = self.store.get_scheduled_task(task_id)
+        assert task is not None
+        self.store.save_scheduled_task(task.with_definition(enabled=False))
+
+    def test_the_tab_lists_the_tasks_and_says_no_worker_holds_the_lease(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        MESSAGES.reset()
+
+        app._refresh_scheduler()
+
+        rows = {iid: values for iid, values in app.tasks_tree.inserted}
+        self.assertEqual(sorted(rows), ["daily-backup", "scheduled-discovery"])
+        self.assertIn("00:00, 12:00", rows["scheduled-discovery"][3])
+        self.assertIn("Asia/Kolkata", rows["scheduled-discovery"][4])
+        self.assertEqual(rows["daily-backup"][6], "never run")
+        self.assertIn("No worker holds the lease", app.scheduler_summary.get())
+        self.assertIn("No attempt has been recorded yet", app.scheduler_summary.get())
+
+    def test_refreshing_claims_nothing_and_creates_nothing(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+
+        app._refresh_scheduler()
+
+        self.assertIsNone(self.store.get_worker_lease())
+        self.assertEqual(self.store.list_task_runs(), ())
+        self.assertEqual(app.task_runs_tree.inserted, ())
+
+    def test_a_finished_attempt_appears_with_its_outcome_and_how_long_it_took(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        self.disable("scheduled-discovery")
+        task = self.store.get_scheduled_task("daily-backup")
+        assert task is not None and task.next_run_at is not None
+        claimed = self.store.claim_due_run(worker_id="w1", now=task.next_run_at)
+        assert claimed is not None
+        self.store.finish_run(claimed.run_id, RunState.REFUSED,
+                              detail="there is no database file to back up yet, so nothing was written",
+                              now=task.next_run_at)
+
+        app._refresh_scheduler()
+
+        self.assertEqual(len(app.task_runs_tree.inserted), 1)
+        values = app.task_runs_tree.inserted[0][1]
+        self.assertEqual(values[0], "daily-backup")
+        self.assertEqual(values[1], "1")
+        self.assertEqual(values[2], "refused")
+        self.assertIn("no database file", values[5])
+        self.assertIn("Recent attempts:", app.scheduler_summary.get())
+
+    def test_adding_the_defaults_twice_says_what_it_left_alone(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        MESSAGES.reset()
+
+        app._add_default_tasks()
+
+        self.assertIn("Created: nothing.", MESSAGES.text("showinfo"))
+        self.assertIn("Left exactly as they were: scheduled-discovery, daily-backup",
+                      MESSAGES.text("showinfo"))
+        self.assertEqual(len(self.store.list_scheduled_tasks()), 2)
+
+    def test_adding_the_defaults_never_rewrites_a_task_the_person_configured(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        task = self.store.get_scheduled_task("scheduled-discovery")
+        assert task is not None
+        self.store.save_scheduled_task(task.with_definition(times=("09:15",), enabled=False))
+
+        app._add_default_tasks()
+
+        stored = self.store.get_scheduled_task("scheduled-discovery")
+        assert stored is not None
+        self.assertEqual(stored.times, ("09:15",))
+        self.assertFalse(stored.enabled)
+        self.assertIsNone(stored.next_run_at)
+
+    def test_toggling_without_a_selection_changes_nothing_and_says_so(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        MESSAGES.reset()
+
+        app._toggle_scheduled_task()
+
+        self.assertIn("Select a task", app.status.get())
+        self.assertEqual(MESSAGES.calls, [], "no dialog should appear when there is nothing selected")
+        assert self.store.get_scheduled_task("daily-backup").enabled
+
+    def test_pausing_asks_first_and_a_declined_confirmation_changes_nothing(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        app.tasks_tree.selection_set("daily-backup")
+        CONFIG["Pause this task"] = False
+
+        app._toggle_scheduled_task()
+
+        self.assertIn("Pause this task", MESSAGES.titles("askyesno"))
+        self.assertIn("cancelled", app.status.get())
+        assert self.store.get_scheduled_task("daily-backup").enabled
+
+    def test_pausing_keeps_the_task_its_times_and_its_history(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        self.disable("scheduled-discovery")
+        task = self.store.get_scheduled_task("daily-backup")
+        assert task is not None and task.next_run_at is not None
+        claimed = self.store.claim_due_run(worker_id="w1", now=task.next_run_at)
+        assert claimed is not None
+        self.store.finish_run(claimed.run_id, RunState.SUCCEEDED, detail="wrote one snapshot",
+                              now=task.next_run_at)
+        # pausing reads the task itself, so it works whether or not the run above is still current
+        self.store.save_scheduled_task(
+            self.store.get_scheduled_task("daily-backup").with_definition(enabled=True))
+        app.tasks_tree.selection_set("daily-backup")
+        CONFIG["Pause this task"] = True
+
+        app._toggle_scheduled_task()
+
+        paused = self.store.get_scheduled_task("daily-backup")
+        assert paused is not None
+        self.assertFalse(paused.enabled)
+        self.assertIsNone(paused.next_run_at)
+        self.assertEqual(paused.times, ("23:30",), "pausing is not deleting")
+        self.assertEqual([run.detail for run in self.store.list_task_runs(task_id="daily-backup")],
+                         ["wrote one snapshot"])
+        self.assertIn("paused", app.status.get())
+        rows = dict(app.tasks_tree.inserted)
+        self.assertEqual(sorted(rows), ["daily-backup", "scheduled-discovery"],
+                         "both tasks are still listed: pausing is not deleting")
+        self.assertEqual(rows["daily-backup"][5], "paused")
+        self.assertEqual(rows["scheduled-discovery"][5], "paused",
+                         "the other task was paused by this test to keep the claim unambiguous")
+
+    def test_resuming_a_paused_task_schedules_the_next_occurrence(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        app.tasks_tree.selection_set("daily-backup")
+        CONFIG["Pause this task"] = True
+        app._toggle_scheduled_task()
+        asked_before_resuming = [kind for _title, _answer, kind in MESSAGES.calls].count("askyesno")
+
+        app._toggle_scheduled_task()
+
+        resumed = self.store.get_scheduled_task("daily-backup")
+        assert resumed is not None
+        self.assertTrue(resumed.enabled)
+        self.assertIsNotNone(resumed.next_run_at)
+        self.assertIn("enabled", app.status.get())
+        self.assertEqual([kind for _title, _answer, kind in MESSAGES.calls].count("askyesno"),
+                         asked_before_resuming,
+                         "resuming does not need a confirmation; pausing does")
+
+    def test_a_task_row_this_version_cannot_read_is_reported_and_the_list_is_left_alone(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE scheduled_task SET schedule_times = ? WHERE task_id = ?",
+                ("not json", "daily-backup"))
+        CONFIG.clear()
+        MESSAGES.reset()
+
+        app._refresh_scheduler()
+
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertIn("could not be read", app.status.get().lower())
+
+    def test_a_stale_selection_is_reported_and_the_list_resynchronised(self):
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        app.tasks_tree.selection_set("daily-backup")
+        self.store.delete_scheduled_task("daily-backup")
+        MESSAGES.reset()
+
+        app._toggle_scheduled_task()
+
+        self.assertIn("no longer in the schedule", app.status.get())
+        self.assertEqual(MESSAGES.calls, [], "a stale selection is not a question to ask the person")
+
+    def test_the_selected_task_is_read_from_the_store_not_trusted_from_the_row(self):
+        """The row is a display artefact; the write is planned from the stored task."""
+        app = self.make_scheduler_app()
+        app._add_default_tasks()
+        app.tasks_tree.selection_set("daily-backup")
+        # The row and the store disagree (an old window, a hand-edited tree): the store wins.
+        self.store.save_scheduled_task(
+            self.store.get_scheduled_task("daily-backup").with_definition(times=("22:00",)))
+        CONFIG["Pause this task"] = True
+
+        app._toggle_scheduled_task()
+
+        paused = self.store.get_scheduled_task("daily-backup")
+        assert paused is not None
+        self.assertEqual(paused.times, ("22:00",), "the stored definition is the one that was changed")
+        self.assertFalse(paused.enabled)
 
 
 if __name__ == "__main__":
