@@ -2530,8 +2530,9 @@ def workflow_i_scheduler(run: Run) -> None:
     do: an empty schedule, the default tasks added once and kept the second time, a declined pause that
     changes nothing, a real pause that keeps the definition and the history, the paused state surviving a
     restart, a resume that schedules the next occurrence from now instead of replaying what was missed,
-    a task whose record has gone reported rather than acted on, and - the check that matters most - that
-    using this tab starts no worker, takes no lease and records no attempt of any kind.
+    a task whose record has gone reported rather than acted on, what the tab says about occurrences the
+    schedule walked past while nothing was running, and - the check that matters most - that using this
+    tab starts no worker, takes no lease and records no attempt of any kind.
     """
     from datetime import datetime, timezone  # noqa: PLC0415 - the next run is an instant
 
@@ -2655,7 +2656,36 @@ def workflow_i_scheduler(run: Run) -> None:
         require(app.store.get_scheduled_task(task_id).enabled is True,
                 "another task was changed instead of the one selected")
 
-    with results.step("I8 using this tab starts no worker, takes no lease and records no attempt"):
+    with results.step("I8 the window reports what the schedule walked past while nothing was running"):
+        from datetime import timedelta  # noqa: PLC0415 - the probe is three days old on purpose
+
+        from career_agent.tasks import build_task  # noqa: PLC0415 - the product's own task builder
+        from career_agent.worker import missed_occurrences  # noqa: PLC0415 - the read the tab makes
+
+        # A task added three days ago whose schedule nobody ever ran: its next occurrence is overdue and
+        # every later one is one nothing will come back to. No attempt is recorded anywhere in this step -
+        # the report is a read, and the freshness of the tab is the window's own refresh.
+        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        app.store.save_scheduled_task(
+            build_task("missed-probe", "Missed occurrence probe", "discovery.run",
+                       times=("00:00", "12:00"), timezone="Asia/Kolkata", now=three_days_ago),
+            now=three_days_ago)
+        press(app.scheduler_tab, "Refresh", workspace.root)
+        summary = app.scheduler_summary.get()
+        expected = missed_occurrences(app.store)
+        require(bool(expected), "the probe produced nothing to report, so this check would prove nothing")
+        require("Missed while nothing was running" in summary,
+                f"the tab does not report what was missed while nothing ran: {summary!r}")
+        require(f"({len(expected)} occurrence(s)" in summary,
+                f"the tab reports a different number of missed occurrences than the schedule holds: "
+                f"{summary!r} against {len(expected)}")
+        require("Nothing is catching up on these" in summary,
+                f"the tab does not say that nothing will run the missed occurrences: {summary!r}")
+        require("No worker holds the lease" in summary,
+                "reading the report must not start a worker or take a lease")
+        require(app.store.list_task_runs() == (), "reading the report recorded a task attempt")
+
+    with results.step("I9 using this tab starts no worker, takes no lease and records no attempt"):
         require(worker_status(app.store).lease is None, "the window took the worker's lease")
         require(app.store.get_worker_lease() is None, "a lease is stored after the tab was used")
         require(app.store.list_task_runs() == (), "the window recorded a task attempt")

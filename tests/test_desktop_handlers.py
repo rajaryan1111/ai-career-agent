@@ -748,11 +748,13 @@ sys.modules["tkinter"] = _tkinter
 
 from career_agent import desktop  # noqa: E402  (imported after the stub is installed)
 from career_agent.handlers import default_tasks, seed_default_tasks  # noqa: E402  (after the stub, like the window)
+from career_agent.tasks import build_task  # noqa: E402  (the product's own task builder)
 
 #: The ids a fresh installation is seeded with, taken from the seeder rather than written out here, so a
 #: task added to the product does not require every listing assertion to be edited by hand.
 DEFAULT_TASK_IDS = tuple(task.task_id for task in default_tasks())
 from career_agent.tasks import RunState  # noqa: E402  (same reason: after the stub)
+from career_agent.worker import missed_occurrences  # noqa: E402  (the same read the tab makes)
 from career_agent.desktop_logic import job_form_values, profile_form_values  # noqa: E402
 
 
@@ -5333,6 +5335,34 @@ class SchedulerTabTests(HandlerTestCase):
         self.assertEqual(rows["daily-backup"][6], "never run")
         self.assertIn("No worker holds the lease", app.scheduler_summary.get())
         self.assertIn("No attempt has been recorded yet", app.scheduler_summary.get())
+
+    def test_the_tab_reports_what_the_schedule_walked_past_while_nothing_ran(self):
+        """The laptop-off case, through the tab: the schedule is behind and the window says by how much.
+
+        The task is added with a three-day-old clock and nothing ever claims it, so its next occurrence is
+        overdue and the later ones are occurrences nothing will come back to. Reading the tab must show
+        both facts without starting a worker: the summary is the same read the command line prints.
+        """
+        app = self.make_scheduler_app()
+        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        self.store.save_scheduled_task(
+            build_task("missed-probe", "Missed occurrence probe", "discovery.run",
+                       times=("00:00", "12:00"), timezone="Asia/Kolkata", now=three_days_ago),
+            now=three_days_ago)
+
+        app._refresh_scheduler()
+
+        summary = app.scheduler_summary.get()
+        expected = missed_occurrences(self.store)
+        self.assertTrue(expected, "the probe must produce something to report, or this proves nothing")
+        self.assertIn("Missed while nothing was running", summary)
+        self.assertIn(f"({len(expected)} occurrence(s)", summary)
+        self.assertIn("Nothing is catching up on these", summary)
+        self.assertIn("(due now)", summary, "the overdue occurrence is named as the next one to serve")
+        self.assertIsNone(self.store.get_worker_lease(), "reading the tab must not take the lease")
+        self.assertEqual(self.store.list_task_runs(), (), "reading the tab must not record an attempt")
+        rows = dict(app.tasks_tree.inserted)
+        self.assertIn("missed-probe", rows, "the probe task is listed like any other")
 
     def test_refreshing_claims_nothing_and_creates_nothing(self):
         app = self.make_scheduler_app()

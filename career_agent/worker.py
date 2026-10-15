@@ -36,7 +36,7 @@ from typing import Callable, Protocol, runtime_checkable
 from .store import CareerStore, TaskRunConflict
 from .tasks import (
     HandlerOutcome, HandlerResult, RunState, ScheduledTask, TaskRun, WorkerLease, WorkerLeaseHeld,
-    clean_detail, validate_utc_instant,
+    clean_detail, next_run_after, validate_utc_instant,
 )
 
 #: How often the loop looks for due work by default. Short enough that a run at 00:00 starts at 00:00,
@@ -56,6 +56,16 @@ DEFAULT_STALE_AFTER_SECONDS = 120.0
 #: worked through over successive ticks rather than in one long burst, so a stop request, a heartbeat
 #: and the person's view of the app stay responsive.
 MAX_RUNS_PER_TICK = 4
+
+#: How far back the missed-occurrence report looks. The report answers "what did the schedule walk
+#: past while nothing was running?", and an unbounded window would answer it with a list nobody reads;
+#: a bounded window says what it is bounded to instead of pretending to remember everything.
+MISSED_LOOKBACK_DAYS = 7
+
+#: The most run rows and the most occurrences examined per task while building that report, so a task
+#: with a dense schedule cannot turn a status read into an unbounded scan.
+_RUNS_EXAMINED_PER_TASK = 200
+_MAX_OCCURRENCES_PER_TASK = 200
 
 
 class WorkerConfigurationError(ValueError):
@@ -182,6 +192,83 @@ class HandlerRegistry:
 
 
 @dataclass(frozen=True)
+class MissedOccurrence:
+    """One scheduled instant the schedule walked past with nothing recorded for it.
+
+    "Missed" is a claim about the records, not about what anybody should do: the instant is due, an
+    occurrence of that task's own schedule, no attempt row exists for it, no retry owes it, and it is not
+    the occurrence the next claim will take - the scheduler plans a run from the instant the previous one
+    finished, so an occurrence like this is one nothing will come back to. Nothing here runs it,
+    re-plans it or deletes it: seeing what was missed is the whole job, and the laptop-off limitation it
+    exposes is stated rather than papered over.
+    """
+
+    task_id: str
+    name: str
+    slot_at: datetime
+
+    def describe(self) -> str:
+        return f"{self.task_id} ({self.name}) at {self.slot_at.isoformat()}"
+
+
+def _occurrences_between(task: ScheduledTask, start: datetime, end: datetime) -> tuple[datetime, ...]:
+    """The task's own occurrences from ``start`` to ``end`` inclusive, bounded per task.
+
+    Uses the same :func:`~career_agent.tasks.next_run_after` the scheduler books with, so a day the
+    zone skips or repeats an hour is enumerated exactly the way it was booked rather than by a second
+    implementation that could disagree with the first.
+    """
+    found: list[datetime] = []
+    cursor = start
+    inclusive = True
+    while len(found) < _MAX_OCCURRENCES_PER_TASK:
+        candidate = next_run_after(task, cursor, inclusive=inclusive)
+        if candidate is None or candidate > end:
+            break
+        found.append(candidate)
+        cursor = candidate
+        inclusive = False
+    return tuple(found)
+
+
+def missed_occurrences(store: CareerStore, *, now: datetime | None = None,
+                       lookback_days: int = MISSED_LOOKBACK_DAYS) -> tuple[MissedOccurrence, ...]:
+    """What the schedule walked past while nothing ran, oldest first. Reads; changes nothing.
+
+    The window is the last ``lookback_days`` days, cut off at each task's own creation, and a task that
+    is paused is not examined at all: nothing was expected of it. An occurrence counts as missed when it
+    is due, no attempt row exists for that instant (any state counts - a refusal, a failure and an
+    interruption were all attempts) and no retry is owed for it either.
+
+    The occurrence at ``next_run_at`` is deliberately left out, and the reason is how the scheduler
+    plans: a claim takes that instant, and the run after it is planned from the *next* instant after the
+    process finished (:func:`~career_agent.tasks.plan_after_run`), so every other occurrence between it
+    and now is one nothing will ever come back to. Overdue work and missed work are therefore different
+    things and this function reports only the second: the first is the ``(due now)`` marker on the status
+    line above, and it will be attempted the moment a worker starts.
+    """
+    moment = validate_utc_instant(now, noun="The reference time") or datetime.now(timezone.utc)
+    if isinstance(lookback_days, bool) or not isinstance(lookback_days, int) or lookback_days < 1:
+        raise ValueError("The look-back window must be a positive whole number of days.")
+    window_start = moment - timedelta(days=lookback_days)
+    found: list[MissedOccurrence] = []
+    for task in store.list_scheduled_tasks():
+        if not task.enabled:
+            continue
+        start = max(window_start, task.created_at) if task.created_at else window_start
+        if moment < start:
+            continue
+        attempted = {run.slot_at for run in store.list_task_runs(
+            task_id=task.task_id, limit=_RUNS_EXAMINED_PER_TASK)}
+        for slot in _occurrences_between(task, start, moment):
+            if slot in attempted or slot == task.pending_slot_at or slot == task.next_run_at:
+                continue
+            found.append(MissedOccurrence(task.task_id, task.name, slot))
+    found.sort(key=lambda missed: (missed.slot_at, missed.task_id))
+    return tuple(found)
+
+
+@dataclass(frozen=True)
 class WorkerStatus:
     """A read-only answer to \"what is scheduled here, and what has it been doing?\"."""
 
@@ -194,6 +281,9 @@ class WorkerStatus:
     next_task: ScheduledTask | None
     recent_runs: tuple[TaskRun, ...]
     checked_at: datetime
+    #: Occurrences the schedule walked past with no attempt recorded. Defaulted so a caller that builds
+    #: a status by hand keeps working; the one constructor that matters, :func:`worker_status`, fills it.
+    missed: tuple[MissedOccurrence, ...] = ()
 
     def describe(self, *, now: datetime | None = None) -> tuple[str, ...]:
         """Lines for the command line: lease, attempts in progress, next due, recent outcomes."""
@@ -235,6 +325,23 @@ class WorkerStatus:
                 lines.append(f"  {run.task_id} attempt {run.attempt}: {outcome} ({timing}){detail}{error}")
         else:
             lines.append("No attempt has been recorded yet.")
+        if self.missed:
+            lines.append(
+                f"Missed while nothing was running ({len(self.missed)} occurrence(s) in the last "
+                f"{MISSED_LOOKBACK_DAYS} days):"
+            )
+            for missed in self.missed[:5]:
+                lines.append(f"  {missed.describe()}")
+            if len(self.missed) > 5:
+                lines.append(f"  ... and {len(self.missed) - 5} more")
+            lines.append(
+                "Nothing is catching up on these: a worker that is not running cannot run what it "
+                "missed, and this report only lists them."
+            )
+        else:
+            lines.append(
+                f"No scheduled occurrence was missed in the last {MISSED_LOOKBACK_DAYS} days."
+            )
         return tuple(lines)
 
 
@@ -252,6 +359,7 @@ def worker_status(store: CareerStore, *, now: datetime | None = None,
         next_task=upcoming[0] if upcoming else None,
         recent_runs=store.list_task_runs(limit=5),
         checked_at=moment,
+        missed=missed_occurrences(store, now=moment),
     )
 
 

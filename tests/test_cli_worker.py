@@ -27,6 +27,7 @@ from career_agent.handlers import (
 )
 from career_agent.store import SCHEMA_VERSION, CareerStore
 from career_agent.tasks import RunState, build_task
+from career_agent.worker import missed_occurrences
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 IST = ZoneInfo("Asia/Kolkata")
@@ -138,6 +139,35 @@ class WorkerStatusCommandTests(CliWorkerTestCase):
         with self.seeded_store() as store:
             self.assertIsNone(store.get_worker_lease())
             self.assertEqual(store.list_task_runs(), ())
+
+
+    def test_the_report_says_what_the_schedule_walked_past_while_nothing_ran(self) -> None:
+        """The command line names what nothing will ever run, and says that nothing is catching up.
+
+        The probe task is created with a three-day-old clock and never claimed, so its next occurrence is
+        overdue while the later ones are occurrences the scheduler has planned past. The report has to show
+        both, in one read that changes nothing.
+        """
+        self.run_cli("--seed-tasks")
+        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        with self.seeded_store() as store:
+            store.save_scheduled_task(
+                build_task("missed-probe", "Missed occurrence probe", "discovery.run",
+                           times=("00:00", "12:00"), timezone="Asia/Kolkata", now=three_days_ago),
+                now=three_days_ago)
+            expected = missed_occurrences(store, now=datetime.now(timezone.utc))
+        self.assertTrue(expected, "the probe must produce something to report, or this proves nothing")
+
+        code, out, err = self.run_cli("--worker-status")
+
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertIn("Missed while nothing was running", out)
+        self.assertIn(f"({len(expected)} occurrence(s)", out)
+        self.assertIn("Nothing is catching up on these", out)
+        self.assertIn("(due now)", out, "the overdue occurrence is reported as the next one to serve")
+        with self.seeded_store() as store:
+            self.assertIsNone(store.get_worker_lease())
+            self.assertEqual(store.list_task_runs(), (), "a read must not record an attempt")
 
 
 class WorkerCommandTests(CliWorkerTestCase):

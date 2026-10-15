@@ -19,12 +19,21 @@ from career_agent.tasks import (
     HandlerOutcome, HandlerResult, RunState, WorkerLeaseHeld, build_task,
 )
 from career_agent.worker import (
-    HandlerRegistry, TaskContext, Worker, WorkerConfigurationError, WorkerSettings, worker_status,
+    MISSED_LOOKBACK_DAYS, HandlerRegistry, TaskContext, Worker, WorkerConfigurationError, WorkerSettings,
+    missed_occurrences, worker_status,
 )
 
 UTC = timezone.utc
 #: 2026-10-15 11:30 IST, half an hour before the default noon occurrence.
 START = datetime(2026, 10, 15, 6, 0, tzinfo=UTC)
+
+
+def _event_line_count(database_path: Path) -> int:
+    """How many event lines the application log holds for this database, or 0 when there is none."""
+    from career_agent.event_log import log_path, read_lines
+
+    path = log_path(database_path)
+    return len(read_lines(database_path=database_path, limit=1000)) if path.exists() else 0
 
 
 class WorkerTestCase(unittest.TestCase):
@@ -84,7 +93,6 @@ class WorkerTestCase(unittest.TestCase):
         handler.description = description  # type: ignore[attr-defined]
         self.registry.register(kind, handler)
         return seen
-
     def due_task(self) -> datetime:
         """Move the clock to the next task's occurrence so something is due, and return the instant."""
         task = self.store.list_scheduled_tasks()[0]
@@ -507,6 +515,130 @@ class StatusTests(WorkerTestCase):
         self.assertTrue(any("In progress: discovery-run attempt 1" in line for line in lines))
         self.assertTrue(any("(due now)" in line for line in lines),
                         "the occurrence is in the past and still the next one to serve")
+
+    def test_an_occurrence_the_schedule_stepped_over_is_reported_with_its_instant(self):
+        """The laptop-off case: a run finished, the process then did not, and the schedule moved on.
+
+        The occurrence a worker will still claim is *not* in this list - that one is overdue, and the
+        status line says so - so what is reported is exactly what nothing will ever come back to.
+        """
+        self.schedule(task_id="daily-backup", times=("23:30",))
+        slot = self.due_task()
+        claimed = self.store.claim_due_run(worker_id="w1", now=slot)
+        self.store.finish_run(claimed.run_id, RunState.SUCCEEDED, detail="wrote one snapshot", now=slot)
+
+        three_days_later = slot + timedelta(days=3, hours=1)
+        missed = missed_occurrences(self.store, now=three_days_later)
+
+        task = self.store.get_scheduled_task("daily-backup")
+        self.assertEqual(task.next_run_at, slot + timedelta(days=1),
+                         "the run plans the next occurrence from the instant the process finished")
+        self.assertEqual([item.slot_at for item in missed],
+                         [slot + timedelta(days=2), slot + timedelta(days=3)],
+                         "the occurrences after the one a worker will still claim, and only those")
+        self.assertEqual({item.task_id for item in missed}, {"daily-backup"})
+        lines = worker_status(self.store, now=three_days_later).describe(now=three_days_later)
+        self.assertTrue(any("(due now)" in line for line in lines), "and the status calls it overdue")
+        self.assertTrue(any(line.startswith("Missed while nothing was running (2 occurrence(s)") for line
+                            in lines), lines)
+        self.assertTrue(any("Nothing is catching up on these" in line for line in lines))
+
+    def test_an_attempt_of_any_state_is_not_a_missed_occurrence(self):
+        """Refused, failed and interrupted are all attempts: the schedule reached them and acted."""
+        made = []
+        for state in (RunState.REFUSED, RunState.FAILED, RunState.INTERRUPTED):
+            task_id = f"task-{state.value}"
+            self.schedule(task_id=task_id, times=("23:30",))
+            slot = self.store.get_scheduled_task(task_id).next_run_at
+            self.now = slot
+            claimed = self.store.claim_due_run(worker_id="w1", now=slot)
+            self.store.finish_run(claimed.run_id, state, detail=state.value, now=slot)
+            made.append((task_id, slot))
+
+        later = made[0][1] + timedelta(days=3)
+        reported = missed_occurrences(self.store, now=later)
+
+        for task_id, slot in made:
+            with self.subTest(task_id):
+                self.assertNotIn((task_id, slot), [(item.task_id, item.slot_at) for item in reported],
+                                 "the occurrence that produced a run row is never reported as missed")
+        self.assertTrue(reported, "the later occurrences the process stepped over are still reported")
+
+    def test_a_retry_that_is_owed_is_pending_rather_than_missed(self):
+        """A failure with attempts left keeps the occurrence: it is owed, so it is not lost."""
+        self.schedule(times=("23:30",), max_attempts=2)
+        slot = self.due_task()
+        claimed = self.store.claim_due_run(worker_id="w1", now=slot)
+        self.store.finish_run(claimed.run_id, RunState.FAILED, error="boom", now=slot)
+        task = self.store.get_scheduled_task("discovery-run")
+        self.assertEqual(task.pending_slot_at, slot, "the occurrence is kept, not replaced")
+
+        missed = missed_occurrences(self.store, now=task.next_run_at + timedelta(seconds=1))
+
+        self.assertNotIn(slot, [item.slot_at for item in missed])
+
+    def test_a_paused_task_is_not_accused_of_missing_anything(self):
+        self.schedule(times=("23:30",))
+        slot = self.due_task()
+        self.store.save_scheduled_task(
+            self.store.get_scheduled_task("discovery-run").with_definition(enabled=False))
+
+        missed = missed_occurrences(self.store, now=slot + timedelta(days=5))
+
+        self.assertEqual(missed, (), "nothing was expected of a paused task")
+
+    def test_occurrences_from_before_the_task_existed_are_not_reported(self):
+        """A task added this morning must not be blamed for the days before it was written."""
+        self.now = START + timedelta(days=5)
+        self.schedule(times=("23:30",))
+
+        missed = missed_occurrences(self.store, now=self.now + timedelta(hours=2))
+
+        task = self.store.get_scheduled_task("discovery-run")
+        self.assertLess(task.created_at, task.next_run_at)
+        self.assertEqual([item.slot_at for item in missed], [],
+                         "the window starts at the task's own creation, and its first occurrence is next")
+
+    def test_the_report_looks_back_a_bounded_window(self):
+        """Thirty days of silence is answered with the window's worth, and the window is a real bound."""
+        self.schedule(times=("00:00", "12:00"))
+        self.now = START + timedelta(days=30)
+
+        week = missed_occurrences(self.store, now=self.now)
+        day = missed_occurrences(self.store, now=self.now, lookback_days=1)
+
+        self.assertTrue(day, "the fixture must have something to report, or this proves nothing")
+        self.assertLess(len(day), len(week), "a longer window looks further back")
+        self.assertEqual([item.slot_at for item in week if item.slot_at >= self.now - timedelta(days=1)],
+                         [item.slot_at for item in day],
+                         "the short window is exactly the tail of the long one")
+        self.assertGreaterEqual(week[0].slot_at, self.now - timedelta(days=MISSED_LOOKBACK_DAYS),
+                                "nothing older than the window is reported")
+        self.assertLessEqual(len(week), MISSED_LOOKBACK_DAYS * 2,
+                             "two occurrences a day is the most this schedule can hold")
+
+    def test_the_window_must_be_a_positive_number_of_whole_days(self):
+        self.schedule()
+        for value in (0, -1, 1.5, True):
+            with self.subTest(value):
+                with self.assertRaises(ValueError):
+                    missed_occurrences(self.store, now=self.now, lookback_days=value)  # type: ignore[arg-type]
+
+    def test_asking_what_was_missed_changes_nothing(self):
+        """Reading the report is a read: no lease, no run row, no event, no bookkeeping moved."""
+        self.schedule(times=("23:30",))
+        slot = self.due_task()
+        task_before = self.store.get_scheduled_task("discovery-run")
+        lines_before = _event_line_count(self.database_path)
+
+        missed = missed_occurrences(self.store, now=slot + timedelta(days=4))
+
+        self.assertTrue(missed, "the fixture has something to report, or this proves nothing")
+        self.assertEqual(self.store.list_task_runs(), ())
+        self.assertIsNone(self.store.get_worker_lease())
+        self.assertEqual(self.store.get_scheduled_task("discovery-run"), task_before)
+        self.assertEqual(_event_line_count(self.database_path), lines_before,
+                         "reading the report writes no event and takes no lease")
 
     def test_asking_for_the_status_claims_nothing(self):
         self.schedule()
