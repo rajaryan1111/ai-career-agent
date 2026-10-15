@@ -134,3 +134,43 @@ Use clear language, keyboard-accessible workflows, readable status text that doe
 - **Backup/restore:** a backup is verified (integrity, schema version, required tables) and written owner-only before success is reported, and an existing file is never overwritten. A restore validates the chosen file, preserves the current database first, replaces the file in one step, and reopens and verifies the result before reporting success; a refusal names what to do next and leaves the current database untouched. Backups are local files and are not encrypted, which the interface states rather than implying otherwise.
 - **Laptop asleep/off:** local UI and local scheduler cannot execute; a remote worker is a separate future capability with explicit data-transfer consent.
 - **Remote worker/source unavailable:** future UI must distinguish disabled, permission-blocked, transient error, partial results, and a valid empty result.
+
+---
+
+## UX Direction Addendum — Resume-First Autonomous Career Agent (2026-10-16)
+
+### Experience principle
+The user-facing promise is: upload a resume, complete one guided setup, then let the agent handle permitted routine career tasks and keep the user informed. Autonomy must be observable and controllable, not a black box.
+
+### First-run onboarding
+1. Resume import with clear explanation of local processing and connected services.
+2. Extracted-profile review grouped into contact, education, skills, projects, experience, links and preferences. Highlight uncertain or missing facts; never silently guess.
+3. Target-role and job-preference setup, including AI/ML Engineer, Applied AI Engineer, AI Engineer, Forward Deployed Engineer and internships.
+4. One-time automation policy: permitted sources, action types, location/work preferences, eligibility rules, daily limits, email identity, resume attachment rules, data-sharing scope and stop conditions.
+5. Connection state for each source/mailbox, showing granted permissions and revocation method.
+6. Readiness checklist distinguishing configured, connected, supported and enabled capabilities.
+
+### Main dashboard
+- **Today:** last/next discovery run, relevant jobs, completed/blocked applications, HR outreach, actual replies, interviews/deadlines and failures.
+- **Discovery:** source, posting date, freshness, job URL, company, role, location, deadline, fit explanation, eligibility evidence and state.
+- **Applications:** company, role, source, submission timestamp, external confirmation evidence, current status and next action.
+- **HR outreach:** private contact-review queue, duplicate/conflict/suppression flags, campaign history, sent timestamp, delivery/bounce and reply state.
+- **Activity timeline:** chronological events with decision reasons and evidence links.
+- **Reports:** concise daily/weekly summary, progress, blockers and next steps.
+- **Controls:** pause/resume automation, stop all external actions, edit policy, disconnect sources and revoke permissions.
+
+### Status language and interaction rules
+Use distinct states such as Discovered, Evaluated, Prepared, Blocked, Submitted, Submission unknown, Email sent, Bounced, Reply received, Interview, Rejected, Offer, Withdrawn and Follow-up due. A prepared draft is not a sent email; a click is not proof of submission; no reply is not a rejection. Display timestamps and evidence for external actions.
+
+Do not repeatedly ask for routine approvals covered by the saved global policy. Ask a targeted question only when a required fact is missing, a legally meaningful attestation needs the user, data conflicts or a platform requires a human step. Explain the blocker and the next action.
+
+### Failure and trust UX
+- Show last successful run, partial failures, retries and next run.
+- Distinguish source unavailable, expired login, rate-limited, no results, platform-blocked, missing user information and uncertain external outcome.
+- Warn before enabling a new source or expanding data-sharing scope.
+- Make pause/stop-all prominent; claim it has stopped work only after the action/scheduler layer confirms.
+- Keep private contact details and message bodies out of public logs, test screens and analytics.
+- Avoid fake progress indicators and claims of universal platform support.
+
+### Accessibility and usability
+Retain the existing desktop-first alpha's low-friction workflows. Provide readable labels, keyboard-operable controls, explicit focus/error states and filterable tables. Notification settings should support configurable cadence and quiet hours.
