@@ -122,7 +122,12 @@ These are proposed targets. Do not report them as measured results.
   refuses `os.replace` while another handle holds the destination open, so the restore's guard is released
   before the swap and the release window is a documented, asserted limit; an idle SQLite connection is
   invisible to the coordination on every platform.
-- Result: run 38713190679 on commit `f38ac49` is green - 12 jobs, including both Windows and both macOS legs.
+- Result: run 38713190679 on commit `f38ac49` is green - 12 jobs, including both Windows and both macOS
+  legs. The three jobs that record notes also publish a green run's counts as an annotation, so "the job is
+  green" is never the only thing known about a platform.
+- Written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` (probe, matrix, root causes,
+  transcripts, invariants) with a second dated follow-up in the manual checklist and phase 3 of the
+  platform work in `research/release-readiness-audit-2026-10-15.md` (section 8.1).
 
 ### 2026-10-14 — Safe offline-core implementation authorized
 - Decision: begin building the software now while source and competitor research continues in parallel. This supersedes the earlier blanket no-code/research-only constraint, but does not waive source-specific permission, data quality, privacy, or application-integrity gates.

@@ -294,6 +294,36 @@ Decisions behind the matrix:
   platform legs are recorded in
   [`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md).
 
+### 8.1 Phase 3 of the platform work — the Windows-first-failure states, each with its evidence
+
+The Windows legs were not written and then declared working: they were run, and each run exposed a different
+state of the same two problems. The sequence is kept because the numbers are the evidence that the fixes
+addressed what was actually failing rather than what was expected to.
+
+| Phase | State observed | Evidence | What changed |
+|---|---|---|---|
+| 3.1 — first exposure | **949 errors**, essentially one cause: every `CareerStore` construction failed, because the owner-only helper looked up `os.fchmod` (absent on Windows) and treated the result as a reason to refuse the write; the open descriptor leaked with it | runs 38706620081 and 38708232458, job annotations for the Windows legs | the helper reports success where there is nothing to apply and still refuses on POSIX (`career_agent/store.py`); `tests/test_store.PlatformWithoutPosixModeBitsTests` holds the writing paths on a platform without mode bits |
+| 3.2 — after that fix | the suite ran, and failed in **four** places on both Windows legs, identically: two mode-verification tests, the swap-write test, and the child-suite leak watch cascading from them | run 38711721472 (`b04ad90`), inventory annotation: `4 distinct failures recorded :: FAIL: test_a_write_attempted_during_the_swap…, FAIL: test_the_suite_leaves_no_sqlite_connection_open, FAIL: test_require_owner_only_reports_a_file_that_cannot_be_protected, FAIL: test_a_filesystem_that_ignores_the_mode_leaves_no_readable_export` | the mode-verification tests skip where there are no mode bits to verify, the swap test asserts the platform's stated release window instead of failing on it, and the platform assumptions in the other test families (flags, path spellings, mode bits, folder cleanup) were corrected |
+| 3.3 — after those | **green**: 12 jobs, both Windows legs and both macOS legs among them | run 38713190679 (`f38ac49`), every job `success` | — |
+
+A step that is not recorded is a step whose failure cannot be diagnosed from the network this project develops
+on, and the third phase's evidence is only readable because the runs before it fixed that: every step now
+records its output into one notes file, and `scripts/ci_annotate.py` publishes the failing test names, ten
+tracebacks and, on a green run, the suite's counts. See
+[`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md).
+
+### 8.2 The macOS side, as its own evidence line
+
+Both macOS legs failed step 10 (`Build a wheel and install it into a virtual environment outside the
+checkout`) on two consecutive runs while their own suites passed (`Ran 1597 tests … OK`), and the step was the
+one step whose output was not recorded — so nothing about it could be read from this side of the network.
+Recorded and reproduced on Linux, the cause was the step's working directory: `python -` put the checkout at
+the head of the import path, so the checkout satisfied the assertion about the *installed* copy. The wheel is
+now built into a temporary directory, installed and inspected from there, and the assertion is unchanged.
+Reproduction transcripts and the local dry run of the whole job body (14 steps, no failures, wheel imported
+from `…/venv/lib/python3.11/site-packages/…`) are in
+[`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md).
+
 ## 9. Version and data-compatibility policy
 
 Written in user-facing form in the README (section "What a version number promises about your data"), and
@@ -330,10 +360,13 @@ summarised here with the evidence this audit produced:
    A scripted smoke entry point now also builds and drives the real window where a display exists
    (`scripts/desktop_smoke_test.py`, run under Xvfb for Linux in CI); that is window construction and
    programmatic interaction with a real Tk, not a person using it, so no checklist step moved to PASS.
-5. **Partly closed (2026-10-15).** Windows and macOS legs now run the suite, the installed-command
-   rehearsal and a minimal Tk lifecycle, and a display-backed Linux leg runs the scripted desktop smoke test.
-   Still missing: a CI leg for Python 3.14 (no interpreter here has been able to run it), the same rehearsal
-   from a *packaged* build on each operating system, and any human GUI session.
+5. **Partly closed (2026-10-15).** Windows and macOS legs run the suite, the installed-command rehearsal and
+   a minimal Tk lifecycle, and a display-backed Linux leg runs the scripted desktop smoke test. The matrix is
+   green as of run 38713190679 (`f38ac49`, 12 jobs), and the three states the Windows legs passed through on
+   the way there are recorded in section 8.1. Still missing: a CI leg for Python 3.14 (no interpreter here has
+   been able to run it), the same rehearsal from a *packaged* build on each operating system, and any human GUI
+   session. On the Windows and macOS runners the Tk widget-lifecycle step reports BLOCKED (no display session),
+   so nothing in these legs claims a window on those platforms.
 6. **Closed (2026-10-15).** A read-only filesystem can now be arranged here with a bind mount, and section 6
    records what it measured — including the write-refusal wording defect that case exposed.
 7. Branch protection, a signed tag and a release archive: none exist, and no package has been published.
