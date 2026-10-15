@@ -278,8 +278,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in the notes file, so a failure stays readable through"
+          echo "the annotations the last three steps publish."
+
       - name: Report the interpreter, the platform and the Tk it ships
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           python -VV
           # Reported rather than required: an interpreter without Tkinter can still run every command,
@@ -300,6 +309,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           # The application refuses to schedule a task whose IANA zone it cannot load, and its message
           # names this package as the fix (career_agent/tasks.py, pinned by tests/test_tasks.py). A
           # Windows installation has no system timezone database, so installing it is what that message
@@ -310,19 +322,31 @@ jobs:
 
       - name: Run the standard-library test suite on this platform
         run: |
-          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set +e
-          python -m unittest discover -s tests -v > "$notes" 2>&1
+          python -m unittest discover -s tests -v
           status=$?
           set -e
-          tail -25 "$notes"
           exit "$status"
       - name: Compile all Python modules
-        run: python -m compileall -q career_agent scripts tests
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python -m compileall -q career_agent scripts tests
       - name: Audit research CSV integrity
-        run: python scripts/audit_job_source_csv.py
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python scripts/audit_job_source_csv.py
       - name: Install the optional PDF extra and run the résumé tests without skips
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet ".[pdf]"
@@ -332,15 +356,24 @@ jobs:
           grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
       - name: Build a wheel and install it into a virtual environment outside the checkout
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           python -m pip install --quiet build
-          python -m build --wheel --outdir dist
           work="$(mktemp -d)"
           work="$(cd "$work" && { pwd -W 2>/dev/null || pwd; })"
           python -m venv "$work/venv"
           if [ -x "$work/venv/bin/python" ]; then venv_bin="$work/venv/bin"; else venv_bin="$work/venv/Scripts"; fi
           "$venv_bin/python" -m pip install --quiet --upgrade pip
-          "$venv_bin/python" -m pip install --quiet dist/*.whl
+          # Built outside the checkout and installed from a directory that is not the checkout: ``python -``
+          # puts the current directory on the import path, and the check below is that the *installed* copy
+          # is the one imported, so it has to run where the source tree cannot answer for it. The macOS legs
+          # failed this step for exactly that reason.
+          python -m build --wheel --outdir "$work/dist"
+          cd "$work"
+          wheel="$(ls -1 dist/*.whl)"
+          "$venv_bin/python" -m pip install --quiet "$wheel"
           "$venv_bin/python" - <<'PY'
           import importlib.metadata as metadata
           import pathlib
@@ -358,6 +391,9 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: The installed commands answer on this platform
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           cd "$WORK"
           "$VENV_BIN/career-agent" --version
@@ -373,6 +409,9 @@ jobs:
           grep -q "no file yet" absent.txt
       - name: A file that is not a database is refused and left alone
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           cd "$WORK"
           printf 'this is not a database\n' > damaged.sqlite3
@@ -393,6 +432,9 @@ jobs:
           test "$before" = "$(cksum damaged.sqlite3)" || { echo "the damaged file was modified"; exit 1; }
       - name: Schema creation, cross-process persistence, backup and restore, export and import
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           cd "$WORK"
           "$VENV_BIN/python" - <<'PY'
@@ -467,6 +509,9 @@ jobs:
           PY
       - name: The two invariants that keep discovery closed still hold on this platform
         run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           cd "$WORK"
           "$VENV_BIN/python" - <<'PY'
@@ -480,9 +525,11 @@ jobs:
           "$VENV_BIN/career-agent" --integration-status | grep -q "Integration state: nothing is enabled."
       - name: Tkinter availability and a minimal Tk widget lifecycle on this platform
         run: |
-          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set +e
-          python - > "$notes" 2>&1 <<'PY'
+          python - <<'PY'
           import sys
 
           try:
@@ -510,7 +557,6 @@ jobs:
           PY
           status=$?
           set -e
-          cat "$notes" | tail -3
           if [ "$status" -eq 2 ]; then
             echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)"
           elif [ "$status" -ne 0 ]; then
@@ -518,13 +564,13 @@ jobs:
           fi
       - name: Desktop smoke test (the real window, or an honest BLOCKED)
         run: |
-          notes="${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set +e
-          python scripts/desktop_smoke_test.py > "$notes.smoke" 2>&1
+          python scripts/desktop_smoke_test.py
           status=$?
           set -e
-          cat "$notes.smoke" >> "$notes"
-          tail -5 "$notes.smoke"
           if [ "$status" -eq 0 ]; then
             echo "the desktop smoke test passed on this runner"
           elif [ "$status" -eq 2 ]; then
