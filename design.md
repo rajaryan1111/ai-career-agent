@@ -1,6 +1,6 @@
 # Product Design Notes
 
-**Status:** Product UX specification; Tkinter local alpha implemented, manual GUI acceptance outstanding. A scripted smoke entry point (`scripts/desktop_smoke_test.py`) builds and drives the real window where a display exists - it must pass under Xvfb in CI and reports BLOCKED, never a pass, where there is none  
+**Status:** Product UX specification; Tkinter local alpha implemented, manual GUI acceptance outstanding. A scripted smoke entry point (`scripts/desktop_smoke_test.py`) builds and drives the real window where a display exists - it must pass under Xvfb in CI and reports BLOCKED, never a pass, where there is none. That entry point's first run against a real display (Linux, Xvfb, 2026-10-15) failed one check of fourteen and passed the other thirteen, which is how a check that inspected a notebook's tab *names* as if they were widgets was found; the Windows and macOS runs of the suite found that every private write was refused on Windows and that six doctor tests hard-coded Linux's data-folder name  
 **Last updated:** 2026-10-15
 
 ## 1. Design objective

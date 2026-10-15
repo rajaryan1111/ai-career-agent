@@ -325,6 +325,13 @@ so a backup always names the file the app itself would open. Restoring replaces 
   backups somewhere only you can reach.
 - Owner-only permissions are a POSIX capability. On Windows the file is written without that protection
   and the app does not claim otherwise (the restore and the lock it can hold there are described above).
+  Where the platform has no mode bits to apply, the writer reports success without applying anything rather
+  than refusing: refusing there is what stopped the application creating its own database on Windows, since
+  every store records its start in the event log and the event log is written through the same helper.
+- **Scheduling on Windows needs a timezone database.** A Windows installation has no system copy of the
+  IANA zones, so a task cannot be scheduled until `pip install tzdata` is run - the app says exactly that and
+  refuses rather than falling back to UTC, because a reminder at the wrong hour is worse than a clear refusal.
+  The Windows CI legs install that package, so the scheduling paths run there instead of the refusal.
 - `PRAGMA integrity_check` detects the damage SQLite can detect. It cannot prove a backup is complete or
   untouched by every byte-level change, so keep more than one backup if the data matters.
 - An exclusive-access check turns "another copy of the app is writing the database" into a refusal with a
@@ -807,6 +814,16 @@ per-user database was neither created nor modified. It exits `0` for `RESULT: PA
 and never a pass, and the script asserts nothing about pixels, layout or dialog wording. CI runs it under
 Xvfb on Linux, where it must pass, and on the Windows and macOS legs, where a runner without a display
 session reports BLOCKED instead of being counted as a pass or failing the build.
+
+A failing step is readable without a browser. Job logs are served from a storage host that a restricted
+network cannot reach, and the API's answer for a failed step is its exit status alone, so every step of the new
+jobs, from the interpreter report to the smoke test, records its output into one notes file - the step opens
+with `tee -a` into it, and the file is created by a step of its own first. When the job fails,
+`scripts/ci_annotate.py` turns the recorded failures into annotations: the failing test's name, the smoke
+test's failed check, and the end of each traceback. That is how the first runs of these legs were diagnosed,
+and it is why the defects they found (see below) are in this repository's history rather than in a log nobody
+could open. A step that is not recorded is a step that cannot be diagnosed from a restricted network; the
+macOS wheel-verification step was the one such step left, and it stayed unexplained until it was covered.
 
 Automated tests, including that script, do **not** cover what a person sees: pixel rendering, layout,
 dialog wording, and operating-system integration are still checked by hand on a real desktop. Those checks

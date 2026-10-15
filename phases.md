@@ -163,7 +163,10 @@ and a scripted desktop smoke test run on a Linux runner under a real virtual dis
 must be built and driven and a run without a display must report BLOCKED), and the suite, the résumé tests
 with the optional `pypdf` extra, and the installed-command rehearsal run on real Windows and macOS runners.
 The manual GUI smoke test — including macOS/Apple Silicon — remains outstanding, and no automated run closes
-a step of it.
+a step of it. Running those legs for the first time found three defects rather than confirming the status quo,
+which is the point of running them: the sync between a notebook's tab names and the widgets they name, the
+owner-only mode applied on a platform that has none, and six doctor tests that assumed Linux's folder name.
+Each was reproduced, fixed and given a regression test that fails on the behaviour it replaced.
 
 The application activity log is implemented end to end: schema version 2 adds
 `application_activity`, `ApplicationActivity`/`ActivityKind` define a dated entry whose detail is

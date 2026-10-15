@@ -61,6 +61,29 @@
   entry point exits 2 with `RESULT: BLOCKED` when the machine has no display or no Tkinter, prints no check as
   passed, and the CI leg that requires a window runs it under a real display where it must exit 0. Manual GUI
   acceptance stays the human checklist; no automated run closes a step of it.
+  **A scripted window check counts only after it has run against a real window** (2026-10-15): the smoke entry
+  point passed code review and its own tests, then failed the first time a display existed - it asked a
+  notebook for its tabs, which answers with widget *names*, and inspected those as widgets. A check that has
+  never run where it is supposed to run is a plan, not evidence.
+  **Where a platform has no capability, report that; do not refuse the work** (2026-10-15): the owner-only
+  file guarantee is POSIX-only and no protection is claimed elsewhere, but the private-write helpers applied
+  it through the descriptor and treated any failure as a reason to refuse the write. On Windows there is no
+  descriptor mode and `os.fchmod` does not exist, so the lookup raised and every `CareerStore` construction
+  failed with it - 949 errors on the first Windows run, with the open descriptor leaked. A capability the
+  platform does not have must be skipped on that platform, consistently, wherever it is asserted; the
+  POSIX refusal (a filesystem that will not apply the mode) must keep refusing.
+  **A test may not spell out a platform's own names** (2026-10-15): the application keeps its files in
+  `AI Career Agent` on macOS and Windows and `ai-career-agent` elsewhere; six doctor tests hard-coded the
+  Linux name, so on those platforms they wrote to a folder the application never reads and reported failures
+  that were the test's own. Expectations of this kind are computed with the code that decides them.
+  **A failing run must publish its evidence where the project can read it** (2026-10-15): a job's log lives
+  on a storage host a restricted network cannot reach, and the API answers a failed step with its exit
+  status alone. Every step of the new jobs, from the first report to the smoke test, starts with a `tee` into
+  one notes file (a step of its own creates the file first), and `scripts/ci_annotate.py` turns the recorded
+  failures into annotations, which the API does return - two slices of ten findings each, because a step may
+  carry ten error and ten warning annotations. A step whose output is not recorded is a step whose failure
+  cannot be diagnosed from this network: the macOS wheel step was exactly that, and stayed unexplained until
+  the recording covered it.
 - Optimize for relevant opportunities and outcomes, not raw application count.
 
 ## 4. Platform compliance
