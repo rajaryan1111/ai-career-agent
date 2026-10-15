@@ -15,6 +15,9 @@ from datetime import date
 from pathlib import Path
 
 import career_agent.__main__ as cli
+from career_agent.core import (
+    ActivityKind, ApplicationActivity, ApplicationTracker, Availability, JobListing,
+)
 from career_agent.store import CareerStore
 
 
@@ -242,6 +245,94 @@ class HistoryCommandTests(unittest.TestCase):
         self.assertIn("B.Tech", out)
         self.assertEqual(len(self.roles()), 1)
         self.assertEqual(len(self.study()), 1)
+
+
+class AnalyticsCommandTests(unittest.TestCase):
+    """The progress report on the command line: the same report, and the same refusals to overstate."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.database = self.folder / "career_agent.sqlite3"
+
+    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main([*arguments, "--database", str(self.database)])
+        return code, out.getvalue(), err.getvalue()
+
+    def record_applications(self, count: int, *, replies: int = 0) -> None:
+        """Write ``count`` applications, of which ``replies`` have a recorded reply."""
+        with CareerStore(self.database) as store:
+            for index in range(count):
+                listing_id = f"j{index}"
+                store.save_job(JobListing(listing_id, "fixture", "Fixture",
+                                          f"https://jobs.example.invalid/{listing_id}", "Sandbox Systems",
+                                          "Data Engineer", availability_status=Availability.OPEN))
+                store.save_tracker(ApplicationTracker(listing_id))
+                store.add_activity(listing_id, ApplicationActivity(
+                    ActivityKind.APPLIED, date(2026, 10, 1), f"applied to {listing_id}"))
+            for index in range(replies):
+                store.add_activity(f"j{index}", ApplicationActivity(
+                    ActivityKind.RESPONSE, date(2026, 10, 5), f"reply about j{index}"))
+
+    def test_the_report_prints_the_counts_and_the_rates_with_their_denominators(self):
+        self.record_applications(6, replies=2)
+
+        code, out, err = self.run_cli("--analytics")
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        self.assertIn("Applications recorded as sent: 6", out)
+        self.assertIn("2 of 6 recorded as sent", out)
+        self.assertIn("This report is read-only", out)
+
+    def test_the_report_withholds_a_rate_below_the_floor_rather_than_printing_a_percentage(self):
+        self.record_applications(2, replies=1)
+
+        code, out, _err = self.run_cli("--analytics")
+
+        self.assertEqual(code, 0)
+        self.assertIn("1 of 2 recorded as sent", out)
+        self.assertIn("No rate is shown", out)
+        self.assertNotIn("% against", out)
+
+    def test_the_report_says_what_it_cannot_measure_instead_of_printing_a_zero(self):
+        self.record_applications(6)
+
+        code, out, _err = self.run_cli("--analytics")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Offers", out)
+        self.assertIn("missing data, not a zero", out)
+        self.assertNotIn("Offers: 0", out)
+        self.assertIn("not your ability", out)
+
+    def test_the_report_on_a_fresh_installation_says_nothing_is_recorded_and_creates_no_database(self):
+        code, out, err = self.run_cli("--analytics")
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("No database yet", out)
+        self.assertFalse(self.database.exists(), "a report must not create the database it reports on")
+
+    def test_the_report_changes_nothing(self):
+        self.record_applications(6, replies=2)
+        with CareerStore(self.database) as store:
+            before = [(record.listing_id, record.status) for record in store.list_trackers()]
+            activities = len(store.list_activity("j0"))
+
+        code, _out, _err = self.run_cli("--analytics")
+
+        self.assertEqual(code, 0)
+        with CareerStore(self.database) as store:
+            self.assertEqual([(record.listing_id, record.status) for record in store.list_trackers()],
+                             before, "no status was created or changed")
+            self.assertEqual(len(store.list_activity("j0")), activities)
+
+    def test_history_and_analytics_cannot_be_asked_for_in_the_same_run(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("--history", "--analytics")
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience for a focused run

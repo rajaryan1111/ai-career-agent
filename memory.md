@@ -2262,3 +2262,69 @@ presence in the notebook through the real `__init__`, and that deleting a profil
 **Test reading.** 1339 tests, `OK (skipped=13)` - up from 1210 before this increment. The version literals
 that had to move (`SCHEMA_VERSION == 6` in two places, `format_version == 2` in three) were moved with the
 reason left in the message, and no assertion was weakened.
+
+
+## 2026-10-15 — What the records add up to, and the four rules that keep the numbers honest
+
+**What changed.** `career_agent/analytics.py` is a new pure module: it takes the listings, the tracker rows,
+the per-listing activity and the interview rounds plus a `today` the caller supplies, and returns a report of
+counts, rates, two timings and one period comparison. Both front ends use it - `python -m career_agent
+--analytics`, and the summary line plus **Progress report** button under the **Application tracker** list - so
+the window and the terminal cannot disagree about a person's own numbers. The store gained `list_trackers()`
+(one query for the whole table, the counterpart to `list_follow_up_trackers()`), and the three tracker readers
+now share one `_decode_tracker`, so a stored status this build cannot name is refused identically wherever it
+is read.
+
+**The four rules, and why they are code rather than care.** A report like this is easy to write and easy to
+make dishonest, so each rule is a constant with a test that fails if it moves:
+
+- **Every rate names its denominator.** The label is stored on the `Rate` and printed in the same line, so a
+  percentage cannot be separated from what it was computed over.
+- **A denominator below `MIN_RATE_DENOMINATOR` (5) produces no rate at all.** The counts print, the rate does
+  not, and the floor is named as the reason. Over three applications one email moves a percentage by thirty
+  points; that is a description of noise presented as a trend.
+- **Unavailable is not zero.** `UNAVAILABLE_METRICS` lists what this schema cannot observe - an offer above
+  all, since no column, field or status can hold one - with the reason. Printing `0 offers` would read as
+  "you received none", which is the opposite of "nothing here can know".
+- **A zero denominator is not a rate of zero, and a real zero is not withheld.** `0 of 0` says nothing was
+  measured; `0 of 20` is a genuine, important fact and prints as `0%`.
+
+**What the timings refuse.** The reply median uses only dates the person recorded, over the pairs that have
+both. A reply that exists only as a status change has no date - the tracker records when the row was saved
+here, not the day the employer wrote - so it is counted as unpaired and the reason is printed rather than the
+sample being quietly shrunk or a zero-day gap invented. A reply dated before the application is excluded as a
+typing mistake, not counted as a negative gap. Below three pairs nothing is reported, with the count.
+
+**The period comparison.** The last 90 days against the 90 before, only when both windows hold five recorded
+applications; otherwise both counts print and the comparison is withheld with the reason, including how many
+applications could not be placed in either window because no application date was recorded. An entirely empty
+database returns no comparison at all rather than a `0 of 0 against 0 of 0` sentence, and the report says
+there is nothing to compare.
+
+**Bugs found and fixed while building it.**
+
+- My first `_rate` gave the zero-denominator case the same "floor of 5 not reached (denominator is 0)" text
+  as a thin denominator, which is technically true and reads as though a measurement was attempted.
+  Zero now has its own sentence, and a test pins both.
+- `_periods` returned a comparison even with nothing recorded, so the report's "Nothing to compare" branch
+  was unreachable and an empty database got a 0-of-0 comparison. Fixed at the source rather than by editing
+  the sentence.
+- The median's empty case read "only 0 application(s) have both dates written down", which is the wrong
+  sentence for "none yet". Reworded, with a test for the empty case separately from the thin case.
+- `count_line`/`line_containing` in the tests were initially written from intent: the count and the rate for
+  the same label share their wording, so a helper that matched either would have let a broken rate pass. The
+  helpers now separate them.
+
+**Verified by running, not by reading.** 46 tests in `tests/test_analytics.py` cover the counting routes (an
+activity entry, a status that implies sending, both at once counted once, a shortlisted application *not*
+counted), the rate floor on both sides of the boundary, the unavailable-versus-zero distinction as printed
+text, the caveats, the medians (including the out-of-order pair and the status-only reply), the window
+boundaries on the first and last day of each window, and the store-backed gathering path. 7 more tests cover
+`--analytics` (counts, the withheld floor, the offers statement, no database created by a read-only command,
+nothing changed, the parser refusing two actions at once) and 8 cover the desktop surface (the summary line,
+the dialog's title/size/bindings/contents, that Escape closes it, that it writes nothing, and that an
+unreadable stored status refuses the report instead of drawing one). Mutation-checked: removing the rate
+floor, the zero-denominator sentence, the offers statement, the caveats or the empty-database guard each fails
+the suite.
+
+**Test reading.** 1399 tests, `OK (skipped=13)` - 1339 before this increment. No assertion was weakened.

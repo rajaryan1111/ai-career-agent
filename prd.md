@@ -50,6 +50,13 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Mark uncertain, missing, or conflicting extracted fields for review before they affect eligibility or generated material.
 - Allow manual correction and multiple resume versions. Resume parsing is not claimed as implemented in the current alpha.
 - Never fabricate experience, skills, qualifications, or work authorization.
+- Report progress from the records the user actually wrote, and never beyond them: a count is always
+  traceable to stored rows; every rate names the denominator it was computed over; a rate is withheld with
+  its reason below a floor of five recorded applications; a metric the schema cannot observe (an offer, an
+  employer's unstated decision) is reported as unmeasurable rather than as zero; a genuine zero is reported
+  as zero; a timing is reported only with its sample size, and a period comparison only when both periods
+  hold enough records to carry one. No projection, no benchmark against other people, and no statement that
+  anything caused a change — the report prints that limitation with the numbers it qualifies.
 - Employment and education history as structured records rather than one summary field: employer, job
   title, employment type, start and end dates, an explicit current-role flag and optional notes; and
   institution, qualification, optional discipline, start and completion dates and an ongoing-study flag.

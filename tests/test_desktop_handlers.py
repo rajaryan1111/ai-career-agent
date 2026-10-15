@@ -27,6 +27,7 @@ from career_agent import (
 )
 from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
 from career_agent.backup import BackupError, create_backup, validate_app_database
+from career_agent import analytics as career_agent_analytics
 from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
@@ -1257,6 +1258,132 @@ class HistoryTabTests(HandlerTestCase):
 
         self.assertEqual(self.store.list_jobs(), ())
         self.assertIsNone(self.store.get_tracker("j1"))
+
+
+class ProgressReportTests(HandlerTestCase):
+    """The progress line and report on the Application tracker tab.
+
+    Handler-level: the widgets are stubs, so nothing here is evidence about how the dialog looks. What is
+    checked is that the line counts what is stored, that a figure this app cannot measure is never shown as
+    a zero, that the dialog carries the report's own caveats, and that a database that cannot be read does
+    not stop the tracker from being drawn.
+    """
+
+    def applied_entry(self, listing_id: str, days_ago: int):
+        return ApplicationActivity(ActivityKind.APPLIED, date(2026, 10, 15) - timedelta(days=days_ago),
+                                   f"applied to {listing_id}")
+
+    def filled_app(self):
+        for index in range(6):
+            listing_id = f"j{index}"
+            self.store.save_job(sample_job(listing_id=listing_id))
+            self.store.save_tracker(ApplicationTracker(listing_id))
+            self.store.add_activity(listing_id, self.applied_entry(listing_id, 30 + index))
+        self.store.add_activity("j0", ApplicationActivity(
+            ActivityKind.RESPONSE, date(2026, 10, 10), "reply from j0"))
+        self.store.add_activity("j1", ApplicationActivity(
+            ActivityKind.RESPONSE, date(2026, 10, 9), "reply from j1"))
+        return self.make_app()
+
+    def test_the_summary_line_counts_the_stored_records(self):
+        app = self.filled_app()
+        app.progress_summary = StringVar()
+
+        app._refresh_progress()
+
+        self.assertIn("6 application(s) recorded as sent", app.progress_summary.get())
+        self.assertIn("2 with a recorded reply", app.progress_summary.get())
+
+    def test_the_summary_line_withholds_a_percentage_below_the_floor(self):
+        self.store.save_job(sample_job())
+        app = self.make_app()
+        app.progress_summary = StringVar()
+
+        app._refresh_progress()
+
+        self.assertIn("No application has been recorded as sent", app.progress_summary.get())
+        self.assertNotIn("%", app.progress_summary.get())
+
+    def test_a_database_that_cannot_be_read_says_so_instead_of_showing_a_wrong_figure(self):
+        self.store.save_job(sample_job())
+        app = self.make_app()
+        app.progress_summary = StringVar()
+        with mock.patch.object(self.store, "list_trackers",
+                               side_effect=sqlite3.OperationalError("attempt to write a readonly database")):
+            app._refresh_progress()
+
+        self.assertIn("could not be computed", app.progress_summary.get())
+        self.assertNotIn("recorded as sent", app.progress_summary.get())
+
+    def test_the_summary_is_never_shown_above_a_report_it_does_not_match(self):
+        """One computation feeds both surfaces, so the line and the dialog cannot disagree."""
+        app = self.filled_app()
+        app.progress_summary = StringVar()
+        app._refresh_progress()
+        report = career_agent_analytics.report_from_store(self.store, today=datetime.now().date())
+
+        self.assertEqual(app.progress_summary.get(), report.headline())
+
+    def test_the_report_dialog_prints_the_report_and_its_caveats(self):
+        app = self.filled_app()
+        app.status = StringVar()
+        RecordingLabel.created = []
+        RecordingToplevel.created = []
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._show_progress_report()
+
+        dialog = RecordingToplevel.created[-1]
+        self.assertEqual(dialog.title_text, "Progress from your records (read-only)")
+        self.assertEqual(dialog.requested_geometry, "900x640",
+                         "a fixed size, so the Close button stays visible")
+        texts = " ".join(label.options.get("text", "") for label in RecordingLabel.created)
+        self.assertIn("Applications recorded as sent: 6", texts)
+        self.assertIn("How to read this", texts)
+        self.assertIn("not your ability", texts, "the caveats travel with the numbers into the window")
+        self.assertIn("missing data, not a zero", texts)
+        self.assertIn("read-only", app.status.get())
+
+    def test_the_report_dialog_is_reachable_by_keyboard_and_closes(self):
+        app = self.filled_app()
+        RecordingLabel.created = []
+        RecordingToplevel.created = []
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._show_progress_report()
+
+        dialog = RecordingToplevel.created[-1]
+        self.assertIn("<Escape>", dialog.bindings)
+        self.assertIn("<Return>", dialog.bindings)
+        dialog.bindings["<Escape>"](None)
+        self.assertTrue(dialog.destroyed)
+
+    def test_opening_the_report_writes_nothing(self):
+        app = self.filled_app()
+        RecordingToplevel.created = []
+        before = [self.store.get_tracker(f"j{i}") for i in range(6)]
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._show_progress_report()
+
+        self.assertEqual([self.store.get_tracker(f"j{i}") for i in range(6)], before)
+        self.assertEqual(len(self.store.list_activity("j0")), 2)
+
+    def test_an_unreadable_tracker_value_refuses_the_report_rather_than_guessing(self):
+        self.store.save_job(sample_job())
+        self.store.save_tracker(ApplicationTracker("j1"))
+        reader = sqlite3.connect(self.store.database_path)
+        with reader:
+            reader.execute("UPDATE application_tracker SET status='casually_hired'")
+        reader.close()
+        app = self.make_app()
+        RecordingToplevel.created = []
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._show_progress_report()
+
+        self.assertEqual(RecordingToplevel.created, [], "no report is drawn from a record it cannot read")
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
 
 
 class WindowShutdownTests(HandlerTestCase):

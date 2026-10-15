@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Progress reporting adds up the records that already exist (`--analytics`, and the **Progress report** on the Application tracker tab): counts, rates that name their denominator and are withheld below five applications, and an explicit list of what this application cannot measure — an offer, or anything an employer did without telling you — so an unavailable metric is never printed as a zero. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 ## Run the desktop app
 
@@ -58,6 +58,7 @@ career-agent                     # open the desktop window
 career-agent --version           # print the version and database schema version
 career-agent --database "/path/to/career-agent.sqlite3"
 career-agent --doctor            # where is my data, and can this app read it?
+career-agent --analytics         # what the records add up to, with every denominator named
 ```
 
 ```bash
@@ -519,6 +520,58 @@ here is uploaded, and no employer or institution is contacted about any of it.
 **Not implemented:** attaching a document to a role, importing roles from a résumé into this list (résumé
 import proposes the flat profile fields only), any verification of a record against an employer, and any
 use of these records in eligibility or matching. They are your notes.
+
+## See how the search is going (and what the numbers do not mean)
+
+`python -m career_agent --analytics` prints what the records in this database add up to. The same report is
+in the window: a one-line summary under the **Application tracker** list and a **Progress report** button
+that opens it in full. Nothing in it is fetched, estimated or modelled — every figure is a count of rows you
+wrote, and the module that computes it (`career_agent/analytics.py`) is pure, so the window and the command
+line cannot disagree about your own numbers.
+
+```bash
+python -m career_agent --analytics     # counts, rates with their denominators, and what cannot be measured
+```
+
+**What it reports.** Applications recorded as sent; applications with a recorded reply; applications with an
+interview round; rounds recorded, rounds whose day has arrived, rounds where you recorded how it went;
+rejections recorded with evidence; applications you withdrew; applications still being planned; follow-up
+entries and notes you wrote. Then four rates and two timings.
+
+**Four rules it will not break:**
+
+1. **A rate always names its denominator.** "2 of 6 recorded as sent (33%)" — never a bare percentage. The
+   denominator is *applications recorded as sent in this database*, which is a fact about your records and
+   not a claim about every application you have ever made.
+2. **A denominator below five applications produces no rate at all.** The counts are still printed, with the
+   reason: over three applications, one email moves a percentage by thirty points and reads as a trend.
+3. **Something this application cannot measure is reported as unmeasurable, never as zero.** An **offer** is
+   the clearest case: no field, status or record here can hold one, so no offer count or offer rate appears
+   at all, and the report says why. A printed `0 offers` would read as "you received none". The same applies
+   to whatever an employer did without telling you.
+4. **A real zero is reported as a zero.** Twenty applications with no reply is `0 of 20` — a genuine and
+   important fact, and the one the report exists to show.
+
+**Timings.** The median days from application to first recorded reply, over the pairs where you recorded
+both dates, with the sample size stated; below three pairs it is withheld and says how many it has. A reply
+dated before the application is treated as a typing mistake and excluded from the median rather than counted
+as a negative gap. A reply recorded only as a status change cannot be used for timing at all — a status
+records when the row was saved here, not the day the employer wrote — and the report says so instead of
+quietly shrinking its sample.
+
+**Periods.** The last 90 days against the 90 before it, for replies recorded. Both windows need at least
+five recorded applications before they are compared at all; otherwise the two counts are printed and the
+comparison is withheld with the reason. Applications with no recorded application date are left out of both
+windows, and the report says how many that was.
+
+**What it refuses to say.** No sentence in the report claims that anything caused anything: a rate that
+changed did not change *because* you changed your résumé. It is not a measure of your ability or your worth.
+It never calls an outcome a "success", because no outcome is defined as one here. The caveats travel inside
+the report — in the window as well as on the command line — so they cannot be separated from the numbers they
+qualify.
+
+**What it is not.** Not a projection, not a benchmark against other people, and not a model of how a search
+"usually" goes: this application has no data about anyone else's search, and it will not invent any.
 
 ## What needs doing next (preparation, interviews and follow-ups in one list)
 

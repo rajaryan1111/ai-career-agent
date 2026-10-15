@@ -294,6 +294,33 @@ is a plan the person wrote and nothing contacts an employer.
     arrive with the same dates. Import it into the *first* database (which still holds its records) and
     confirm the plan says the stored records are kept and nothing is duplicated.
 
+## Progress reporting (added 2026-10-15)
+
+The report adds up records that already exist. Nothing here fetches, estimates or projects, and every manual
+check below is about what the window and the terminal *say*, which unit tests cannot confirm.
+
+79. [ ] Open the **Application tracker** tab on a database with several applications recorded. Under the
+    activity list there must be a summary line naming how many applications are recorded as sent and how
+    many have a recorded reply - and, below five applications, it must not show a percentage at all; it must
+    say there are too few to report a rate.
+80. [ ] Press **Progress report**. A read-only dialog must open with the counts, the rates, the timing, the
+    period comparison, a section listing what this app cannot measure, and the "How to read this" caveats.
+    It must close with **Close**, with Escape, and with Return, and nothing in the window may change while it
+    is open.
+81. [ ] Resize the report dialog and scroll it: the **Close** button must stay visible at the bottom no
+    matter how long the report is.
+82. [ ] Read the "What cannot be measured here" section and confirm it says an offer cannot be stored
+    anywhere in this app. Confirm no line anywhere in the dialog reads "0 offers" or "0%" for something the
+    app cannot observe.
+83. [ ] With fewer than five applications recorded, confirm every rate line says "No rate is shown" and gives
+    the floor as the reason, and that the counts above them are still correct.
+84. [ ] Close the window, then run `python -m career_agent --analytics`. The terminal report must contain the
+    same numbers the dialog showed, must name its denominators, must print the five caveats, and must end by
+    saying the report is read-only.
+85. [ ] Run `python -m career_agent --analytics --database /tmp/nothing-here.sqlite3`: it must say there is no
+    database yet, create no file, and exit with status 0. Then confirm `--history --analytics` together are
+    refused by the argument parser with status 2.
+
 ## Record results
 
 For each operating system tested, record:

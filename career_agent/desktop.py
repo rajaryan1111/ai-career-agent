@@ -24,6 +24,7 @@ from .core import (
     selectable_tracker_statuses,
 )
 from . import __version__
+from . import analytics
 from .config import database_path_for_run
 from .event_log import record_event
 from .handlers import seed_default_tasks
@@ -129,6 +130,7 @@ class CareerAgentApp:
         self._load_profile()
         self._refresh_jobs()
         self._refresh_tracker()
+        self._refresh_progress()
         self._refresh_follow_ups()
         self._refresh_history()
         self._refresh_actions()
@@ -258,6 +260,116 @@ class CareerAgentApp:
             self.activity_tree.heading(col, text=label)
             self.activity_tree.column(col, width=width, anchor=W)
         self.activity_tree.pack(fill=BOTH, expand=False)
+        self._build_progress_panel()
+
+    def _build_progress_panel(self):
+        """One summary line and a read-only report, on the tab where the records they are counted from live.
+
+        The line states counts and never a bare percentage, and the report it opens is the same report the
+        command line prints - computed by ``career_agent.analytics`` from the records in this database, so
+        the two surfaces cannot disagree about somebody's own numbers.
+        """
+        row = ttk.Frame(self.tracker_tab)
+        row.pack(fill=X, pady=(10, 0))
+        self.progress_summary = tk.StringVar()
+        ttk.Label(
+            self.tracker_tab, textvariable=self.progress_summary, wraplength=1000, justify="left",
+        ).pack(anchor=W, pady=(6, 0))
+        ttk.Button(row, text="Progress report", command=self._show_progress_report).pack(side="left")
+        ttk.Label(
+            row,
+            text=("Counts of what is written down here, with the denominator named. A rate too small to mean "
+                  "anything is withheld rather than shown, and what this app cannot measure is listed as "
+                  "unmeasurable rather than as zero."),
+            wraplength=760, justify="left",
+        ).pack(side="left", padx=8)
+
+    def _refresh_progress(self):
+        """Recompute the summary line from the records. Read-only, and never fatal to the tab.
+
+        A database that cannot be read here must not stop the tracker list itself from being drawn: the
+        person's records are shown either way, and the summary says it could not be computed instead of
+        showing a figure that is wrong.
+        """
+        if not hasattr(self, "progress_summary"):
+            return
+        try:
+            report = analytics.report_from_store(self.store, today=datetime.now().date())
+        except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+            self.progress_summary.set(f"The progress summary could not be computed: {exc}")
+            return
+        self.progress_summary.set(report.headline())
+
+    def _show_progress_report(self):
+        """Open the whole report in a read-only, scrollable dialog. Writes nothing."""
+        try:
+            report = analytics.report_from_store(self.store, today=datetime.now().date())
+        except (StoredRecordError, TrackerStatusError) as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Progress from your records (read-only)")
+        dialog.transient(self.root)
+        dialog.geometry("900x640")
+        dialog.minsize(620, 400)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.bind("<Return>", lambda _event: dialog.destroy())
+
+        footer = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        footer.pack(fill=X, side="bottom")
+        ttk.Button(footer, text="Close", command=dialog.destroy).pack(side="right")
+
+        header = ttk.Frame(dialog, padding=(12, 12, 12, 6))
+        header.pack(fill=X)
+        ttk.Label(header, text=f"Progress computed for {report.generated_on.isoformat()} (this machine's day)",
+                  font=("TkDefaultFont", 11, "bold")).pack(anchor=W)
+        ttk.Label(
+            header,
+            text=("Nothing here is read from anywhere but this database, and nothing here is sent "
+                  "anywhere. Every figure is a count of what you recorded."),
+            wraplength=820, justify="left",
+        ).pack(anchor=W, pady=(4, 0))
+
+        body = ttk.Frame(dialog)
+        body.pack(fill=BOTH, expand=True, padx=12, pady=(0, 4))
+        canvas = tk.Canvas(body, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill=BOTH, expand=True)
+        scrolled = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=scrolled, anchor="nw")
+
+        def fit_scrollregion(_event=None):
+            box = canvas.bbox("all")
+            if box:
+                canvas.configure(scrollregion=box)
+
+        def fit_width(event):
+            canvas.itemconfigure(canvas_window, width=event.width)
+
+        def scroll_units(event):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+        scrolled.bind("<Configure>", fit_scrollregion)
+        canvas.bind("<Configure>", fit_width)
+        canvas.bind("<MouseWheel>", scroll_units)
+        scrolled.bind("<MouseWheel>", scroll_units)
+
+        for line in report.describe():
+            # A blank line is spacing; a short line with no leading indent is a section heading.
+            if not line:
+                ttk.Label(scrolled, text="").pack(anchor=W)
+            elif not line.startswith(" ") and line.count(":") <= 1:
+                ttk.Label(scrolled, text=line, font=("TkDefaultFont", 10, "bold")).pack(anchor=W, pady=(6, 0))
+            else:
+                ttk.Label(scrolled, text=line, wraplength=830, justify="left").pack(anchor=W)
+        self.status.set("Progress report opened: read-only, computed from the records in this database.")
+
 
     def _build_data_safety(self):
         ttk.Label(

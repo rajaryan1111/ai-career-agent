@@ -281,6 +281,18 @@ whose records would mix into records already stored keeps the stored ones and sa
 importing these records from a résumé, attaching documents, verifying anything with an employer, or using
 them in eligibility and matching.
 
+Outcome-versus-activity reporting is implemented for the records that exist. `career_agent/analytics.py` is a
+pure module over the stored listings, tracker rows, activity entries and interview rounds; it reports what the
+records hold and how often, with four rules that are enforced by tests rather than by care: every rate names
+its denominator, a denominator below five applications produces no rate at all, a metric this application
+cannot observe (an offer, or anything an employer did without telling you) is listed as unmeasurable rather
+than printed as zero, and a genuine zero is printed as `0 of N`. Timings use only dates the person recorded,
+and the period comparison needs both windows to hold five recorded applications before they are set beside
+each other. The surface is the **Progress report** button on the Application tracker tab and
+`python -m career_agent --analytics`, both read-only, both computed from the same function. Not implemented:
+benchmarks, projections, any comparison against other people's searches, and any statement about causation -
+the report denies causation in the text it prints.
+
 Distribution and packaging are partially implemented. `pyproject.toml` (PEP 621) declares the project
 name, `requires-python = ">=3.10"`, **no required runtime dependency**, the optional `pdf` extra
 (`pypdf>=4.3`), and a `career-agent` console script pointing at the same `career_agent.__main__:main`

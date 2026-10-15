@@ -55,7 +55,7 @@ from .desktop_logic import ACTIVITY_DATE_PATTERN
 from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
 )
-from . import importer, preparation
+from . import analytics, importer, preparation
 from .followups import calendar_file_name, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
@@ -158,6 +158,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--interviews", action="store_true",
         help="List the interview rounds recorded for your applications, next one first, then exit.",
+    )
+    actions.add_argument(
+        "--analytics", action="store_true",
+        help="Add up what the records hold: counts, rates with their denominators, then exit (read-only).",
     )
     actions.add_argument(
         "--history", action="store_true",
@@ -694,6 +698,37 @@ def _day_argument(raw: str | None, *, label: str, optional: bool) -> date | None
     return date.fromisoformat(text)
 
 
+def run_analytics(args: argparse.Namespace) -> int:
+    """Report what the stored records add up to, with every rate naming its denominator.
+
+    Read-only. The report is computed by :mod:`career_agent.analytics` from the same records the window
+    reads, so the two cannot disagree, and everything it refuses to report - because the denominator is too
+    small, because a figure this application cannot know, or because a comparison needs more history than
+    this database has - is printed with the reason. Silence there would read as a zero.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · progress from this database ({today.isoformat()}, local day)")
+    if not database.exists():
+        print("")
+        print("No database yet, so nothing is recorded to add up. The counts start from what you write "
+              "down: an application you applied to, a reply you received, a round you have been invited to.")
+        print("")
+        print("This report is read-only; nothing was changed, uploaded or sent to anybody.")
+        return EXIT_OK
+    with CareerStore(database) as store:
+        report = analytics.report_from_store(store, today=today)
+        lines = list(report.describe()[1:])
+        while lines and not lines[0]:
+            lines.pop(0)
+        print("")
+        for line in lines:
+            print(line)
+    print("")
+    print("This report is read-only; no status was changed, nothing was uploaded and nothing was sent.")
+    return EXIT_OK
+
+
 def run_history(args: argparse.Namespace) -> int:
     """List the candidate's own employment and education records, most recent first.
 
@@ -989,6 +1024,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_next_actions(args)
         if args.interviews:
             return run_interviews(args)
+        if args.analytics:
+            return run_analytics(args)
         if args.history:
             return run_history(args)
         if args.add_role:

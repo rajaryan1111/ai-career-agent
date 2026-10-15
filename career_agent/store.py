@@ -2498,6 +2498,39 @@ class CareerStore:
             "follow_up_on": row["follow_up_on"], "follow_up_note": row["follow_up_note"],
         }
 
+    @staticmethod
+    def _decode_tracker(row: sqlite3.Row) -> ApplicationTracker:
+        """One ``application_tracker`` row as a record, refusing a status this build cannot name.
+
+        Shared by every reader of the table so the same damaged row produces the same refusal rather than
+        three slightly different behaviours.
+        """
+        try:
+            status = ApplicationStatus(row["status"])
+        except ValueError as exc:
+            raise TrackerStatusError(row["status"]) from exc
+        return ApplicationTracker(
+            listing_id=row["listing_id"], status=status,
+            status_evidence=row["status_evidence"], candidate_confirmed=bool(row["candidate_confirmed"]),
+            follow_up_on=_stored_date(row["follow_up_on"], row["listing_id"]),
+            follow_up_note=row["follow_up_note"],
+        )
+
+    def list_trackers(self) -> tuple[ApplicationTracker, ...]:
+        """Every application record, oldest first, in one query.
+
+        The counterpart to :meth:`list_follow_up_trackers` for callers that need the whole table rather
+        than the records carrying a reminder - the progress report adds up every application, not only the
+        ones with a day set. Read-only, and each row is decoded by the same function as a single
+        :meth:`get_tracker`, so an unreadable stored value is reported rather than quietly skipped.
+        """
+        rows = self._connection.execute(
+            """SELECT listing_id, status, status_evidence, candidate_confirmed, follow_up_on, follow_up_note
+                 FROM application_tracker
+                ORDER BY rowid"""
+        ).fetchall()
+        return tuple(self._decode_tracker(row) for row in rows)
+
     def list_follow_up_trackers(self) -> tuple[ApplicationTracker, ...]:
         """Every application that has a follow-up day recorded, soonest day first.
 
@@ -2513,20 +2546,7 @@ class CareerStore:
                 WHERE follow_up_on IS NOT NULL
                 ORDER BY follow_up_on, listing_id"""
         ).fetchall()
-        trackers: list[ApplicationTracker] = []
-        for row in rows:
-            try:
-                status = ApplicationStatus(row["status"])
-            except ValueError as exc:
-                raise TrackerStatusError(row["status"]) from exc
-            trackers.append(ApplicationTracker(
-                listing_id=row["listing_id"], status=status,
-                status_evidence=row["status_evidence"],
-                candidate_confirmed=bool(row["candidate_confirmed"]),
-                follow_up_on=_stored_date(row["follow_up_on"], row["listing_id"]),
-                follow_up_note=row["follow_up_note"],
-            ))
-        return tuple(trackers)
+        return tuple(self._decode_tracker(row) for row in rows)
 
     def get_record_times(self, listing_id: str) -> dict | None:
         """When this device first and last wrote a listing, or ``None`` when it is not stored.
@@ -2554,18 +2574,7 @@ class CareerStore:
                  FROM application_tracker WHERE listing_id=?""",
             (listing_id,),
         ).fetchone()
-        if row is None:
-            return None
-        try:
-            status = ApplicationStatus(row["status"])
-        except ValueError as exc:
-            raise TrackerStatusError(row["status"]) from exc
-        return ApplicationTracker(
-            listing_id=row["listing_id"], status=status,
-            status_evidence=row["status_evidence"], candidate_confirmed=bool(row["candidate_confirmed"]),
-            follow_up_on=_stored_date(row["follow_up_on"], listing_id),
-            follow_up_note=row["follow_up_note"],
-        )
+        return None if row is None else self._decode_tracker(row)
 
     def delete_profile(self) -> bool:
         """Delete the candidate's profile **and** the history records that belong to it.

@@ -102,6 +102,21 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   and ``candidate_education`` tables; both are deleted with the profile in one transaction (and never with
   a listing), and ``profile_record_counts`` is what the confirmation dialog names before it deletes
   anything. They are absent from eligibility, matching and scoring, which read the profile's own fields.
+- Progress reporting is a pure function over the stored records. ``career_agent/analytics.py`` takes the
+  listings, the tracker rows, the per-listing activity and the interview rounds plus a ``today`` the caller
+  supplies, and returns a report: counts, rates, two timings and one period comparison. Nothing else in the
+  app computes a statistic, so the window, ``--analytics`` and any test read the same numbers. The module's
+  rules are the product requirements rather than formatting choices - every rate carries the label of its
+  denominator, a denominator below ``MIN_RATE_DENOMINATOR`` (five) withholds the rate and states the floor,
+  a zero denominator is reported as nothing measured rather than as 0% (the two are finally different
+  sentences), a metric the schema cannot observe is listed in ``UNAVAILABLE_METRICS`` with its reason
+  instead of being printed as zero, a median below ``MIN_MEDIAN_SAMPLES`` is withheld with its sample size,
+  and a period comparison needs ``MIN_RATE_DENOMINATOR`` recorded applications in *both* windows before the
+  two are set beside each other. Reply timing uses only dates the person recorded: a reply that exists only
+  as a status change has no date, because the tracker stores when the row was saved rather than the day the
+  employer wrote, and the report says so rather than counting it as day zero. ``_CAVEATS`` is data, printed
+  by every report, so an edit that dropped a caveat fails a test rather than quietly shipping a bare
+  percentage.
 - Local backups and export/import. Back up/restore moves the whole SQLite file and is the local
   durability path; the JSON export/import is the portable, versioned format and is deliberately stricter
   about what it will assert: `career_agent/importer.py` owns both directions of the format
