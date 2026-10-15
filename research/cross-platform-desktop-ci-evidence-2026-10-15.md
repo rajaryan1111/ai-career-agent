@@ -506,3 +506,57 @@ dialog wording, keyboard-only navigation and focus order, screen-reader behaviou
 native feel are outside every check above, no check inspects pixels, and the checklist's window steps stay
 BLOCKED for those reasons — with the functional claim recorded beside the verdict where a workflow now covers
 it. A backup, a pause and a reminder are also not evidence that a person would find them understandable.
+
+## 16. D18 — a verdict that depended on the hour CI ran at (run 38781575276 at `e69e5836`)
+
+**What the run said.** The twelve-job matrix came back red on exactly two jobs, both Windows
+(`Cross-platform (windows-latest, Python 3.10)` and `3.13`), with three failures each: the two
+`SchedulerTabTests` below and `SuiteConnectionLeakTests.test_the_suite_leaves_no_sqlite_connection_open`,
+which re-runs the whole suite in a child process and therefore reported the same two failures a second time.
+Every other job — the four `unit-tests` legs, both macOS legs, the display-backed Linux leg, both
+`installed-package` legs and the PDF extra — was green on the same commit. The annotations gave the two
+messages verbatim:
+
+```
+FAIL: test_a_finished_attempt_appears_with_its_outcome_and_how_long_it_took
+  AssertionError: 'follow-up-digest' != 'daily-backup'          (tests/test_desktop_handlers.py:5353)
+FAIL: test_pausing_keeps_the_task_its_times_and_its_history
+  AssertionError: Lists differ: [] != ['wrote one snapshot']     (tests/test_desktop_handlers.py:5432)
+```
+
+**Why only the Windows legs.** The jobs' own timestamps (read from
+`repos/rajaryan1111/ai-career-agent/actions/runs/38781575276/jobs`, converted to Asia/Kolkata) show the
+whole matrix starting at 23:27 IST and the boundary falling inside the Windows suite:
+
+| job | ran (IST) | crossed 23:30? |
+| --- | --- | --- |
+| `unit-tests` (3.10–3.13) | 23:27:09 → 23:28:10 | no |
+| `Cross-platform (macos-latest, …)` | 23:27:13 → 23:29:51 | no |
+| `Cross-platform (windows-latest, …)` | 23:27:09 → 23:37:29 / 23:38:02 | **yes** |
+
+**The cause is the test's own clock dependence, not the product.** A claim takes the earliest due task
+(`SELECT … WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at, task_id LIMIT 1`, `store.py:2049`),
+and both tests seeded the three default tasks from the real clock and then paused only
+`scheduled-discovery`. Seeded before 23:30, the 23:30 backup slot is the earliest due occurrence and the
+claim lands on `daily-backup`. Seeded after it, the backup rolls to the next evening while the 09:00
+`follow-up-digest` slot is already due, so the earliest due task is the digest — which is what the two
+annotations show. The product's behaviour is correct and documented; the test asserted a fact about the
+arrangement that only held for part of the day. Classification: **test defect**.
+
+**The smallest correct fix.** The helper these tests share (`disable`, which paused one named task) became
+`keep_only(task_id)`, which pauses every *other* default task, so the task under test is the only one left
+that can be claimed; the two tests keep every assertion they had, and no product line changed. The
+assertion that the other tasks are still listed ("pausing is not deleting") stays in place.
+
+**Regression test.** `SchedulerTabTests.test_the_claim_a_test_makes_is_the_task_it_asked_for_at_any_hour`
+seeds the defaults at a fixed `2026-10-16 23:38 Asia/Kolkata` — the window the Windows legs were in —
+asserts that the digest is genuinely due before the backup (so the test cannot quietly stop exercising the
+ambiguous hour), removes the other tasks from contention, claims at the backup's own slot and requires the
+run to belong to `daily-backup`. Fail-before proof: with the old one-competitor pause restored the test
+fails with `- follow-up-digest / + daily-backup`, the same shape as the CI annotation; with the fix it
+passes, and it passes at any hour because the seed no longer reads the clock. Fix and test are in commit `6e92c9b` on
+this branch; the suite total moved 1651 → 1652.
+
+**What this does not establish.** This is a unit-level verdict about a test's own arrangement. It adds no
+window coverage: the checklist's window steps remain BLOCKED for the reasons in section 15, and no run in
+this file is a human acceptance.

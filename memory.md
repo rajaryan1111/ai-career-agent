@@ -2729,3 +2729,38 @@ places still described the old rule and now describe the new one - `preparation.
 and the checklist's ordering citation for step 61 names the age-first rule and the two new tests. Only words
 changed: no behaviour, no test, and no assertion was touched to accommodate the commit, and the full suite is
 green at 1651 tests after it.
+
+**2026-10-16 - the final commit's CI found a real defect, and it was a defect in the tests (D18).** Run 38781575276 at
+`e69e5836` came back red on two jobs: the Windows legs at Python 3.10 and 3.13, three failures each - the two
+`scheduled-backup` tests in `SchedulerTabTests` and the suite-wide connection-leak test, which re-runs the whole
+suite in a child process and so reported the same two failures again. Every other job on that commit was green,
+including both macOS legs and all four interpreter legs. The annotations gave it away: `AssertionError:
+'follow-up-digest' != 'daily-backup'` and an empty attempt list for the task the test was about.
+
+**The cause was the hour, not the product.** A claim takes the earliest due task (`ORDER BY next_run_at, task_id
+LIMIT 1`), both tests seeded the three default tasks from the real clock and paused only `scheduled-discovery`,
+and the three default slots straddle the boundary: seeded before 23:30 Asia/Kolkata the 23:30 backup is the
+earliest due occurrence, seeded after it the backup rolls to the next evening while the already-due 09:00 digest
+becomes the earliest one left. The job timestamps show exactly that - the four `unit-tests` legs finished by
+23:28:10 IST and the two macOS legs by 23:29:51, while the Windows legs ran 23:27:09 → 23:37:29 and 23:38:02 and
+were the only legs still inside the suite when the clock crossed 23:30. Classification: **test defect**. The
+product's behaviour is correct and documented; the test asserted a fact about the arrangement that only held for
+part of the day.
+
+**What was done.** The shared helper became `keep_only(task_id)`, which pauses every default task *except* the
+one under test, so the claim can only land where the test wants it; both tests keep every assertion they had, and
+no product line changed. The regression test
+`SchedulerTabTests.test_the_claim_a_test_makes_is_the_task_it_asked_for_at_any_hour` seeds at a fixed
+`2026-10-16 23:38 Asia/Kolkata` - the window the Windows legs were in - asserts that the digest genuinely is due
+before the backup (so it cannot stop exercising the ambiguous hour without saying so), removes the other tasks
+from contention and requires the claimed run to belong to `daily-backup`. Fail-before proof: with the old
+one-competitor pause restored the new test fails with `- follow-up-digest / + daily-backup`, the same shape as
+the CI annotation; with the fix it passes, at any hour, because the seed no longer reads the clock. The fix and
+test are `6e92c9b`; the suite moved 1651 → 1652 and the totals in `phases.md` were re-grepped to match. D18 is
+written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` section 16 with the table of job
+times, the two annotations verbatim, the classification and what it does not establish (no window coverage, no
+human acceptance, and the window steps stay BLOCKED).
+
+**State after it.** `main` is still `127244b5`; the branch carries the small docs cross-reference from the
+release-readiness audit to `phases.md`'s audited phase table and to the handoff, plus this fix; the run for the
+fix commit is the one that decides whether the matrix is green at 1652 tests.
