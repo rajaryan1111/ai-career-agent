@@ -60,7 +60,8 @@ from .handlers import default_registry, describe_default_handlers, seed_default_
 from .core import EmploymentType, months_covered_by
 from .desktop_logic import ACTIVITY_DATE_PATTERN
 from .store import (
-    SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
+    SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
+    unreadable_stored_records, write_private_text_file,
 )
 from . import analytics, importer, preparation
 from . import integrations
@@ -313,6 +314,20 @@ def _nearest_existing(path: Path) -> Path | None:
     return None
 
 
+def _refuse_unreadable_records(exc: Exception) -> int:
+    """Report a stored record this build cannot read, having written nothing.
+
+    Every read-only report goes through this rather than letting the failure reach the top-level handler,
+    which would describe a damaged row as "COULD NOT START" and exit with an unexpected-failure status. The
+    message names what could not be read - never its contents - says nothing was changed or repaired, and
+    points at the doctor, which reads the same records without writing and names the row itself.
+    """
+    print(f"REFUSED: this database holds a record this version cannot read: {exc}", file=sys.stderr)
+    print("Nothing was changed or repaired. `python -m career_agent --doctor` reports which record it is, "
+          "and a verified backup taken earlier can be restored over it.", file=sys.stderr)
+    return EXIT_REFUSED
+
+
 def run_doctor(args: argparse.Namespace) -> int:
     """Report the resolved settings and whether the data on this machine is usable.
 
@@ -371,6 +386,28 @@ def run_doctor(args: argparse.Namespace) -> int:
                     f"          It was written by schema version {info.schema_version}; opening the app "
                     f"updates it to version {SCHEMA_VERSION} and records that step in the file."
                 )
+                print("          Its records are not decoded here: this check never changes the file, so "
+                      "the version check comes first.")
+            else:
+                # The structural check above cannot see a row this build cannot interpret - a status or a
+                # payload that is present, well-formed SQLite, and unreadable to the app. The scan decodes
+                # every record through the same functions the read paths use, read-only, so this report can
+                # say what the app would say rather than "no problems found" above damaged data.
+                try:
+                    unreadable = unreadable_stored_records(database)
+                except sqlite3.Error as exc:
+                    problems.append(f"The stored records could not be read: {exc}")
+                    print(f"PROBLEM: the stored records could not be read: {exc}")
+                else:
+                    if unreadable:
+                        problems.extend(unreadable)
+                        print(f"PROBLEM: {len(unreadable)} stored record(s) cannot be read by this version. "
+                              "The app refuses those records rather than guessing, and this check changed "
+                              "nothing:")
+                        for sentence in unreadable:
+                            print(f"         - {sentence}")
+                    else:
+                        print("          Every stored record could be decoded by this version.")
             if info.foreign_key_violations:
                 problems.append(
                     f"The database has {info.foreign_key_violations} broken reference(s) between its tables."
@@ -498,21 +535,24 @@ def run_worker_status(args: argparse.Namespace) -> int:
         print("No database yet, so no tasks are scheduled. Open the app, or run "
               "python -m career_agent --seed-tasks, to add the default schedule.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        status = worker_status(store)
-        for line in status.describe():
-            print(line)
-        tasks = store.list_scheduled_tasks()
-        if tasks:
-            print("Scheduled tasks:")
-            for task in tasks:
-                due = task.next_run_at.isoformat() if task.next_run_at else "paused"
-                print(f"  {task.task_id}: {task.name} - {', '.join(task.times)} {task.timezone} "
-                      f"| next {due} | last "
-                      f"{task.last_outcome.value if task.last_outcome else 'never run'}")
-        else:
-            print("No tasks are stored in this database yet; "
-                  "python -m career_agent --seed-tasks adds the defaults.")
+    try:
+        with CareerStore(database) as store:
+            status = worker_status(store)
+            tasks = store.list_scheduled_tasks()
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    for line in status.describe():
+        print(line)
+    if tasks:
+        print("Scheduled tasks:")
+        for task in tasks:
+            due = task.next_run_at.isoformat() if task.next_run_at else "paused"
+            print(f"  {task.task_id}: {task.name} - {', '.join(task.times)} {task.timezone} "
+                  f"| next {due} | last "
+                  f"{task.last_outcome.value if task.last_outcome else 'never run'}")
+    else:
+        print("No tasks are stored in this database yet; "
+              "python -m career_agent --seed-tasks adds the defaults.")
     print("This report is read-only; nothing was claimed and nothing was run.")
     return EXIT_OK
 
@@ -618,19 +658,22 @@ def run_follow_ups(args: argparse.Namespace) -> int:
         print("No database yet, so no follow-up days are recorded. Open the app to save applications "
               "and set the day you plan to follow each one up.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        pairs = _follow_up_pairs(store)
-        upcoming = reminders(pairs, today)
-        print(summary(upcoming))
-        if upcoming:
-            print("")
-            for item in upcoming:
-                print(f"  {item.describe()}")
-        missing_listings = len(store.list_follow_up_trackers()) - len(pairs)
-        if missing_listings:
-            print("")
-            print(f"{missing_listings} record(s) have a follow-up day but no listing stored any more; "
-                  "they are not listed. Open the app to remove or re-link them.")
+    try:
+        with CareerStore(database) as store:
+            pairs = _follow_up_pairs(store)
+            upcoming = reminders(pairs, today)
+            missing_listings = len(store.list_follow_up_trackers()) - len(pairs)
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    print(summary(upcoming))
+    if upcoming:
+        print("")
+        for item in upcoming:
+            print(f"  {item.describe()}")
+    if missing_listings:
+        print("")
+        print(f"{missing_listings} record(s) have a follow-up day but no listing stored any more; "
+              "they are not listed. Open the app to remove or re-link them.")
     print("")
     print("This report is read-only; no status was changed and nothing was sent.")
     return EXIT_OK
@@ -655,29 +698,32 @@ def run_next_actions(args: argparse.Namespace) -> int:
         print("No database yet, so nothing is recorded. Open the app to save applications, plan "
               "follow-ups and write down what you have to do.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        jobs = {job.listing_id: job for job in store.list_jobs()}
-        preparation_items = store.list_preparation()
-        rounds = store.list_interviews()
-        pairs = _follow_up_pairs(store)
-        found = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
-                                    include_later=False, include_undated=True)
-        everything = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
-                                        include_later=True, include_undated=True)
-        print(preparation.summary(found, today))
-        if found:
-            print("")
-            for line in preparation.describe_actions(found):
-                print(f"  {line}")
-        later = len(everything) - len(found)
-        if later:
-            print("")
-            # Only items beyond the window are hidden here: undated ones are listed above, because an
-            # open item with no day is still work a person is carrying.
-            print(f"{later} more item(s) are further out than the coming week; open the app to see them all.")
+    try:
+        with CareerStore(database) as store:
+            jobs = {job.listing_id: job for job in store.list_jobs()}
+            preparation_items = store.list_preparation()
+            rounds = store.list_interviews()
+            pairs = _follow_up_pairs(store)
+            found = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
+                                        include_later=False, include_undated=True)
+            everything = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
+                                            include_later=True, include_undated=True)
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    print(preparation.summary(found, today))
+    if found:
         print("")
-        print(f"{len(preparation_items)} preparation item(s) and {len(rounds)} interview round(s) are "
-              "recorded.")
+        for line in preparation.describe_actions(found):
+            print(f"  {line}")
+    later = len(everything) - len(found)
+    if later:
+        print("")
+        # Only items beyond the window are hidden here: undated ones are listed above, because an
+        # open item with no day is still work a person is carrying.
+        print(f"{later} more item(s) are further out than the coming week; open the app to see them all.")
+    print("")
+    print(f"{len(preparation_items)} preparation item(s) and {len(rounds)} interview round(s) are "
+          "recorded.")
     print("")
     print("This report is read-only; no status was changed and nothing was sent.")
     return EXIT_OK
@@ -697,22 +743,25 @@ def run_interviews(args: argparse.Namespace) -> int:
         print("No database yet, so no rounds are recorded. Open the app to record one after an employer "
               "gets in touch.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        rounds = store.list_interviews()
-        jobs = {job.listing_id: job for job in store.list_jobs()}
-        print(preparation.interview_summary(rounds, today))
-        if rounds:
-            print("")
-            for entry in preparation.rounds_ordered(rounds, today):
-                job = jobs.get(entry.listing_id)
-                where = (f"{job.role_title} at {job.employer_name}" if job is not None
-                         else f"listing {entry.listing_id} (no longer stored)")
-                when = f"{entry.scheduled_on.isoformat()} ({_relative_day(entry.days_away(today))})"
-                print(f"  {when}: {entry.stage_label} - {entry.mode_label} [{where}]")
-                print(f"      {entry.outcome_label}" + (f" - {entry.notes}" if entry.notes else ""))
+    try:
+        with CareerStore(database) as store:
+            rounds = store.list_interviews()
+            jobs = {job.listing_id: job for job in store.list_jobs()}
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    print(preparation.interview_summary(rounds, today))
+    if rounds:
         print("")
-        print("These are your own notes about each round, not an employer's decision: nothing here says "
-              "whether you passed, and no status was changed.")
+        for entry in preparation.rounds_ordered(rounds, today):
+            job = jobs.get(entry.listing_id)
+            where = (f"{job.role_title} at {job.employer_name}" if job is not None
+                     else f"listing {entry.listing_id} (no longer stored)")
+            when = f"{entry.scheduled_on.isoformat()} ({_relative_day(entry.days_away(today))})"
+            print(f"  {when}: {entry.stage_label} - {entry.mode_label} [{where}]")
+            print(f"      {entry.outcome_label}" + (f" - {entry.notes}" if entry.notes else ""))
+    print("")
+    print("These are your own notes about each round, not an employer's decision: nothing here says "
+          "whether you passed, and no status was changed.")
     return EXIT_OK
 
 
@@ -764,14 +813,17 @@ def run_analytics(args: argparse.Namespace) -> int:
         print("")
         print("This report is read-only; nothing was changed, uploaded or sent to anybody.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        report = analytics.report_from_store(store, today=today)
-        lines = list(report.describe()[1:])
-        while lines and not lines[0]:
-            lines.pop(0)
-        print("")
-        for line in lines:
-            print(line)
+    try:
+        with CareerStore(database) as store:
+            report = analytics.report_from_store(store, today=today)
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    lines = list(report.describe()[1:])
+    while lines and not lines[0]:
+        lines.pop(0)
+    print("")
+    for line in lines:
+        print(line)
     print("")
     print("This report is read-only; no status was changed, nothing was uploaded and nothing was sent.")
     return EXIT_OK
@@ -791,33 +843,36 @@ def run_history(args: argparse.Namespace) -> int:
         print("No database yet, so nothing is recorded. Open the app to add your roles as you go; "
               "nothing is uploaded and no employer is contacted.")
         return EXIT_OK
-    with CareerStore(database) as store:
-        roles = store.list_work_history()
-        study = store.list_education()
-        print("")
-        print(f"Employment ({len(roles)} record(s), current role first)")
-        if not roles:
-            print("  None recorded. The profile's experience figure is a summary and is kept separate.")
-        for role in roles:
-            print(f"  {role.period}: {role.job_title} at {role.employer}"
-                  f" [{role.employment_type_label}]")
-            if role.summary:
-                print(f"      {role.summary}")
-        counted = months_covered_by(roles, today=today)
-        uncounted = sum(1 for role in roles if role.end_date is None and not role.is_current)
-        if counted:
-            print(f"  These periods cover {counted} month(s) in total; months covered by two roles at "
-                  "once are counted once, a role with no recorded end counts nothing, and this is not a "
-                  "claim about experience.")
-        if uncounted:
-            print(f"  {uncounted} ended role(s) have no end date recorded, so no duration is counted "
-                  "for them.")
-        print("")
-        print(f"Education ({len(study)} record(s), ongoing first)")
-        if not study:
-            print("  None recorded.")
-        for entry in study:
-            print(f"  {entry.period}: {entry.label} at {entry.institution}")
+    try:
+        with CareerStore(database) as store:
+            roles = store.list_work_history()
+            study = store.list_education()
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_unreadable_records(exc)
+    print("")
+    print(f"Employment ({len(roles)} record(s), current role first)")
+    if not roles:
+        print("  None recorded. The profile's experience figure is a summary and is kept separate.")
+    for role in roles:
+        print(f"  {role.period}: {role.job_title} at {role.employer}"
+              f" [{role.employment_type_label}]")
+        if role.summary:
+            print(f"      {role.summary}")
+    counted = months_covered_by(roles, today=today)
+    uncounted = sum(1 for role in roles if role.end_date is None and not role.is_current)
+    if counted:
+        print(f"  These periods cover {counted} month(s) in total; months covered by two roles at "
+              "once are counted once, a role with no recorded end counts nothing, and this is not a "
+              "claim about experience.")
+    if uncounted:
+        print(f"  {uncounted} ended role(s) have no end date recorded, so no duration is counted "
+              "for them.")
+    print("")
+    print(f"Education ({len(study)} record(s), ongoing first)")
+    if not study:
+        print("  None recorded.")
+    for entry in study:
+        print(f"  {entry.period}: {entry.label} at {entry.institution}")
     print("")
     print("This report is read-only; nothing was changed, uploaded or sent to anybody.")
     return EXIT_OK

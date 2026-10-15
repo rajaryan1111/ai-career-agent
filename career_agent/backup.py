@@ -223,7 +223,7 @@ def _sidecar_paths(database_path: Path) -> tuple[Path, ...]:
     return tuple(database_path.with_name(database_path.name + suffix) for suffix in _SIDECAR_SUFFIXES)
 
 
-def _read_only_uri(path: Path) -> str:
+def read_only_uri(path: Path) -> str:
     """A ``file:`` URI in read-only mode; ``as_uri`` escapes spaces and other special characters."""
     return f"{Path(os.path.abspath(os.fspath(path))).as_uri()}?mode=ro"
 
@@ -266,7 +266,7 @@ def validate_app_database(path: str | Path) -> DatabaseInfo:
 
     connection = None
     try:
-        connection = sqlite3.connect(_read_only_uri(target), uri=True, timeout=LOCK_TIMEOUT_SECONDS)
+        connection = sqlite3.connect(read_only_uri(target), uri=True, timeout=LOCK_TIMEOUT_SECONDS)
         verdict = connection.execute("PRAGMA integrity_check").fetchone()
         result = verdict[0] if verdict else "no result"
         if result != "ok":
@@ -336,7 +336,7 @@ def _copy_through_sqlite(source: Path, destination: Path, *, source_read_only: b
     state instead of being silently skipped, which is exactly what a plain file copy does.
     """
     source_connection = sqlite3.connect(
-        _read_only_uri(source) if source_read_only else str(source), uri=source_read_only,
+        read_only_uri(source) if source_read_only else str(source), uri=source_read_only,
         timeout=LOCK_TIMEOUT_SECONDS,
     )
     destination_connection = sqlite3.connect(str(destination), timeout=LOCK_TIMEOUT_SECONDS)

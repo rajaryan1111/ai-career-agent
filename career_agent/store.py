@@ -1055,8 +1055,13 @@ class CareerStore:
         row = self._connection.execute("SELECT payload FROM candidate_profile WHERE profile_id=1").fetchone()
         if row is None:
             return None
+        return self._decode_profile(row["payload"])
+
+    @staticmethod
+    def _decode_profile(payload: str) -> CandidateProfile:
+        """One ``candidate_profile`` payload as a record, refusing what this build cannot read."""
         noun = "candidate profile"
-        values = _stored_object(row["payload"], noun)
+        values = _stored_object(payload, noun)
         for key in ("skills", "preferred_locations", "preferred_work_modes", "preferred_role_types"):
             values[key] = frozenset(_stored_text_values(values.get(key), noun, key))
         try:
@@ -1318,7 +1323,8 @@ class CareerStore:
             self._record("activity.deleted", f"activity_id={int(activity_id)}")
         return removed
 
-    def _decode_activity(self, row: sqlite3.Row) -> ApplicationActivity:
+    @staticmethod
+    def _decode_activity(row: sqlite3.Row) -> ApplicationActivity:
         noun = "activity entry"
         try:
             kind = ActivityKind(row["kind"])
@@ -1558,7 +1564,8 @@ class CareerStore:
                 f"There is no stored listing {listing_id!r} to {verb}. Save the listing first."
             )
 
-    def _decode_preparation(self, row: sqlite3.Row) -> PreparationItem:
+    @staticmethod
+    def _decode_preparation(row: sqlite3.Row) -> PreparationItem:
         noun = "preparation item"
         try:
             kind = PreparationKind(row["kind"])
@@ -1581,7 +1588,8 @@ class CareerStore:
         except ValueError as exc:
             raise StoredRecordError(noun, f"it cannot be read ({exc})") from exc
 
-    def _decode_interview(self, row: sqlite3.Row) -> InterviewRound:
+    @staticmethod
+    def _decode_interview(row: sqlite3.Row) -> InterviewRound:
         noun = "interview round"
         try:
             stage = InterviewStage(row["stage"])
@@ -1838,7 +1846,8 @@ class CareerStore:
                 "SELECT COUNT(*) FROM candidate_education").fetchone()[0]),
         }
 
-    def _decode_work_history(self, row: sqlite3.Row) -> WorkHistoryEntry:
+    @staticmethod
+    def _decode_work_history(row: sqlite3.Row) -> WorkHistoryEntry:
         noun = "work-history record"
         try:
             employment_type = EmploymentType(row["employment_type"])
@@ -1863,7 +1872,8 @@ class CareerStore:
             # row was written by something else or edited by hand: it is reported, never repaired.
             raise StoredRecordError(noun, f"it does not describe a possible employment period ({exc})") from exc
 
-    def _decode_education(self, row: sqlite3.Row) -> EducationEntry:
+    @staticmethod
+    def _decode_education(row: sqlite3.Row) -> EducationEntry:
         noun = "education record"
         try:
             return EducationEntry(
@@ -2360,7 +2370,8 @@ class CareerStore:
             # is about to raise is what matters, and this must not replace it.
             pass
 
-    def _decode_scheduled_task(self, row: sqlite3.Row) -> ScheduledTask:
+    @staticmethod
+    def _decode_scheduled_task(row: sqlite3.Row) -> ScheduledTask:
         noun = "scheduled task"
         try:
             times = json.loads(row["schedule_times"])
@@ -2394,7 +2405,8 @@ class CareerStore:
         except TaskValidationError as exc:
             raise StoredRecordError(noun, f"it could not be read as a task ({exc})") from exc
 
-    def _decode_task_run(self, row: sqlite3.Row) -> TaskRun:
+    @staticmethod
+    def _decode_task_run(row: sqlite3.Row) -> TaskRun:
         noun = "background task run"
         try:
             return TaskRun(
@@ -2416,7 +2428,8 @@ class CareerStore:
         except TaskValidationError as exc:
             raise StoredRecordError(noun, f"it could not be read as a run ({exc})") from exc
 
-    def _decode_worker_lease(self, row: sqlite3.Row) -> WorkerLease:
+    @staticmethod
+    def _decode_worker_lease(row: sqlite3.Row) -> WorkerLease:
         noun = "worker lease"
         try:
             return WorkerLease(
@@ -2609,7 +2622,8 @@ class CareerStore:
             self._record("job.deleted", f"id={listing_id}")
         return removed
 
-    def _decode_job(self, payload: str) -> JobListing:
+    @staticmethod
+    def _decode_job(payload: str) -> JobListing:
         noun = "job listing"
         values = _stored_object(payload, noun)
         raw_status = values.get("availability_status")
@@ -2630,3 +2644,83 @@ class CareerStore:
             return JobListing(**values)
         except TypeError as exc:
             raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc
+
+
+# ---------------------------------------------------------------- reading a file without opening it
+#
+# The doctor's question is "can this app read the data on this machine?" and the store answers it by
+# *opening* the file, which also updates an older schema - a change the doctor promises never to make. So
+# the check below reads the same payloads through a read-only connection and the same decoders the read
+# paths use, which is the only way the two answers can agree.
+
+#: The payloads this build knows how to read, as ``(table, identifier column, decoder)``. A table missing
+#: from a file is not a problem here: an older file simply has fewer tables, and the doctor reports the
+#: schema version it found separately.
+_RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] = (
+    ("candidate_profile", "profile_id", lambda row: CareerStore._decode_profile(row["payload"])),
+    ("job_listings", "listing_id", lambda row: CareerStore._decode_job(row["payload"])),
+    ("application_tracker", "listing_id", CareerStore._decode_tracker),
+    ("application_activity", "activity_id", CareerStore._decode_activity),
+    ("application_preparation", "preparation_id", CareerStore._decode_preparation),
+    ("interview_round", "round_id", CareerStore._decode_interview),
+    ("candidate_work_history", "entry_id", CareerStore._decode_work_history),
+    ("candidate_education", "entry_id", CareerStore._decode_education),
+    ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
+    ("task_run", "run_id", CareerStore._decode_task_run),
+    ("worker_lease", "worker_id", CareerStore._decode_worker_lease),
+)
+
+#: How many rows of each kind are read before the scan stops looking. A database in this application holds
+#: hundreds of rows at most, so this is not a limit anybody reaches; it exists so a damaged file cannot make
+#: a read-only check run for an unbounded time.
+MAX_SCANNED_ROWS = 5000
+
+
+def unreadable_stored_records(database_path: str | Path) -> tuple[str, ...]:
+    """Every stored record this build cannot read, one plain sentence each. Read-only, creates nothing.
+
+    This is the check that makes ``--doctor`` able to say what the app would say when it opens the file. A
+    structural check alone answers "is this a database" - it counts rows and verifies references - and a
+    file can pass all of that while holding a status, availability value or payload this build cannot
+    interpret. Those rows are exactly what turns into a refusal on every read path, so the doctor looks for
+    them by decoding through the same functions the read paths use.
+
+    Nothing is written: the connection is opened ``mode=ro``, so the file cannot be modified, and no
+    migration runs - which is why this is safe to call on a file an older version wrote. A missing file
+    yields nothing, because there is nothing to read; a file that cannot be opened at all raises the
+    ``sqlite3.Error`` the caller already reports.
+    """
+    path = Path(database_path)
+    if not path.exists():
+        return ()
+    problems: list[str] = []
+    # The URI helper is imported from the backup module so spaces and other special characters in a path
+    # are escaped the same way everywhere in the program. Imported here rather than at the top of the file
+    # because ``backup`` imports this module.
+    from .backup import read_only_uri
+
+    connection = sqlite3.connect(read_only_uri(path), uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        for table, identifier, decoder in _RECORD_DECODERS:
+            if table not in tables:
+                continue
+            # The table name is one of the constants above, never anything a caller supplies.
+            rows = connection.execute(f"SELECT * FROM {table} LIMIT {MAX_SCANNED_ROWS}").fetchall()
+            for row in rows:
+                try:
+                    decoder(row)
+                except (StoredRecordError, TrackerStatusError) as exc:
+                    problems.append(f"{exc} (in the '{table}' table, record {row[identifier]!r})")
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    # A decoder that raises something unnamed is still a record this build cannot read: the
+                    # report says so with the values it can name, never with the record's contents.
+                    problems.append(
+                        f"The saved record in the '{table}' table (record {row[identifier]!r}) could not be "
+                        f"read ({type(exc).__name__}: {exc}). It was not changed."
+                    )
+    finally:
+        connection.close()
+    return tuple(problems)
