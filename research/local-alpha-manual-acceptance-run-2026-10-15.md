@@ -402,3 +402,49 @@ added for the purpose (`scripts/desktop_acceptance.py`, section 14 of
   unit test rather than the product: a pre-upgrade case asserted a listing order that depended on two saves
   landing in the same second, fixed in `c0314c2` by pinning the observation time through the store's own
   parameter.
+
+---
+
+## 9. The last increment of 2026-10-15: follow-ups, the scheduler and data safety
+
+Sections 1-8 stand as they were written. Three more workflows have since been added to
+`scripts/desktop_acceptance.py`, and the script now declares **76 checks** (section 15 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md` has the full account and the per-leg table).
+
+- **Ten workflows, 76 checks, on five display-backed CI legs** — Linux under Xvfb, Windows 2025 (3.10 and
+  3.13) and macOS 26 (3.10 and 3.13) — every leg `RESULT: PASS — 76 checks passed`, in run `38762008724` at
+  `5b291a7a`, all 12 jobs successful. The whole suite is green on the same legs: 1648 tests, `OK` (13, 20, 37
+  and 44 skipped by interpreter and platform). Workflow I's first green run was `38761595835` at `d12c2bcb`
+  (68 checks, 12/12 jobs).
+- **What the new workflows drove**: a follow-up day recorded for an application selected in the window — its
+  first day, which no reachable path could record before — with overdue, due-today and later days computed
+  from fixed offsets and read as words, the list ordered by day with its summary line, a day moved and cleared
+  from its own row with a declined clear changing nothing, the list across a close and reopen, preparation
+  items added through their own dialog (one with a day, one with none, listed rather than hidden), ticking one
+  off without touching any status, a reminder whose listing or record has gone reported rather than acted on,
+  and a calendar preview and an email draft that write nothing and send nothing; the scheduler tab's own
+  buttons — the default tasks added and adding them again creating nothing, pausing asking first, a declined
+  pause changing nothing, a real pause keeping the task's definition and history and reading "paused", that
+  pause surviving a restart, resume scheduling the next occurrence from now and replaying nothing, a deleted
+  task reported rather than written back, and no worker started, no lease taken and no attempt recorded; and
+  data safety — a backup written through the tab's own chooser and verified before success is reported and
+  owner-only on POSIX, an existing destination never overwritten, a cancelled chooser writing nothing, a
+  malformed, foreign, truncated and too-new file each refused with the live database's digest unchanged, a
+  declined restore changing not one byte, a confirmed restore undoing what came after the backup while keeping
+  the previous database as a readable copy, a restore refused while another connection holds the database, and
+  no temporary file left behind on success or failure.
+- **Two defects only a real display could show came out of these workflows.** D17: the first follow-up day
+  could not be recorded from any path in the window, because the Follow-ups tab lists only applications that
+  already hold a day and the button that sets it read its subject from that empty list; fixed in `480dca1`
+  with a handler-level regression test that fails before the fix and with H1–H2 as the display-backed proof.
+  The second: run `38758158210` failed workflow H5 on all five legs with `SmokeFailure: the fields still hold
+  a day that was cleared`, because a cleared day rebuilds the list, real Tk fires `<<TreeviewSelect>>` on the
+  rebuilt tree, and the handler refilled the fields from another tab's selection; the binding now reads only
+  the reminder list's own row, the acceptance step re-selects the row it acts on, and the fail-before-fix
+  check reproduced as `AssertionError: '2026-10-24' != ''` (`0215413`).
+- **What this is still not.** No human has opened the window, on any platform. Layout and clipping, dialog
+  wording, keyboard-only navigation and focus order, screen-reader behaviour, real mouse-driven flows and
+  native feel are exactly as unverified as in section 7. The checklist verdicts are unchanged — **22 PASS,
+  76 BLOCKED, 0 FAIL**, no box ticked — with 35 steps now carrying an "Automated coverage" line, ten of them
+  in part. The stand-in development run (`--stand-in-tk`, 76 passed, `RESULT: BLOCKED`, exit 2) is a
+  development aid on a machine with no display and is not evidence of real-window behaviour.

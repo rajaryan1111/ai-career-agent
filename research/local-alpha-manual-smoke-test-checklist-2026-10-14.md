@@ -12,6 +12,18 @@ steps (68–73) carry coverage lines citing it, and the earlier lines keep the n
 them. Two of those six are **partial**: the delete button's two answers (71) and the finished-qualification
 listing (72) are not driven by the run.
 
+**Update, 2026-10-15 (the last increment of the day):** the verdicts are unchanged once more — 22 PASS,
+76 BLOCKED, 0 FAIL — and **no box has been ticked**. Three workflows are new: follow-up reminders and the
+combined next-action list (H1–H14), the schedule's pause and resume with nothing started (I1–I8), and
+data safety — a verified backup, a validated restore and every refusal in between (J1–J8). That is
+**76 checks per leg** on the same five display-backed CI legs, run `38762008724` at `5b291a7a`; the fifteen
+numbered steps those workflows drive carry coverage lines citing that run, and every earlier line keeps the
+numbers of the run that produced it. Workflow H is also where a real desktop defect was found: the first
+follow-up day could not be recorded from any reachable path in the window, because the button that sets it
+only ever looked at the reminder list — which is empty precisely when a day is being recorded for the
+first time. It is fixed (`480dca1`) with a regression test at the handler level, and H1–H2 are the
+display-backed proof.
+
 **Update, 2026-10-15 (later the same day):** the numbered steps' verdicts are unchanged — 22 PASS, 76 BLOCKED, 0 FAIL — and **no box has been ticked**. What is new is 14 steps whose *functional* claim is now checked automatically, through the real window, on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26; CPython 3.10–3.13): each of those steps now carries an "Automated coverage" line naming the checks, the run and the commit. Nothing about layout, wording, focus order, accessibility, mouse-driven use or native feel is covered by those checks, which is what the remaining BLOCKED verdicts are about; see "Automated coverage of numbered steps" below.  
 **Date created:** 2026-10-14
 
@@ -96,19 +108,23 @@ This checklist is intentionally separate from unit tests. It requires a real des
     (`-rw-------`). Never point this at a file you still need: an existing file must be refused, not
     overwritten.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal backup reported 'written and verified'.**
+    → **Automated coverage (2026-10-15): J1 (the backup is written from the Data safety tab's own file chooser, is verified before the window reports success, holds the records the database holds and is owner-only on POSIX, and the live database's digest is unchanged afterwards); J2 (a second backup to the same path is refused and the first file's digest does not move) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 18. [ ] Back up again to the *same* path. The app must refuse and explain, and the earlier file must be
     unchanged (compare the file size and its modification time).
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the second terminal backup was refused with the first file byte-identical.**
+    → **Automated coverage (2026-10-15): J2 (the refused second backup leaves the first file byte-identical, and a destination inside a folder that does not exist is refused with no file created and the folder still absent) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 19. [ ] Add a job, then restore from the backup made in step 17 and confirm the question is asked first.
     Cancel once: nothing may change. Then confirm: the added job must be gone, the older data must be
     back, and a `<database name>.backup-<timestamp>` file must exist beside the database.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal restore ran and a timestamped copy was kept beside the database.**
+    → **Automated coverage (2026-10-15): J5 (the confirmation is answered **No** first and not one byte of the database or of its folder changes); J6 (answered **Yes**, a listing saved after the backup is gone, the profile is back, the window's list matches the stored records, exactly one `<database>.backup-<timestamp>` copy holds the pre-restore counts and is still readable, and the restored database can be written to again) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 20. [ ] Close and reopen the app after that restore; the restored data must still be there, and the
     status line must not claim a success that did not happen.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the restored database was read back from the terminal with only the older records.**
 21. [ ] Choose a file that is not a database (for example a text file) and restore from it: the app must
     refuse with a clear message *before* asking to confirm, and the current data must be untouched.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal restore from a text file was refused with the database unchanged.**
+    → **Automated coverage (2026-10-15): J4 (a text file, another program's database, a file truncated to its first 4 KiB and a copy marked with a newer schema version are each refused under "Backup cannot be used" with "The current database was not changed.", the live database's digest does not move, and no temporary file is left behind) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 22. [ ] From a terminal in the repository root, run
     `python -m career_agent --database "<path to a throwaway copy of the database>" --backup-to "/tmp/alpha-check.sqlite3"`
     and confirm it prints a verified backup; then run the same command again and confirm it refuses
@@ -233,10 +249,12 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     Follow-ups list with the day, the note, and "in N day(s)"; the status shown must be unchanged, and the
     status bar must say the application's status was not changed.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the day and note were stored and listed from the terminal with the note text.**
+    → **Automated coverage (2026-10-15): H1–H2 (with an application selected on the **Application tracker** tab its first follow-up day **is** recordable — the refusals that made that impossible from anywhere in the window are what this check found, see D17 — the new row carries the day, the note and "in 2 day(s)", and the stored status and the confirmation flag are untouched) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 44. [ ] Set a day in the past for a second application (for example yesterday). It must sort above the
     future one and read "N day(s) overdue". Confirm the summary line counts overdue and due-today
     separately, and that the **Application tracker** tab still shows the same statuses as before.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal list printed the overdue day above the future one and led with the overdue count.**
+    → **Automated coverage (2026-10-15): H3–H4 (days computed from fixed offsets read "3 day(s) overdue", "due today" and "in 20 day(s)", the list is ordered by day, the summary leads with "1 overdue, 1 due today: 2 application(s) need a look.", and every application is still `discovered` and unconfirmed) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 45. [ ] Type something that is not a date ("next tuesday") and press the set button. The app must refuse
     with a message naming the YYYY-MM-DD form, and the stored record must be unchanged (check with
     `python -m career_agent --follow-ups`, or by re-reading the row).
@@ -245,6 +263,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     again and accept: the day and note must disappear, while the application, its status and its activity
     history stay exactly as they were.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; clearing the follow-up was executed at the storage layer.**
+    → **Automated coverage (2026-10-15): H5 — **partial**: a day is moved from its own row, a declined clear leaves the day and its row in place, and an accepted clear removes the day and the note, leaves the status alone, empties the fields and takes the row out of the list; the application's activity history is not re-read by the run drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 47. [ ] Press **Export to a calendar file**, choose a name, and open the saved `.ics` in a real calendar
     application on this OS. It must import without an error dialog, show an all-day event on each
     follow-up day, name the employer and role, and contain no attendee and no link. Then export again to
@@ -271,9 +290,11 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     with a stored follow-up that day), and confirm the attempt's detail in **Recent attempts** names the
     due application and does not change any application's status.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the three tasks were seeded and read back with their times and zones.**
+    → **Automated coverage (2026-10-15): I1–I2 and I8 — **partial**: the schedule starts empty with the tab saying nothing is scheduled and no worker holds the lease, the defaults are added through the tab (created, enabled, with a next run) and adding them again creates nothing and leaves the stored tasks untouched, and using the tab takes no lease, records no attempt and writes no `task.run_*` or `worker.*` event; the three tasks' names, times and timezone are asserted by the suite and by the terminal runs, not by this workflow drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 52. [ ] With the app open, pause `follow-up-digest` in the Background tasks tab, confirm it asks first and
     that pausing keeps its times and its history, then resume it and confirm the next run is scheduled.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; a task saved as paused read back paused with its times intact.**
+    → **Automated coverage (2026-10-15): I3–I7 (pausing asks first and a declined confirmation changes nothing; an accepted pause keeps the task's name, kind, times and timezone and its recorded history, and its row reads "paused"; the paused task is still paused after the window is closed and opened again; resuming schedules the next run ahead of now and replays no missed occurrence; and a task whose record was deleted behind the window is reported rather than written back) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 
 ## Moving data with the JSON export and import (added 2026-10-15)
 
@@ -324,10 +345,12 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     must appear at the top of the list (the overdue one first, the undated one after the dated items), and
     the application's status must be unchanged everywhere in the window.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal list printed the order and the preparation and round counts.**
+    → **Automated coverage (2026-10-15): H8–H9 — **partial**: a preparation item with yesterday's day is added through its own dialog, whose kind chooser offers the documented kinds, and lists as "<day> (1 day(s) overdue)" naming the item and the application; an item with no day lists as "No day set" rather than being hidden, and the reminder recorded earlier appears in the same list; the run selected the application on the tracker tab rather than the Jobs tab and did not assert the order of the two rows drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 62. [ ] Select the item and press **Mark the selected item done**. The row must leave the list, the status
     line must say the application's status was not changed, and the tracker row on the **Application
     tracker** tab must be exactly as it was.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; completing an item was executed at the storage layer.**
+    → **Automated coverage (2026-10-15): H10 (the row leaves the list, the window says "Done: <title>. The application's status was not changed." and the application is still `discovered` afterwards) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 63. [ ] Press **Record an interview round**, choose a stage, a day (tomorrow) and a mode, and save. The round
     must appear in the list above the preparation items and must read "in 1 day(s)"/"tomorrow" rather than
     as something that has already happened. Then select it, press **Record the selected round's outcome**,
@@ -338,6 +361,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
 64. [ ] Select a **follow-up** row and press **Delete the selected record**. It must explain that a follow-up
     day is cleared on the Follow-ups tab rather than deleted here, and nothing may change.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; clearing the plan was executed at the storage layer.**
+    → **Automated coverage (2026-10-15): H11 (selecting a reminder row and pressing **Delete the selected record** raises "Follow-up days are cleared, not deleted", completes no preparation item, and leaves the reminder, its status and the list exactly as they were) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 65. [ ] Select an interview round and press **Delete the selected record**, answering **No** first and then
     **Yes**. Nothing may be removed on the first answer; the second must remove only the round and say so.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; deleting a round was executed at the storage layer.**
@@ -456,17 +480,20 @@ account was touched, which is why they are here and not in the suite.
     email** beside the existing controls, and there must be no button, menu item or setting anywhere in the
     window that connects an account, sends a message, or invites anybody.
     → **BLOCKED — the tab is a window; the terminal equivalents ran and the shipped code was scanned for account and socket use.**
+    → **Automated coverage (2026-10-15): H7 — **partial**: both buttons are pressed on the tab, the preview and the draft are the read-only dialogs they claim to be ("no invitation", "no attendee is invited", "No email account is connected", "nothing here can send anything"), no file is written while they are open and both status lines say nothing was sent; whether any other control in the window could connect an account is not scanned by this workflow drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 87. [ ] Press **Preview the calendar export** with at least one follow-up recorded. A read-only dialog must
     list each event as `<day>: Follow up: <role> at <employer>  [follow-up-<id>-<day>@ai-career-agent.local]`,
     state that nothing has been written yet and that every event is an all-day entry with no attendee, and
     close with **Close**, Escape and Return. Before and after, the folder holding the database must contain
     no new `.ics` file.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal preview listed the same event and wrote no file.**
+    → **Automated coverage (2026-10-15): H7 — **partial**: the preview counts the reminders the tab lists, states that nothing has been written yet and that no attendee is invited, and the folder holding the database gains no file; the per-event line format and the dialog's Close/Escape/Return behaviour are not asserted here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 88. [ ] Press **Draft a follow-up email** with no row selected: it must ask you to select a reminder, and
     open nothing. With a reminder selected, the dialog must show the subject, the full body, `To: NOT
     SUPPLIED`, `Status: DRAFT ONLY`, an `Operation id: email-...`, the "Missing, and not guessed" line for
     the recipient, and a line saying nothing was sent and nothing was created.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the terminal refusals and the full draft text were observed.**
+    → **Automated coverage (2026-10-15): H7 — **partial**: the draft names the role it was written for, says that nothing here can send anything and that no email account is connected, and the database's digest does not move while it is open; the subject, the body, `To: NOT SUPPLIED`, `Status: DRAFT ONLY`, the operation id, the "Missing, and not guessed" line and the refusal with no row selected are not asserted here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10 and 3.13), 76 checks per leg, run `38762008724` at `5b291a7a`.**
 89. [ ] While that draft dialog is open, check the application's status, its follow-up day and its note, and
     the reminders list: none may change. Select and copy the draft text out of the dialog by hand; nothing
     must be written to disk by copying.
@@ -743,14 +770,18 @@ that the workflows report BLOCKED with no display and that the stand-in developm
 both passed. The full record, including the defect below and the per-leg annotations, is section 14 of
 `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
 
-**Automated coverage of numbered steps.** 20 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10, 11,
-13, 32, 33, 34, 54, 68, 69, 70, 73, 78** are covered for the functional claim the step states, and **12, 63, 71
-and 72 are covered in part** — step 12's pasted-guidance-text refusal and in-place evidence
-rewrite are not driven, step 63's appearance in the other list views is not checked, step 71's delete button and
-both answers to its confirmation are not driven, and step 72's record with a completion date and no start date,
-and its place after the ongoing one, were verified at the storage layer rather than in this run. Step 78 already
-passed by file inspection; its second half (the plan for an already-populated database, and the repeat import)
-is now checked automatically as well.
+**Automated coverage of numbered steps.** 35 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10,
+11, 13, 17, 18, 19, 21, 32, 33, 34, 43, 44, 52, 54, 62, 64, 68, 69, 70, 73, 78** are covered for the functional
+claim the step states, and **12, 46, 51, 61, 63, 71, 72, 86, 87 and 88 are covered in part** — step 12's
+pasted-guidance-text refusal and in-place evidence rewrite are not driven, step 46's activity history is not
+re-read by the run, step 51's three tasks' names, times and timezone are asserted by the suite and the terminal
+runs rather than by the workflow, step 61's selection was made on the tracker tab and the order of its two rows
+is not asserted, step 63's appearance in the other list views is not checked, step 71's delete button and both
+answers to its confirmation are not driven, step 72's record with a completion date and no start date, and its
+place after the ongoing one, were verified at the storage layer rather than in this run, and steps 86–88's
+per-event line format, dialog key bindings, draft fields and the absence of any account-connecting control
+elsewhere in the window are not asserted. Step 78 already passed by file inspection; its second half (the plan
+for an already-populated database, and the repeat import) is now checked automatically as well.
 
 **A defect that only a real display could show (D14).** The first display-backed run of these workflows
 (38734920175 at `115ad2a`) passed 35 of 36 checks; the failure was F4 reporting a cleanup that had worked,

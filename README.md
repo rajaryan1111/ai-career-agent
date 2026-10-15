@@ -821,7 +821,7 @@ The workflows themselves are driven the same way, in more depth:
 python scripts/desktop_acceptance.py
 ```
 
-Seven workflows run against the real window and a disposable synthetic database: a profile (with a role and a
+Ten workflows run against the real window and disposable synthetic databases: a profile (with a role and a
 qualification) typed, saved, closed and read back; a listing whose source URL and blank apply URL stay separate
 fields and whose blank stays blank; a listing with no availability evidence evaluating to UNKNOWN and refusing
 to be shortlisted, then reaching PASS and being shortlisted once the evidence and requirements are stated; an
@@ -832,10 +832,22 @@ file, a damaged record, an unprotected target, a declined plan, a repeat import)
 work history and study forms, where a current role is added, an impossible period and a date written in another
 shape are refused with nothing stored, an ongoing qualification is added, a contradictory one is refused, a
 role's stored values are loaded into an emptied form and its title saved back over the record, and the
-current-role flag is taken off again with an end date saved; and cleanup that releases every window and
-connection, deletes its own folder and leaves the person's database byte-identical, including after a forced
-failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 46 checks, and compares that number
-against the checks its own source declares so a check that stops running fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
+current-role flag is taken off again with an end date saved; follow-up reminders and the combined next-action
+list, where the first day for an application is recorded from the window, overdue, due-today and later days
+read as words computed from fixed offsets, the list survives a close and reopen, a day is moved and cleared
+from its own row with a refused clear changing nothing, a staged day is ticked off without touching any status,
+and the calendar preview and the email draft write nothing and send nothing; the schedule's own tab, where the
+default tasks are added and adding them again keeps them, pausing asks first and keeps the task's times and
+history, a paused task is still paused after a restart, resuming schedules the next occurrence from now and
+replays nothing, a task whose record has gone is reported rather than written back, and no worker is started,
+no lease taken and no attempt recorded; data safety, where a backup is written through the window and verified
+before success is reported, an existing file is never overwritten, a cancelled chooser writes nothing, a
+malformed, foreign, truncated or too-new file is refused with the live database unchanged, a declined restore
+changes nothing, a confirmed restore brings the backed-up records back while keeping the previous database as a
+readable copy, and nothing temporary is left behind on success or failure; and cleanup that releases every
+window and connection, deletes its own folder and leaves the person's database byte-identical, including after
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 76 checks, and compares that
+number against the checks its own source declares so a check that stops running fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
 the confirmation - and every one of them is recorded and reported. On a machine with no display,
 `--stand-in-tk` runs the same workflows against the test suite's stand-in widget module for development: it
 prints DEVELOPMENT RUN, never prints a pass or a failure, and exits 2, and CI has a step that requires exactly

@@ -2594,3 +2594,52 @@ defect 4). The job-source CSV was not touched (`input_sha256 0356b093…`, 83 re
 `SOURCE_QUALITY_GATE_PASSED` stays `False` and `enabled_discovery_sources()` stays empty. The wheel built and
 installed during the run was byte-different across two builds of the same tree while every entry's *content*
 was identical: a wheel hash identifies one build, not one revision.
+
+## 2026-10-15 — The desktop harness grows to ten workflows: follow-ups, the scheduler and data safety
+
+**Eleven commits turned a two-workflow harness into ten.** `scripts/desktop_acceptance.py` now drives the real
+`CareerAgentApp` through A (profile), B (the two job URLs), C (eligibility safety), D (tracker transitions and
+analytics), E (export/import and its refusals), G (work history and study), H (follow-up reminders and the
+combined next-action list), I (the scheduler tab), J (data safety: backup, validation and restore) and F
+(cleanup) — **76 checks**, each workflow in its own disposable database, each step pressing the window's own
+widgets through Tk's command dispatch and answering the dialogs a person would answer, with the file chooser
+and every confirmation recorded so a refusal can be checked for being *explained*, not merely performed. The
+script declares its own check count and the runner compares the two, so a step that stops running fails the job
+with "a check that does not run is not a pass".
+
+**Two defects only a real display could show, both with fail-before regression tests.** D17: the Follow-ups tab
+lists only applications that already hold a follow-up day, so its list is empty exactly when a person records
+the first one — and the button that sets the day read its subject from that empty list, so the first follow-up
+day was unrecordable from anywhere in the window; fixed in `480dca1`, with H1–H2 recording an application's
+first day from the tracker tab as the display-backed proof. The second: run `38758158210` failed H5 on all five
+legs with `the fields still hold a day that was cleared`, because clearing a day rebuilds the reminder list,
+real Tk fires `<<TreeviewSelect>>` on the rebuilt tree, and the handler refilled the fields from another tab's
+selection; the binding now reads only the reminder list's own row, the acceptance step re-selects the row it
+acts on exactly as a person does, and the fail-before check reproduced as `AssertionError: '2026-10-24' != ''`
+(`0215413`). The stand-in tree could not have produced either: it re-inserts rows without firing the event, and
+it never had an empty list to read a subject from.
+
+**Verified on real windows, per leg, not by badge.** Run `38762008724` at `5b291a7a`: 12/12 jobs, and all five
+display-backed legs report `RESULT: PASS — 76 checks passed` — Linux under Xvfb (`1280x1024 pixels from X11R0`,
+`Tk 8.6`) and Windows 2025 / macOS 26 on CPython 3.10 and 3.13 (`1024x768 pixels from Windows 10.0 26100 Win64`
+and `… from CG0.0 Apple AppKit 2685.7`), with the suite at 1648 tests `OK` (13, 20, 37 and 44 skipped by
+interpreter and platform). Workflow I's first green run was `38761595835` at `d12c2bcb` (68 checks, 12/12) and
+the 60-check run `38759670194` at `0215413` was green before that. The local stand-in development run reports
+76 passed with `RESULT: BLOCKED` and exit 2, and is never used as evidence of window behaviour; a machine with
+no display runs the real entry point and exits 2 with `RESULT: BLOCKED`.
+
+**Test reading.** 1648 tests, `OK (skipped=13)` locally — 12 skips need the optional `pypdf` extra and one runs
+only where the project is installed; `skipped=37` on Windows and `skipped=20` on macOS 3.10 are the platform
+differences the CI legs report. `compileall` is clean, `declared_step_count()` reads 76, and the checklist
+carries 35 "Automated coverage" lines (ten of them in part). No assertion was weakened and no test family was
+skipped to reach green: the two acceptance failures above were fixed in the product and in the check, and the
+earlier timing-sensitive store case was fixed by pinning the write clock rather than by relaxing the comparison.
+
+**What the run still cannot say.** No human has opened this window on any platform. Layout and clipping at
+normal and smaller sizes, dialog wording and clarity, keyboard-only navigation and focus order, screen-reader
+behaviour, real mouse-driven flows and native feel are unverified and stay BLOCKED in the checklist, whose
+verdicts are unchanged at 22 PASS / 76 BLOCKED / 0 FAIL with no box ticked. macOS, Windows and Python 3.14 GUI
+behaviour has only ever been exercised by a script on a runner, never by a person, and installers, signing and
+notarisation remain unimplemented and unclaimed. `SOURCE_QUALITY_GATE_PASSED` stays `False`,
+`enabled_discovery_sources()` stays `()`, the job-source CSV is untouched (`input_sha256 0356b093…`, 83
+records), and no generated database or backup is committed.

@@ -429,3 +429,80 @@ window steps stay BLOCKED for those reasons; where a step's *functional* claim i
 above, the step records that beside its BLOCKED verdict rather than being marked PASS
 (section "Automated coverage of numbered steps" in the checklist). Automated, machine-observed behaviour on a
 runner is not a substitute for a person using the application, and is not reported as one.
+
+## 15. Ten workflows, 76 checks: follow-ups, the scheduler and data safety on five legs
+
+Section 14 records the seven workflows of `scripts/desktop_acceptance.py` as they stood at `e939260` (46
+checks). Three more have been added since, and the script now declares **76 checks**, still in one file, still
+against the real `CareerAgentApp`, each workflow in its own disposable database. Workflow I (the scheduler) and
+workflow J (data safety) were added after workflow H, and each is counted by CI's own step: the run's source
+declares the number of checks, the runner compares it with the number that ran, and a mismatch fails the job.
+
+**Workflow H — follow-up reminders and the combined next-action list (H1–H14).** An application saved in the
+window has no follow-up day; with it selected on the **Application tracker** tab its first day is recorded
+through the tab's own button, and the row carries the day, the note and "in 2 day(s)" while the stored status
+and the confirmation flag are untouched; days computed from fixed offsets read "3 day(s) overdue", "due today"
+and "in 20 day(s)"; the list is ordered by day and the summary leads with "1 overdue, 1 due today: 2
+application(s) need a look."; a day is moved and cleared from its own row, a declined clear changes nothing and
+an accepted one leaves the status alone and empties the fields; the list survives closing and reopening the
+window; a preparation item is added through its own dialog (its kind chooser offering the documented kinds) and
+appears as a next action with its day, an item with no day lists as "No day set" rather than being hidden, and
+ticking one off writes "Done: … The application's status was not changed."; buttons that do not apply to a
+reminder explain instead of acting; a reminder whose listing or application record has gone is reported rather
+than acted on; and the calendar preview and the email draft are read-only — no file written, nothing sent, no
+confirmation event anywhere. **Workflow I — the schedule (I1–I8).** The schedule starts empty, no worker holds
+the lease and the tab says so; the default tasks are added through the tab and adding them again creates
+nothing and leaves the stored tasks untouched; pausing asks first and a declined confirmation changes nothing;
+an accepted pause keeps the task's name, kind, times, timezone and recorded history and its row reads "paused";
+that survives closing and reopening the window; resuming schedules the next run ahead of now and replays no
+missed occurrence; a task deleted behind the window is reported rather than written back; and using the tab
+takes no lease, records no attempt and writes no `task.run_*` or `worker.*` event. **Workflow J — data safety
+(J1–J8).** A backup is written through the Data safety tab's own chooser and verified before the window reports
+success, its file holds the database's records and is owner-only on POSIX, and the live database's digest does
+not move; an existing destination is never overwritten and a destination that cannot be written is refused with
+nothing left behind; a cancelled chooser writes nothing and raises no dialog; a text file, another program's
+database, a file truncated to its first 4 KiB and a copy marked with a newer schema version are each refused
+under "Backup cannot be used" with "The current database was not changed."; declining the restore confirmation
+changes not one byte; a confirmed restore undoes a listing saved after the backup, brings the profile back,
+leaves the window's list matching the stored records, keeps exactly one `<database>.backup-<timestamp>` copy
+holding the pre-restore counts and leaves the database writable; a restore is refused while another connection
+holds the database; and nothing temporary is left beside any database on success or failure.
+
+**The evidence: run 38762008724 at `5b291a7a`, all 12 jobs successful, 76/76 checks on every leg below.**
+
+| Leg | Interpreter and platform | Tk and screen | Desktop acceptance | Suite |
+| --- | --- | --- | --- | --- |
+| Desktop smoke (Linux, display-backed) | CPython 3.12 (system), ubuntu-latest | Tk 8.6, from `/usr/lib/python3.12/tkinter/__init__.py`; `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` | `RESULT: PASS — 76 checks passed` and, separately, `RESULT: PASS — 14 checks passed` for the smoke entry point | no suite in this job; the script asserts its own declared check count |
+| Cross-platform (windows-latest, 3.13) | 3.13.15, `C:\hostedtoolcache\windows\Python\3.13.15\x64\python.exe`, `Windows-2025Server-10.0.26100-SP0` | Tk 8.6 Tcl 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 76 checks passed` | 1648 tests, OK (37 skipped); 78 tests, OK |
+| Cross-platform (windows-latest, 3.10) | 3.10.11, `C:\hostedtoolcache\windows\Python\3.10.11\x64\python.exe`, `Windows-10-10.0.26100-SP0` | Tk 8.6 Tcl 8.6; same screen string | `RESULT: PASS — 76 checks passed` | 1648 tests, OK (44 skipped); 78 tests, OK |
+| Cross-platform (macos-latest, 3.13) | 3.13.16, `/Library/Frameworks/Python.framework/Versions/3.13/bin/python`, `macOS-26.6.2-arm64-arm-64bit-Mach-O` | Tk 8.6 Tcl 8.6; `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` | `RESULT: PASS — 76 checks passed` | 1648 tests, OK (13 skipped); 78 tests, OK |
+| Cross-platform (macos-latest, 3.10) | 3.10.11, `/Library/Frameworks/Python.framework/Versions/3.10/bin/python`, `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6 Tcl 8.6; same screen string | `RESULT: PASS — 76 checks passed` | 1648 tests, OK (20 skipped); 78 tests, OK |
+
+The Windows annotations replace the em dash with an unreadable replacement character, the runner's encoding as
+recorded in section 2.1, not a different result. Workflow I's
+first green run was 38761595835 at `d12c2bcb` (68 checks, 12/12 jobs); workflow J's is the run above. The
+stand-in development path (`--stand-in-tk`) reports 76 passed with `RESULT: BLOCKED` and exit 2 on the machine
+without a display; it is a development aid and is never used as evidence of real-window behaviour, which is why
+every number above comes from a display-backed leg.
+
+**A defect workflow H found on a real display (D17, and a second fix at `0215413`).** Two real-window failures
+came out of these workflows and each is fixed with a regression test at the handler level:
+
+- **D17 — the first follow-up day could not be recorded anywhere in the window.** The Follow-ups tab lists only
+  applications that already hold a day, so its list is empty precisely when a person records the first one; the
+  button that sets the day read its subject from that empty list and always refused with "Select an
+  application". Workflow H1–H2, which records the first day for an application selected on the tracker tab, is
+  the display-backed proof; the fix is in `480dca1` and the handler-level regression test fails before it.
+- **A rebuilt list takes the selection away (`0215413`).** Workflow H5 failed on all five legs of run
+  38758158210 with `SmokeFailure: the fields still hold a day that was cleared` at the acceptance script: after
+  a clear, the list is rebuilt, real Tk fires `<<TreeviewSelect>>` on the rebuilt tree, and the tab's handler
+  refilled the fields from the *Jobs-tab* selection. The binding now reads only the reminder list's own row (and
+  says so), the acceptance step re-selects the row it acts on exactly as a person does, and the fail-before-fix
+  check reproduced with `AssertionError: '2026-10-24' != ''`. The stand-in tree could not produce this: it
+  re-inserts rows without firing the event.
+
+**What this does not establish.** Nothing here was judged by a person on any platform. Layout and clipping,
+dialog wording, keyboard-only navigation and focus order, screen-reader behaviour, mouse-driven flows and
+native feel are outside every check above, no check inspects pixels, and the checklist's window steps stay
+BLOCKED for those reasons — with the functional claim recorded beside the verdict where a workflow now covers
+it. A backup, a pause and a reminder are also not evidence that a person would find them understandable.
