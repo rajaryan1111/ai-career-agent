@@ -386,6 +386,13 @@ added for the purpose (`scripts/desktop_acceptance.py`, section 14 of
   through Tk's own dispatch cannot judge any of them. The checklist verdicts are unchanged: **22 PASS,
   76 BLOCKED, 0 FAIL**, with no box ticked and 20 steps now carrying an "Automated coverage" line (four of
   them in part).
+- **One more flake, in a unit test rather than the product**: the macOS 3.13 leg of run `38750225851` failed a
+  case comparing the whole stored tracker row after an idempotent re-save, because the row's `updated_at` is
+  the store's own write clock at whole-second resolution and the two writes need not land inside one second.
+  The record's own columns are what must not move, and that is what the case now compares (`90e4b3f`), with a
+  second case pinning the clock behaviour deterministically; no store behaviour was changed to make it pass.
+  The last run, `38752606452` at `90e4b3f`, is green on all 12 jobs with 1643 tests `OK (skipped=13)` on
+  macOS 3.13 and `RESULT: PASS — 46 checks passed` on the Linux display leg.
 - **Three defects only a real display could show came out of this**, each fixed with regression tests:
   D14 (a cleanup check read Tk's refusal to answer for a destroyed interpreter as the window having
   survived, fixed in `dfea62d`), D15 (a widget lookup that could not read the name Tk answers a binding

@@ -386,7 +386,9 @@ earlier run.
 
 The same workflows also ran green on run 38739493727 at `a530029` (38 checks), run 38737533708 at `dbaa082`
 (37 checks) and run 38735309770 at `dfea62d` (36 checks); each number is what the script declared at that
-commit, and the count is checked against its own source, not against a number kept in CI. The Windows annotation prints the em dash as `�` — the runner's
+commit, and the count is checked against its own source, not against a number kept in CI. The newest green run at the time of writing - 38752606452 at `90e4b3f`, 12 jobs - reports
+`RESULT: PASS — 46 checks passed` on the Linux display leg and on macOS 3.13 alike, with the suite at 1643
+tests, `OK (skipped=13)`. The Windows annotation prints the em dash as `�` — the runner's
 encoding, as recorded in section 2.1, not a different result.
 
 **Two more that only real Tk could show (D15, D16).** Run 38741309350 at `a7349e8` failed G7 on all five legs
