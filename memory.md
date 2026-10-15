@@ -2934,3 +2934,29 @@ will not risk doing it twice"). Measured: refusing a 20 MB file allocates 1.1 KB
 cover the refusal (with the limit patched small, asserting the shipped 16 MB value as well) and that an
 ordinary ledger still loads and reports its one operation. Full suite 1708 tests, OK (skipped=13).
 
+**2026-10-16, same session - five more defects, all found by pointing the program at something it did not
+expect.** Each was reproduced outside the suite first, refused by a test that fails before the fix, and
+fixed in the smallest place that owns the rule. D26: `--forget-local-data` promised to refuse anything
+"reached through a symbolic link", but the `logs` folder it derives from the database path was not checked -
+with that folder replaced by a link, it deleted a same-named file out of somebody else's folder. D27/D28: the
+database's name was interpolated into a glob pattern unescaped, so a database called `my[1].sqlite3` made the
+snapshot pattern match `my1.sqlite3.backup-...` (listed and deleted by the removal command) while missing its
+own snapshots - and `automatic_backup_snapshots`, which `MAX_AUTOMATIC_SNAPSHOTS` counts, therefore reported
+zero however many were there, so the cap that stops a schedule filling the disk could never be reached.
+D29: an import replaced a stored listing whose identifier it reused. Linking is decided by
+`core.duplicate_key`, the row is keyed by `listing_id` and `save_job` is an upsert by that id, so a record
+that matched no stored identity but reused a stored identifier was planned as new and then overwrote the
+stored listing - employer, URL and availability - while the command printed "Nothing was replaced". D30:
+every read-only command guarded itself with `database.exists()`, and an empty file exists: SQLite reads a
+zero-byte file as a valid empty database and writes the schema into it, so six reports plus the two
+read-only exports wrote 126,976 bytes and an `application.log` beside a file the person had named, then
+printed a line saying nothing had changed. All five are written up in the threat model's section 8.4 with
+their regression tests (`tests/test_cli_forget.py`, `tests/test_handlers.py`, `tests/test_importer.py`,
+`tests/test_config.py`), the README gained the two rules a person needs to know (an identifier a file
+reuses is refused rather than written; an empty file is not a database this app will create), and the
+window harness check for a damaged import now asserts the promise rather than the old heading. Full suite
+1718 tests, OK (skipped=13); compileall clean. CI run 38807628488 at `a57e86c` is the first in which all
+thirteen jobs are green together, which is what makes "3.14 is measured" a statement about the whole matrix
+(`unit-tests (3.14)`: `Ran 1709 tests ... OK (skipped=13)`, `csv: 0356b093ded3...`; `Installed package
+(3.14)` green in the same run).
+
