@@ -331,6 +331,45 @@ so a backup always names the file the app itself would open. Restoring replaces 
   place yourself.
 
 
+## How matching works (and what it will not claim)
+
+When you evaluate a saved listing, the app shows two things: whether you appear **eligible**, and how the
+listing compares with what you have recorded — the **matching** view. Matching looks at six factors and
+says what it found for each one:
+
+| Factor | Compared against |
+| --- | --- |
+| Required skills | the skills the listing states, against the skills you recorded |
+| Experience | the listing's stated range, against the years you recorded |
+| Qualification | any degree/study-status/graduation-year the listing names |
+| Location | the listing's location text, against your preferred places |
+| Work mode | remote / hybrid / onsite, when the listing states one |
+| Role type | internship / full-time / contract / …, when the listing states one |
+
+Each factor is reported as **pass**, **partial**, **fail**, **unknown** or **not applicable**, with the
+reason ("3 of 4 required skill(s) are recorded for you; missing: Kubernetes"), so you can disagree with
+the app and see exactly which fact to change.
+
+**What it will not do.** It does not invent facts: if a listing states no required skills, that factor is
+*not applicable* — not a zero and not a perfect score — and if you have not recorded your experience, the
+experience factor is *unknown* rather than assumed. The score is always shown with **how much of the
+picture was actually known** (the coverage): below half, the reading is *not enough information* whatever
+the known factors said, and a *strong* reading is only possible once two thirds of the applicable weight
+is known. The order listings appear in is a **review order**: it puts listings that could actually be
+compared first, then the better overlap, so a listing you happen to know almost nothing about cannot jump
+to the top.
+
+**It is never a probability.** The number is the share of your recorded preferences that the listing
+satisfies — nothing about the employer, their other applicants, or their decision. It is not a chance of
+being hired, no employer ever sees it, and a script in the test suite fails the build if any wording that
+reads like a forecast appears in the output. A listing whose stated requirements you do not meet is
+**blocked** from the recommendation while its comparison stays on screen: blocking is not hiding.
+
+**Not compared yet:** pay. The record has no compensation field, so the app says nothing about it rather
+than guessing from the listing's free text. Also, differently-spelled skill names are only treated as the
+same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
+otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
+
 ## Run scheduled tasks (local worker)
 
 The app can keep a schedule of its own work. Two tasks are created for you, and both run on your

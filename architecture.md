@@ -65,6 +65,13 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
 - Local backups and export/import.
 - Safe handling of source schema or page changes.
 - Provider-specific response semantics: a successful response with zero records is not always proof that a board is valid and empty; migrations can leave old and new boards both responding; filtered runs must not mark omitted records closed. Record per-source run outcomes, counts before/after filters and deduplication, stable IDs touched, and explicit error categories (empty success, blocked, rate-limited, transient failure, schema error, permission gate closed). See the [n8n workflow pattern review](research/n8n-workflows-repository-review-2026-10-13.md).
+- Matching is a comparison, not a forecast. `career_agent/matching.py` reports each factor
+  (required skills, experience range, stated qualification, location, work mode, role type) as
+  pass/partial/fail/unknown/not applicable with its evidence, and returns a score together with the
+  coverage of the applicable weight that was actually known; below half, the reading is "not enough
+  information" and the score is not allowed to look confident. Silence is never a pass, equivalences
+  between differently-spelled skills come only from a caller-supplied table, and no output may describe a
+  score as a probability. Compensation is deliberately not compared: the domain model has no field for it.
 - Field-level uncertainty: preserve missing vs. zero, raw pay ranges, currency, unit/period, source wording and evidence. Do not normalize ambiguous compensation to annual salary.
 - Contract fixtures per source for pagination, timestamp units, empty/error responses, missing fields, challenge pages, dedup/reposts, and malformed payloads. Keep live smoke tests separate from deterministic offline tests.
 

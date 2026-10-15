@@ -43,6 +43,19 @@ Tasks: finish the 50-record validation sample; measure direct employer applicati
 
 Exit criteria: documented evidence for each enabled source; quality thresholds met or explicitly revised with rationale; unresolved providers remain disabled. The current source-quality gate remains NOT PASSED until the research record says otherwise.
 
+Matching is implemented as a transparent comparison rather than a score:
+`career_agent/matching.py` reports required-skill overlap, the experience range, a stated qualification,
+location, work mode and role type as pass/partial/fail/unknown/not applicable, each with its evidence,
+and returns a score *with the coverage that produced it*. Below half of the applicable weight known the
+reading is "not enough information", a "strong" reading needs two thirds, and the ranking order puts
+listings that could be compared first so a barely-known listing cannot outrank a compared one. Nothing is
+inferred: silence about skills or a location is not a pass, equivalence between different skill names is
+used only when a caller supplies it, and compensation is not compared at all because the domain model has
+no such field (recorded as outstanding). The window shows these lines with the eligibility report, from
+the same evaluation. Synthetic fixtures cover software/data, embedded/VLSI, mechanical, civil, design, a
+sparse record and a near-silent listing; the ranking has not been validated against real outcomes, and
+nothing in the product is calibrated to one industry's vocabulary.
+
 ## Phase 4 — Cross-industry matching validation
 
 **Goal:** Ensure the product is not effectively an AI/ML-only tool.
@@ -94,7 +107,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 894 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 936 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit

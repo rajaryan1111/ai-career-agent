@@ -61,6 +61,13 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
 ### Matching and eligibility
+
+Implemented today: eligibility is a decision (PASS/FAIL/UNKNOWN) from stated requirements, and matching
+is a transparent, per-factor comparison of required skills, experience, a stated qualification, location,
+work mode and role type, reported with the coverage of what was actually known. Ranked output is a review
+order, never a probability, and a listing whose eligibility fails is blocked from recommendation while
+its comparison stays visible. Missing information is reported as missing rather than approximated, and
+compensation is not compared because no compensation field exists yet.
 - Run hard eligibility rules separately from relevance scoring.
 - Evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
 - Explain positive matches, missing requirements, and unresolved questions.

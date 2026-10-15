@@ -1923,3 +1923,54 @@ an unreadable row reported, a stale selection, and the stored definition winning
 A real end-to-end run outside the tests: a due backup task wrote `career_agent.sqlite3.backup-<stamp>`
 and verified it, status showed the run, and Ctrl-C released the lease - with the log reading
 `worker.lease_taken` → `task.run_started` → `backup.written` → `task.run_succeeded` → `worker.lease_released`.
+
+## 2026-10-15 — Explainable matching across industries, with coverage leading the ranking
+
+**What changed.** `career_agent/matching.py` is the comparison engine, and
+`tests/matching_fixtures.py` holds synthetic fixtures for six industries (software/data, embedded/VLSI,
+mechanical, civil, design), a sparse record, a listing that states nothing, and a case where one factor
+out of ten weight units is comparable. The engine builds six factors - required skills, experience
+range, stated qualification, location, work mode, role type - reports each as pass, partial, fail,
+unknown or not applicable with the evidence behind it, and returns a score *and the coverage that
+produced it*. The window's evaluate dialog now shows these lines under the eligibility report, computed
+from the *same* eligibility report so the two answers cannot disagree.
+
+**Nothing is invented.** A listing that names no required skills has a skills factor that is
+*not applicable* with no score - not zero and not a perfect score. A person who recorded no skills gets
+"unknown", not a failure. A listing that states no location gets "unknown" for location, not a pass.
+Text is folded only for case, spacing and separators: ``Power-BI``/``power_bi`` are one skill,
+``VHDL``/``Verilog`` are not, and equivalences such as ``Postgres``/``PostgreSQL`` are used only when the
+caller supplies them. **Compensation is not compared at all**, because the domain model has no field for
+it: inventing one from free text is exactly what this module refuses, and it is recorded as outstanding
+rather than approximated.
+
+**A number is never a forecast.** The score is the share of the *recorded preference weight* the listing
+satisfies, always reported beside its coverage, always with the disclaimer that it is not a probability
+of being hired. A test scans every string the module can produce for forecast-like phrases
+(``probability``, ``chance of``, ``likely to be hired``, ``guaranteed``, ``will be selected``) and fails
+if one appears outside the disclaimer that denies it.
+
+**Coverage decides the band, and the ranking.** Below 50% of the applicable weight known, the band is
+"not enough information" whatever the known factors said; a "strong" reading needs two thirds, because a
+bare majority is not a strong comparison. Three tests pin those boundaries, including one where a perfect
+skills match covers only 30% of the weighted picture and is therefore *not* a strong fit. The ranking
+order puts listings that could actually be compared first, then by score, then by coverage, then by id -
+so the order is stable between runs and a barely-known listing cannot outrank a compared one.
+
+**Eligibility is not overruled.** A FAIL blocks the recommendation while keeping the comparison visible
+(blocking is not hiding), an UNKNOWN eligibility is reported as undecided rather than rounded to a match,
+and blocked listings are excluded from the default order but kept in the full set.
+
+**Found while writing it (two real flaws the tests caught).** First, the original ranking key put
+coverage ahead of score, so a listing with a perfect skills match and a zero-everything-else record
+outranked a listing that fitted well and was fully known; the key is now grouped and documented. Second,
+the first version of the experience factor let a stored ``nan``/``inf`` satisfy a range, contradicting the
+eligibility checker, which refuses it; a non-finite value is now "unknown, not a usable number".
+
+**Teeth checks.** Treating "no skills recorded" as a pass failed 2 tests; ignoring the ranking key failed
+4; removing the coverage floor failed 1; making a preference mismatch always pass failed 2 - and that last
+one first *found a gap*: nothing had pinned a mismatch, so a test was added for work mode and role type
+before the check could bite.
+
+**Evidence.** Full suite 936 tests OK (13 skipped without the optional `pypdf`); `tests/test_matching.py`
+is 45 of them, and the existing evaluation-dialog test was extended rather than weakened.

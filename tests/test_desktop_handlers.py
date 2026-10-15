@@ -2107,7 +2107,15 @@ class StaleSelectionTests(HandlerTestCase):
         self.assertIn("Skill overlap:", report)
         for item in expected.requirements:
             self.assertIn(f"[{item.decision.value.upper()}] {item.requirement}:", report)
-        self.assertEqual(self.app.status.get(), f"Eligibility for {job.role_title}: {expected.decision.value}.")
+        self.assertIn("MATCHING (explainable, and never a prediction)", report)
+        self.assertIn("Overlap score:", report)
+        self.assertIn("How much was known:", report)
+        self.assertIn("not a probability of being hired", report,
+                      "the disclaimer travels with the comparison, in the window too")
+        self.assertTrue(
+            self.app.status.get().startswith(f"Eligibility for {job.role_title}: {expected.decision.value};"),
+            f"the status line must lead with the decision and add the matching reading: "
+            f"{self.app.status.get()!r}")
 
     def test_evaluate_keeps_an_unproven_listing_unknown(self):
         """The behaviour the user saw on macOS: no availability evidence means UNKNOWN."""

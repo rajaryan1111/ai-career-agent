@@ -26,6 +26,7 @@ from . import __version__
 from .config import database_path_for_run
 from .event_log import record_event
 from .handlers import default_registry, describe_default_handlers, seed_default_tasks
+from .matching import DISCLAIMER as MATCHING_DISCLAIMER, FactorStatus, assess
 from .worker import WorkerSettings, worker_status
 from .desktop_logic import (
     ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity, build_candidate_profile,
@@ -1119,13 +1120,31 @@ class CareerAgentApp:
             return
         report = evaluate_eligibility(profile, job)
         relevance = score_relevance(profile, job)
+        # The eligibility report is evaluated once and handed to the matching engine, so the two answers
+        # in this dialog come from the same report rather than from two evaluations that could disagree.
+        assessment = assess(profile, job, eligibility=report)
         lines = [f"ELIGIBILITY: {report.decision.value.upper()}", "Only explicit PASS is eligible. UNKNOWN is not eligible.", ""]
         lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.explanation}" for item in report.requirements]
         lines += ["", f"Skill overlap: {relevance.get('skill_overlap', 'n/a')} (not a hiring probability)",
                   "Matched skills: " + (", ".join(relevance.get("matched_skills", [])) or "None recorded"),
                   "Missing required skills: " + (", ".join(relevance.get("missing_required_skills", [])) or "None recorded")]
+        lines += ["", "MATCHING (explainable, and never a prediction)", ""]
+        lines += [f"  {factor.line()}" for factor in assessment.factors
+                  if factor.status is not FactorStatus.NOT_APPLICABLE]
+        lines += [
+            "",
+            f"  Overlap score: {assessment.score:.0%} of the recorded preference weight"
+            if assessment.score is not None else "  Overlap score: nothing could be compared yet",
+            f"  How much was known: {assessment.coverage:.0%} of the applicable weight",
+            f"  Reading: {assessment.band.value.replace('_', ' ')}",
+            f"  Suggested next step: {assessment.recommendation.value.replace('_', ' ')}",
+        ]
+        lines += [f"  {note}" for note in assessment.notes]
+        lines += ["", "  " + MATCHING_DISCLAIMER]
         self._report("\n".join(lines))
-        self.status.set(f"Eligibility for {job.role_title}: {report.decision.value}.")
+        self.status.set(
+            f"Eligibility for {job.role_title}: {report.decision.value}; "
+            f"{assessment.band.value.replace('_', ' ')}")
 
     def _shortlist(self):
         listing_id = self._selected_listing_id()
