@@ -1,0 +1,319 @@
+"""Tests for scripts/desktop_acceptance.py - the end-to-end desktop workflows.
+
+Two things are tested here, and they are different from each other.
+
+* **Under this machine's own Tk, if it has one**, the workflows run for real: the real ``CareerAgentApp``
+  window, the real widgets, the real handlers, the real SQLite files, and every check asserting what was
+  actually stored. On Linux without a display, and on an interpreter without ``tkinter``, that half reports
+  BLOCKED - the same 0/1/2 the script itself uses - rather than skipping quietly, so "no window here" can
+  never be mistaken for "everything passed".
+* **Always**, the harness's own reading of a window is exercised against a stand-in widget module: that a
+  typed value reaches the entry bound to the application's variable, that a button is pressed through its
+  own ``invoke``, that a dialog is found by its title, that every Tk variable a dialog creates is captured,
+  and that a widget without the option asked for is not mistaken for the one wanted. Those are the parts of
+  the harness that would silently stop checking things if Tk's own behaviour were assumed instead.
+
+The stand-in is not a substitute for the display-backed run: whether the workflows pass against real Tk is
+exactly what this file cannot answer, which is why the result is reported as BLOCKED here and as a real
+pass or failure in CI's display-backed Linux job and on the Windows and macOS runners.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+for folder in (REPOSITORY_ROOT / "scripts", REPOSITORY_ROOT / "tests"):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+import desktop_acceptance as acceptance  # noqa: E402
+import desktop_smoke_test as smoke  # noqa: E402
+import test_desktop_handlers as stub_module  # noqa: E402  (the stand-in widgets, reused on purpose)
+
+
+def run_the_script(*arguments: str) -> tuple[int, str]:
+    """Run ``scripts/desktop_acceptance.py`` in its own interpreter and return (status, output).
+
+    In its own interpreter *on purpose*. This test file imports ``tests/test_desktop_handlers.py``, which
+    installs its stand-in widget module for the whole process and leaves ``career_agent.desktop`` bound to
+    it. A real display-backed run inside that process would build stub widgets inside a real host window,
+    find nothing to drive, and fail - or, worse, if the stand-in were partial, look at widgets that are not
+    on screen and call it evidence. A separate interpreter has none of that history: it runs exactly the
+    command CI runs, and its exit status is the same 0/1/2 a person gets.
+    """
+    completed = subprocess.run(
+        [sys.executable, str(REPOSITORY_ROOT / "scripts" / "desktop_acceptance.py"), *arguments],
+        cwd=str(REPOSITORY_ROOT), capture_output=True, text=True, timeout=600, check=False,
+    )
+    return completed.returncode, completed.stdout + completed.stderr
+
+
+class HarnessTests(unittest.TestCase):
+    """Reading a window: the harness against the project's own stand-in widget module."""
+
+    def setUp(self):
+        self.tk = stub_module._tkinter  # noqa: SLF001 - the stand-in module the suite already maintains
+        self.original = sys.modules.get("tkinter")
+        sys.modules["tkinter"] = self.tk
+        sys.modules.setdefault("tkinter.ttk", types.ModuleType("tkinter.ttk"))
+        stub_module.BUTTONS.clear()
+        stub_module.MESSAGES.reset()
+
+    def tearDown(self):
+        if self.original is None:
+            sys.modules.pop("tkinter", None)
+        else:
+            sys.modules["tkinter"] = self.original
+
+    def make_vars(self, *names):
+        return {name: self.tk.StringVar(value="") for name in names}
+
+    def make_form(self, names):
+        """A frame holding one entry per variable, built the way the window builds its forms."""
+        frame = self.tk.ttk.Frame()
+        variables = self.make_vars(*names)
+        for variable in variables.values():
+            self.tk.ttk.Entry(frame, textvariable=variable)
+        return frame, variables
+
+    def test_a_value_typed_into_the_bound_entry_reaches_the_applications_variable(self):
+        frame, variables = self.make_form(["country", "graduation_year"])
+        typed = acceptance.type_into(frame, variables["country"], "Syntheticland", what="the country field")
+        self.assertEqual(typed, "Syntheticland")
+        self.assertEqual(variables["country"].get(), "Syntheticland")
+        self.assertEqual(variables["graduation_year"].get(), "", "the wrong field was written to")
+
+    def test_typing_replaces_what_was_there_rather_than_appending(self):
+        frame, variables = self.make_form(["country"])
+        variables["country"].set("Old value")
+        acceptance.type_into(frame, variables["country"], "New value", what="the country field")
+        self.assertEqual(variables["country"].get(), "New value")
+
+    def test_a_widget_bound_to_no_variable_is_not_taken_for_the_one_wanted(self):
+        frame = self.tk.ttk.Frame()
+        wanted = self.tk.StringVar(value="")
+        self.tk.ttk.Entry(frame)  # an entry the window did not bind to anything
+        self.tk.ttk.Entry(frame, textvariable=wanted)
+        found = acceptance.widget_for(frame, wanted, klass=acceptance.ENTRY, what="the field")
+        self.assertIs(found.cget("textvariable"), wanted)
+
+    def test_a_missing_control_fails_with_a_message_naming_what_was_looking_for(self):
+        frame = self.tk.ttk.Frame()
+        self.tk.ttk.Label(frame, text="nothing like a button")
+        with self.assertRaises(acceptance.SmokeFailure) as caught:
+            acceptance.press(frame, "Save job", mock.Mock())
+        self.assertIn("button labelled 'Save job'", str(caught.exception))
+        self.assertIn("TLabel", str(caught.exception), "the failure does not say what was there instead")
+
+    def test_pressing_a_button_runs_the_command_the_window_built_it_with(self):
+        frame = self.tk.ttk.Frame()
+        calls = []
+        self.tk.ttk.Button(frame, text="Save job", command=lambda: calls.append("pressed"))
+        acceptance.press(frame, "Save job", mock.Mock())
+        self.assertEqual(calls, ["pressed"])
+
+    def test_a_chooser_is_set_through_the_variable_the_window_bound_to_it(self):
+        frame = self.tk.ttk.Frame()
+        scope = self.tk.StringVar(value="unknown")
+        self.tk.ttk.Combobox(frame, textvariable=scope, values=["unknown", "worldwide"])
+        acceptance.choose_in(frame, scope, "worldwide", what="the scope chooser")
+        self.assertEqual(scope.get(), "worldwide")
+
+    def test_a_dialog_is_found_by_the_title_the_window_gave_it(self):
+        host = self.tk.Tk()
+        dialog = self.tk.Toplevel(host)
+        dialog.title("Update application status")
+        self.assertIs(acceptance.open_dialog(host, "Update application status"), dialog)
+        with self.assertRaises(acceptance.SmokeFailure) as caught:
+            acceptance.open_dialog(host, "No such dialog")
+        self.assertIn("Update application status", str(caught.exception),
+                      "the failure does not list the dialogs that were open")
+
+    def test_every_variable_a_dialog_creates_is_recorded_for_it(self):
+        from career_agent import desktop  # noqa: PLC0415 - imported with the stand-in installed
+
+        policy = acceptance.DialogPolicy()
+        created = []
+
+        def build_dialog():
+            created.append(desktop.tk.StringVar(value="first"))
+            created.append(desktop.tk.BooleanVar(value=False))
+            return created[-1]
+
+        acceptance.record_dialog_controls(policy, "A dialog", build_dialog)
+        self.assertEqual(created[0].get(), "first", "the dialog's own variable changed under it")
+        self.assertEqual([variable.get() for variable in acceptance.string_variables(policy, "A dialog")],
+                         ["first"])
+        self.assertEqual([variable.get() for variable in acceptance.boolean_variables(policy, "A dialog")],
+                         [False])
+        self.assertEqual(list(policy.fields), ["A dialog"])
+
+    def test_the_dialog_policy_answers_files_in_order_and_records_every_dialog(self):
+        policy = acceptance.DialogPolicy(files=("/tmp/one.json", "/tmp/two.json"),
+                                         answers={"Delete?": False})
+        self.assertEqual(policy.asksaveasfilename(), "/tmp/one.json")
+        self.assertEqual(policy.askopenfilename(), "/tmp/two.json")
+        self.assertEqual(policy.asksaveasfilename(), "", "a chooser with no path left must cancel")
+        self.assertFalse(policy.askyesno("Delete?", "Really?"))
+        self.assertTrue(policy.askyesno("Import this file?", "Apply it now?"))
+        policy.showinfo("Import complete", "Added one listing")
+        self.assertEqual(policy.titles(), ["Delete?", "Import this file?", "Import complete"])
+        self.assertEqual(policy.titles("showinfo"), ["Import complete"])
+        self.assertIn("Added one listing", policy.said("Import complete"))
+
+    def test_a_text_widget_reports_what_the_window_wrote_into_it(self):
+        text = self.tk.Text()
+        text.insert("1.0", "ELIGIBILITY: UNKNOWN\n")
+        self.assertEqual(acceptance.text_in(text), "ELIGIBILITY: UNKNOWN\n")
+
+
+class WorkflowWiringTests(unittest.TestCase):
+    """The acceptance run is only evidence if CI runs it where a window exists, and gates on it."""
+
+    def setUp(self):
+        self.workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+
+    def test_the_script_runs_on_the_display_backed_leg_and_gates_on_its_result(self):
+        self.assertIn("xvfb-run -a --server-args=\"-screen 0 1280x1024x24\" python3 scripts/desktop_acceptance.py",
+                      self.workflow)
+        self.assertIn("grep -q \"RESULT: PASS\"", self.workflow)
+        self.assertIn("RESULT: BLOCKED", self.workflow)
+        self.assertEqual(acceptance.EXIT_PASS, 0)
+        self.assertEqual(acceptance.EXIT_FAIL, 1)
+        self.assertEqual(acceptance.EXIT_BLOCKED, 2)
+
+    def test_the_leg_fails_when_a_workflow_stops_running_or_a_check_count_drops(self):
+        self.assertIn('for workflow in A B C D E F', self.workflow)
+        self.assertIn("grep -c '^\\[ ok \\]'", self.workflow)
+
+    def test_the_stand_in_flag_is_used_only_to_prove_it_is_not_evidence(self):
+        # Exactly one run asks for the stand-in, and it is the step that requires BLOCKED and no pass
+        # line from it. A second one anywhere would mean CI had started accepting stand-in results.
+        self.assertEqual(self.workflow.count("desktop_acceptance.py --stand-in-tk"), 1)
+        self.assertIn("Confirm the acceptance workflows cannot be run against stand-in widgets in CI",
+                      self.workflow)
+
+    def test_a_run_with_no_display_must_not_report_a_pass(self):
+        # The step that runs with DISPLAY unset requires exit 2 and forbids a pass line, which is what
+        # keeps a display-less runner from looking green.
+        self.assertIn('env -u DISPLAY python3 scripts/desktop_acceptance.py', self.workflow)
+        self.assertIn("the acceptance run reported success without a display", self.workflow)
+
+    def test_the_windows_and_macos_legs_run_the_workflows_and_tolerate_only_blocked(self):
+        self.assertIn("Desktop acceptance workflows (the real window, or an honest BLOCKED)", self.workflow)
+        self.assertIn("the acceptance workflows reported BLOCKED on ${{ matrix.os }}", self.workflow)
+        self.assertIn("the acceptance workflows failed on this runner", self.workflow)
+
+
+class DevelopmentRunTests(unittest.TestCase):
+    """The stand-in run: useful for writing the workflows, and impossible to mistake for evidence."""
+
+    def test_a_stand_in_run_never_reports_a_pass_or_failure_and_exits_blocked(self):
+        status, output = run_the_script("--stand-in-tk")
+
+        self.assertEqual(status, smoke.EXIT_BLOCKED, "a stand-in run must never be a pass or a failure")
+        self.assertNotIn("RESULT: PASS", output, "a stand-in run printed a pass line")
+        self.assertNotIn("RESULT: FAIL", output, "a stand-in run printed a failure line")
+        self.assertIn("DEVELOPMENT RUN", output)
+        self.assertIn("not a desktop", output)
+        self.assertIn("[ ok ] A1", output, "the development run did not exercise the workflows")
+        self.assertIn("DEVELOPMENT RESULT: 36 checks passed, 0 failed", output)
+
+    def test_a_stand_in_tkinter_is_recognised_as_one(self):
+        self.assertTrue(acceptance.using_stand_in_tk(types.ModuleType("tkinter")))
+        self.assertFalse(acceptance.using_stand_in_tk(smoke))  # a real module, with a file
+
+
+class SelectionTests(unittest.TestCase):
+    """Selecting a row, against a window whose event loop cannot dispatch a selection event."""
+
+    def setUp(self):
+        self.tk = stub_module._tkinter  # noqa: SLF001
+        self.original = sys.modules.get("tkinter")
+        sys.modules["tkinter"] = self.tk
+        stub_module.BUTTONS.clear()
+        stub_module.MESSAGES.reset()
+
+    def tearDown(self):
+        if self.original is None:
+            sys.modules.pop("tkinter", None)
+        else:
+            sys.modules["tkinter"] = self.original
+
+    def fake_app(self):
+        """The smallest stand-in for the window: a jobs tree, a handler, and its own record of the row."""
+        app = types.SimpleNamespace()
+        app.jobs_tree = self.tk.ttk.Treeview()
+        app.jobs_tree.insert("", "end", iid="synthetic-1", values=("a listing",))
+        app.selected_job_id = None
+        app.handler_calls = []
+
+        def select_job():
+            app.handler_calls.append(app.jobs_tree.selection()[:1])
+            app.selected_job_id = str(app.jobs_tree.selection()[0])
+
+        app._select_job = select_job
+        return app
+
+    def test_the_handler_runs_once_when_the_window_has_not_reacted(self):
+        app = self.fake_app()
+        acceptance.select_listing(app, "synthetic-1", mock.Mock(update=lambda: None))
+        self.assertEqual(len(app.handler_calls), 1, "the selection handler did not run exactly once")
+        self.assertEqual(app.selected_job_id, "synthetic-1")
+
+    def test_the_handler_is_not_run_again_when_the_window_already_reacted(self):
+        app = self.fake_app()
+        app.selected_job_id = "synthetic-1"  # as if the event loop had already dispatched the selection
+        acceptance.select_listing(app, "synthetic-1", mock.Mock(update=lambda: None))
+        self.assertEqual(app.handler_calls, [], "the window's own dispatch was duplicated by the harness")
+
+    def test_a_window_that_never_reacts_fails_the_selection_check(self):
+        app = self.fake_app()
+        app._select_job = lambda: None  # a window that does nothing with the selection
+        with self.assertRaises(acceptance.SmokeFailure) as caught:
+            acceptance.select_listing(app, "synthetic-1", mock.Mock(update=lambda: None))
+        self.assertIn("not working on 'synthetic-1'", str(caught.exception))
+
+
+class DisplayBackedWorkflowTests(unittest.TestCase):
+    """The workflows themselves, against this machine's own Tk when it has one.
+
+    Reported as BLOCKED, not skipped, when it does not: a suite that went green here while asserting
+    nothing about the workflows would be the exact failure this project keeps writing rules about.
+    """
+
+    def test_the_workflows_run_against_a_real_window_or_report_they_cannot(self):
+        status, output = run_the_script()
+
+        if status == smoke.EXIT_BLOCKED:
+            self.assertIn("RESULT: BLOCKED", output)
+            self.assertNotIn("RESULT: PASS", output)
+            self.assertNotIn("RESULT: FAIL", output)
+            print(f"\n[acceptance] BLOCKED on this machine: {output.strip().splitlines()[-2]}")
+            return
+
+        self.assertIn("A1", output, "the profile workflow did not run")
+        self.assertEqual(
+            status, smoke.EXIT_PASS,
+            f"the acceptance run did not pass. Exit {status}. Output tail:\n{output[-6000:]}",
+        )
+        self.assertIn("RESULT: PASS", output)
+        # Every workflow is named in the report, so a workflow that silently stopped running shows up here.
+        for name, _workflow in acceptance.WORKFLOWS:
+            self.assertIn(f"--- workflow {name}", output)
+
+    def test_the_workflow_list_covers_the_documented_letters(self):
+        names = [name for name, _workflow in acceptance.WORKFLOWS]
+        self.assertEqual([name[0] for name in names], ["A", "B", "C", "D", "E", "F"])
+        for name, workflow in acceptance.WORKFLOWS:
+            self.assertTrue(callable(workflow), f"{name} is not runnable")
+            self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

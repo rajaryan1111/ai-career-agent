@@ -246,11 +246,63 @@ jobs:
           test "$status" -eq 0 \
             || { echo "the smoke test did not pass under a real display (exit $status)"; exit 1; }
           grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+      - name: Confirm the acceptance workflows refuse to report success without a display
+        run: |
+          set +e
+          output="$(env -u DISPLAY python3 scripts/desktop_acceptance.py 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -eq 2 || { echo "the acceptance run must exit 2 (BLOCKED) with no display, not $status"; exit 1; }
+          grep -q "RESULT: BLOCKED" <<< "$output"
+          if grep -q "RESULT: PASS" <<< "$output"; then
+            echo "the acceptance run reported success without a display"; exit 1
+          fi
+      - name: Confirm the acceptance workflows cannot be run against stand-in widgets in CI
+        run: |
+          # The stand-in run exists for writing the workflows on a machine with no display. It must never
+          # report a pass or a failure, so a CI step that accidentally asked for it would still not be
+          # evidence - and this step fails if that stops being true.
+          set +e
+          output="$(python3 scripts/desktop_acceptance.py --stand-in-tk 2>&1)"
+          status=$?
+          set -e
+          echo "$output" | tail -3
+          test "$status" -eq 2 || { echo "a stand-in run must exit 2 (BLOCKED), not $status"; exit 1; }
+          if grep -qE "RESULT: (PASS|FAIL)" <<< "$output"; then
+            echo "a stand-in run printed a pass or failure line"; exit 1
+          fi
+          grep -q "DEVELOPMENT RUN" <<< "$output"
+      - name: Run the desktop acceptance workflows against the virtual display
+        run: |
+          set +e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_acceptance.py \
+            > "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"
+          tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt" < "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" > /dev/null
+          test "$status" -eq 0 \
+            || { echo "the acceptance workflows did not pass under a real display (exit $status)"; exit 1; }
+          grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"
+          # Every workflow ran, and every one of its checks passed: a workflow that silently stopped
+          # running would leave the line count short, which is what this compares.
+          for workflow in A B C D E F; do
+            grep -q -- "--- workflow $workflow" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" \
+              || { echo "workflow $workflow did not run"; exit 1; }
+          done
+          test "$(grep -c '^\[ ok \]' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt")" -eq 36 \
+            || { echo "the acceptance run did not report 36 passing checks"; exit 1; }
+          if grep -qE '^\[ *fail *\]|^FAILED: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"; then
+            echo "a check failed but the run reported PASS"; exit 1
+          fi
       - name: Confirm the smoke test left no window, database or temporary folder behind
         run: |
           set -euo pipefail
           test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-desktop-smoke-*' -print -quit)" \
             || { echo "a disposable folder survived the smoke run"; exit 1; }
+          test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-acceptance-*' -print -quit)" \
+            || { echo "a disposable folder survived the acceptance run"; exit 1; }
           # Ask the application where it would keep its own files on this system rather than guessing
           # the folder: the point of the check is that the run left nothing there, and resolving that
           # path touches nothing.
@@ -275,6 +327,15 @@ jobs:
           grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
             "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
           python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
+      - name: Record what the acceptance workflows reported, step by step
+        if: always()
+        shell: bash
+        run: |
+          # One line per workflow and per check, plus the failures, so the acceptance evidence is
+          # readable through the API on a restricted network as well as in the log.
+          grep -E '^(--- workflow |\[ *fail *\]|\[ ok \]|FAILED: |RESULT: |DEVELOPMENT RESULT:)' \
+            "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" > "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" || true
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" --tail 24 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -682,6 +743,24 @@ jobs:
             reason="$(grep -m1 '^BLOCKED: ' "$report" || true)"
             echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED): ${reason:-no reason was printed}"
           elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      - name: Desktop acceptance workflows (the real window, or an honest BLOCKED)
+        run: |
+          # The same workflows the display-backed Linux job runs, on this platform's own Tk. A runner with
+          # no display session reports BLOCKED rather than passing, which is a real answer about this
+          # platform and is recorded as a warning; a failure here is a failure.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set +e
+          python scripts/desktop_acceptance.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "the acceptance workflows passed on this runner"
+          elif [ "$status" -eq 2 ]; then
+            echo "::warning::the acceptance workflows reported BLOCKED on ${{ matrix.os }} (no display session)"
+          else
+            echo "the acceptance workflows failed on this runner"
             exit "$status"
           fi
       - name: Desktop smoke test (the real window, or an honest BLOCKED)

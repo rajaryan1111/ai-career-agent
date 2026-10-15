@@ -114,12 +114,85 @@ class TclOptionError(Exception):
 
 
 class Widget:
+    #: What real Tk answers for ``winfo_class()``. Every subclass names its own, so a test (or the
+    #: acceptance harness) can find widgets the way a person sees them - "the button", "the entry" -
+    #: instead of by where they happen to sit in a list.
+    tk_class = "Widget"
+
     def __init__(self, *args, **kwargs):
         self.options = kwargs
         # The first positional argument is the parent widget in every real Tk constructor, so tests can
         # check where a widget was placed (inside the scrolling area, or in the fixed footer).
         self.master = args[0] if args else kwargs.get("master")
         self.destroyed = False
+        # Real Tk knows its own widget tree, and walking it is how the acceptance harness (and the
+        # desktop smoke test) find the control a person would press. A stub that did not build one
+        # would make those walks untestable here, which is the opposite of what a stub is for.
+        # Deliberately *not* called ``children``: the tree-view stub already uses that name for its rows.
+        self.widget_children = []
+        if isinstance(self.master, Widget):
+            self.master.widget_children.append(self)
+
+    def winfo_children(self):
+        """The widgets whose parent this one is, in the order real Tk would list them."""
+        return list(self.widget_children)
+
+    def winfo_class(self):
+        """The Tk class name, as real ``winfo_class`` reports it."""
+        return self.tk_class
+
+    def cget(self, name):
+        """The configured value of one option, as real ``cget`` reports it.
+
+        Real Tk answers with the *value* for most options and with the variable's Tcl name for
+        ``textvariable``; here it is whatever the widget was constructed with, which is the variable
+        object. Both spellings are accepted by the acceptance harness: it compares a widget's linked
+        variable with the application's own variable by identity *or* by name, so a real window and this
+        stub are read the same way.
+        """
+        if name in self.options:
+            return self.options[name]
+        raise KeyError(f"{self.tk_class} has no option {name!r} as configured")
+
+    def nametowidget(self, name):
+        """Real ``nametowidget`` resolves a widget path; here the widget itself is the name."""
+        if isinstance(name, Widget):
+            return name
+        raise KeyError(name)
+
+    def winfo_exists(self):
+        return not self.destroyed
+
+    def update(self, *args, **kwargs):
+        return None
+
+    def update_idletasks(self, *args, **kwargs):
+        return None
+
+    def withdraw(self, *args, **kwargs):
+        """Real ``wm withdraw``: the window exists but is not shown."""
+        self.withdrawn = True
+        return None
+
+    def deiconify(self, *args, **kwargs):
+        self.withdrawn = False
+        return None
+
+    def state(self, *args, **kwargs):
+        return "withdrawn" if getattr(self, "withdrawn", False) else "normal"
+
+    def focus_set(self, *args, **kwargs):
+        return None
+
+    def see(self, *args, **kwargs):
+        return None
+
+    def wait_window(self, *args, **kwargs):
+        # Nothing is modal in a test: the handler that opened the dialog has already returned.
+        return None
+
+    def after(self, *_args, **_kwargs):
+        return None
 
     def pack(self, *args, **kwargs):
         return self
@@ -151,16 +224,22 @@ class Widget:
         return self
 
     def title(self, *args, **kwargs):
-        self.title_text = args[0] if args else None
-        return None
+        """Real ``title`` sets the window title, and answers with it when called with no argument."""
+        if args:
+            self.title_text = args[0]
+            return None
+        return getattr(self, "title_text", None)
 
     def geometry(self, *args, **kwargs):
         self.requested_geometry = args[0] if args else None
         return None
 
     def minsize(self, *args, **kwargs):
-        self.requested_minsize = args[:2]
-        return None
+        """Real ``minsize`` sets the minimum size, and answers with it when called with no argument."""
+        if args:
+            self.requested_minsize = args[:2]
+            return None
+        return getattr(self, "requested_minsize", None)
 
     def protocol(self, handle=None, func=None, *args, **kwargs):
         # Real Tk runs this handler when the window is closed; recording it lets a test do the same.
@@ -186,6 +265,8 @@ class Widget:
 
     def destroy(self):
         self.destroyed = True
+        if isinstance(self.master, Widget) and self in self.master.widget_children:
+            self.master.widget_children.remove(self)
 
 
 class ValidatedWidget(Widget):
@@ -202,10 +283,13 @@ class ValidatedWidget(Widget):
 
 
 class Frame(ValidatedWidget):
+    tk_class = "TFrame"
     allowed_options = TTK_FRAME_OPTIONS
 
 
 class LabelFrame(Frame):
+    tk_class = "TLabelframe"
+
     """``ttk.LabelFrame``: a frame that also accepts the option naming it.
 
     The real widget's own option list, so a typo in the window's code is still caught here - and the title
@@ -222,12 +306,15 @@ class LabelFrame(Frame):
 class Notebook(ValidatedWidget):
     """Notebook stand-in; records each tab as ``(frame, label)`` in the order it was added."""
 
+    tk_class = "TNotebook"
     allowed_options = TTK_NOTEBOOK_OPTIONS
     created = []
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tabs = []
+        #: Nothing is selected until something selects it, as in a fresh notebook.
+        self.selected_tab = None
         Notebook.created.append(self)
 
     def add(self, frame, **kwargs):
@@ -237,10 +324,37 @@ class Notebook(ValidatedWidget):
     def labels(self):
         return [text for _frame, text in self.tabs]
 
+    # The three methods a notebook is read and driven through, as real ``ttk.Notebook`` implements them:
+    # asking which tab is shown, choosing one, resolving a widget name, and reading a tab's label.
+    def select(self, tab=None):
+        """Choose a tab (or answer which one is chosen), as real ``ttk.Notebook.select`` does."""
+        if tab is None:
+            return self.selected_tab
+        self.selected_tab = tab
+        return None
+
+    def index(self, tab):
+        """The position of a tab, accepting the string ``"current"`` as real Tk does."""
+        frames = [frame for frame, _label in self.tabs]
+        if str(tab) == "current":
+            if self.selected_tab is None:
+                raise KeyError("no tab is selected")
+            return frames.index(self.selected_tab)
+        return frames.index(tab)
+
+    def tab(self, tab, option=None, **kwargs):
+        if option == "text":
+            for frame, label in self.tabs:
+                if frame is tab:
+                    return label
+            raise KeyError(f"{tab!r} is not a tab of this notebook")
+        return {}
+
 
 class Canvas(ValidatedWidget):
     """Canvas stand-in: keeps the scrolled child window and any scroll request a test caused."""
 
+    tk_class = "Canvas"
     allowed_options = CANVAS_OPTIONS
     created = []
 
@@ -276,6 +390,7 @@ class Canvas(ValidatedWidget):
 
 
 class Tree(ValidatedWidget):
+    tk_class = "Treeview"
     allowed_options = TTK_TREEVIEW_OPTIONS
 
     def __init__(self, *args, **kwargs):
@@ -388,15 +503,79 @@ class ButtonRegistry:
 
 
 class Button(ValidatedWidget):
+    tk_class = "TButton"
     allowed_options = TTK_BUTTON_OPTIONS
 
     @property
     def text(self):
         return self.options.get("text", "")
 
+    def invoke(self):
+        """Run the command this button was built with: real ``invoke``, without the mouse."""
+        command = self.options.get("command")
+        return command() if command else None
+
+
+class Text(Widget):
+    """``tk.Text`` stand-in: keeps the text so a test can read a report back out of the widget.
+
+    Deliberately permissive about options, like the assignment it replaces: the real text widget has a
+    long option list of its own, and this stub's job is the content, not the option set.
+    """
+
+    tk_class = "Text"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.content = ""
+
+    def insert(self, index, text):
+        # Real Tk inserts at a position; the harness only ever writes the whole buffer at "1.0".
+        if str(index) in ("1.0", "end", "end-1c"):
+            self.content += str(text)
+        return None
+
+    def delete(self, first, last=None):
+        self.content = ""
+        return None
+
+    def get(self, first=None, last=None):
+        return self.content
+
+    def yview(self, *args, **kwargs):
+        return None
+
 
 class Entry(ValidatedWidget):
+    """Entry stand-in that keeps what was typed, which a handler's own widget has to.
+
+    Real ``insert``/``delete`` write into the linked ``textvariable`` when there is one; here the text
+    is kept and the variable is updated as well, so both ways of reading an entry agree.
+    """
+
+    tk_class = "TEntry"
     allowed_options = TTK_ENTRY_OPTIONS
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.typed = str(self.options.get("textvariable").get()) if self.options.get("textvariable") else ""
+
+    def insert(self, index, text):
+        self.typed = self.typed + str(text)
+        if self.options.get("textvariable") is not None:
+            self.options["textvariable"].set(self.typed)
+        return None
+
+    def delete(self, first, last=None):
+        self.typed = ""
+        if self.options.get("textvariable") is not None:
+            self.options["textvariable"].set("")
+        return None
+
+    def get(self):
+        if self.options.get("textvariable") is not None:
+            return str(self.options["textvariable"].get())
+        return self.typed
 
 
 class FileDialog:
@@ -417,6 +596,8 @@ class FileDialog:
 class RecordingScrollbar(ValidatedWidget):
     """Scrollbar stand-in that records the thumb positions it was asked to show."""
 
+    tk_class = "TScrollbar"
+
     allowed_options = TTK_SCROLLBAR_OPTIONS
     created = []
 
@@ -432,6 +613,7 @@ class RecordingScrollbar(ValidatedWidget):
 class RecordingCombobox(ValidatedWidget):
     """Combobox stand-in that keeps every instance, so a test can read the offered values."""
 
+    tk_class = "TCombobox"
     allowed_options = TTK_COMBOBOX_OPTIONS
     created = []
 
@@ -444,10 +626,30 @@ class RecordingCombobox(ValidatedWidget):
         """The values this chooser offered, as a list of status strings."""
         return list(self.options.get("values") or ())
 
+    def set(self, value):
+        """Real ``ttk.Combobox.set``: choose a value, updating the linked variable."""
+        if self.options.get("textvariable") is not None:
+            self.options["textvariable"].set(str(value))
+        return None
+
+    def get(self):
+        variable = self.options.get("textvariable")
+        return "" if variable is None else str(variable.get())
+
+    def current(self, index=None):
+        """Real ``current()``: the index of the chosen value, or the one it is set to."""
+        values = self.offered
+        chosen = self.get()
+        if index is not None:
+            self.set(values[index])
+            return None
+        return values.index(chosen) if chosen in values else -1
+
 
 class RecordingCheckbutton(ValidatedWidget):
     """Checkbutton stand-in; keeps every instance so a test can read or set its variable."""
 
+    tk_class = "TCheckbutton"
     allowed_options = TTK_CHECKBUTTON_OPTIONS
     created = []
 
@@ -463,9 +665,21 @@ class RecordingCheckbutton(ValidatedWidget):
     def text(self):
         return self.options.get("text", "")
 
+    def invoke(self):
+        """Real ``Checkbutton.invoke``: flip the linked variable, as a click does."""
+        variable = self.variable
+        if variable is not None:
+            variable.set(not variable.get())
+        return None
+
+    def state(self, *args, **kwargs):
+        return ("selected",) if self.variable is not None and self.variable.get() else ()
+
 
 class RecordingLabel(ValidatedWidget):
     """Label stand-in that keeps every instance, so a test can read what a dialog displayed."""
+
+    tk_class = "TLabel"
 
     allowed_options = TTK_LABEL_OPTIONS
     created = []
@@ -482,6 +696,7 @@ class RecordingLabel(ValidatedWidget):
 class RecordingToplevel(ValidatedWidget):
     """Toplevel stand-in that keeps every dialog, so a test can read its bindings and size."""
 
+    tk_class = "Toplevel"
     allowed_options = TOPLEVEL_OPTIONS
     created = []
 
@@ -497,8 +712,10 @@ FILEDIALOG = FileDialog()
 
 _tkinter = types.ModuleType("tkinter")
 _tkinter.Tk = Widget
-_tkinter.Toplevel = Widget
-_tkinter.Text = Widget  # a permissive stub: the text widget has a long option list of its own
+# A real Toplevel is a Toplevel: dialogs the window opens must be findable as such, which is how a test
+# or the acceptance harness reaches the controls inside them.
+_tkinter.Toplevel = RecordingToplevel
+_tkinter.Text = Text
 _tkinter.Canvas = Canvas
 _tkinter.StringVar = StringVar
 _tkinter.BooleanVar = BooleanVar
