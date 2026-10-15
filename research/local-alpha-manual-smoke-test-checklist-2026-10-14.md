@@ -569,6 +569,75 @@ database on a `bind,ro` mount is read normally by `--doctor`, `--analytics`, `--
 that location succeed, every write *into* it is refused with exit 2, and the file's sha256 is identical before
 and after every command.
 
+### 2026-10-15 — second follow-up: the platform legs run green, and what they cost
+
+**No numbered step changed status.** The 98 steps are exactly as the two entries above left them: 22 PASS,
+76 BLOCKED, 0 FAIL. Everything below is automated evidence from GitHub-hosted runners plus commands re-run on
+this machine; none of it is a person at a window, and none of it closes a step that needs one. The full record,
+with the commands, the annotations and the transcripts, is in
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+
+**Capability probe, re-run (commands, not assumptions).** `uname -a` → Debian GNU/Linux 12, kernel 6.1.158+;
+`python3 -VV` → 3.11.2, and no 3.10/3.12/3.13 interpreter exists here; `python3 -c "import tkinter"` →
+`ModuleNotFoundError`; `DISPLAY` unset; `command -v Xvfb xvfb-run Xephyr Xorg weston` → none;
+`sudo apt-get install -y python3-tk` → *no installation candidate* (only GitHub, PyPI and npm hosts answer from
+this sandbox); `python3 scripts/desktop_smoke_test.py` → **BLOCKED**, exit 2, no check reported as passed. The
+conclusion is unchanged: no window on this machine, and none was simulated.
+
+**The matrix, green.** Run 38713190679 at `f38ac49`, all 12 jobs successful: the suite on CPython 3.10, 3.11,
+3.12 and 3.13; the installed-package jobs on 3.10 and 3.13; the optional-PDF job; the display-backed desktop
+smoke test on Linux; and the four cross-platform legs (`windows-latest` and `macos-latest` × 3.10 and 3.13),
+which verify installation, `--version`, `--doctor` against a missing database (0), a file that is not a database
+(1) and a read-only report (2), schema creation and cross-process persistence, backup/restore that really
+replaces data, export/import into a second database, the discovery invariants, Tk availability plus a minimal
+widget lifecycle, and the smoke test. On the Windows and macOS runners the widget-lifecycle step reports
+`exit 2, BLOCKED` — those runners have no display session — and the step is annotated as a warning rather than
+counted as a pass. On the Linux runner the smoke test **passed under Xvfb**, which is the only place in this
+pipeline where a real Tk window is built and driven.
+
+**Defects found by those runs, and fixed (each with a regression test that fails on the old behaviour).**
+
+- **D6 — the wheel-verification step measured the checkout, not the wheel.** Step 10 of the macOS legs ran
+  `python -` from the checkout, so the checkout satisfied an assertion about the installed copy and both macOS
+  legs failed on a correct installation. Reproduced on Linux from the repository root (the checkout's
+  `career_agent/__init__.py` was imported) and from `/tmp` (site-packages, as required). The wheel is now built
+  into the temporary directory, installed and inspected from there, and the assertion is unchanged.
+- **D7 — every private write was refused on Windows.** `_apply_owner_only_mode` applied the owner-only mode
+  through the descriptor and treated any failure as a reason to refuse, while Windows has neither a descriptor
+  mode nor `os.fchmod`: the lookup raised, the descriptor leaked, and the first Windows run reported 949 errors
+  because every `CareerStore` construction writes the event log through that helper. The helper now reports
+  success where there is nothing to apply, keeps refusing on POSIX, and
+  `tests/test_store.PlatformWithoutPosixModeBitsTests` holds the writing paths on a platform without mode bits.
+- **D8 — platform assumptions inside tests.** Four tests patched `os.fchmod` and one patched `os.O_NOFOLLOW`,
+  neither of which exists on Windows (`mock.patch` raised at `__enter__`, so the assertions never ran); doctor
+  tests hard-coded `/tmp` and `/srv`; a redaction test spelled a path with a forward slash; three assertions
+  read POSIX mode bits. The flag patch is now created where the attribute is absent (reproduced by deleting
+  `os.O_NOFOLLOW` in a child interpreter), the paths are built from the platform's own anchor and separator,
+  and the mode assertions run where mode bits exist. The POSIX assertions themselves are unchanged.
+- **D9 — a temporary folder was removed while the application still held it open**, which Windows refuses
+  (`WinError 32`); the app is now closed inside the block that owns the folder.
+- **D10 — a failure could only be read ten findings deep.** The first Windows run failed 949 times and the
+  annotations could carry ten of them, so most of the inventory could only be guessed at.
+  `scripts/ci_annotate.py --names` now publishes one annotation listing every failing test by name, and a green
+  run publishes its `Ran N tests` / `RESULT:` lines as a notice.
+
+**Platform limits, stated and asserted rather than skipped.** The restore's guard cannot be held across
+`os.replace` where the operating system refuses to replace a file another handle has open (Windows), so the
+instant between releasing the guard and the swap is a limit of the module and that branch asserts the limit
+instead of failing on it; the operating system's own refusal keeps its own test. An idle SQLite connection is
+invisible to the coordination on every platform, and each platform's outcome is asserted. A filesystem whose
+mode silently does not apply cannot be verified where there are no mode bits, so those two tests skip there
+with the reason stated.
+
+**PDF steps 24–31 (unchanged, still BLOCKED).** They are window steps. The optional extra is exercised on real
+Windows, macOS and Linux runners (the `pdf-extra` job runs the module with and without `pypdf`), and on this
+machine the résumé module runs `Ran 78 tests … OK` with `pypdf 6.20.1` and **no skips** — but steps 24–31 need
+the import dialog and a person deciding on each proposed value.
+
+**Support policy unchanged.** CPython 3.10–3.13 on Linux, macOS and Windows are the versions these runners
+exercised. 3.14 is deliberately not added: no compatible interpreter has been exercised anywhere in this
+pipeline, and adding it to the policy on the strength of the others would be a claim without evidence.
+
 For each operating system tested, record:
 
 - OS version and Python version.

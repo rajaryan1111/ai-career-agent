@@ -195,7 +195,12 @@ compensation is not compared because no compensation field exists yet.
   replaced, a stored profile kept, and an application record never imported at a status it did not
   reach here.
 - Accessible, understandable user interface.
-- Cross-platform distribution to be evaluated before commitment.
+- Cross-platform distribution to be evaluated before commitment. What is measured as of 2026-10-15:
+  the suite, the installed command surface, schema creation and migration, backup/restore, JSON
+  export/import, the discovery invariants and the optional résumé extra all execute on real Windows and
+  macOS runners as well as on Linux, and a scripted window check builds and drives the real Tk window
+  on the Linux runner under Xvfb while reporting BLOCKED - never a pass - on a runner with no display
+  session. Interactive GUI acceptance, packaging, code signing and installation remain unmeasured.
 
 ## 8. Success metrics (proposed, not yet validated)
 

@@ -65,6 +65,14 @@
   point passed code review and its own tests, then failed the first time a display existed - it asked a
   notebook for its tabs, which answers with widget *names*, and inspected those as widgets. A check that has
   never run where it is supposed to run is a plan, not evidence.
+  **A documented platform limit is asserted where the platform has it, not skipped** (2026-10-15): three
+  Windows failures were the platform behaving as the module documents rather than defects. A filesystem that
+  silently ignores a mode cannot be verified where there are no mode bits, so those tests are skipped there
+  with the reason in the skip message and the writing paths are held by
+  `tests/test_store.PlatformWithoutPosixModeBitsTests`. The restore's release window on a platform that will
+  not replace an open file (`_CAN_REPLACE_AN_OPEN_FILE`) is a stated limit, so that branch asserts the limit
+  instead of failing on it, and the platform's own refusal - the operating system will not replace a file
+  another handle holds open - keeps its own test. A skip hides a behaviour; an assertion pins it.
   **Where a platform has no capability, report that; do not refuse the work** (2026-10-15): the owner-only
   file guarantee is POSIX-only and no protection is claimed elsewhere, but the private-write helpers applied
   it through the descriptor and treated any failure as a reason to refuse the write. On Windows there is no
@@ -85,7 +93,9 @@
   ten warning annotations, and a run can fail in more places than that. A step whose output is not recorded is a
   step whose failure
   cannot be diagnosed from this network: the macOS wheel step was exactly that, and stayed unexplained until
-  the recording covered it.
+  the recording covered it. A run that *passes* publishes its numbers the same way, because "the job is green"
+  is not evidence of what ran: the summary notice carries the suite's counts and the window check's result.
+  **A platform limit is asserted where it happens, not skipped** (2026-10-15) - corrected below.
 - Optimize for relevant opportunities and outcomes, not raw application count.
 
 ## 4. Platform compliance

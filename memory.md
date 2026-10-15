@@ -103,6 +103,27 @@ These are proposed targets. Do not report them as measured results.
 
 ## Change log
 
+### 2026-10-15 — Cross-platform CI reached green, and what it cost to get there
+- Decision: the declared support remains Linux, macOS and Windows on CPython 3.10-3.13; 3.14 is not added to
+  the policy because no compatible interpreter has been exercised here.
+- Added `cross-platform` GitHub Actions legs (windows-latest, macos-latest x Python 3.10, 3.13) that verify
+  installation, `--version`, `--doctor` against a missing and a damaged database, schema creation and
+  cross-process persistence, backup/restore that really replaces data, JSON export/import, the discovery
+  invariants, Tk availability plus a minimal widget lifecycle, and the desktop smoke test where a display
+  exists. Every step records its output into one notes file, and `scripts/ci_annotate.py` publishes failures
+  (and a green run's counts) as annotations, because this project must be able to read a run through the API.
+- Defects found by the first runs, each fixed with a regression test: the scripted window check inspected a
+  notebook's tab *names* as widgets; the owner-only mode helper raised on Windows (no `os.fchmod`), refusing
+  every private write and with it every store construction; six doctor tests hard-coded Linux's folder name;
+  the wheel-verification step ran `python -` from the checkout, so the checkout satisfied an assertion about
+  the installed copy; four tests patched `os.fchmod` and one patched `os.O_NOFOLLOW`, neither present on
+  Windows; a temporary folder was removed while the app that used it was still open.
+- Platform limits, stated and asserted rather than assumed: the owner-only guarantee is POSIX-only; Windows
+  refuses `os.replace` while another handle holds the destination open, so the restore's guard is released
+  before the swap and the release window is a documented, asserted limit; an idle SQLite connection is
+  invisible to the coordination on every platform.
+- Result: run 38713190679 on commit `f38ac49` is green - 12 jobs, including both Windows and both macOS legs.
+
 ### 2026-10-14 — Safe offline-core implementation authorized
 - Decision: begin building the software now while source and competitor research continues in parallel. This supersedes the earlier blanket no-code/research-only constraint, but does not waive source-specific permission, data quality, privacy, or application-integrity gates.
 - Added a dependency-free Python domain core in `career_agent/`: three-valued eligibility, explicit country scope, transparent skill overlap, conservative URL/requisition deduplication, separate source/application URLs, and guarded application-status transitions.
