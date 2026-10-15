@@ -285,17 +285,18 @@ jobs:
           test "$status" -eq 0 \
             || { echo "the acceptance workflows did not pass under a real display (exit $status)"; exit 1; }
           grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"
-          # Every workflow ran, and every one of its checks passed: a workflow that silently stopped
-          # running would leave the line count short, which is what this compares.
+          # Every workflow ran, and none of its checks failed. The script compares the checks it performed
+          # against the number its own source declares, so a check that silently stopped running fails the
+          # run rather than shrinking it - there is no count to keep in step here.
           for workflow in A B C D E F; do
             grep -q -- "--- workflow $workflow" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" \
               || { echo "workflow $workflow did not run"; exit 1; }
           done
-          test "$(grep -c '^\[ ok \]' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt")" -eq 36 \
-            || { echo "the acceptance run did not report 36 passing checks"; exit 1; }
           if grep -qE '^\[ *fail *\]|^FAILED: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"; then
             echo "a check failed but the run reported PASS"; exit 1
           fi
+          test "$(grep -c '^\[ ok \]' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt")" -ge 1 \
+            || { echo "the acceptance run reported no passing checks"; exit 1; }
       - name: Confirm the smoke test left no window, database or temporary folder behind
         run: |
           set -euo pipefail

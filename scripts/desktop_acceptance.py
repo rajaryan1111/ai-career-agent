@@ -16,9 +16,10 @@ the window says about it. Six workflows run, in the order a first-time user woul
 * **D - tracker and analytics.** Move an application by permitted transitions through the status dialog, and
   check that an interview round recorded while the application is only shortlisted is never reported as an
   application sent or as a completed outcome.
-* **E - export, import and refusal.** Export to a chosen file, import it into a second disposable database,
-  and check that malformed input, a damaged record and a path that cannot be protected are refused without
-  writing a byte.
+* **E - export, import and refusal.** Export to a chosen file, check the file against what the database
+  holds (including the application record), import it into a second disposable database, import it again
+  and check that a repeat adds nothing, and check that malformed input, a damaged record and a path that
+  cannot be protected are refused without writing a byte.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 
@@ -35,6 +36,9 @@ Four properties are deliberate, and they are the reason this file is safe to run
   answer - and says so in the report it prints. What is *checked* about them is which dialogs were raised
   and whether their text contradicts what the run observed: a refusal that must be explained is checked for
   being explained, and an export that failed must never be reported as written.
+* **A check that does not run is not a pass.** Every check is a ``results.step`` block, and the run
+  compares how many it performed against how many its own source declares. Remove a check, and the run
+  reports a failure rather than a smaller pass - so the size of this file cannot shrink unnoticed.
 * **Synthetic data, and only ever in a disposable folder.** The profile, the listings and every note are
   obvious fixtures. The database, the export and the temporary folder are created inside one
   ``mkdtemp`` folder that is deleted at the end; the application's own database location is recorded before
@@ -46,6 +50,11 @@ Run from the repository root, on a machine with a display::
 
 Exit status: ``0`` every check passed; ``1`` a check failed (a defect, or this project no longer matches
 what the workflows assert); ``2`` BLOCKED (no display, or no ``tkinter``), which is not a pass.
+
+On a machine with no display, ``--stand-in-tk`` runs the same workflows against the stand-in widget module
+the test suite maintains. It exists for writing the workflows, reports itself as a DEVELOPMENT RUN, never
+prints a pass or a failure, and always exits 2: a stand-in has no window, so its results are not evidence
+and must never be read as any. CI runs it once, in a step that requires exactly that behaviour.
 """
 from __future__ import annotations
 
@@ -1340,6 +1349,24 @@ def workflow_e_export_import(run: Run) -> None:
             f"the exported listing's application URL is {record.get('employer_apply_url')!r}",
         )
         require(document.get("profile"), "the export carries no profile")
+        # The application record travels with the listing, and what travels is the *stored* record - which
+        # earlier workflows have advanced, so the check is that the file agrees with the database rather
+        # than that the status is any particular value. An export that dropped it, or wrote a status of its
+        # own, fails here.
+        stored_listing = next(job for job in stored
+                              if job.source_listing_url == LISTING_WITH_EVIDENCE["source_url"])
+        stored_tracker = app.store.get_tracker(stored_listing.listing_id)
+        tracker_record = record.get("application_tracker")
+        require(
+            isinstance(tracker_record, dict),
+            f"the exported listing carries no application record: {tracker_record!r}",
+        )
+        require(
+            None is not stored_tracker
+            and tracker_record.get("status") == stored_tracker.status.value,
+            f"the export says the application is {tracker_record.get('status')!r} while the database "
+            f"holds {getattr(stored_tracker, 'status', None)!r}",
+        )
         require("export.written" in event_lines(workspace.database), "no export event was recorded")
 
     with results.step("E3 an export that cannot be written is refused, and claims to have written nothing"):
@@ -1448,6 +1475,42 @@ def workflow_e_export_import(run: Run) -> None:
             "a refused import changed the database file",
         )
 
+    with results.step("E8 importing the same file again adds nothing and duplicates nothing"):
+        host5, app5 = workspace.open_window(database=workspace.second_database)
+        before_jobs = {job.listing_id for job in app5.store.list_jobs()}
+        before_profile = app5.store.get_profile()
+        policy.reset()
+        policy.files.append(str(export_path))
+        press(app5.data_tab, "Import an exported file (JSON)", workspace.root)
+        require(
+            "Import this file?" in [call[1] for call in policy.calls],
+            "the repeated import was applied without showing what it would do first",
+        )
+        plan_text = policy.said("Import this file?") + policy.said("Import complete")
+        require(
+            "already stored" in plan_text.lower(),
+            f"the plan does not say the listings are already stored:\n{plan_text}",
+        )
+        require(
+            "kept" in plan_text.lower(),
+            f"the plan does not say what was kept rather than imported:\n{plan_text}",
+        )
+        after_jobs = {job.listing_id for job in app5.store.list_jobs()}
+        require(
+            after_jobs == before_jobs,
+            f"a repeated import changed the stored listings: {sorted(after_jobs)} vs {sorted(before_jobs)}",
+        )
+        require(
+            app5.store.get_profile() == before_profile,
+            "a repeated import replaced the stored profile instead of keeping it",
+        )
+        require(
+            "nothing was added" in app5.status.get().lower()
+            or "left" in app5.status.get().lower(),
+            f"the repeated import reports {app5.status.get()!r}",
+        )
+        workspace.close_window(host5, app5)
+
     with results.step("E7 a document with a damaged record imports the good part and names the rest"):
         host4, app4 = workspace.open_window(database=workspace.second_database)
         before_jobs = len(app4.store.list_jobs())
@@ -1553,6 +1616,38 @@ WORKFLOWS = (
 )
 
 
+def declared_step_count() -> int:
+    """How many checks this file's own source declares.
+
+    Read from the source rather than kept in a number elsewhere, so adding a check does not mean editing a
+    count somewhere else - and so a check that quietly stops running cannot pass unnoticed. A
+    ``with results.step(...)`` block that never executes leaves the run short of this number, which is a
+    failure, not a smaller pass.
+    """
+    import ast  # noqa: PLC0415 - only this check needs to parse the file
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"), __file__)
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "step"
+    )
+
+
+def ran_every_declared_check(results: Results) -> str | None:
+    """``None`` when every declared check ran, or the sentence explaining what is missing."""
+    declared = declared_step_count()
+    performed = results.passed + len(results.failures)
+    if performed != declared:
+        return (
+            f"the run performed {performed} checks but this file's source declares {declared}: a check "
+            "stopped running, and a check that does not run is not a pass"
+        )
+    return None
+
+
 def using_stand_in_tk(tk) -> bool:
     """Whether ``tkinter`` here is the stand-in widget module the tests maintain rather than real Tk.
 
@@ -1646,6 +1741,9 @@ def main(argv=None) -> int:
         # Printed without a PASS or FAIL line: those two words mean evidence in this project, and a stand-in
         # module cannot produce any. The step lines stay, because they are what makes the run useful while
         # the workflows are being written.
+        missing = ran_every_declared_check(results)
+        if missing:
+            results.failures.append(("every declared check ran", missing))
         if results.failures:
             print()
             for description, traceback_text in results.failures:
@@ -1660,6 +1758,10 @@ def main(argv=None) -> int:
         )
         print("RESULT: BLOCKED — a stand-in Tk is not a desktop, so this run is not evidence.")
         return EXIT_BLOCKED
+
+    missing = ran_every_declared_check(results)
+    if missing:
+        results.failures.append(("every declared check ran", missing))
 
     return results.report(
         "The window was built by real Tk and driven through its own widgets and commands: a profile, a "

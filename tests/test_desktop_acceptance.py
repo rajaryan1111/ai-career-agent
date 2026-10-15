@@ -19,6 +19,7 @@ pass or failure in CI's display-backed Linux job and on the Windows and macOS ru
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import types
@@ -172,6 +173,36 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(acceptance.text_in(text), "ELIGIBILITY: UNKNOWN\n")
 
 
+class StepCoverageTests(unittest.TestCase):
+    """A check that stops running is a failure, and the run says so itself."""
+
+    def test_the_declared_count_is_read_from_the_source_and_is_not_trivial(self):
+        declared = acceptance.declared_step_count()
+        self.assertGreaterEqual(declared, 30, "the declared count looks wrong")
+        # Matched with the opening quote so the mention of the form inside a docstring is not counted as
+        # a call: this is a check on the AST's answer, not a second implementation of it.
+        self.assertEqual(declared, len(re.findall(r'results\.step\("', self.source)), "AST and text disagree")
+
+    def test_a_run_that_performed_fewer_checks_than_it_declares_is_not_a_pass(self):
+        results = smoke.Results()
+        results.passed = acceptance.declared_step_count() - 1
+        self.assertIsNotNone(acceptance.ran_every_declared_check(results))
+
+    def test_a_run_that_performed_every_declared_check_has_nothing_to_report(self):
+        results = smoke.Results()
+        results.passed = acceptance.declared_step_count()
+        self.assertIsNone(acceptance.ran_every_declared_check(results))
+
+    def test_a_failed_check_still_counts_as_a_check_that_ran(self):
+        results = smoke.Results()
+        results.passed = acceptance.declared_step_count() - 1
+        results.failures.append(("a check", "traceback"))
+        self.assertIsNone(acceptance.ran_every_declared_check(results))
+
+    def setUp(self):
+        self.source = (REPOSITORY_ROOT / "scripts" / "desktop_acceptance.py").read_text(encoding="utf-8")
+
+
 class WorkflowWiringTests(unittest.TestCase):
     """The acceptance run is only evidence if CI runs it where a window exists, and gates on it."""
 
@@ -187,9 +218,15 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertEqual(acceptance.EXIT_FAIL, 1)
         self.assertEqual(acceptance.EXIT_BLOCKED, 2)
 
-    def test_the_leg_fails_when_a_workflow_stops_running_or_a_check_count_drops(self):
-        self.assertIn('for workflow in A B C D E F', self.workflow)
-        self.assertIn("grep -c '^\\[ ok \\]'", self.workflow)
+    def test_the_leg_fails_when_a_workflow_stops_running_or_a_check_stops(self):
+        self.assertIn("for workflow in A B C D E F", self.workflow)
+        # The run compares what it performed against what its own source declares, and says what that means.
+        script = (REPOSITORY_ROOT / "scripts" / "desktop_acceptance.py").read_text(encoding="utf-8")
+        self.assertIn("a check that does not run is not a pass", script)
+        # And CI carries no count of its own to drift: a number there would have to be edited whenever a
+        # check is added, and the check that matters - did every declared check run - is the script's job.
+        self.assertNotIn("-eq 36", self.workflow)
+        self.assertNotIn("-eq 37", self.workflow)
 
     def test_the_stand_in_flag_is_used_only_to_prove_it_is_not_evidence(self):
         # Exactly one run asks for the stand-in, and it is the step that requires BLOCKED and no pass
@@ -222,7 +259,9 @@ class DevelopmentRunTests(unittest.TestCase):
         self.assertIn("DEVELOPMENT RUN", output)
         self.assertIn("not a desktop", output)
         self.assertIn("[ ok ] A1", output, "the development run did not exercise the workflows")
-        self.assertIn("DEVELOPMENT RESULT: 36 checks passed, 0 failed", output)
+        self.assertIn(
+            f"DEVELOPMENT RESULT: {acceptance.declared_step_count()} checks passed, 0 failed", output
+        )
 
     def test_a_stand_in_tkinter_is_recognised_as_one(self):
         self.assertTrue(acceptance.using_stand_in_tk(types.ModuleType("tkinter")))
