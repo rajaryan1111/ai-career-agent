@@ -22,6 +22,17 @@ virtual or CI display. It is not evidence about layout, wording, focus, assistiv
 how any of it feels, and it is not human acceptance. Where a step's checklist line carries an "Automated
 coverage" note, that note says exactly which part a machine checked and which part is still yours.
 
+**One command is deliberately not a numbered step: `--forget-local-data`.** It removes the database, its
+SQLite sidecars, the snapshots and staged restores beside it, and the two logs this application writes. It
+is a terminal command with no window, and asking a tester to erase their own data to prove it works would
+be a destructive test of the tester rather than of the program, so the 17 tests in
+`tests/test_cli_forget.py` carry it: the preview lists exactly what `--yes` would remove, a folder or a
+symbolic link is refused rather than followed, a file the application did not write in the same folder
+survives, a removal that completes exits zero, a removal that only partly completes exits non-zero, and a
+database that comes back is reported rather than claimed as removed. If you want to read that preview on
+your own machine, run `python -m career_agent --forget-local-data` without `--yes`: it changes nothing, and
+you can judge whether the list it prints is the list you would expect.
+
 ---
 
 ## 1. Prerequisites
