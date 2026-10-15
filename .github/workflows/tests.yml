@@ -288,7 +288,7 @@ jobs:
           # Every workflow ran, and none of its checks failed. The script compares the checks it performed
           # against the number its own source declares, so a check that silently stopped running fails the
           # run rather than shrinking it - there is no count to keep in step here.
-          for workflow in A B C D E F; do
+          for workflow in A B C D E F G; do
             grep -q -- "--- workflow $workflow" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" \
               || { echo "workflow $workflow did not run"; exit 1; }
           done

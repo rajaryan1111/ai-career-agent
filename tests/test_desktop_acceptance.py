@@ -219,7 +219,15 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertEqual(acceptance.EXIT_BLOCKED, 2)
 
     def test_the_leg_fails_when_a_workflow_stops_running_or_a_check_stops(self):
-        self.assertIn("for workflow in A B C D E F", self.workflow)
+        self.assertIn("for workflow in ", self.workflow)
+
+    def test_ci_requires_every_workflow_letter_the_run_defines(self):
+        # Read from the run's own list, so adding a workflow without adding it to CI fails here rather than
+        # leaving a workflow that never runs on a runner. Compared as a set: each of CI's greps stands on its
+        # own, so the order it lists them in carries no meaning.
+        letters = sorted(name[0] for name, _workflow in acceptance.WORKFLOWS)
+        self.assertIn(f"for workflow in {' '.join(letters)}; do", self.workflow,
+                      "CI does not require every workflow this run defines")
         # The run compares what it performed against what its own source declares, and says what that means.
         script = (REPOSITORY_ROOT / "scripts" / "desktop_acceptance.py").read_text(encoding="utf-8")
         self.assertIn("a check that does not run is not a pass", script)
@@ -389,11 +397,10 @@ class DisplayBackedWorkflowTests(unittest.TestCase):
 
     def test_the_workflow_list_covers_the_documented_letters(self):
         names = [name for name, _workflow in acceptance.WORKFLOWS]
-        self.assertEqual([name[0] for name in names], ["A", "B", "C", "D", "E", "F"])
+        self.assertEqual([name[0] for name in names], ["A", "B", "C", "D", "E", "G", "F"])
         for name, workflow in acceptance.WORKFLOWS:
             self.assertTrue(callable(workflow), f"{name} is not runnable")
             self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

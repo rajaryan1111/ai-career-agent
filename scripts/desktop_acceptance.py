@@ -20,6 +20,9 @@ the window says about it. Six workflows run, in the order a first-time user woul
   holds (including the application record), import it into a second disposable database, import it again
   and check that a repeat adds nothing, and check that malformed input, a damaged record and a path that
   cannot be protected are refused without writing a byte.
+* **G - work history and study records.** Add a current role and an ongoing qualification through their own
+  forms and check what is stored; refuse an end date before its start, a date written in another shape, and a
+  qualification marked ongoing that carries a completion date, and check that a refusal stores nothing.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 
@@ -1620,6 +1623,212 @@ def workflow_e_export_import(run: Run) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Workflow G - work history and study through their own forms, refusals included
+# --------------------------------------------------------------------------------------------------
+def tick(container, variable, *, what: str, on: bool = True):
+    """Find the checkbutton bound to ``variable``, set it to ``on`` and return the variable.
+
+    A real checkbutton is pressed with ``invoke()`` - the same command a click runs - so the state the
+    handler reads is the state the widget shows. Where it is already in the wanted state, nothing is pressed.
+    """
+    box = widget_for(container, variable, klass=CHECKBUTTON, what=what)
+    if bool(variable.get()) != on:
+        box.invoke()
+    require(
+        bool(variable.get()) is on,
+        f"{what} is {variable.get()!r} after being pressed, not {on!r}",
+    )
+    return box
+
+
+def clear_history_forms(app, root) -> None:
+    """Empty both forms, as closing and reopening the tab would."""
+    for key, variable in app.work_vars.items():
+        set_field(app.history_tab, variable, "", what=f"the role {key} field")
+    for key, variable in app.study_vars.items():
+        set_field(app.history_tab, variable, "", what=f"the qualification {key} field")
+    for variable in (app.work_current, app.study_ongoing):
+        if bool(variable.get()):
+            widget_for_any(app.history_tab, variable, what="a history checkbox").invoke()
+    root.update()
+
+
+def workflow_g_history_records(run: Run) -> None:
+    """Add a role and a qualification through their forms, and check the refusals they must make.
+
+    Every refusal here is a date that cannot be true or a pair of answers that contradict each other. What is
+    checked is that the window says which field is wrong and that nothing was stored - a refused record that
+    leaves a row behind would be worse than no refusal at all.
+    """
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+
+    with results.step("G1 the form's checkbuttons are the application's own variables, unticked"):
+        require(
+            app.work_current.get() is False and app.study_ongoing.get() is False,
+            "a history form opened with its checkbox already ticked",
+        )
+        require(
+            widget_for(app.history_tab, app.work_current, klass=CHECKBUTTON,
+                       what="the current-role checkbox") is not None,
+            "the role form has no current-role checkbox",
+        )
+        require(
+            widget_for(app.history_tab, app.study_ongoing, klass=CHECKBUTTON,
+                       what="the still-studying checkbox") is not None,
+            "the qualification form has no still-studying checkbox",
+        )
+
+    with results.step("G2 a role whose end date is before its start is refused, and nothing is stored"):
+        before = len(app.store.list_work_history())
+        clear_history_forms(app, workspace.root)
+        impossible = {"employer": "Fixture Analytics Ltd", "job_title": "Fictional Impossible Role",
+                      "start_date": "2025-06-01", "end_date": "2025-01-01"}
+        for key, value in impossible.items():
+            set_field(app.history_tab, app.work_vars[key], value, what=f"the role {key} field")
+        policy.reset()
+        press(app.history_tab, "Add this role", workspace.root)
+        require(
+            "Role not saved" in policy.titles(),
+            f"an impossible employment period was stored; dialogs: {policy.titles()}",
+        )
+        said = policy.said("Role not saved")
+        require(
+            "2025-01-01" in said and "2025-06-01" in said,
+            f"the refusal does not name both dates: {said!r}",
+        )
+        require(
+            len(app.store.list_work_history()) == before,
+            "a refused role was written to the database",
+        )
+
+    with results.step("G3 a date written as '1 April 2023' is refused, naming the shape wanted"):
+        clear_history_forms(app, workspace.root)
+        for key, value in (("employer", "Fixture Analytics Ltd"), ("job_title", "Fictional Dated Role"),
+                           ("start_date", "1 April 2023")):
+            set_field(app.history_tab, app.work_vars[key], value, what=f"the role {key} field")
+        policy.reset()
+        press(app.history_tab, "Add this role", workspace.root)
+        require(
+            "Role not saved" in policy.titles(),
+            f"a date in the wrong shape was accepted; dialogs: {policy.titles()}",
+        )
+        require(
+            "YYYY-MM-DD" in policy.said("Role not saved"),
+            f"the refusal does not say the shape it wants: {policy.said('Role not saved')!r}",
+        )
+        require(
+            app.store.list_work_history() and len(app.store.list_work_history()) == before,
+            "a refused role changed the stored records",
+        )
+
+    with results.step("G4 a current role is added through the form and reported"):
+        clear_history_forms(app, workspace.root)
+        for key, value in (("employer", "Fixture Systems Ltd"), ("job_title", "Fictional Current Role"),
+                           ("start_date", "2025-03-01")):
+            set_field(app.history_tab, app.work_vars[key], value, what=f"the role {key} field")
+        tick(app.history_tab, app.work_current, what="the current-role checkbox")
+        press(app.history_tab, "Add this role", workspace.root)
+        require(
+            "Employment record added" in app.status.get(),
+            f"adding a current role reported {app.status.get()!r}",
+        )
+        stored = [entry for entry in app.store.list_work_history()
+                  if entry.job_title == "Fictional Current Role"]
+        require(len(stored) == 1, f"{len(stored)} matching role(s) were stored, expected 1")
+        require(
+            stored[0].is_current is True and stored[0].end_date is None,
+            f"the role was stored as current={stored[0].is_current!r}, end={stored[0].end_date!r}",
+        )
+
+    with results.step("G5 an ongoing qualification with no dates lists as ongoing"):
+        for key, value in (("institution", "Fixture Institute of Technology"),
+                           ("qualification", "MSc Fictional Computing")):
+            set_field(app.history_tab, app.study_vars[key], value, what=f"the qualification {key} field")
+        tick(app.history_tab, app.study_ongoing, what="the still-studying checkbox")
+        press(app.history_tab, "Add this qualification", workspace.root)
+        require(
+            "Education record added" in app.status.get(),
+            f"adding an ongoing qualification reported {app.status.get()!r}",
+        )
+        stored_study = [entry for entry in app.store.list_education()
+                        if entry.qualification == "MSc Fictional Computing"]
+        require(len(stored_study) == 1, f"{len(stored_study)} matching record(s) were stored, expected 1")
+        require(
+            stored_study[0].is_ongoing is True
+            and stored_study[0].completion_date is None
+            and stored_study[0].start_date is None,
+            f"the record was stored as {stored_study[0]!r}",
+        )
+        rows = [app.study_tree.item(item, "values") for item in app.study_tree.get_children()]
+        require(
+            any("MSc Fictional Computing" in str(row) and "ongoing" in str(row).lower() for row in rows),
+            f"no listed row shows the qualification as ongoing: {rows}",
+        )
+
+    with results.step("G6 a completion date while 'Still studying' is ticked is refused"):
+        before = len(app.store.list_education())
+        set_field(app.history_tab, app.study_vars["institution"], "Fixture Institute of Technology",
+                  what="the qualification institution field")
+        set_field(app.history_tab, app.study_vars["qualification"], "BSc Fictional Contradiction",
+                  what="the qualification field")
+        set_field(app.history_tab, app.study_vars["completion_date"], "2026-06-30",
+                  what="the qualification completion date field")
+        require(
+            bool(app.study_ongoing.get()) is True,
+            "the still-studying checkbox was cleared before the contradictory case could be tested",
+        )
+        policy.reset()
+        press(app.history_tab, "Add this qualification", workspace.root)
+        require(
+            "Qualification not saved" in policy.titles(),
+            f"a record marked ongoing with a completion date was accepted; dialogs: {policy.titles()}",
+        )
+        said = policy.said("Qualification not saved")
+        require(
+            "still on" in said or "ongoing" in said.lower(),
+            f"the refusal does not explain the contradiction: {said!r}",
+        )
+        require(
+            len(app.store.list_education()) == before,
+            "a refused qualification was written to the database",
+        )
+
+    with results.step("G7 the selected role's title can be changed and saved over the record"):
+        entries = app.store.list_work_history()
+        target = next(entry for entry in entries if entry.job_title == "Fictional Current Role")
+        app.work_tree.selection_set(str(target.entry_id))
+        workspace.root.update()
+        press(app.history_tab, "Select the selected role for editing", workspace.root)
+        require(
+            field_value(app.history_tab, app.work_vars["job_title"], what="the role job title field")
+            == "Fictional Current Role",
+            "selecting the role for editing did not load its title into the form",
+        )
+        set_field(app.history_tab, app.work_vars["job_title"], "Fictional Renamed Role",
+                  what="the role job title field")
+        tick(app.history_tab, app.work_current, what="the current-role checkbox")
+        press(app.history_tab, "Save changes to the selected role", workspace.root)
+        require(
+            "Employment record" in app.status.get() and "saved" in app.status.get(),
+            f"saving the change reported {app.status.get()!r}",
+        )
+        renamed = [entry for entry in app.store.list_work_history()
+                   if entry.entry_id == target.entry_id]
+        require(len(renamed) == 1, "the edited role disappeared from the database")
+        require(
+            renamed[0].job_title == "Fictional Renamed Role",
+            f"the stored title is {renamed[0].job_title!r}",
+        )
+        require(
+            len(app.store.list_work_history()) == len(entries),
+            "editing a role added or removed a record",
+        )
+
+    workspace.close_window(host, app)
+
+
+# --------------------------------------------------------------------------------------------------
 # Workflow F - cleanup, lifecycle, and cleanup after a failure
 # --------------------------------------------------------------------------------------------------
 def workflow_f_cleanup(run: Run) -> None:
@@ -1668,13 +1877,16 @@ def workflow_f_cleanup(run: Run) -> None:
 
 
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
-#: which part of the application it belongs to.
+#: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
+#: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
+#: before it - G included, which is why the letters are not alphabetical here.
 WORKFLOWS = (
     ("A - candidate profile persistence", workflow_a_profile),
     ("B - the two job URLs", workflow_b_job_urls),
     ("C - eligibility safety", workflow_c_eligibility),
     ("D - tracker and analytics", workflow_d_tracker_and_analytics),
     ("E - export, import and refusal", workflow_e_export_import),
+    ("G - work history and study records", workflow_g_history_records),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
