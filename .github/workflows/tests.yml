@@ -190,9 +190,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
             > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -253,9 +253,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
             > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
@@ -547,8 +547,14 @@ jobs:
           # can report the step that failed rather than only the first one that failed.
           exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set +e
-          python - <<'PY'
-          import sys
+          # Captured as well as tee'd, so a BLOCKED day's reason can go into the warning itself: a warning
+          # that says only "could not run" is what left this step's verdict unreadable beside a desktop
+          # smoke test that had just built and driven the window on the same runner.
+          lifecycle="$(python - <<'PY'
+          # The classification is the smoke script's, so a platform that cannot open a display is BLOCKED
+          # while a platform whose widget graph is wrong is a failure - same phrases, one list. A second
+          # copy of the list here is how the two steps would drift apart.
+          from scripts.desktop_smoke_test import looks_like_no_display
 
           try:
               import tkinter
@@ -558,6 +564,14 @@ jobs:
 
           try:
               root = tkinter.Tk()
+          except Exception as exc:
+              if looks_like_no_display(str(exc)):
+                  print(f"BLOCKED: a Tk root cannot be created here: {exc}")
+                  raise SystemExit(2)
+              print(f"FAILED: creating a Tk root raised {exc!r}, which is not a missing display")
+              raise SystemExit(1)
+
+          try:
               root.withdraw()
               frame = tkinter.ttk.Frame(root)
               frame.pack()
@@ -567,16 +581,21 @@ jobs:
               assert label.winfo_exists()
               assert frame.winfo_children()
               assert str(label.cget("text")) == "career-agent smoke"
-              print(f"PASS: Tk {tkinter.TkVersion} built a root, a frame and a label and updated them")
-              root.destroy()
           except Exception as exc:
-              print(f"BLOCKED: Tk cannot create a window on this runner: {exc}")
-              raise SystemExit(2)
+              print(f"FAILED: a Tk root was created, but its widget lifecycle is broken: {exc!r}")
+              raise SystemExit(1)
+          finally:
+              root.destroy()
+
+          print(f"PASS: Tk {tkinter.TkVersion} built a root, a frame and a label and updated them")
           PY
+          )"
           status=$?
+          printf '%s\n' "$lifecycle"
           set -e
           if [ "$status" -eq 2 ]; then
-            echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)"
+            reason="$(printf '%s\n' "$lifecycle" | grep -m1 '^BLOCKED: ' || true)"
+            echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED): ${reason:-no reason was printed}"
           elif [ "$status" -ne 0 ]; then
             exit "$status"
           fi
@@ -611,9 +630,9 @@ jobs:
         run: |
           # A green run is worth reading too: the suite's counts and the window check's result are what
           # say which platform did what, and a notice is returned by the API when the job passes as well.
-          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
             > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 6 --level notice
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
       - name: Annotate the first failures so they are readable outside the run
         if: failure()
         shell: bash
