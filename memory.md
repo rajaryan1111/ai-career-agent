@@ -2895,4 +2895,23 @@ read only from a labelled line; that rule is deliberate because country decides 
 separately from the accuracy figure rather than into it, with rule checks passing in both directions so a
 silent widening cannot go unnoticed. Phase 4 moves from **Not started** to **Partially complete**: the
 corpus is synthetic and small, so the thresholds stay *measured*, not achieved for the product.
+**2026-10-16, same session - the Phase 2 deletion task, closed for every file the app can derive.** Phase 2's
+task list names "data export/deletion"; export existed and per-record deletion existed, but there was no way
+to make the application's own data go away - a gap the threat model had recorded. `career_agent/erasure.py`
+now plans the removal (database, SQLite sidecars, the snapshots and staged restores beside it, and the two
+logs it writes) without creating anything or opening a database, and `--forget-local-data` shows that plan by
+default and performs it only with `--yes`. What it cannot derive - a backup, export, `.ics`, draft or ledger
+at a path the person chose - it reports instead of pretending to have handled; a folder or symbolic link as
+the database path is refused rather than followed, and every failure is reported with its reason rather than
+counted as success.
+
+Writing the tests found two more product gaps in the same pass: a folder passed as `--database` was planned
+around instead of refused (it would have deleted the logs beside it), and `--yes` on its own was silently
+ignored - the program went on to open the window, which is not what someone typing `--yes` asked for. Both
+are fixed, the second by an orphan-option refusal in the same style as the existing ones. The module also
+corrected one of my own test expectations: a symlinked candidate is refused at *planning* time, so it appears
+in the "left alone" report rather than in the failure list - which is the safer behaviour and is now what the
+test asserts. `tests/test_cli_forget.py` (15 tests) covers the plan, the preview writing nothing, the delete
+removing exactly the derived files while a foreign file survives, idempotence, and each refusal. Full suite
+1702 tests, OK (skipped=13).
 

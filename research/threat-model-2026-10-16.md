@@ -120,6 +120,16 @@ same export adds nothing and lets the stored record win; a duplicate employment 
 One worker per database is enforced by a lease, so two copies of the worker cannot both claim the same
 occurrence.
 
+### 4.8a Removal is planned before it is performed
+
+`career_agent/erasure.py` separates the plan from the deletion: the plan is a list of concrete paths with
+sizes, computed without creating anything and without opening the database; nothing is removed until the
+command line passes `--yes`. Candidates that are directories or symbolic links are refused rather than
+followed, each failure is reported with its reason instead of being counted as a success, and the report
+always states what was left alone. Measured on a disposable folder: the preview left every file in place
+(exit 0), `--yes` removed exactly the four derived files and left a foreign file beside them, and a second
+run reported nothing to remove without creating anything.
+
 ### 4.8 Execution and submission are off
 
 No email is sent, no calendar event is created in any account, no application is submitted: the execution
@@ -145,12 +155,15 @@ sockets blocked.
 
 1. **No encryption at rest.** Files are 0600, which answers "another user account" but not "a copied file".
    This is the largest residual risk and remains open in `phases.md` Phase 2.
-2. **No single erase-everything command.** Records can each be deleted from the window (job, activity,
-   tracker record, preparation item, interview round, profile, employment, education), and removing the
-   database file removes everything — but a *command* that deletes the database, its backups, its
-   pre-restore snapshots, its logs, exports, `.ics` files and the mock ledger together does not exist. A
-   person who wants everything gone has to find those files themselves. Recorded as a gap, not claimed as a
-   feature.
+2. **Deletion is complete only where the names are derivable — narrowed 2026-10-16, not eliminated.**
+   Records can each be deleted from the window, and `--forget-local-data --yes` now removes the database,
+   its `-journal`/`-wal`/`-shm` sidecars, the snapshots and staged restores beside it, and the two logs it
+   writes. What it still cannot remove is everything at a path the *person* chose: a backup written to
+   another folder, a JSON export, an `.ics` file, a saved draft, a mock ledger. It reports that limit
+   rather than implying the machine is clean, refuses to follow a symbolic link or a folder, and never
+   walks a directory — so "everything is gone" is a statement about this application's own files, and the
+   user's copies elsewhere remain their own to delete. `tests/test_cli_forget.py` asserts each of those
+   refusals and that a foreign file in the same folder survives.
 3. **Synchronised or shared folders.** Pointing `--database` at a synced folder hands the file to another
    service; the app cannot detect this and does not try to prevent it.
 4. **Backup and export files travel.** An export warns about itself in its own contents

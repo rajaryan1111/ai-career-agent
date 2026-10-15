@@ -15,9 +15,13 @@ import re
 import unittest
 from pathlib import Path
 
+import tempfile
+
+from career_agent import resume
 from scripts.evaluate_cross_industry import (
     DEFAULT_CORPUS, PROPOSED_THRESHOLDS, CorpusError, load_corpus, summarise,
 )
+from tests.test_resume import build_docx
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -135,6 +139,66 @@ class MeasurementTests(unittest.TestCase):
         self.assertIn("synthetic", caveats)
         self.assertIn("not with hiring outcomes", caveats)
         self.assertIn("seven résumés", caveats)
+
+
+class DocumentPipelineTests(unittest.TestCase):
+    """The corpus measured through the real import, not only through the text parser.
+
+    Every résumé in the corpus is also built as a real DOCX - a ZIP with WordprocessingML inside, the same
+    shape a person's file has - and read with ``parse_resume``: ZIP, XML, text extraction, section
+    splitting and proposals. The expectations come from the corpus, so the two paths are held to one
+    standard instead of drifting apart, and a document with blank paragraphs (as real ones have) is the
+    ordinary case here rather than an edge case.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.corpus = load_corpus(REPOSITORY_ROOT / DEFAULT_CORPUS)
+        cls.folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.folder.cleanup)
+
+    def parse_group_resume(self, group):
+        path = Path(self.folder.name) / f"{group['id']}.docx"
+        path.write_bytes(build_docx(paragraphs=tuple(group["resume"]["text"].splitlines())))
+        return resume.parse_resume(path)
+
+    def test_every_stated_value_survives_the_real_document_path(self):
+        for group in self.corpus["groups"]:
+            result = self.parse_group_resume(group)
+            by_key = {proposal.key: proposal for proposal in result.proposals}
+            for key, wanted in group["resume"]["expected"].items():
+                field = key.split("_cont")[0] if key.endswith(("_contains", "_contain")) else key
+                with self.subTest(group=group["id"], field=field):
+                    self.assertIn(field, by_key, f"{group['id']}: {field} was stated and must be proposed")
+                    if field == "skills":
+                        found = [part.strip().casefold() for part in by_key[field].value.split(",")]
+                        for value in wanted:
+                            self.assertIn(value.casefold(), found)
+                    else:
+                        self.assertIn(str(wanted).casefold(), by_key[field].value.casefold())
+
+    def test_the_documented_non_coverage_holds_through_the_document_path_too(self):
+        for group in self.corpus["groups"]:
+            result = self.parse_group_resume(group)
+            by_key = {proposal.key: proposal for proposal in result.proposals}
+            for entry in group["resume"]["not_proposed_by_design"]:
+                with self.subTest(group=group["id"], field=entry["field"]):
+                    if entry["field"] == "country":
+                        self.assertNotIn("country", by_key, entry["rule"])
+                    else:
+                        skills = by_key.get("skills")
+                        self.assertIsNotNone(skills)
+                        self.assertNotIn(entry["value"].casefold(), skills.value.casefold(), entry["rule"])
+
+    def test_the_import_never_carries_the_document_text(self):
+        """The privacy property from the résumé tests, re-asserted over corpus documents."""
+        for group in self.corpus["groups"]:
+            result = self.parse_group_resume(group)
+            for proposal in result.proposals:
+                with self.subTest(group=group["id"], key=proposal.key):
+                    self.assertNotIn("SKILLS\n", proposal.evidence)
+                    self.assertLessEqual(len(proposal.evidence), 160)
+            self.assertNotIn("Sample Candidate\n", str(result.proposals))
 
 
 if __name__ == "__main__":

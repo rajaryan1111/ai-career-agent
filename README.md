@@ -348,6 +348,31 @@ so a backup always names the file the app itself would open. Restoring replaces 
   place yourself.
 
 
+## Remove the data this app wrote
+
+Everything the app stores is local, and it can all be removed from the command line:
+
+```bash
+python -m career_agent --forget-local-data          # shows what would be removed; removes nothing
+python -m career_agent --forget-local-data --yes    # removes those files
+```
+
+The first form is the default on purpose: deleting is irreversible, so the command lists every file with
+its size and its reason, and reports what it is deliberately **not** touching. The second form removes
+them and says so file by file.
+
+**What it removes** — only files this app wrote, and only where their names are derived from the database
+it was pointed at: the database itself, SQLite's `-journal`/`-wal`/`-shm` sidecars, the snapshots and
+staged restores written beside it (`<database>.backup-*`, `.<database>.restore-….partial`,
+`.<database>.rollback.partial`), and the two logs it writes in the `logs` folder beside the database.
+
+**What it never removes** — anything it cannot derive: a backup, JSON export, `.ics` file, saved draft or
+mock ledger you wrote to a path of your choosing. It names that limit instead of implying the machine is
+clean, so delete those yourself if you want them gone. It also never walks a folder: a file beside the
+database that this app did not write is reported and left alone, and a path that is a folder or a symbolic
+link is refused rather than followed. Nothing is created — no database, no folder, no log — and running it
+again after a successful removal reports that there is nothing left to remove.
+
 ## Move your data to another computer (JSON export and import)
 
 A backup is a copy of the whole database in SQLite's own format, so it is the right thing for keeping

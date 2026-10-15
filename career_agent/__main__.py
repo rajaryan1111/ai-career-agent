@@ -63,7 +63,7 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, importer, preparation
+from . import analytics, erasure, importer, preparation
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -135,6 +135,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--restore-from", metavar="PATH",
         help="Replace the local database with this backup after validating it.",
+    )
+    actions.add_argument(
+        "--forget-local-data", action="store_true",
+        help="Remove the database, its snapshots and its logs - everything this application wrote for it. "
+             "Shows what it would remove unless --yes is given.",
     )
     actions.add_argument(
         "--doctor", action="store_true",
@@ -288,7 +293,8 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--yes", action="store_true",
-        help="Confirm the restore without the interactive prompt (needed when input is not a terminal).",
+        help="Confirm without the interactive prompt (the restore, or removing the local data with "
+             "--forget-local-data; needed when input is not a terminal).",
     )
     parser.add_argument(
         "--version", action="version",
@@ -630,6 +636,47 @@ def _follow_up_pairs(store: CareerStore) -> list[tuple]:
         if job is not None:
             pairs.append((tracker, job))
     return pairs
+
+
+def run_forget_local_data(args: argparse.Namespace) -> int:
+    """Remove the data this application wrote for one database, or show what would be removed.
+
+    Deleting is irreversible and the person may have pointed --database at the only copy, so the default
+    answer is a preview. With --yes the plan is carried out, and the report names every file removed,
+    every failure, and what was deliberately left alone - a command that did not remove what it listed
+    must not read like success. This never creates anything and never opens the database, so it works
+    after a failed start-up and cannot resurrect what it is removing.
+    """
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · local data")
+    try:
+        plan = erasure.plan_erasure(database)
+    except erasure.ErasureError as exc:
+        print(f"REFUSED: {exc} Nothing was removed.", file=sys.stderr)
+        return EXIT_REFUSED
+    if not plan.anything_to_remove:
+        print(f"Nothing to remove: there is no database, snapshot or log at or beside {database}.")
+        print("Nothing was removed, and nothing was created.")
+        return EXIT_OK
+    if not args.yes:
+        print(f"Would remove {len(plan.data_files)} file(s) ({plan.total_bytes:,} bytes) for {database}:")
+        for item in plan.data_files:
+            print(f"  {item.path}  ({item.size_bytes:,} bytes, {item.description})")
+        print("Nothing has been removed yet. Re-run with --yes to remove these files.")
+    else:
+        outcome = erasure.erase(plan)
+        for path in outcome.removed:
+            print(f"Removed {path}")
+        for path, reason in outcome.failed:
+            print(f"NOT removed: {path} - {reason}", file=sys.stderr)
+        if not outcome.complete:
+            print(f"{len(outcome.removed)} file(s) removed, {len(outcome.failed)} could not be.", file=sys.stderr)
+            return EXIT_PROBLEM_FOUND
+        print(f"Removed {len(outcome.removed)} file(s) ({plan.total_bytes:,} bytes).")
+    print("Left alone on purpose:")
+    for note in plan.left_alone:
+        print(f"  {note}")
+    return EXIT_OK
 
 
 def run_export(args: argparse.Namespace) -> int:
@@ -1037,6 +1084,10 @@ def describe_orphan_options(args: argparse.Namespace) -> str | None:
             return f"{option} only means something with {command}."
     if args.mock_ledger and not (args.draft_follow_up or args.record_follow_up):
         return "--mock-ledger only means something with --draft-follow-up or --record-follow-up."
+    # --yes confirms one of three commands. Given on its own it would confirm nothing and the program
+    # would go on to open the window, which is not what a person typing --yes asked for.
+    if args.yes and not (args.restore_from or args.import_from or args.forget_local_data):
+        return "--yes only means something with --restore-from, --import-from or --forget-local-data."
     return None
 
 
@@ -1469,6 +1520,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_backup(args)
         if args.restore_from:
             return run_restore(args)
+        if args.forget_local_data:
+            return run_forget_local_data(args)
         if args.doctor:
             return run_doctor(args)
         if args.worker_status:
