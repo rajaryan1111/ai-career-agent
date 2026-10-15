@@ -648,6 +648,15 @@ runners is not a person using it, and this entry still closes none of the 76 BLO
   tkinter stand-in: working Tk → 0; no-display phrase → 2 with the reason; any other root failure → 1; widgets
   that do not honour what they were asked for → 1.
 
+- **D13 — one job's failure was unreadable.** Run 38723866093 failed in `unit-tests (3.11)` with nothing but
+  `Process completed with exit code 1` in the API, because that job (and `installed-package`) recorded no
+  output for `scripts/ci_annotate.py` to publish. Both jobs now record every step into the notes file and
+  publish the failing test names, the first findings and the run's last words; a green `unit-tests` run also
+  publishes the seed data's hash and record count. Verified by running the extracted step bodies here, which
+  caught a defect in the new step before it reached a runner (it read `records`, the audit prints
+  `record_count`). Run 38725527363 is green and the failure did not recur; whether it was a flake is unknown
+  and is not claimed.
+
 **Platform limits, stated and asserted rather than skipped.** The restore's guard cannot be held across
 `os.replace` where the operating system refuses to replace a file another handle has open (Windows), so the
 instant between releasing the guard and the swap is a limit of the module and that branch asserts the limit

@@ -312,6 +312,23 @@ In the order they were made, oldest first:
 | `76d0a3c` | the reporting steps cannot fail a run whose checks passed, and cannot fail silently (D11) |
 | `d56172d` | the window check says which verdict it reached, and why, classifying as the smoke script does |
 | `e803286` | the window check imports `tkinter.ttk` and works under macOS's bash 3.2 (D12) |
+| `e70ee1e` | every platform leg publishes its interpreter, its Tk, the screen Tk reported and its own verdicts |
+| `980e93e` | sections 2.1, 9 and 11 written down: the per-leg values, the two defects and the limits of this file |
+| `7517590` | the `unit-tests` and `installed-package` jobs record and publish their evidence too (D13) |
+
+## 12. D13, added while closing this file
+
+Run 38723866093 failed in bare `unit-tests (3.11)` - the one job that still recorded nothing - and the API
+could say only `Process completed with exit code 1`. That is the rule in `rules.md` being enforced by a
+failure: a failing run must publish its evidence where the project can read it. Both remaining jobs now
+record every step's output into the notes file and publish, on failure, the failing test names, ten findings
+with the end of each traceback and the run's last words; on a green run they publish the numbers, and the
+`unit-tests` job's notice now carries the seed data (`csv: 0356b093… over 83 records`) as well. Verified by
+running the extracted step bodies here; that dry run also caught a defect of mine before it reached a runner
+(the new CSV line read a key the audit does not print, `records` instead of `record_count`, and exited 1 on
+the KeyError). Run 38725527363 at `7517590` is green, 12 jobs, and `unit-tests (3.11)` did not fail again -
+whether its single failure was a flake is not known, and it is not claimed either way; what is now true is
+that a recurrence will be readable.
 
 Runs 38713190679 (`f38ac49`), 38716978550 (`76d0a3c`) and 38719357147 (`e803286`) are green, 12 jobs each.
 `e803286` is the state described here; PR #2 remains open and unmerged, and `main` has not been touched.
