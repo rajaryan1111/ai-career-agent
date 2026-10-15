@@ -832,8 +832,19 @@ class RestoreTests(BackupTestCase):
             result = restore_backup(chosen, live, timestamp=STAMP)
 
         self.assertEqual(len(outcomes), 1, "the writer must have been attempted exactly once")
-        self.assertTrue(outcomes[0].startswith("refused"),
-                        f"the competing write was not refused, so it was silently discarded: {outcomes[0]}")
+        if backup_module._CAN_REPLACE_AN_OPEN_FILE:
+            self.assertTrue(outcomes[0].startswith("refused"),
+                            f"the competing write was not refused, so it was silently discarded: {outcomes[0]}")
+        else:
+            # The guard cannot be held across the swap here (see _CAN_REPLACE_AN_OPEN_FILE), so the
+            # refusal is the operating system's: it will not replace a file another handle holds open,
+            # which is the next test. What is left is the instant between releasing this guard and the
+            # swap, and that instant is a stated limit of the module rather than a guarantee: a writer
+            # that commits *and closes* inside it is accepted here, and its connection is then in the
+            # same refused-on-next-write state the idle-connection test documents. Asserted instead of
+            # skipped so the limit cannot drift unnoticed on the platform that has it.
+            self.assertEqual(outcomes[0], "accepted",
+                             "the released guard is the window this platform documents, not a refusal")
         self.assertEqual(result.info.job_count, 1)
         self.assert_no_leftovers(live)
         with CareerStore(str(live)) as store:

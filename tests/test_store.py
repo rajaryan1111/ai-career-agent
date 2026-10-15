@@ -2182,6 +2182,11 @@ class PrivateFileWriteTests(unittest.TestCase):
         if target.exists():
             self.assertNotIn("ECE", target.read_text(encoding="utf-8"))
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "catching a mount whose mode silently did not apply is a POSIX guarantee; the Windows branch of "
+        "the writer is held by PlatformWithoutPosixModeBitsTests",
+    )
     def test_a_filesystem_that_ignores_the_mode_leaves_no_readable_export(self):
         """Verification catches a mount where chmod appears to succeed but does not apply."""
         target = self.directory / "sloppy-fs.json"
@@ -2252,6 +2257,11 @@ class PrivateFileCreationTests(unittest.TestCase):
         self.assertIn("nothing was written", str(caught.exception))
         self.assertFalse(target.exists(), "the file this call created must not be left behind")
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "verifying that a file is owner-only is a POSIX guarantee; where there are no mode bits to check "
+        "there is nothing to protect and nothing to remove, which PlatformWithoutPosixModeBitsTests holds",
+    )
     def test_require_owner_only_reports_a_file_that_cannot_be_protected(self):
         target = self.directory / "unprotected.sqlite3"
         target.write_text("candidate data", encoding="utf-8")
