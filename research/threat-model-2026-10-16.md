@@ -23,6 +23,12 @@ implying that local means safe.
 | Mock integration ledger, drafts | user-chosen paths | Drafts contain a private message body |
 | The database file itself | `--database` or the per-user application-data folder | Everything above in one file |
 
+**There is no secret to store.** The product has no account, no API token, no password and no session
+for any service: nothing in this repository asks for a credential and nothing keeps one, so Phase 2's
+"secure secret storage" is satisfied by having no secrets rather than by a store — and the standing rule
+is that no credential enters a log, a test, a document or a commit. If a future integration needs one,
+that is a new threat with its own section to write, not an extension of this one.
+
 Nothing is transmitted, because nothing in the shipped code can open a connection (4.1). That is the single
 largest control in the model, and it is also why the model is short: the realistic adversaries are other
 local users or processes, accident, and the user's own files travelling further than the user intended.

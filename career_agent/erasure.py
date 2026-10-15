@@ -171,4 +171,19 @@ def erase(plan: ErasurePlan) -> ErasureOutcome:
             failed.append((item.path, "the file is still there after the delete, so this is not a success"))
         else:
             removed.append(item.path)
+    # The database is checked again after everything else, because a worker running in another terminal
+    # holds it open and recreates it on its next write: reporting those files as removed would be a
+    # statement about the moment of deletion rather than about the result. Only a stat is used here; no
+    # database is opened, so this still works when the database is the thing that will not start.
+    if _regular_file(plan.database) and plan.database not in removed:
+        failed.append((
+            plan.database,
+            "it was still there when the removal finished, so nothing was reported as complete",
+        ))
+    elif plan.database.exists() and plan.database in removed:
+        failed.append((
+            plan.database,
+            "it exists again after being removed, which means something recreated it - a worker still "
+            "running against it does exactly this. Stop that process and run the command again",
+        ))
     return ErasureOutcome(removed=tuple(removed), failed=tuple(failed))

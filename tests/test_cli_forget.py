@@ -176,6 +176,32 @@ class ErasureExecutionTests(ErasureTestCase):
         self.assertTrue(any("no longer a regular file" in reason for _path, reason in outcome.failed))
 
 
+class RecreationTests(ErasureTestCase):
+    """A database that comes back must not be reported as gone."""
+
+    def test_a_database_that_reappears_is_reported_rather_than_claimed_as_removed(self):
+        """A worker in another terminal recreates the file it holds open; the report must say so."""
+        from career_agent.erasure import ErasurePlan
+
+        self.make_data()
+        plan = ErasurePlan(database=self.database, data_files=(), left_alone=())
+        # Something recreates the database between the plan and the removal: a running worker does this.
+        outcome = erase(plan)
+
+        self.assertFalse(outcome.complete)
+        message = " ".join(reason for _path, reason in outcome.failed)
+        self.assertIn("still there when the removal finished", message)
+
+    def test_a_removal_that_completes_still_exits_zero(self):
+        """The recreation check must not fail an ordinary, complete removal."""
+        self.make_data()
+        code, out, err = self.run_cli("--forget-local-data", "--yes")
+
+        self.assertEqual(code, cli.EXIT_OK, (out, err))
+        self.assertIn("Removed", out)
+        self.assertNotIn("exists again", out + err)
+
+
 class ForgetCommandTests(ErasureTestCase):
     """The command line: preview by default, delete only with --yes, and refuse the rest."""
 
