@@ -729,8 +729,8 @@ def run_import(args: argparse.Namespace) -> int:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     if not database.exists():
-        print(f"No database exists yet at {database}. Opening an import is how it would be created; "
-              "run the app or the commands once first, then import.")
+        print(f"No database exists yet at {database}. An import merges into a database you already have, "
+              "and this command will not create one: run the app or the commands once first, then import.")
         return EXIT_REFUSED
     with CareerStore(database) as store:
         # An import is planned and then applied to the whole file. If the file holds a record this build

@@ -222,6 +222,8 @@ class ExportImportCommandTests(unittest.TestCase):
 
         self.assertEqual(code, cli.EXIT_REFUSED)
         self.assertIn("run the app or the commands once first", out)
+        self.assertIn("will not create one", out,
+                      "the refusal must say that the database is not created here, not imply that it is")
         self.assertFalse(self.target.exists(), "an import must not silently create a database")
 
     def test_a_status_the_record_never_passed_through_is_reported_and_not_asserted(self):

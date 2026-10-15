@@ -957,11 +957,14 @@ repository claims one. What exists today:
   `--doctor` against a missing database and against a file that is not one, schema creation and
   cross-process persistence, a backup and a restore that really replace data, a JSON export imported into
   a second database, and the two invariants that keep discovery closed. **3.14 was added on 2026-10-16 and
-  is measured**: `unit-tests (3.14)` ran the suite (`Ran 1702 tests … OK (skipped=13)`), `compileall` and
-  the CSV audit in run
-  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342), and
-  `Installed package (3.14)` built the wheel, installed it into a clean environment and ran the installed
-  command from outside the checkout in run
+  is measured**: in run
+  [38807628488](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38807628488) all thirteen jobs
+  are green, `unit-tests (3.14)` reporting `Ran 1709 tests … OK (skipped=13)`, `compileall` and the CSV
+  audit (`csv: 0356b093ded3… over 83 records`), and `Installed package (3.14)` building the wheel,
+  installing it into a clean environment and running the installed command from outside the checkout. The
+  unit leg first ran alone in
+  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342) (`Ran 1702
+  tests … OK (skipped=13)`, the suite as it stood then) and the wheel leg in
   [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543). What is *not*
   measured on 3.14 is Windows and macOS, and the display-backed desktop harness still runs on 3.10 and
   3.13, so those claims stop where the legs stop. `requires-python = ">=3.10"` has no upper bound — a

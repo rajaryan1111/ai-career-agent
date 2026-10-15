@@ -279,12 +279,16 @@ Decisions behind the matrix:
   and none is claimed", after attempts to obtain 3.13 and 3.14 in the development environment failed — `uv
   python install` and a direct download from the `python-build-standalone` releases were both blocked by the
   sandbox's network policy (`UnknownIssuer` / `SSL_ERROR_SYSCALL`). The gap was closed where it can be closed:
-  a `unit-tests (3.14)` leg was added to the matrix and run the suite (`Ran 1702 tests … OK (skipped=13)`),
-  `compileall` and the CSV audit in run
-  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342), and the
-  `installed-package` leg moved from 3.13 to 3.14 so the wheel is built, installed and run from outside the
-  checkout on the newest claimed interpreter in run
-  [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543). Still not measured:
+  a `unit-tests (3.14)` leg was added to the matrix (first green alone in run
+  [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342): `Ran 1702
+  tests … OK (skipped=13)`, `compileall` and the CSV audit) and the `installed-package` leg moved from 3.13
+  to 3.14 (first green alone in run
+  [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543)) so the wheel is
+  built, installed and run from outside the checkout on the newest claimed interpreter. Both legs are
+  green **together** with every other job in run
+  [38807628488](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38807628488) — 13 of 13 jobs,
+  `unit-tests (3.14)` at `Ran 1709 tests … OK (skipped=13)` and `csv: 0356b093ded3… over 83 records`.
+  Still not measured:
   Windows and macOS on 3.14, and the display-backed desktop harness remains 3.10/3.13. An interpreter no leg
   names is untested rather than supported.
 - `tests/test_documented_commands.py` reads every `--flag` this README and the manual smoke-test checklist

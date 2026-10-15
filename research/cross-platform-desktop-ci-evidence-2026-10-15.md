@@ -708,8 +708,8 @@ network policy). The gap was closed where it can be: in CI.
 
 | Leg | What it runs | Result | Run |
 | --- | --- | --- | --- |
-| `unit-tests (3.14)` | the whole suite, `compileall` over `career_agent/`, `scripts/`, `tests/`, and the research-CSV integrity audit | **success** — `Ran 1702 tests … OK (skipped=13)`, CSV `0356b093ded3…` | [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342) at `709242b` |
-| `Installed package (3.14)` | `python -m build --wheel`, the wheel's contents, installation into a clean environment, and the installed `career-agent` command run from **outside** the checkout (`--version`, `--doctor`, a throwaway database, backup/restore) | **success** | [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543) at `791f9ed` |
+| `unit-tests (3.14)` | the whole suite, `compileall` over `career_agent/`, `scripts/`, `tests/`, and the research-CSV integrity audit | **success** — `Ran 1702 tests … OK (skipped=13)`, CSV `0356b093ded3…`; re-run green with every other job at `Ran 1709 tests … OK (skipped=13)` | [38804198342](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38804198342) at `709242b`, then [38807628488](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38807628488) at `a57e86c` (13/13 jobs) |
+| `Installed package (3.14)` | `python -m build --wheel`, the wheel's contents, installation into a clean environment, and the installed `career-agent` command run from **outside** the checkout (`--version`, `--doctor`, a throwaway database, backup/restore) | **success** — green together with every other job in the run named beside it | [38805511543](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38805511543) at `791f9ed` (leg alone), [38807628488](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38807628488) at `a57e86c` (13/13 jobs) |
 
 The `unit-tests` matrix now names `3.10, 3.11, 3.12, 3.13, 3.14`, and the `installed-package` matrix moved from
 3.13 to 3.14 beside the 3.10 floor, so the interpreter the suite runs on and the interpreter the wheel is
