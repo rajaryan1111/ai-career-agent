@@ -719,3 +719,73 @@ built and installed on agree.
 harness still runs on 3.10 and 3.13 — so "runs on 3.14" is a statement about the Linux suite and the Linux
 build/install rehearsal, not about a 3.14 desktop on every platform. `requires-python` keeps its open upper
 bound, and an interpreter no leg names is untested rather than supported.
+
+## 21. D31 — a refused command still printed its title (found while rehearsing the built wheel, 2026-10-16)
+
+**How it was found.** The release rehearsal's failure paths were re-run against the *installed wheel* on a
+disposable folder, with the command's two streams separated instead of merged. Every failure path behaved as
+the audit describes — exit 2, one sentence naming what happened, "nothing was changed" — but the *other*
+stream was not empty:
+
+```
+$ career-agent --database corrupt.sqlite3 --analytics   >report.txt 2>err.txt ; echo $?
+2
+$ cat report.txt
+AI Career Agent 0.1.0 · progress from this database (2026-10-15, local day)
+$ cat err.txt
+REFUSED: this database file could not be read, so nothing was reported: file is not a database
+Nothing was changed or repaired. `python -m career_agent --doctor` names the file and the reason, and a
+verified backup taken earlier can be restored over it.
+```
+
+**Why it mattered.** The exit status and the refusal were right; the title was not. `career-agent --analytics
+> report.txt` on a file the app cannot read left a report file whose only line is a report heading with a date,
+and piping the command into another program handed that program a title with a status saying the command had
+failed. Twelve other commands did the same: the heading was written before the database was opened (or before
+the record was decoded), so the refusal happened after it. Measured on a text file named like a database, and
+again on a database whose tracker row held a status this build cannot read:
+
+| Input | Commands that wrote a title and then refused | Commands that already wrote nothing |
+| --- | --- | --- |
+| a file that is not a database | `--analytics`, `--history`, `--interviews`, `--follow-ups`, `--next-actions`, `--worker-status`, `--preview-calendar-export`, `--export-to`, `--calendar-to`, `--import-from`, `--draft-follow-up`, `--record-follow-up` | `--backup-to`, `--seed-tasks`, `--restore-from` |
+| a database with one unreadable row | `--analytics`, `--follow-ups`, `--next-actions`, `--preview-calendar-export`, `--calendar-to`, `--draft-follow-up`, `--record-follow-up` | `--export-to` (it succeeds: the export carries the value it cannot label) |
+
+This was not a new rule for the project, which is why the inconsistency is the defect: `--backup-to` and
+`--seed-tasks` already printed nothing on the same input, and D20 had established the strong form for
+`--worker` — "no output at all on stdout — the strong form of *nothing was started*", tested by
+`assertFalse(out, "the worker must not announce itself before refusing")`. A rule that holds for the worker and
+not for `--analytics` is a rule somebody has to guess.
+
+**Classification: product defect**, in the command-line output contract.
+
+**The smallest correct fix.** Each command now builds its heading as a string and writes it once the data it
+reports on has actually been read: in the reports, after the store has been opened and the records decoded
+(the "no database yet" branches still print it, because there the command has something to explain); in
+`--export-to` and `--calendar-to`, after the file was written; in `--import-from`, once the plan exists; in
+`--draft-follow-up` and `--record-follow-up`, once the reminder was resolved. No message text, exit status,
+database access or report body changed.
+
+**Regression tests (fail before, pass after).** `tests/test_damaged_records.py` gained
+`NotADatabaseAtAllTests::test_no_command_announces_itself_before_refusing_a_file_it_cannot_read`, which drives
+all fourteen commands that open the database (`DATABASE_COMMANDS`) against a text file named like one and
+requires exit 2, a `REFUSED` line, **empty stdout**, no file written and no byte changed; its
+`{document}` argument is a real export built with `importer.write_export`, so `--import-from` fails on the
+database rather than on the file and cannot pass for the wrong reason. The file's shared
+`assert_refused_cleanly` helper — used by the record-level refusals of `--import-from`, `--draft-follow-up`,
+`--calendar-to`, `--preview-calendar-export` and `--record-follow-up` — now also requires empty stdout, and
+`ReadOnlyReportsOnDamagedRecordsTests` asserts it for the three refusing reports. Measured with the fix
+reverted (`git checkout` of `career_agent/__main__.py`, everything else in place): `Ran 30 tests … FAILED
+(failures=22)` — six test methods, each failure showing the exact heading that reached stdout, twelve of them
+subtests of the table above. With the fix in place the whole file passes (30 tests) and so does the suite
+(1719 tests, `OK (skipped=12)` locally; CI reports its own numbers).
+
+One existing check in that file was replaced rather than kept: it looked for the text `Progress from this
+database` in `out.splitlines()[-1]`, and the heading spells that word with a lower-case `progress`, so the
+search could never match and the check could not fail — it only failed once the empty stream made the index
+invalid. It now asserts the whole stream, which is what its own comment ("a refusal must not be dressed up as
+a report") promised all along.
+
+**What this does not establish.** Nothing about the wording a person would prefer for a refusal, and nothing
+about the commands that explain a *user* refusal on stdout on purpose (`--draft-follow-up nope`'s "no
+application is stored" is a sentence about the request, not a failed report): those still print what they
+explain. It says nothing about the desktop window, which does not use these commands.

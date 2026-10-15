@@ -619,8 +619,9 @@ def run_worker_status(args: argparse.Namespace) -> int:
     report as a failure - it is a fresh installation, and the report says so.
     """
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · scheduled tasks in {database}")
+    heading = f"AI Career Agent {__version__} · scheduled tasks in {database}"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so no tasks are scheduled. Open the app, or run "
               "python -m career_agent --seed-tasks, to add the default schedule.")
         _say_an_empty_file_was_left_alone(database)
@@ -631,6 +632,7 @@ def run_worker_status(args: argparse.Namespace) -> int:
             tasks = store.list_scheduled_tasks()
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     for line in status.describe():
         print(line)
     if tasks:
@@ -671,12 +673,12 @@ def run_forget_local_data(args: argparse.Namespace) -> int:
     after a failed start-up and cannot resurrect what it is removing.
     """
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · local data")
     try:
         plan = erasure.plan_erasure(database)
     except erasure.ErasureError as exc:
         print(f"REFUSED: {exc} Nothing was removed.", file=sys.stderr)
         return EXIT_REFUSED
+    print(f"AI Career Agent {__version__} · local data")
     if not plan.anything_to_remove:
         print(f"Nothing to remove: there is no database, snapshot or log at or beside {database}.")
         print("Nothing was removed, and nothing was created.")
@@ -712,8 +714,9 @@ def run_export(args: argparse.Namespace) -> int:
     """
     target = Path(args.export_to).expanduser()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · export local data")
+    heading = f"AI Career Agent {__version__} · export local data"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so there is nothing to export. Nothing was written.")
         _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
@@ -731,6 +734,7 @@ def run_export(args: argparse.Namespace) -> int:
         except (StoredRecordError, sqlite3.Error) as exc:
             print(f"REFUSED: the database could not be read for export: {exc}", file=sys.stderr)
             return EXIT_REFUSED
+    print(heading)
     print(f"Wrote {len(document['jobs'])} listing(s) and the profile to {written}")
     print("This file may hold personal information. It was written owner-only where the file system "
           "supports it, and nothing was sent anywhere.")
@@ -746,13 +750,14 @@ def run_import(args: argparse.Namespace) -> int:
     """
     source = Path(args.import_from).expanduser()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · import local data")
+    heading = f"AI Career Agent {__version__} · import local data"
     try:
         document = importer.read_export(source)
     except importer.ImportRefused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     if not database.exists():
+        print(heading)
         print(f"No database exists yet at {database}. An import merges into a database you already have, "
               "and this command will not create one: run the app or the commands once first, then import.")
         return EXIT_REFUSED
@@ -769,6 +774,7 @@ def run_import(args: argparse.Namespace) -> int:
         except importer.ImportRefused as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return EXIT_REFUSED
+        print(heading)
         for line in plan.describe():
             print(line)
         if not args.yes:
@@ -792,8 +798,9 @@ def run_follow_ups(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · follow-ups for {today.isoformat()} (local day)")
+    heading = f"AI Career Agent {__version__} · follow-ups for {today.isoformat()} (local day)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so no follow-up days are recorded. Open the app to save applications "
               "and set the day you plan to follow each one up.")
         _say_an_empty_file_was_left_alone(database)
@@ -805,6 +812,7 @@ def run_follow_ups(args: argparse.Namespace) -> int:
             missing_listings = len(store.list_follow_up_trackers()) - len(pairs)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     print(summary(upcoming))
     if upcoming:
         print("")
@@ -834,8 +842,9 @@ def run_next_actions(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · what needs doing on {today.isoformat()} (local day)")
+    heading = f"AI Career Agent {__version__} · what needs doing on {today.isoformat()} (local day)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so nothing is recorded. Open the app to save applications, plan "
               "follow-ups and write down what you have to do.")
         _say_an_empty_file_was_left_alone(database)
@@ -852,6 +861,7 @@ def run_next_actions(args: argparse.Namespace) -> int:
                                             include_later=True, include_undated=True)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     print(preparation.summary(found, today))
     if found:
         print("")
@@ -880,8 +890,9 @@ def run_interviews(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · recorded interview rounds ({today.isoformat()}, local day)")
+    heading = f"AI Career Agent {__version__} · recorded interview rounds ({today.isoformat()}, local day)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so no rounds are recorded. Open the app to record one after an employer "
               "gets in touch.")
         _say_an_empty_file_was_left_alone(database)
@@ -892,6 +903,7 @@ def run_interviews(args: argparse.Namespace) -> int:
             jobs = {job.listing_id: job for job in store.list_jobs()}
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     print(preparation.interview_summary(rounds, today))
     if rounds:
         print("")
@@ -948,8 +960,9 @@ def run_analytics(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · progress from this database ({today.isoformat()}, local day)")
+    heading = f"AI Career Agent {__version__} · progress from this database ({today.isoformat()}, local day)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("")
         print("No database yet, so nothing is recorded to add up. The counts start from what you write "
               "down: an application you applied to, a reply you received, a round you have been invited to.")
@@ -962,6 +975,7 @@ def run_analytics(args: argparse.Namespace) -> int:
             report = analytics.report_from_store(store, today=today)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     lines = list(report.describe()[1:])
     while lines and not lines[0]:
         lines.pop(0)
@@ -982,8 +996,9 @@ def run_history(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · your employment and education (local database)")
+    heading = f"AI Career Agent {__version__} · your employment and education (local database)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so nothing is recorded. Open the app to add your roles as you go; "
               "nothing is uploaded and no employer is contacted.")
         _say_an_empty_file_was_left_alone(database)
@@ -994,6 +1009,7 @@ def run_history(args: argparse.Namespace) -> int:
             study = store.list_education()
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
         return _refuse_database_problem(exc)
+    print(heading)
     print("")
     print(f"Employment ({len(roles)} record(s), current role first)")
     if not roles:
@@ -1183,13 +1199,15 @@ def run_preview_calendar_export(args: argparse.Namespace) -> int:
     """
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · calendar export preview (nothing is written)")
+    heading = f"AI Career Agent {__version__} · calendar export preview (nothing is written)"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so there are no follow-up days to preview. Nothing was written.")
         _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
     with CareerStore(database) as store:
         upcoming = reminders(_follow_up_pairs(store), today)
+    print(heading)
     if not upcoming:
         print("No follow-up days are recorded, so there would be nothing to export. Set a day on an "
               "application in the window and run this again. Nothing was written.")
@@ -1213,8 +1231,9 @@ def run_draft_follow_up(args: argparse.Namespace) -> int:
     listing_id = args.draft_follow_up
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · follow-up email draft (nothing is sent)")
+    heading = f"AI Career Agent {__version__} · follow-up email draft (nothing is sent)"
     if not database.exists():
+        print(heading)
         print("No database yet, so there is no application to write from. Nothing was written.")
         return EXIT_REFUSED
     try:
@@ -1235,6 +1254,7 @@ def run_draft_follow_up(args: argparse.Namespace) -> int:
             return EXIT_REFUSED
         preview = integrations.preview_email(draft, integration=integration, listing=job)
 
+    print(heading)
     for line in preview.describe():
         print(line)
     print("")
@@ -1328,8 +1348,9 @@ def run_record_follow_up(args: argparse.Namespace) -> int:
     listing_id = args.record_follow_up
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · calendar event for a follow-up (nothing is created on its own)")
+    heading = f"AI Career Agent {__version__} · calendar event for a follow-up (nothing is created on its own)"
     if not database.exists():
+        print(heading)
         print("No database yet, so there is no follow-up day to record. Nothing was created.")
         return EXIT_REFUSED
     try:
@@ -1352,6 +1373,7 @@ def run_record_follow_up(args: argparse.Namespace) -> int:
             return EXIT_REFUSED
         preview = integrations.preview_event(request, integration=integration, listing=job)
 
+    print(heading)
     for line in preview.describe():
         print(line)
     result = integrations.dispatch_with_retry(integration, request)
@@ -1375,14 +1397,16 @@ def run_calendar_export(args: argparse.Namespace) -> int:
     target = Path(args.calendar_to).expanduser()
     today = _local_today()
     database = _database_path(args)
-    print(f"AI Career Agent {__version__} · calendar export")
+    heading = f"AI Career Agent {__version__} · calendar export"
     if not database.exists() or _empty_database_file(database):
+        print(heading)
         print("No database yet, so there are no follow-up days to export. Nothing was written.")
         _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
     with CareerStore(database) as store:
         pairs = _follow_up_pairs(store)
         upcoming = reminders(pairs, today)
+    print(heading)
     if not upcoming:
         print("No follow-up days are recorded, so no calendar file was written. Set a day on an "
               "application in the window and run this again.")

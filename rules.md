@@ -57,6 +57,20 @@
   read-only filesystem before the fix; `looks_like_a_write_failure` and
   `tests/test_damaged_records.WriteRefusalTests` are the regression coverage, and the before/after transcripts
   are in `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+  **Extended by the release-rehearsal increment (2026-10-16):** a command that refuses writes **nothing at
+  all** to its report stream - the refusal belongs on standard error and the exit status says what happened,
+  so `career-agent --analytics > report.txt` on a file this build cannot read cannot leave a report title
+  with today's date in it, and a command piped into another program cannot hand it a title beside a status
+  saying it failed. Twelve of the fourteen commands that open the database were announcing themselves first
+  (the heading was written before the file was opened, so the refusal came after it), while `--backup-to`,
+  `--seed-tasks` and `--worker` already wrote nothing. The heading is now written once the data it reports on
+  has been read; the commands that explain a refusal about the *request* (a listing id that is not stored, a
+  day that was never recorded) still print what they explain. Found by probing the built wheel with the two
+  streams separated, reproduced with the fix reverted (`Ran 30 … FAILED (failures=22)`, six test methods, each
+  showing the heading that reached stdout), covered by
+  `tests/test_damaged_records.py` (`DATABASE_COMMANDS` against a text file named like a database, plus the
+  shared `assert_refused_cleanly` helper), and written up in
+  `research/cross-platform-desktop-ci-evidence-2026-10-15.md` section 21.
   **A smoke test may never report success for a window it did not build** (2026-10-15): the scripted desktop
   entry point exits 2 with `RESULT: BLOCKED` when the machine has no display or no Tkinter, prints no check as
   passed, and the CI leg that requires a window runs it under a real display where it must exit 0. Manual GUI

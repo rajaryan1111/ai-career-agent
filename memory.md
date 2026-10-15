@@ -2960,3 +2960,39 @@ thirteen jobs are green together, which is what makes "3.14 is measured" a state
 (`unit-tests (3.14)`: `Ran 1709 tests ... OK (skipped=13)`, `csv: 0356b093ded3...`; `Installed package
 (3.14)` green in the same run).
 
+**2026-10-16, this session — the release rehearsal found D31: a refused command still printed its title.** The
+rehearsal in `scratch/release_rehearsal.sh` builds an artifact from a clean `git archive` of one revision and
+installs it into disposable environments; the failure battery (`scratch/failure_probes.sh`) then walks the
+installed command over a data folder that cannot be created, a read-only folder, `--database` pointing at a
+directory, a corrupt file, a truncated file, a PDF résumé without `pypdf`, and a missing target folder. Every
+failure path already behaved: exit 2 or 3, one plain sentence, "nothing was changed", no traceback. What the
+battery showed with the two streams **separated** was that the refusal was not the only thing the command
+wrote - `--analytics` on a text file named like a database put `AI Career Agent 0.1.0 · progress from this
+database (…, local day)` on stdout and then refused on stderr, and eleven other commands did the same (twelve
+of the fourteen that open the database; `--backup-to`, `--seed-tasks` and `--worker` were already correct,
+the last one because D20 fixed it). So `career-agent --analytics > report.txt` left a report file that was a
+title and nothing else, and a pipeline got a title beside a status saying the command had failed. It also
+contradicted a rule already in `design.md` ("nothing half-printed") and `rules.md`.
+
+The fix writes each heading once the data it reports on has been read (reports after the records are decoded,
+`--export-to`/`--calendar-to` after the file is written, `--import-from` once the plan exists, the draft and
+the calendar-event commands once the reminder resolves); no message, exit status or report body changed, and
+the commands that explain a refusal about the *request* still print what they explain. `tests/test_damaged_records.py`
+gained `DATABASE_COMMANDS` and `test_no_command_announces_itself_before_refusing_a_file_it_cannot_read` (all
+fourteen commands against a corrupt file: exit 2, a `REFUSED` line, **empty stdout**, no file written, no byte
+changed, and `--import-from` is handed a real `importer.write_export` document so it cannot pass for the wrong
+reason), the shared `assert_refused_cleanly` helper now requires empty stdout, and the three refusing reports
+assert it too. One existing check was replaced because it could not fail: it searched for `Progress from this
+database` in the last line of stdout, and the heading spells that word lower-case - it only errored once the
+stream became empty. Fail-before measured with the fix reverted: `Ran 30 … FAILED (failures=22)`, six methods.
+Full suite 1719 tests, OK (skipped=13 in a clean checkout); `compileall` clean. D31 is section 21 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`; `rules.md`, `design.md`, `README.md`,
+`research/README.md` and `phases.md` carry the rule and the new counts.
+
+**A build left `ai_career_agent.egg-info/` in the checkout.** `python -m build` writes setuptools metadata into
+the source tree, and on the next suite run `importlib.metadata.version("ai-career-agent")` found it, so
+`test_packaging`'s installed-only test ran (and passed) instead of skipping and the suite reported
+`skipped=12` where a clean checkout reports 13. It is gitignored, so nothing was committed, but the rehearsal
+script now exports the tracked revision with `git archive` into `/tmp` before building, and the folder was
+removed: a checkout that is also a build directory is not the state any measurement should be taken in.
+

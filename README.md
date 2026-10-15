@@ -838,7 +838,9 @@ changed", a verified copy taken before an existing database is updated - not for
 current one, and not an existing copy reused - with a refused copy leaving the update unstarted and the
 file byte-identical, refusals by type for a newer or unrecognised file), WAL and side-file handling, and the
 command-line front end —
-its exit codes, its refusals, the confirmation it requires before replacing a database, and the
+its exit codes, its refusals, the confirmation it requires before replacing a database, the rule that a
+command which refuses writes nothing to its report stream and leaves the refusal on stderr (measured on the
+built wheel, where twelve commands still printed their heading first), and the
 fact that it never imports the GUI toolkit), and
 the desktop handlers exercised through widget stubs — including the résumé review screen: proposals shown
 with evidence before anything is saved, per-value accept and reject, cancellation and declined

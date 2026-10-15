@@ -193,7 +193,7 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 | Phase | Status | Evidence, and what is missing |
 | --- | --- | --- |
 | **0 — Product contract and risk controls** | **Complete** | `prd.md`, `architecture.md`, `rules.md`, `design.md`, `phases.md`, `memory.md` and `README.md` agree; no document says the implementation is unauthorized or research-only. |
-| **1 — Usable local desktop workflow** | **Partially complete** | The workflow exists and is exercised end to end automatically: eleven workflows, 82 checks, on five display-backed CI legs (run `38784018777` at `eba6b4f2`, 12/12 jobs; that run's suite was 1652 tests on every leg, the tree now stands at 1718). The exit criterion "automated tests **and manual GUI smoke tests** cover critical workflows" is **half met**: no human has run the window on any platform, so all 76 window steps of the checklist stay BLOCKED (22 steps passed, all of them needing no window). |
+| **1 — Usable local desktop workflow** | **Partially complete** | The workflow exists and is exercised end to end automatically: eleven workflows, 82 checks, on five display-backed CI legs (run `38784018777` at `eba6b4f2`, 12/12 jobs; that run's suite was 1652 tests on every leg, the tree now stands at 1719). The exit criterion "automated tests **and manual GUI smoke tests** cover critical workflows" is **half met**: no human has run the window on any platform, so all 76 window steps of the checklist stay BLOCKED (22 steps passed, all of them needing no window). |
 | **1B — Local resume import and profile review** | **Partially complete** | Implemented locally and text-only: `career_agent/resume.py` extracts from DOCX with the standard library and from PDF through the optional `pypdf`, proposes values with their evidence and confidence, and writes **only** the values the person selects and confirms. Automated coverage: the reader and proposal layers, encrypted/damaged/empty/oversized/textless refusals, a socket-blocked local-only run, and workflow H/I-independent handler tests for the review dialog. Missing: a human import review through the real window (checklist steps 24–31, all BLOCKED), a scanned-PDF path (OCR is deliberately out of scope, so a textless PDF is refused), and the 12 PDF-dependent tests skip in a checkout without the `pdf` extra. |
 | **2 — Product reliability and security foundation** | **Partially complete** | Schema migrations with a pre-update verified snapshot and honest refusals (newer/unrecognised files refused by type), backup/restore with validation, owner-only export and database permissions where the platform has them, redacted one-line event log, JSON export/import with a preview plan, packaging metadata and an installed-command rehearsal on three platforms. Missing: **encryption at rest**, a written release/upgrade policy beyond the README's data-compatibility section, a diagnostics/threat-model document, and per-platform launch artefacts. |
 | **3 — Source permission and job-quality validation** | **Blocked** | The gate is closed (`SOURCE_QUALITY_GATE_PASSED = False`) and `enabled_discovery_sources()` is empty, by design: the 50-record validation sample is not finished, and no source has current permission evidence. Nothing may be enabled from this repository state. |
@@ -207,7 +207,7 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 
 * **Implemented:** the domain core, storage, migrations and backup/restore, the Tk window with its tabs, the
   scheduler engine, the adapter framework, analytics, export/import, résumé reading, the event log.
-* **Automated-tested:** 1718 unit and integration tests plus the two scripted desktop entry points, green on
+* **Automated-tested:** 1719 unit and integration tests plus the two scripted desktop entry points, green on
   five display-backed legs and four interpreter versions — **and the checks are about records, widget cells and
   status lines, never about pixels, wording or focus**.
 * **Human-accepted:** **nothing.** No person has opened this window on any platform.
@@ -218,7 +218,7 @@ distinction the whole table turns on: *implemented* ≠ *automated-tested* ≠ *
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1718 tests passing locally (13 skipped in a checkout: 12 of them need the optional
+implemented, with 1719 tests passing locally (13 skipped in a checkout: 12 of them need the optional
 `pypdf` library and one runs only where the project is installed) and a
 Python 3.10–3.14 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs

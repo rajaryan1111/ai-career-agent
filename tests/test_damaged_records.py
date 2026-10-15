@@ -32,6 +32,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import career_agent.__main__ as cli
+from career_agent import importer
 from career_agent.core import (
     ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     InterviewStage, JobListing,
@@ -41,6 +42,28 @@ from career_agent.store import (
 )
 
 UNKNOWN_STATUS = "sent-somewhere"
+
+#: Every command a person can run that has to open the database, with the extra arguments it needs to get
+#: that far. ``{target}`` and ``{document}`` are filled in per run. The commands that do not open the
+#: database are deliberately absent: ``--doctor`` reads the same file without writing and reports what it
+#: finds under a documented exit status instead of refusing, ``--forget-local-data`` removes files and never
+#: opens the database, and ``--sources`` and ``--integration-status`` answer from the code alone.
+DATABASE_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("--analytics",),
+    ("--history",),
+    ("--interviews",),
+    ("--follow-ups",),
+    ("--next-actions",),
+    ("--worker-status",),
+    ("--preview-calendar-export",),
+    ("--export-to", "{target}"),
+    ("--calendar-to", "{target}"),
+    ("--import-from", "{document}"),
+    ("--draft-follow-up", "j1"),
+    ("--record-follow-up", "j1", "--at", "10:30", "--timezone", "Asia/Kolkata", "--minutes", "30"),
+    ("--add-role", "Sandbox Systems", "--title", "Data Engineer", "--start", "2024-06-01"),
+    ("--add-study", "Sandbox Institute", "--qualification", "B.Tech"),
+)
 
 
 class DisposableDatabaseTestCase(unittest.TestCase):
@@ -314,6 +337,11 @@ class ReadOnlyReportsOnDamagedRecordsTests(DisposableDatabaseTestCase):
                 self.assertNotIn("Traceback", err)
                 self.assertNotIn("Traceback", out)
                 self.assertNotIn("COULD NOT START", err + out)
+                self.assertEqual(
+                    out, "",
+                    "a refused report must print nothing: the heading used to be written before the database "
+                    "was read (measured 2026-10-16)",
+                )
         self.assertEqual(self.bytes_of_database(), before, "a read-only report wrote to the database")
 
     def test_the_reports_that_do_not_read_the_record_still_run(self) -> None:
@@ -335,8 +363,14 @@ class ReadOnlyReportsOnDamagedRecordsTests(DisposableDatabaseTestCase):
 
         self.assertEqual(code, cli.EXIT_REFUSED)
         self.assertIn("Nothing was changed or repaired", err)
-        # A refusal must not be dressed up as a report: no metric is printed after it.
-        self.assertNotIn("Progress from this database", out.splitlines()[-1])
+        # A refusal must not be dressed up as a report: not one line of it reaches stdout, because the report
+        # was never produced. The earlier form of this check looked for the text "Progress from this database"
+        # in the *last* line of stdout only - and the heading spells that word with a lower-case "progress",
+        # so the search could not match anything and the check could not fail. The heading itself was written
+        # before the database was opened, so on every refusal stdout held one line of a report of a database
+        # that was never read. Both were measured on 2026-10-16 and both are why this now asserts the whole
+        # stream.
+        self.assertEqual(out, "", "a refusal must not be dressed up as a report")
 
 
 class EveryCommandThatReadsTheRecordTests(DisposableDatabaseTestCase):
@@ -357,6 +391,12 @@ class EveryCommandThatReadsTheRecordTests(DisposableDatabaseTestCase):
         self.assertIn("--doctor", err, "the refusal must say how to find which record it is")
         self.assertNotIn("COULD NOT START", err + out)
         self.assertNotIn("Traceback", err + out)
+        self.assertEqual(
+            out, "",
+            "a command that refused still announced itself: its heading reached stdout before the database "
+            "was read, so redirecting a refused command to a file left something that looked like the start "
+            "of a report (measured on the built wheel, 2026-10-16)",
+        )
         if target is not None:
             self.assertFalse(target.exists(), f"{target.name} was written despite the refusal")
         note = self.database.parent / "logs" / "startup-diagnostics.log"
@@ -515,6 +555,48 @@ class NotADatabaseAtAllTests(DisposableDatabaseTestCase):
         self.assertEqual(code, cli.EXIT_PROBLEM_FOUND)
         self.assertIn("file is not a database", out)
         self.assertIn("Nothing was changed", out)
+
+    def write_a_real_export_document(self) -> Path:
+        """A document the import command would accept, so its refusal is about the database and not the file.
+
+        The import command reads the file before it opens the database. Handing it a file it would refuse
+        anyway would make this test pass for the wrong reason: the point is what happens when the *database*
+        cannot be read.
+        """
+        document = self.folder / "export.json"
+        with CareerStore(self.folder / "healthy.sqlite3") as store:
+            store.save_job(JobListing("j1", "fixture", "Fixture", "https://jobs.example.invalid/j1",
+                                      "Sandbox Systems", "Data Engineer", availability_status=Availability.OPEN))
+            importer.write_export(store, document)
+        return document
+
+    def test_no_command_announces_itself_before_refusing_a_file_it_cannot_read(self) -> None:
+        """Reproduced on 2026-10-16: eleven commands printed their title line and then refused.
+
+        Measured on the built wheel, with a text file named like a database: ``--analytics`` wrote
+        ``AI Career Agent 0.1.0 · progress from this database (…, local day)`` to stdout and then refused on
+        stderr with exit 2. Redirecting a refused command to a file therefore left a file that looked like
+        the beginning of a report of a database that was never read, and piping it to another program handed
+        that program a report title with a status saying the command had failed. ``--backup-to`` and
+        ``--seed-tasks`` already wrote nothing on the same input, and ``--worker`` has been held to the same
+        rule since the interval refusal ("the worker must not announce itself before refusing"). This holds
+        every other command that opens the database to it.
+        """
+        document = self.write_a_real_export_document()
+        self.write_garbage()
+        before = self.bytes_of_database()
+
+        for index, command in enumerate(DATABASE_COMMANDS):
+            with self.subTest(command=command[0]):
+                target = self.folder / f"output-{index}.dat"
+                arguments = [part.format(target=target, document=document) for part in command]
+                code, out, err = self.run_cli(*arguments)
+
+                self.assertEqual(code, cli.EXIT_REFUSED, f"{arguments[0]} exited {code}: {err}")
+                self.assertIn("REFUSED", err)
+                self.assertEqual(out, "", f"{arguments[0]} announced itself before refusing")
+                self.assertFalse(target.exists(), f"{arguments[0]} wrote {target.name} despite refusing")
+        self.assertEqual(self.bytes_of_database(), before, "a refused command wrote to the refused file")
 
 
 class ExportOfDamagedRecordsTests(DisposableDatabaseTestCase):
