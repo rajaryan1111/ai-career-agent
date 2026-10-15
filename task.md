@@ -6,14 +6,18 @@
 ## Product outcome
 After resume upload and one-time setup, the agent should autonomously discover relevant jobs twice daily, evaluate fit and eligibility, prepare truthful application materials, submit through permitted supported workflows, send authorized personalized HR outreach, track actual replies/outcomes, prevent duplicates and proactively report progress. Routine actions inside saved global policy should not require per-application approval.
 
-## P0 — Inspect current implementation and finish offline contact import
-- [ ] Inspect existing resume/CSV importers, SQLite schema/migration contract, desktop views, activity events, backup/restore and tests before adding abstractions.
-- [ ] Complete CSV parse/preview/review with synthetic fixtures; handle BOM, encoding, missing/extra columns, blank rows and row-level validation.
-- [ ] Detect normalized-email duplicates, suspicious syntax, missing names, conflicting person/company metadata and repeated records.
-- [ ] Keep import read-only until explicit user confirmation; show review summary and rejected-row reasons.
-- [ ] Persist only through migration-safe existing store paths; preserve suppression/opt-out history across re-imports.
-- [ ] Test cancellation/no-write, duplicate imports, malformed files, conflicts, backup/restore and regression behavior.
-- [ ] Never include contact data in public fixtures, logs, screenshots or repository files.
+## P0 — Finish offline HR contact import
+- [x] Implement the offline CSV parser/preview contract with synthetic fixtures: BOM/encoding handling, explicit header validation, ambiguous email-column refusal, source-value preservation, normalised comparison keys, duplicate grouping, conflict flags, privacy-safe aggregate CLI report, and strict size/row caps. See [parser/preview evidence](research/hr-contact-csv-preview-2026-10-16.md) and commit `062a88c`.
+- [x] Add parser tests for malformed/empty files, normalisation, duplicate groups, conflicts, privacy, no-write behaviour and CLI refusal paths. Latest Arena report says the full 13-job CI matrix was green on run 38823626117; verify current branch/run status before relying on that as current.
+- [ ] Inspect and reuse the existing SQLite migration/backup-before-upgrade, storage, desktop tab/scrolling, activity-event, backup/restore and GUI acceptance patterns before adding persistence or UI abstractions.
+- [ ] Add a migration-safe contacts store through the existing migration runner; preserve provenance and original review values; reuse `contacts.normalise_email_key`; make imports transactional and deterministic.
+- [ ] Preserve suppression/do-not-contact state across duplicate imports, metadata conflicts, restarts, backup and restore.
+- [ ] Add the local review/import UI: preview, mappings, conflicts and rejected-row reasons; explicit confirm-before-write; cancel/close/parse-refusal must perform zero writes.
+- [ ] Test migration/rollback, backup/restore, repeated imports, conflicts, suppression persistence, cancellation/no-write, confirmation, storage failure, GUI keyboard/scrolling paths and regression behavior.
+- [ ] Keep all private contact data out of the repository, tests, logs, screenshots and workflow artifacts.
+- [ ] Do not add matching-to-jobs, email drafts, sending, reply tracking, external calls or source enabling to this increment.
+
+**Next Arena task:** [safe contact import persistence + review UI](planning/arena-task-phase-0-contact-import-persistence-review-ui-2026-10-16.md).
 
 ## P1 — Resume intelligence and one-time onboarding
 - [ ] Inspect existing resume ingestion and reuse supported PDF/DOCX/text paths.
