@@ -158,9 +158,12 @@ resource lifecycle: a child process re-runs the whole suite counting connections
 closed (the macOS `ResourceWarning: unclosed database` came from exactly that, and Python 3.10/3.11
 never emit the warning), and a source scan refuses `with sqlite3.connect(...)`, which manages the
 transaction and never closes the connection. They do not cover widget
-rendering, a real Tk session, PDF extraction without the optional `pypdf` library, or any
-operating-system integration, so the manual GUI smoke test —
-including macOS/Apple Silicon — remains outstanding.
+rendering, dialog wording, layout, or a person using the window. What CI does add since 2026-10-15: the suite
+and a scripted desktop smoke test run on a Linux runner under a real virtual display (Xvfb, where the window
+must be built and driven and a run without a display must report BLOCKED), and the suite, the résumé tests
+with the optional `pypdf` extra, and the installed-command rehearsal run on real Windows and macOS runners.
+The manual GUI smoke test — including macOS/Apple Silicon — remains outstanding, and no automated run closes
+a step of it.
 
 The application activity log is implemented end to end: schema version 2 adds
 `application_activity`, `ApplicationActivity`/`ActivityKind` define a dated entry whose detail is

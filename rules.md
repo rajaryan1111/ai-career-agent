@@ -47,6 +47,20 @@
   halfway leaves a part-written database behind a refusal that says nothing was written. Both were reproduced
   before they were fixed, and both have a regression test that fails on the behaviour they replaced
   (`tests/test_damaged_records.py`, evidence in `research/local-alpha-manual-acceptance-run-2026-10-15.md`).
+  **Extended again by the desktop-verification increment (2026-10-15):** a refusal has to name the right
+  *kind* of failure. A database that is intact but cannot be *written* - a read-only file, a read-only
+  folder, a folder that is not there, another process holding it - was reported as "this database file could
+  not be read", with the advice to restore a verified backup over it: a read described for a write, damage
+  that is not there, and a remedy that would fail in exactly the same way. The refusal now says the database
+  could not be written to, keeps exit status 2, still writes nothing, and the classifier that chooses between
+  the two keeps read failures on the read sentence. Reproduced on a read-only file, a read-only folder and a
+  read-only filesystem before the fix; `looks_like_a_write_failure` and
+  `tests/test_damaged_records.WriteRefusalTests` are the regression coverage, and the before/after transcripts
+  are in `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+  **A smoke test may never report success for a window it did not build** (2026-10-15): the scripted desktop
+  entry point exits 2 with `RESULT: BLOCKED` when the machine has no display or no Tkinter, prints no check as
+  passed, and the CI leg that requires a window runs it under a real display where it must exit 0. Manual GUI
+  acceptance stays the human checklist; no automated run closes a step of it.
 - Optimize for relevant opportunities and outcomes, not raw application count.
 
 ## 4. Platform compliance

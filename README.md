@@ -789,9 +789,28 @@ connection — is refused by a source scan, and a test may not resolve the machi
 so the suite cannot open the candidate's real database. Closing the window is covered too: the
 registered `WM_DELETE_WINDOW` handler closes the store, destroys the window, and writes none of the
 form's unsaved values. It
-requires no display and no GUI packages. Automated tests do **not** cover widget rendering, window
-behavior, or operating-system integration: GUI smoke testing on a real desktop, including macOS,
-remains outstanding and is tracked in
+requires no display and no GUI packages.
+
+A window can also be built and driven without a person, on a machine that has one:
+
+```bash
+python scripts/desktop_smoke_test.py
+```
+
+It constructs the real `CareerAgentApp` against a disposable synthetic database in a temporary folder,
+checks the window's title, minimum size, eight tabs in their documented order, that every tab was built,
+and that the main lists carry the columns they are read from, switches to every tab with a real rendering
+pass, presses the affected tabs' read-only **Refresh** buttons through Tk's own command dispatch, then
+closes the window, releases the database and deletes the folder it created — and checks that the default
+per-user database was neither created nor modified. It exits `0` for `RESULT: PASS`, `1` for
+`RESULT: FAIL` and `2` for `RESULT: BLOCKED`: a machine with no display, or no `tkinter`, is a BLOCKED run
+and never a pass, and the script asserts nothing about pixels, layout or dialog wording. CI runs it under
+Xvfb on Linux, where it must pass, and on the Windows and macOS legs, where a runner without a display
+session reports BLOCKED instead of being counted as a pass or failing the build.
+
+Automated tests, including that script, do **not** cover what a person sees: pixel rendering, layout,
+dialog wording, and operating-system integration are still checked by hand on a real desktop. Those checks
+remain outstanding, and every one of their statuses is in
 [the local-alpha smoke-test checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md).
 
 ## Packaging status
@@ -815,13 +834,24 @@ repository claims one. What exists today:
   behaviour is proven by one run; it is executed on two interpreters anyway, the floor the metadata
   declares (3.10) and the newest one the suite is run on (3.13), because a wheel or a console script that
   only works on the version used to build it is exactly the defect that installing from a checkout hides.
+  The same build-and-install-from-a-wheel rehearsal is repeated on Windows and macOS by the
+  `cross-platform` job, and the `pdf-extra` job proves the optional library is what unlocks the résumé
+  tests rather than a skip being mistaken for coverage: without `pypdf` the PDF cases skip, and with it
+  installed the same module has to finish with a bare `OK`.
 - **Which interpreters are tested, and which are not.** CI runs the full suite, `compileall` and the CSV
-  audit on **3.10, 3.11, 3.12 and 3.13**. `requires-python = ">=3.10"` has no upper bound — a newer
-  interpreter is not forbidden — but nothing here claims one: 3.14 has not been run, so it is untested
-  rather than supported, and the same is true of every interpreter the workflow does not name. The window
-  itself is only exercised through handler tests with stubbed widgets on Linux; a real Tk run on any
-  platform is [the manual checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md), not
-  CI. There is also no lint, formatter or type-check step configured, so none is claimed.
+  audit on **3.10, 3.11, 3.12 and 3.13** on Linux, and the same suite on **3.10 and 3.13** on Windows and
+  macOS, where it also exercises the installed command surface from a built wheel: `--version`,
+  `--doctor` against a missing database and against a file that is not one, schema creation and
+  cross-process persistence, a backup and a restore that really replace data, a JSON export imported into
+  a second database, and the two invariants that keep discovery closed. `requires-python = ">=3.10"` has
+  no upper bound — a newer interpreter is not forbidden — but nothing here claims one: 3.14 has not been
+  run, so it is untested rather than supported, and the same is true of every interpreter the workflow
+  does not name. The window is exercised on three levels, and they are not interchangeable: handler tests
+  with stubbed widgets on Linux, the scripted smoke test above under a real display (Xvfb) on Linux where
+  it must pass, and — the only level that can say a person can use it — [the manual
+  checklist](research/local-alpha-manual-smoke-test-checklist-2026-10-14.md), which CI cannot run and
+  whose GUI steps are still unrun. There is also no lint, formatter or type-check step configured, so none
+  is claimed.
 - **The documented commands are checked against the program.** `tests/test_documented_commands.py` reads
   every `--flag` this README and the manual checklist tell a person to run and looks it up in the real
   `--help` output, so a documented command that no longer exists fails the suite instead of failing in
@@ -853,8 +883,10 @@ Missing pieces, in the order they are needed, for a packaged desktop alpha:
    is the repository half of that rehearsal, run on this machine and recorded in [the release-readiness
    audit](research/release-readiness-audit-2026-10-15.md): install from the built wheel, `--doctor`,
    backup, restore, export, import, a real schema upgrade, and the failure paths — each with the exact
-   command and its observed result. The per-operating-system half needs machines this project does not
-   have.
+   command and its observed result. The per-operating-system half is only partly covered: CI runs the
+   suite, a real Tk widget lifecycle where the runner has one, and the installed-command rehearsal on real
+   Windows and macOS runners, but never from a packaged build and never with a person at the keyboard,
+   which is what that checklist asks for.
 
 Nothing is published to a package index and no release archive is attached anywhere, so "install from
 this checkout into your own Python environment, or run it from the checkout directly" is the accurate

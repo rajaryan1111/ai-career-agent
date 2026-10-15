@@ -155,15 +155,40 @@ verified by hashing the database file before and after.
 | Backup file that is not a database | `--restore-from damaged-backup.sqlite3 --yes` | exit 2, `REFUSED: … is not a database this app can read (file is not a database). The restore did not complete.`; the live database hash is byte-identical before and after |
 | A record this version cannot read | see section 7 | doctor exits 1 and names the record; reports that read it exit 2; reports that do not read it exit 0 |
 
-**Finding: a read-only database file is not a write-refusal path.** With the database file at mode `444`,
-`--doctor` and `--follow-ups` still run (correct: both are read-only), and the file's mode was observed
-changing from `-r--r--r--` to `-rw-------` on open — the store re-applies owner-only permissions to its own
-database every time it opens it (`_restrict_to_owner`, best-effort, POSIX-only). Writes then succeed, so a
-"read-only file" does not produce a refusal here; the refusal paths that exist are around *targets*
-(backup/export destinations, section 6) and around damaged files. This is a deliberate privacy measure with
-a documented side effect, not an accident, and it is recorded here because the opposite behaviour was
-expected when the probe was written. A filesystem-mounted read-only database, or a directory the process
-cannot write, was not available on this machine to exercise the remaining case.
+**Finding, measured again on 2026-10-15: a read-only file *is* a write-refusal path, and it was worded as a
+read failure.** With the database file at mode `444`, `--doctor` and `--follow-ups` still run (correct: both
+are read-only), and the file's mode is restored to owner-only on open (`_restrict_to_owner`, best-effort,
+POSIX-only) — observed again as `-r--r--r--` → `-rw-------`. This section first read that as "writes then
+succeed". They do not: the connection was opened while the file was read-only, so a *writing* command fails
+with SQLite's `attempt to write a readonly database`. Measured with no `chmod` in between, on the installed
+console script: `--seed-tasks` run 1 exits 2 and refuses, leaving the file at `-rw-------`; run 2 exits 0 and
+creates the schedule. The same reproduction holds for a database inside a folder the account cannot write
+(mode `555`), and on a **read-only filesystem** — the case recorded here as unavailable, because a read-only
+bind mount can now be arranged (2026-10-15):
+
+| Situation | Command | Observed |
+|---|---|---|
+| Database on a read-only filesystem (bind mount, `ro`) | `--doctor` | exit **1**: the database is reported `readable … schema version 6`, and the one problem named is `start-up notes cannot be written to mnt/logs` — accurate, and worth knowing, because a start-up failure could not be recorded there |
+| same | `--analytics`, `--follow-ups`, `--history` | exit 0, full reports |
+| same | `--backup-to out/backup.sqlite3`, `--export-to out/export.json` | exit 0, `Backup written and verified`; writing *outside* the read-only location is unaffected |
+| same | `--seed-tasks`, `--import-from … --yes` (a file with something to add) | exit 2, write refusal, nothing written |
+| same | `--restore-from … --yes` | exit 2, `REFUSED: mnt/.career_agent.sqlite3.restore-….partial could not be opened for writing: Read-only file system. The restore did not complete.` |
+| all of the above | — | the database file's sha256 is identical before and after every command, no `-journal`/`-wal` side file is left behind, and the mount is unmounted afterwards |
+
+**The defect those runs found.** Every one of those write refusals was worded as a *read* failure:
+`REFUSED: this database file could not be read, so nothing was reported: attempt to write a readonly
+database`, followed by advice to restore a verified backup *over the file* — a read described for a write,
+damage that is not there, and a remedy that would have failed in exactly the same way. Nothing was ever
+written by mistake (exit status 2, byte-identical file), so the harm was entirely in the sentence. Fixed in
+`career_agent/__main__.py`: `looks_like_a_write_failure()` keeps SQLite's write-side words (`attempt to write
+a readonly database`, `unable to open database file`, `database is locked`, `read-only file system`) on their
+own sentence — *"this database could not be written to, so nothing was changed"*, naming the read-only
+file/folder, missing-folder and lock possibilities — while read failures keep theirs. The refusal helper is
+now `_refuse_database_problem`, because it words three cases rather than one. Reproduced before the fix on a
+read-only filesystem (four writing commands, transcript in
+[`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md)) and
+covered after it by `tests/test_damaged_records.WriteRefusalTests`: a read-only file, a folder that cannot be
+written, the read failures that must not be re-worded, and the write permission coming back as the whole fix.
 
 ## 7. The defect this audit found, and the fix
 
@@ -234,12 +259,16 @@ sweeps its target read-only before it writes anything.
 
 ## 8. CI coverage audit
 
-The workflow runs three jobs on `ubuntu-latest` only. What it covers, and why:
+The workflow runs five jobs across Linux, Windows and macOS. What they cover, and why (the platform legs were
+added on 2026-10-15):
 
 | Job | Matrix | What it proves |
 |---|---|---|
-| `unit-tests` | Python 3.10, 3.11, 3.12, 3.13 | the suite passes on the floor `pyproject.toml` declares and on the newest interpreter it has been run on; `compileall` over `career_agent/`, `scripts/`, `tests/`; the source-CSV integrity audit |
-| `installed-package` | Python 3.10 and 3.13 | `python -m build --wheel`, `pip install dist/*.whl` into a clean environment, then `career-agent --version`, `--doctor`, `--database` run **from outside the checkout** — the same strings `tests/test_packaging.py` requires, so a wheel, a console script or a build backend that only works on the interpreter that built it fails CI |
+| `unit-tests` | Ubuntu, Python 3.10, 3.11, 3.12, 3.13 | the suite passes on the floor `pyproject.toml` declares and on the newest interpreter it has been run on; `compileall` over `career_agent/`, `scripts/`, `tests/`; the source-CSV integrity audit |
+| `installed-package` | Ubuntu, Python 3.10 and 3.13 | `python -m build --wheel`, `pip install dist/*.whl` into a clean environment, then `career-agent --version`, `--doctor`, `--database` run **from outside the checkout** — the same strings `tests/test_packaging.py` requires, so a wheel, a console script or a build backend that only works on the interpreter that built it fails CI |
+| `desktop-smoke-linux` | Ubuntu, system interpreter, `xvfb` + `python3-tk` | the scripted desktop entry point run twice: with no display it must exit 2 and print `RESULT: BLOCKED` (and must not print a pass), and under a real virtual display it must exit 0 — so a runner that cannot show a window can never be counted as covering one. Then it checks that the run left no window, database or temporary folder behind |
+| `pdf-extra` | Ubuntu, Python 3.13 | the optional `[pdf]` extra is what unlocks the résumé tests, in both directions: without `pypdf` the PDF cases skip, and with it installed the same module finishes with a bare `OK` |
+| `cross-platform` | Windows and macOS, Python 3.10 and 3.13 | the full suite on a real Windows and a real macOS runner; `compileall`; the CSV audit; the résumé tests with the extra installed (no skips); a wheel built and installed into a virtual environment **outside the checkout** with the import path asserted; then the installed command surface — `--version`, `--doctor` on a missing database (exit 0, `no file yet`) and on a file that is not one (exit 1 for the doctor, exit 2 for a read-only report, file byte-identical), schema creation with all eleven tables, cross-process persistence, a backup/restore that really replaces data, a JSON export imported into a second database, the two discovery invariants, a minimal Tk widget lifecycle, and the desktop smoke test |
 
 Decisions behind the matrix:
 
@@ -255,11 +284,15 @@ Decisions behind the matrix:
   exists fails the suite. Current state: README 30 flags, checklist 21 flags, 0 unknown in either. (This
   line read "checklist 20" when it was written; re-counted on 2026-10-15 while executing the checklist, which
   is 21 either way — the document is what changed, not the count of flags in it.)
-- Not covered by CI, and therefore not claimed anywhere: real Tk rendering, window behaviour, macOS or
-  Windows behaviour, code signing, or anything requiring a display. The manual campaign's non-GUI half has
-  since been executed and is recorded in
+- **What CI still does not cover, and therefore does not let this document claim:** pixel rendering, layout,
+  dialog wording, accessibility, native look-and-feel, code signing, installers, or a person using the window.
+  macOS and Windows *are* now covered for the suite, the installed command surface and a minimal Tk widget
+  lifecycle, and a runner without a display session reports BLOCKED for the window itself rather than passing.
+  The manual campaign's non-GUI half has been executed and is recorded in
   [`local-alpha-manual-acceptance-run-2026-10-15.md`](local-alpha-manual-acceptance-run-2026-10-15.md); the
-  window items are still unrun, and the checklist itself carries the per-step state.
+  window items are still unrun, and the checklist itself carries the per-step state. The results of the new
+  platform legs are recorded in
+  [`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md).
 
 ## 9. Version and data-compatibility policy
 
@@ -294,9 +327,15 @@ summarised here with the evidence this audit produced:
 4. Real GUI coverage: the manual smoke-test checklist's desktop items are still unrun; automated tests use
    widget stubs and are not GUI tests. The checklist's non-GUI half *has* been executed (22 steps passed, 76
    blocked for the missing display, four defects found and fixed) — see the acceptance run linked in section 7.
-5. A CI leg for Python 3.14, and a macOS/Windows CI leg (this repository runs only on `ubuntu-latest`).
-6. The read-only-*filesystem* case from section 6, which needs a machine where a read-only mount can be
-   arranged.
+   A scripted smoke entry point now also builds and drives the real window where a display exists
+   (`scripts/desktop_smoke_test.py`, run under Xvfb for Linux in CI); that is window construction and
+   programmatic interaction with a real Tk, not a person using it, so no checklist step moved to PASS.
+5. **Partly closed (2026-10-15).** Windows and macOS legs now run the suite, the installed-command
+   rehearsal and a minimal Tk lifecycle, and a display-backed Linux leg runs the scripted desktop smoke test.
+   Still missing: a CI leg for Python 3.14 (no interpreter here has been able to run it), the same rehearsal
+   from a *packaged* build on each operating system, and any human GUI session.
+6. **Closed (2026-10-15).** A read-only filesystem can now be arranged here with a bind mount, and section 6
+   records what it measured — including the write-refusal wording defect that case exposed.
 7. Branch protection, a signed tag and a release archive: none exist, and no package has been published.
 
 ## 11. Reproducing this rehearsal

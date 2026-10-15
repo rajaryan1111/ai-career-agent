@@ -1,7 +1,7 @@
 # Product Design Notes
 
-**Status:** Product UX specification; Tkinter local alpha implemented, GUI/cross-platform smoke testing outstanding  
-**Last updated:** 2026-10-14
+**Status:** Product UX specification; Tkinter local alpha implemented, manual GUI acceptance outstanding. A scripted smoke entry point (`scripts/desktop_smoke_test.py`) builds and drives the real window where a display exists - it must pass under Xvfb in CI and reports BLOCKED, never a pass, where there is none  
+**Last updated:** 2026-10-15
 
 ## 1. Design objective
 

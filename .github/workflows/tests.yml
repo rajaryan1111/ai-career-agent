@@ -118,3 +118,341 @@ jobs:
           career-agent --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes
           # After the restore the doctor must actually read that database, not merely not crash.
           career-agent --database alpha.sqlite3 --doctor | grep -q "^Database: readable"
+
+  # A window can only be verified on a machine that has one, and the runners are headless. This job
+  # gives Linux a real display (Xvfb) and a Tkinter the system interpreter can import, then runs the
+  # repeatable smoke test from ``scripts/``. Both runs are required and they check opposite things:
+  # with no display at all the smoke test must report BLOCKED rather than passing - that is what stops
+  # every other job from going green on a runner that can never show a window - and under the virtual
+  # display it must pass. Nothing here is manual acceptance: the checklist in ``research/`` stays
+  # BLOCKED for the steps a person has to perform, and a passing smoke run does not close any of them.
+  desktop-smoke-linux:
+    name: Desktop smoke (Linux, display-backed)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install a virtual display and Tkinter for the system interpreter
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb python3-tk
+      - name: Report the interpreter and the Tk that is now importable
+        run: |
+          set -euo pipefail
+          python3 -c "import sys; assert sys.version_info >= (3, 10), sys.version; print(sys.version)"
+          python3 -c "import tkinter; print('tkinter: Tk', tkinter.TkVersion, 'Tcl', tkinter.TclVersion)"
+      - name: Confirm the smoke test refuses to report success without a display
+        run: |
+          set +e
+          output="$(env -u DISPLAY python3 scripts/desktop_smoke_test.py 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -eq 2 || { echo "the smoke test must exit 2 (BLOCKED) with no display, not $status"; exit 1; }
+          grep -q "RESULT: BLOCKED" <<< "$output"
+          if grep -q "RESULT: PASS" <<< "$output"; then
+            echo "the smoke test reported success without a display"; exit 1
+          fi
+      - name: Run the desktop smoke test against the virtual display
+        run: |
+          set -euo pipefail
+          output="$(xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_smoke_test.py 2>&1)"
+          echo "$output"
+          grep -q "RESULT: PASS" <<< "$output" || { echo "the smoke test did not pass under a real display"; exit 1; }
+      - name: Confirm the smoke test left no window, database or temporary folder behind
+        run: |
+          set -euo pipefail
+          test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-desktop-smoke-*' -print -quit)" \
+            || { echo "a disposable folder survived the smoke run"; exit 1; }
+          test ! -e "$HOME/.local/share/ai-career-agent" \
+            || { echo "the smoke run created the per-user data folder"; exit 1; }
+
+  # The optional extra is the difference between a résumé PDF being readable and not, and a "skipped"
+  # line is exactly the kind of green that hides a missing capability. This job proves both directions on
+  # one platform: without ``pypdf`` the PDF cases skip, and with the extra installed the same module has
+  # to finish with a bare ``OK`` - no skips at all.
+  pdf-extra:
+    name: Optional PDF extra
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Without the extra, the PDF cases must skip rather than pass
+        run: |
+          set -euo pipefail
+          python -m venv bare
+          output="$(bare/bin/python -m unittest discover -s tests -p "test_resume.py" 2>&1)"
+          echo "$output" | tail -3
+          grep -q "skipped=" <<< "$output" || { echo "without pypdf the PDF cases did not skip"; exit 1; }
+      - name: With the extra installed, nothing may skip
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet ".[pdf]"
+          python -c "import pypdf; print('pypdf', pypdf.__version__)"
+          output="$(python -m unittest discover -s tests -p "test_resume.py" -v 2>&1)"
+          echo "$output" | tail -6
+          grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
+
+  # The suite is the same everywhere; the operating system is not. These legs run the suite and the
+  # desktop smoke test on the two platforms the metadata claims besides Linux, and exercise the installed
+  # command surface there: version, the doctor against a missing database and against a file that is not
+  # one, schema creation and cross-process persistence, backup and restore that really replaces data,
+  # export and import into a second database, and the two invariants that keep discovery closed. The
+  # whole job runs under bash, which is the shell the checkout's own scripts are written for.
+  cross-platform:
+    name: Cross-platform (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.10", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Report the interpreter, the platform and the Tk it ships
+        run: |
+          set -euo pipefail
+          python -VV
+          # Reported rather than required: an interpreter without Tkinter can still run every command,
+          # and whether a window can be built on this runner is answered by the two steps further down,
+          # which report BLOCKED rather than passing when it cannot.
+          python - <<'PY'
+          import platform, sys
+          print("python:", sys.version.split()[0], sys.executable)
+          print("platform:", platform.platform())
+          try:
+              import tkinter
+          except Exception as exc:
+              print(f"tkinter: NOT AVAILABLE on this interpreter ({exc!r})")
+          else:
+              print("tkinter: Tk", tkinter.TkVersion, "Tcl", tkinter.TclVersion)
+          PY
+      - name: Run the standard-library test suite on this platform
+        run: python -m unittest discover -s tests -v
+      - name: Compile all Python modules
+        run: python -m compileall -q career_agent scripts tests
+      - name: Audit research CSV integrity
+        run: python scripts/audit_job_source_csv.py
+      - name: Install the optional PDF extra and run the résumé tests without skips
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet ".[pdf]"
+          python -c "import pypdf; print('pypdf', pypdf.__version__)"
+          output="$(python -m unittest discover -s tests -p "test_resume.py" 2>&1)"
+          echo "$output" | tail -3
+          grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
+      - name: Build a wheel and install it into a virtual environment outside the checkout
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet build
+          python -m build --wheel --outdir dist
+          work="$(mktemp -d)"
+          work="$(cd "$work" && { pwd -W 2>/dev/null || pwd; })"
+          python -m venv "$work/venv"
+          if [ -x "$work/venv/bin/python" ]; then venv_bin="$work/venv/bin"; else venv_bin="$work/venv/Scripts"; fi
+          "$venv_bin/python" -m pip install --quiet --upgrade pip
+          "$venv_bin/python" -m pip install --quiet dist/*.whl
+          "$venv_bin/python" - <<'PY'
+          import importlib.metadata as metadata
+          import pathlib
+          import career_agent
+
+          location = pathlib.Path(career_agent.__file__).resolve()
+          assert "site-packages" in location.parts, f"the checkout was imported, not the wheel: {location}"
+          declared = metadata.version("ai-career-agent")
+          assert declared == career_agent.__version__, (declared, career_agent.__version__)
+          print(f"installed {declared} from {location}")
+          PY
+          {
+            echo "WORK=$work"
+            echo "VENV_BIN=$venv_bin"
+          } >> "$GITHUB_ENV"
+      - name: The installed commands answer on this platform
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/career-agent" --version
+          "$VENV_BIN/career-agent" --help > /dev/null
+          # A database that does not exist yet is a report, not a failure: nothing is there to check.
+          set +e
+          "$VENV_BIN/career-agent" --database absent.sqlite3 --doctor > absent.txt 2>&1
+          absent_status=$?
+          set -e
+          cat absent.txt
+          test "$absent_status" -eq 0 \
+            || { echo "the doctor must report a missing database, not fail ($absent_status)"; exit 1; }
+          grep -q "no file yet" absent.txt
+      - name: A file that is not a database is refused and left alone
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          printf 'this is not a database\n' > damaged.sqlite3
+          before="$(cksum damaged.sqlite3)"
+          set +e
+          "$VENV_BIN/career-agent" --database damaged.sqlite3 --doctor > damaged-doctor.txt 2>&1
+          doctor_status=$?
+          "$VENV_BIN/career-agent" --database damaged.sqlite3 --analytics > damaged-report.txt 2>&1
+          report_status=$?
+          set -e
+          echo "doctor exit $doctor_status:"; tail -3 damaged-doctor.txt
+          echo "report exit $report_status:"; cat damaged-report.txt
+          test "$doctor_status" -eq 1 \
+            || { echo "the doctor must report a problem with exit 1, got $doctor_status"; exit 1; }
+          test "$report_status" -eq 2 \
+            || { echo "a read-only report must refuse with exit 2, got $report_status"; exit 1; }
+          grep -q "REFUSED" damaged-report.txt
+          test "$before" = "$(cksum damaged.sqlite3)" || { echo "the damaged file was modified"; exit 1; }
+      - name: Schema creation, cross-process persistence, backup and restore, export and import
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/python" - <<'PY'
+          import sqlite3
+
+          from career_agent import ApplicationTracker, Availability, JobListing
+          from career_agent.store import SCHEMA_TABLES, SCHEMA_VERSION, CareerStore
+
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j1", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/1", employer_name="Example",
+                  role_title="AI Intern", availability_status=Availability.OPEN,
+              ))
+              store.save_tracker(ApplicationTracker("j1"))
+
+          connection = sqlite3.connect("alpha.sqlite3")
+          try:
+              version = connection.execute("PRAGMA user_version").fetchone()[0]
+              tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+          finally:
+              connection.close()
+          assert version == SCHEMA_VERSION, (version, SCHEMA_VERSION)
+          missing = sorted(set(SCHEMA_TABLES) - tables)
+          assert not missing, missing
+          print(f"schema version {version} with all {len(SCHEMA_TABLES)} tables")
+          PY
+          # A second process must read back what the first one wrote.
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --doctor | grep -q "^Database: readable"
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --backup-to alpha-backup.sqlite3
+          "$VENV_BIN/python" - <<'PY'
+          from career_agent import Availability, JobListing
+          from career_agent.store import CareerStore
+
+          # Written after the backup: restoring must remove it again, or the restore did nothing.
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j2", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/2", employer_name="Example",
+                  role_title="Second role", availability_status=Availability.OPEN,
+              ))
+          PY
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes
+          "$VENV_BIN/python" - <<'PY'
+          import sqlite3
+
+          connection = sqlite3.connect("alpha.sqlite3")
+          try:
+              jobs = sorted(row[0] for row in connection.execute("SELECT listing_id FROM job_listings"))
+          finally:
+              connection.close()
+          assert jobs == ["j1"], f"the restore did not replace the data it restored over: {jobs}"
+          print("the restore replaced the data: only the backed-up job is left")
+          PY
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --export-to alpha-export.json
+          # Importing refuses to create the target database: opening an import is not the moment to
+          # decide where a person's data lives. Create it, then import into it.
+          "$VENV_BIN/python" -c "from career_agent.store import CareerStore; CareerStore('copy.sqlite3').close()"
+          "$VENV_BIN/career-agent" --database copy.sqlite3 --import-from alpha-export.json --yes
+          "$VENV_BIN/python" - <<'PY'
+          import json
+          import sqlite3
+
+          exported = json.loads(open("alpha-export.json", encoding="utf-8").read())
+          connection = sqlite3.connect("copy.sqlite3")
+          try:
+              copied = sorted(row[0] for row in connection.execute("SELECT listing_id FROM job_listings"))
+          finally:
+              connection.close()
+          assert copied == ["j1"], f"the import did not carry the job over: {copied}"
+          print(f"exported {len(exported.get('job_listings', []))} job(s) and imported them into a second database")
+          PY
+      - name: The two invariants that keep discovery closed still hold on this platform
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/python" - <<'PY'
+          from career_agent.sources import SOURCE_QUALITY_GATE_PASSED, enabled_discovery_sources
+
+          assert SOURCE_QUALITY_GATE_PASSED is False, "the source-quality gate must stay closed"
+          assert enabled_discovery_sources() == (), "no discovery source may be enabled"
+          print("the source-quality gate is not passed and no discovery source is enabled")
+          PY
+          "$VENV_BIN/career-agent" --sources | grep -q "Source-quality gate: NOT passed"
+          "$VENV_BIN/career-agent" --integration-status | grep -q "Integration state: nothing is enabled."
+      - name: Tkinter availability and a minimal Tk widget lifecycle on this platform
+        run: |
+          set +e
+          python - <<'PY'
+          import sys
+
+          try:
+              import tkinter
+          except Exception as exc:
+              print(f"BLOCKED: this interpreter has no tkinter ({exc!r})")
+              raise SystemExit(2)
+
+          try:
+              root = tkinter.Tk()
+              root.withdraw()
+              frame = tkinter.ttk.Frame(root)
+              frame.pack()
+              label = tkinter.ttk.Label(frame, text="career-agent smoke")
+              label.pack()
+              root.update_idletasks()
+              assert label.winfo_exists()
+              assert frame.winfo_children()
+              assert str(label.cget("text")) == "career-agent smoke"
+              print(f"PASS: Tk {tkinter.TkVersion} built a root, a frame and a label and updated them")
+              root.destroy()
+          except Exception as exc:
+              print(f"BLOCKED: Tk cannot create a window on this runner: {exc}")
+              raise SystemExit(2)
+          PY
+          status=$?
+          set -e
+          if [ "$status" -eq 2 ]; then
+            echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)"
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      - name: Desktop smoke test (the real window, or an honest BLOCKED)
+        run: |
+          set +e
+          python scripts/desktop_smoke_test.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "the desktop smoke test passed on this runner"
+          elif [ "$status" -eq 2 ]; then
+            # A runner with no display session is a real answer, not a failure of the project: the
+            # display-backed Linux job above is where the window itself is required to pass. Recorded as
+            # a warning so the run's own log says which legs have a window and which do not.
+            echo "::warning::the desktop smoke test reported BLOCKED on ${{ matrix.os }} (no display session)"
+          else
+            echo "the desktop smoke test failed on this runner"
+            exit "$status"
+          fi

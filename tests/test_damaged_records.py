@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import sqlite3
 import sys
 import tempfile
@@ -532,6 +533,92 @@ class ExportOfDamagedRecordsTests(DisposableDatabaseTestCase):
         self.assertIn(UNKNOWN_STATUS, document)
         self.assertIn('"status_recognised": false', document)
         self.assertIn("ask about the panel", document, "the follow-up note must travel with the record")
+
+
+class WriteRefusalTests(DisposableDatabaseTestCase):
+    """A database that cannot be *written* must not be described as one that cannot be read.
+
+    Measured on 2026-10-15 against a valid database: at mode ``444``, or inside a folder the account cannot
+    write to, a command that writes fails with SQLite's own "attempt to write a readonly database". The
+    refusal used to say *"this database file could not be read, so nothing was reported"* and advise
+    restoring a verified backup over the file. Nothing was ever written by mistake - failing was the
+    correct outcome - but the explanation described a read for a write, sent the reader looking for damage
+    that is not there, and recommended a restore that would fail in exactly the same way. Two minutes of
+    looking at the wrong thing is the whole harm of a wrong sentence, and it is why the words are tested
+    here rather than left to review.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        if os.name != "posix":
+            self.skipTest("this is reproduced with file modes, which are not meaningful on this platform")
+        if os.geteuid() == 0:
+            self.skipTest("root ignores file modes, so a read-only file is not read-only for it")
+
+    def make_the_file_read_only(self) -> bytes:
+        """Store one record of every kind, then take the write permission away from the database file."""
+        self.write_one_of_every_record()
+        before = self.bytes_of_database()
+        os.chmod(self.database, 0o444)
+        self.addCleanup(os.chmod, self.database, 0o600)
+        return before
+
+    def test_a_write_to_a_read_only_file_is_not_reported_as_a_read_failure(self) -> None:
+        before = self.make_the_file_read_only()
+
+        code, out, err = self.run_cli("--seed-tasks")
+
+        self.assertEqual(code, cli.EXIT_REFUSED)
+        self.assertIn("could not be written", err)
+        self.assertNotIn("could not be read", err)
+        self.assertNotIn("COULD NOT START", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(self.bytes_of_database(), before,
+                         "a refused write must leave the database byte-for-byte as it was")
+
+    def test_the_write_permission_is_the_whole_problem(self) -> None:
+        """Giving the permission back must be the entire fix, or the message is pointing at the wrong thing."""
+        self.make_the_file_read_only()
+        self.assertEqual(self.run_cli("--seed-tasks")[0], cli.EXIT_REFUSED)
+
+        os.chmod(self.database, 0o600)
+        code, out, err = self.run_cli("--seed-tasks")
+
+        self.assertEqual(code, cli.EXIT_OK, err)
+        self.assertNotIn("could not be written", err)
+
+    def test_a_database_in_a_folder_that_cannot_be_written_is_reported_as_a_write_failure(self) -> None:
+        self.write_one_of_every_record()
+        before = self.bytes_of_database()
+        os.chmod(self.folder, 0o555)
+        self.addCleanup(os.chmod, self.folder, 0o755)
+
+        code, out, err = self.run_cli("--add-role", "Acme Analytics", "--title", "Data Analyst",
+                                      "--start", "2026-01-05", "--current")
+
+        self.assertEqual(code, cli.EXIT_REFUSED)
+        self.assertIn("could not be written", err)
+        self.assertNotIn("could not be read", err)
+        self.assertEqual(self.bytes_of_database(), before)
+
+    def test_the_classifier_does_not_capture_read_failures(self) -> None:
+        """A read failure has to keep its own sentence: a damaged file must not be called read-only."""
+        for message in (
+            "attempt to write a readonly database",
+            "unable to open database file",
+            "database is locked",
+            "read-only file system",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(cli.looks_like_a_write_failure(message))
+
+        for message in (
+            "file is not a database",
+            "no such table: application_tracker",
+            "database disk image is malformed",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(cli.looks_like_a_write_failure(message))
 
 
 if __name__ == "__main__":

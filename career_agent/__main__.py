@@ -319,19 +319,46 @@ def _nearest_existing(path: Path) -> Path | None:
 _REFUSAL_ADVICE = ("Nothing was changed or repaired. `python -m career_agent --doctor` reports which record "
                    "it is, and a verified backup taken earlier can be restored over it.")
 
+#: SQLite's own words for "this database cannot be written", as opposed to "this database cannot be read".
+#: The two send a person somewhere different: a file that cannot be read is damaged or is not a database,
+#: while a file that cannot be written is intact and the *location* refused the change - a read-only file
+#: or folder, a folder that is not there, or another process holding the database. Measured on 2026-10-15
+#: against a valid database at mode 444, inside a folder the account could not write to, and on a
+#: read-only filesystem: all three produced a write error, and all three were described as a read failure.
+_WRITE_FAILURE_MARKERS = (
+    "attempt to write a readonly database",
+    "unable to open database file",
+    "database is locked",
+    "read-only file system",
+)
 
-def _refuse_unreadable_records(exc: Exception | None = None, *, problems: tuple[str, ...] = ()) -> int:
-    """Report a database this build cannot read, having written nothing.
+
+def looks_like_a_write_failure(message: str) -> bool:
+    """Whether SQLite's message means the database could not be *written*, rather than read.
+
+    Deliberately a short list of its own words rather than anything cleverer: the messages this
+    distinguishes are the ones observed on this project's own failure paths, and a read failure - a file
+    that is not a database, a malformed image, a table that is not there - must keep the read sentence.
+    """
+    lowered = message.lower()
+    return any(marker in lowered for marker in _WRITE_FAILURE_MARKERS)
+
+
+def _refuse_database_problem(exc: Exception | None = None, *, problems: tuple[str, ...] = ()) -> int:
+    """Report a database this build could not read or could not write, having written nothing.
 
     Every read-only report goes through this rather than letting the failure reach the top-level handler,
-    which would describe a damaged row as "COULD NOT START" and exit with an unexpected-failure status. Two
-    different failures arrive here and they are not described the same way: a *stored record* this version
-    cannot decode, and a *file* that cannot be read as a database at all (a text file with the wrong name, a
-    truncated download). Saying "this database holds a record this version cannot read" about a file that
-    holds no records would send somebody looking for a row that does not exist, so the file-level refusal
-    says what actually happened. In both cases the message names what failed - never a record's contents -
-    says nothing was changed or repaired, and points at the doctor, which reads the same file without
-    writing and gives its own reason.
+    which would describe a damaged row as "COULD NOT START" and exit with an unexpected-failure status.
+    Three different failures arrive here and they are not described the same way: a *stored record* this
+    version cannot decode, a *file* that cannot be read as a database at all (a text file with the wrong
+    name, a truncated download), and a database that is intact but cannot be *written* (a read-only file,
+    a read-only folder, another process holding it). Saying "this database holds a record this version
+    cannot read" about a file that holds no records would send somebody looking for a row that does not
+    exist, and saying "could not be read" about a write - with the advice to restore a backup over the
+    file - sends them looking for damage that is not there and recommends a restore that would fail the
+    same way, so each one says what actually happened. In every case the message names what failed - never
+    a record's contents - says nothing was changed or repaired, and points at the doctor, which reads the
+    same file without writing and gives its own reason.
 
     ``problems`` is the other way in: the sentences the read-only sweep found before a command that *writes*
     touched anything. A command that plans to write has to know this first, because applying part of its work
@@ -342,6 +369,13 @@ def _refuse_unreadable_records(exc: Exception | None = None, *, problems: tuple[
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         print(_REFUSAL_ADVICE, file=sys.stderr)
+        return EXIT_REFUSED
+    if isinstance(exc, sqlite3.Error) and looks_like_a_write_failure(str(exc)):
+        print(f"REFUSED: this database could not be written to, so nothing was changed: {exc}",
+              file=sys.stderr)
+        print("A read-only file or folder, a folder that is not there, or another program holding the "
+              "database are the usual reasons. `python -m career_agent --doctor` reads the same database "
+              "without writing to it and reports what it finds.", file=sys.stderr)
         return EXIT_REFUSED
     if isinstance(exc, sqlite3.Error):
         print(f"REFUSED: this database file could not be read, so nothing was reported: {exc}",
@@ -566,7 +600,7 @@ def run_worker_status(args: argparse.Namespace) -> int:
             status = worker_status(store)
             tasks = store.list_scheduled_tasks()
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     for line in status.describe():
         print(line)
     if tasks:
@@ -657,7 +691,7 @@ def run_import(args: argparse.Namespace) -> int:
         # read-only, and the command refuses before it plans or writes anything.
         problems = unreadable_stored_records(database)
         if problems:
-            return _refuse_unreadable_records(problems=problems)
+            return _refuse_database_problem(problems=problems)
         try:
             plan = importer.plan_import(store, document, source=str(source))
         except importer.ImportRefused as exc:
@@ -697,7 +731,7 @@ def run_follow_ups(args: argparse.Namespace) -> int:
             upcoming = reminders(pairs, today)
             missing_listings = len(store.list_follow_up_trackers()) - len(pairs)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     print(summary(upcoming))
     if upcoming:
         print("")
@@ -742,7 +776,7 @@ def run_next_actions(args: argparse.Namespace) -> int:
             everything = preparation.actions(preparation_items, rounds, reminders(pairs, today), jobs, today,
                                             include_later=True, include_undated=True)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     print(preparation.summary(found, today))
     if found:
         print("")
@@ -781,7 +815,7 @@ def run_interviews(args: argparse.Namespace) -> int:
             rounds = store.list_interviews()
             jobs = {job.listing_id: job for job in store.list_jobs()}
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     print(preparation.interview_summary(rounds, today))
     if rounds:
         print("")
@@ -850,7 +884,7 @@ def run_analytics(args: argparse.Namespace) -> int:
         with CareerStore(database) as store:
             report = analytics.report_from_store(store, today=today)
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     lines = list(report.describe()[1:])
     while lines and not lines[0]:
         lines.pop(0)
@@ -881,7 +915,7 @@ def run_history(args: argparse.Namespace) -> int:
             roles = store.list_work_history()
             study = store.list_education()
     except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
-        return _refuse_unreadable_records(exc)
+        return _refuse_database_problem(exc)
     print("")
     print(f"Employment ({len(roles)} record(s), current role first)")
     if not roles:
@@ -1486,7 +1520,7 @@ def main(argv: list[str] | None = None) -> int:
             # one of those reports was reported as "the application stopped while starting up" - with a
             # start-up note written beside the data for a start-up that never happened, and a status
             # meaning "unexpected failure" where every other path uses the documented refusal.
-            return _refuse_unreadable_records(exc)
+            return _refuse_database_problem(exc)
         # Start-up failures are explained in plain language with local paths redacted, and kept in a
         # bounded owner-only note beside the app data, because a terminal transcript is easy to paste
         # somewhere and must not carry candidate data, credentials, or filesystem locations.

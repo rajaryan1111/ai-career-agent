@@ -508,6 +508,67 @@ file the app is using. Set one tracker row's `status` to a value no version of t
   macOS and Windows), install the optional pdf extra and run the résumé steps, and repeat the whole checklist
   from a packaged build.
 
+### 2026-10-15 — follow-up: capability probe again, scripted desktop smoke test, cross-platform CI
+
+**No numbered step changed status.** The 98 steps above are exactly as the previous entry left them: 22 PASS,
+76 BLOCKED, 0 FAIL. Everything in this subsection is *automated* evidence, gathered on GitHub-hosted runners
+and on this machine, and none of it closes a step that needs a person at a keyboard.
+
+**Capability probe, executed again on 2026-10-15 (commands, not assumptions).**
+
+| Probe | Result |
+|---|---|
+| `sudo -n true` | **succeeds** — the earlier entry's "not root" is superseded, so the environment was re-probed with install privileges available |
+| `apt-get update` after switching the sources to `https://` (`sed` on `/etc/apt/sources.list.d/debian.sources`), then `apt-get install -y xvfb python3-tk x11-utils xauth` | **impossible**: port 80 is refused and the HTTPS handshake to `deb.debian.org` is terminated by the sandbox's network policy (`E: Unable to locate package xvfb`, `E: Package 'python3-tk' has no installation candidate`). Only `github.com`, `codeload.github.com`, `api.github.com`, `registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org` are reachable |
+| `python3 -c "import tkinter"` | `ModuleNotFoundError: No module named 'tkinter'` (unchanged) |
+| Full PyPI project index scanned (914,223 names) for a distribution shipping an X server or a Tk-enabled interpreter, and `registry.npmjs.org` searched for a prebuilt `Xvfb` | none: every hit is a wrapper that downloads a binary from a host this environment cannot reach (`pytest-xvfb`, `@cypress/xvfb`, `@wdio/xvfb`, `portable-python`, …) |
+| GitHub release assets (`objects.githubusercontent.com`) | TLS-blocked, so a prebuilt `Xvfb` (for example `shkolnik/xvfb-static`, whose binaries exist only as release assets) cannot be downloaded |
+| `sudo mount -o bind,ro SRC DST` | **works** — a genuinely read-only filesystem can now be arranged here, which is used below |
+
+**Conclusion:** no real Tk widget can be created or interacted with on *this* machine, so every GUI step above
+stays **BLOCKED** here. The window is instead exercised on runners that have a display, by the scripted entry
+point below.
+
+**New automated evidence (not manual GUI acceptance).**
+
+| Platform / Python | Exact command | Observed | Status | Kind |
+|---|---|---|---|---|
+| Linux (Debian 12), CPython 3.11.2 | `python scripts/desktop_smoke_test.py` (this machine: no `tkinter`, no display) | `RESULT: BLOCKED — this Python has no tkinter module: ModuleNotFoundError("No module named 'tkinter'")`, exit **2**, no check reported as passed | **BLOCKED** | automated smoke test |
+| Ubuntu runner, system CPython, `xvfb` + `python3-tk` | `env -u DISPLAY python scripts/desktop_smoke_test.py`, then `xvfb-run -a python scripts/desktop_smoke_test.py` | first run must exit 2 with `RESULT: BLOCKED`; second must exit 0 with `RESULT: PASS` | see `research/cross-platform-desktop-ci-evidence-2026-10-15.md` | automated smoke test |
+| Windows / macOS runners, CPython 3.10 and 3.13 | full suite, wheel install outside the checkout, `--version`, `--doctor` (missing database → 0, file that is not a database → 1, read-only report → 2), schema creation and cross-process persistence, backup/restore that replaces data, export/import into a second database, discovery invariants, minimal Tk widget lifecycle, `python scripts/desktop_smoke_test.py` | recorded per job in the same report; a runner without a display session reports the window as BLOCKED and is annotated rather than counted as covering it | see the report | automated, per operating system |
+| Ubuntu runner, CPython 3.13 | `pip install ".[pdf]"`, then the résumé module with the extra (`OK`, no skips) and without it (12 PDF cases skip) | recorded in the same report | see the report | automated |
+
+**What the scripted smoke test does and does not prove.** It builds the real window against a disposable
+synthetic database, checks the title, the minimum size, the eight tabs in order, that every tab was built, the
+main lists' columns, that the status line names the disposable database, that the created file holds the
+current schema, that every tab can be selected with a rendering pass, that each affected tab's read-only
+**Refresh** button can be pressed through Tk's own command dispatch, that the summaries fill, that the event
+log is written beside the disposable database, that closing releases it and the folder can be deleted, and
+that the person's own database was neither created nor modified. It asserts nothing about pixels, layout or
+dialog wording, and it does not press anything with a mouse — every numbered step above that needs a human at
+the window therefore stays **BLOCKED**, and passing it must never be recorded as a passed step.
+
+**PDF steps 24–31 (unchanged).** They are window steps: the import dialog is where a file is chosen and where
+each proposed value is accepted or rejected. The optional extra is now installed and exercised on three
+operating systems in CI (the résumé module finishes with a bare `OK` there, and skips all twelve PDF cases
+without it), so the *reader* half is continuously covered — but steps 24–31 need the window and stay
+**BLOCKED**.
+
+**Defect found by this follow-up, and fixed.** D5: a database that is intact but cannot be *written* (a
+read-only file, a read-only folder, a read-only filesystem, a lock) was refused as
+`this database file could not be read`, with advice to restore a verified backup over it — a read described
+for a write, on a file nothing had written to, with a remedy that would fail identically. Reproduced on a
+read-only file, a folder at mode `555` and a read-only bind mount; the refusal now says the database could
+not be written to and still exits 2 having changed nothing. `tests/test_damaged_records.WriteRefusalTests`
+fails on the old wording; before/after transcripts are in
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+
+**Read-only filesystem case, now executed** (the release audit previously recorded it as unavailable): a
+database on a `bind,ro` mount is read normally by `--doctor`, `--analytics`, `--follow-ups` and `--history`
+(exit 0, doctor exit 1 solely because start-up notes cannot be written there), a backup and an export *out* of
+that location succeed, every write *into* it is refused with exit 2, and the file's sha256 is identical before
+and after every command.
+
 For each operating system tested, record:
 
 - OS version and Python version.
