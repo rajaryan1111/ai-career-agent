@@ -94,7 +94,32 @@
   step whose failure
   cannot be diagnosed from this network: the macOS wheel step was exactly that, and stayed unexplained until
   the recording covered it. A run that *passes* publishes its numbers the same way, because "the job is green"
-  is not evidence of what ran: the summary notice carries the suite's counts and the window check's result.
+  is not evidence of what ran: the summary notice carries the interpreter, the platform string, the Tk
+  version, the screen Tk reported, the suite's counts, the widget check's verdict and the window check's
+  result. When it first carried the window check's line, it exposed a leg whose window check had been
+  reporting a limit that did not exist - see the paragraphs below.
+  **A BLOCKED is a claim about the machine, so it names the missing capability and quotes the platform**
+  (2026-10-15): the Tk widget-lifecycle step answered every exception with "could not run on this runner
+  (exit 2, BLOCKED)", with no reason and no distinction between a machine without a display and a check that
+  was broken. On four legs it was publishing that sentence while the next step on the same runner built and
+  drove the real window and passed 14 checks; the true reason, once the step was made to say it, was
+  `AttributeError("module 'tkinter' has no attribute 'ttk'")` - a defect in the check, which had never run
+  anywhere. Anything that is not the platform saying it cannot open a display is a failure of the check, and
+  the classification belongs in one place (`scripts/desktop_smoke_test.looks_like_no_display`), imported
+  rather than copied.
+  **A reporting step may not fail the run it reports on** (2026-10-15): the steps that publish a run's
+  recorded output turned a green Windows leg red with nothing in the API but "Process completed with exit
+  code 1". The notes file mixes encodings - bash steps write UTF-8, Python steps write the platform's ANSI
+  code page - so the em dash in a recorded line arrived as a lone `0x97` byte, was read back as U+FFFD, and
+  could not be printed through the console code page. Reporting now prints UTF-8 (which is what a runner
+  reads), drops bytes that would corrupt a workflow command, and turns anything unexpected into a warning
+  annotation naming it: silent no longer, fatal never, and the checks still fail a job through their own exit
+  codes.
+  **A workflow step is parsed by the oldest shell the workflow runs on** (2026-10-15): a here-document inside
+  a command substitution is not parsed by the bash 3.2 macOS ships, so a step that worked on Linux and Windows
+  died on macOS before its first command ran. What the rest of that workflow already used - a here-document
+  with a redirect into a file, read back with `cat` - works everywhere it runs, and a step body is worth
+  running through `bash -n` before it is pushed.
   **A platform limit is asserted where it happens, not skipped** (2026-10-15) - corrected below.
 - Optimize for relevant opportunities and outcomes, not raw application count.
 

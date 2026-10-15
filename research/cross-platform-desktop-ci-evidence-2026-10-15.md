@@ -25,9 +25,10 @@ claim of desktop acceptance, packaging, code signing or release readiness.
 | `sudo apt-get install -y python3-tk` | `E: Package 'python3-tk' has no installation candidate` — the sandbox's packages are unreachable; only `github.com`, `codeload.github.com`, `api.github.com`, `registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org` answer |
 | `python3 scripts/desktop_smoke_test.py` | `RESULT: BLOCKED — this Python has no tkinter module: ModuleNotFoundError("No module named 'tkinter'")`, exit **2**, no check reported as passed |
 
-So on this machine no real Tk widget can be created, and none was simulated. The window is therefore exercised
-where a display actually exists: the display-backed Linux runner, and the two platform jobs, which report the
-same BLOCKED status there rather than a pass.
+So on this machine no real Tk widget can be created, and none was simulated. The window is exercised on the
+runners instead, and on all five of them: the Ubuntu legs under Xvfb, and the four Windows and macOS legs,
+where Tk needs no display variable at all. This paragraph first said those platform jobs reported the same
+BLOCKED status there; that was the window check's own defect, not a limit of the runners - section 9.
 
 ## 2. CI matrix, latest commit
 
@@ -46,11 +47,20 @@ Workflow `.github/workflows/tests.yml`, branch `arena/351e052d-ai-career-agent`,
 | `Cross-platform (macos-latest, 3.10)` | `macos-latest` | 3.10 | **success** (116349415846) | the same |
 | `Cross-platform (macos-latest, 3.13)` | `macos-latest` | 3.13 | **success** (116349415564) | the same |
 
-On the Windows and macOS runners the Tk widget-lifecycle step exits 2 and publishes
-`::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)` — those hosted runners have
-no display session, and the step records that instead of failing the build or pretending the window was
-checked. The Linux display-backed job has no such warning: its widget lifecycle and its smoke test both
-passed under Xvfb, which is the only place in this pipeline where a real Tk window was built and driven.
+**Corrected the same day by run 38719357147 (`e803286`): every one of those legs builds and drives the real
+window.** That run carried the same 12 jobs to success while the Windows and macOS legs published, in their own
+annotations:
+
+    PASS: Tk 8.6 built a root, a frame and a label and updated them
+    RESULT: PASS — 14 checks passed. The window was built on a real display, its tabs and lists were read,
+    its read-only refresh actions were invoked, and its disposable database was released.
+
+This paragraph first reported those legs as BLOCKED for the window, on the strength of the widget-lifecycle
+step's warning. The warning was the defect: the step never imported `tkinter.ttk`, so its first real use raised
+`AttributeError`, and the step published that as "could not run on this runner (exit 2, BLOCKED)" - no reason,
+and a hard failure wearing a missing capability's words. Section 9 has the two defects and their fixes; the
+platform table in section 7 now reads what the runs actually said. The manual checklist steps stay BLOCKED:
+none of this is a person using the window.
 
 Earlier runs, kept because the fixes below were derived from them:
 
@@ -172,8 +182,10 @@ status alone. So:
   test by name (`--names 200`, de-duplicated), ten findings with the end of each traceback, and the run's last
   words. A step may carry only ten error and ten warning annotations, which is why the inventory exists — the
   twenty findings the detail slices can carry were not enough to see a 949-error run;
-* on a green run the same mechanism publishes the numbers (a notice annotation with the `Ran N tests`, `OK`
-  and `RESULT:` lines), because "the job is green" is not evidence of what ran.
+* on a green run the same mechanism publishes the numbers *and* the platform's own account of itself - the
+  interpreter, the platform string, the Tk version, the screen Tk reported, the suite's counts, the widget
+  check's verdict and the smoke test's `RESULT:` line - because "the job is green" is not evidence of what
+  ran, and it was not evidence of which platform had a window either (section 9).
 
 ## 7. What is verified where (and what is not)
 
@@ -185,14 +197,15 @@ status alone. So:
 | Schema creation, migration, persistence | yes | yes | yes | yes | — |
 | Backup/restore, export/import | yes | yes | yes | yes | — |
 | Discovery closed (gate + no enabled sources) | yes | yes | yes | yes | — |
-| Tk availability | **no Tkinter** | yes | Tk present; widget lifecycle **BLOCKED** (no display session) | Tk present; widget lifecycle **BLOCKED** (no display session) | — |
-| Real window built and driven by a script | **BLOCKED** (exit 2) | **yes** (smoke test passes under Xvfb) | **BLOCKED**, reported as such | **BLOCKED**, reported as such | — |
+| Tk availability | **no Tkinter** | yes | **yes** (Tk 8.6; `PASS: Tk 8.6 built a root, a frame and a label and updated them`) | **yes** (the same, both interpreters) | — |
+| Real window built and driven by a script | **BLOCKED** (exit 2, no tkinter) | **yes** (smoke test passes under Xvfb) | **yes** (14 checks: window built, tabs and lists read, refresh commands invoked, database released) | **yes** (14 checks, the same) | — |
 | Mouse/keyboard interaction, pixels, layout, dialog wording | no | no | no | no | **not done** |
 
-Remaining, stated plainly: the 76 manual checklist steps are untouched by all of the above; macOS/Apple
-Silicon GUI behaviour is not verified (the runner reports BLOCKED); packaging, signed bundles and installers do
-not exist; the support policy stays at CPython 3.10–3.13 because no 3.14 interpreter has been exercised; live
-integrations remain disabled behind the source-quality gate.
+Remaining, stated plainly: the 76 manual checklist steps are untouched by all of the above - a script that
+builds and drives the window on five runners is still not a person reading a dialog, a menu or a layout;
+packaging, signed bundles and installers do not exist, so nothing here speaks for a *packaged* build on any
+operating system; the support policy stays at CPython 3.10–3.13 because no 3.14 interpreter has been
+exercised; live integrations remain disabled behind the source-quality gate.
 
 ## 8. Data and invariants (verified in this increment)
 
@@ -206,7 +219,63 @@ False ()
 Every database used above is synthetic and disposable, created under `/tmp`; no candidate data, credential or
 generated database is committed.
 
-## 9. Commits this evidence describes
+## 9. Two defects in the pipeline that produced this evidence (D11, D12)
+
+### D11 - a reporting step failed the Windows legs of a run whose checks had all passed
+
+Run 38715164487 (`c2ad285`, the first run carrying the summary step) reported both Windows legs red with every
+check inside them green: the two red steps were the reporting ones, and the API said only
+`Process completed with exit code 1`. The cause, reproduced here: the notes file mixes encodings - the bash
+steps write UTF-8, the Python steps write the platform's ANSI code page - so the em dash in a recorded
+`RESULT: BLOCKED — …` line reaches the file as a lone `0x97` byte. The tail mode reads the notes as UTF-8 with
+`errors="replace"`, which turns that byte into U+FFFD, and printing U+FFFD through a console code page raises
+`UnicodeEncodeError`:
+
+    $ PYTHONIOENCODING=cp1252 python3 <the script as it was> /tmp/repro/ci-notes.txt --tail 3 --level notice
+    UnicodeEncodeError: 'charmap' codec can't encode character '\ufffd' in position 99   # exit 1
+
+Fixed in `76d0a3c`: the script prints workflow commands as UTF-8, which is what a runner reads; drops control
+bytes that would corrupt a command rather than sending them; and publishes everything unexpected as a warning
+annotation carrying the error, so a defect in the reporting can neither redden a passing run nor stay silent.
+The checks still fail the job through their own exit codes. Four tests in `tests/test_ci_annotate.py` pin it,
+one of them writing the notes with the byte a Windows run leaves and driving the tail mode through cp1252 and
+cp437. Run 38716978550 (`76d0a3c`) is green, 12 jobs.
+
+### D12 - a window check that had never run anywhere, reported as a platform limit
+
+Once D11 was fixed the platform legs' own annotations became readable, and they contradicted each other. The
+widget-lifecycle step, on all four Windows and macOS legs:
+
+    ::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED)
+
+and the desktop smoke test, one step later on the same runner:
+
+    RESULT: PASS — 14 checks passed. The window was built on a real display, …
+
+One of the two was wrong and the step could not say which, because it classified every exception as a missing
+display and published no reason. Made honest in `d56172d` - classifying the way
+`scripts/desktop_smoke_test.py` already did, by importing its `looks_like_no_display` instead of keeping a
+second copy of the phrase list, and publishing the reason in the warning - the next run answered per platform:
+
+* Windows, both interpreters: `FAILED: a Tk root was created, but its widget lifecycle is broken:
+  AttributeError("module 'tkinter' has no attribute 'ttk'")`. `tkinter` does not import its `ttk` submodule on
+  demand, so the check's first real use failed on every platform it ever ran on, and the old code called that
+  "no display".
+* macOS, both interpreters: `unexpected EOF while looking for matching` (bash's own words) - the here-document
+  inside a command substitution added by `d56172d` is not parsed by the bash 3.2 macOS ships, so the step died
+  before its first command ran.
+
+Both fixed in `e803286`, which is green (run 38719357147, 12 jobs). The step now prints the verdict it reached
+- `PASS:`, `BLOCKED:` with Tk's own phrase, or `FAILED:` - and a BLOCKED carries its reason into the warning, so
+a check can no longer answer "could not run here" without saying why. Verified by driving the extracted step
+body against a tkinter stand-in: a working Tk prints PASS and exits 0; Tk's no-display phrase prints BLOCKED
+and exits 2 with the phrase in the warning; a root that raises anything else prints FAILED and exits 1; a root
+whose widgets do not honour what they were asked for prints FAILED and exits 1. A real failure now fails the
+step, where before it was published as BLOCKED.
+
+## 10. Commits this evidence describes
+
+In the order they were made, oldest first:
 
 | Commit | What it did |
 |---|---|
@@ -216,6 +285,21 @@ generated database is committed.
 | `c102aff` | the flag patch on a platform that has no such flag; the idle-connection limit asserted per platform |
 | `b04ad90` | the whole failure inventory in one annotation (`--names`), and the documents that describe it |
 | `f38ac49` | the mode-verification tests skip without mode bits; the swap release window is asserted as a window |
+| `d841615` | a green run publishes the numbers it ran, not only the failure it hit |
+| `21475ee` | the cross-platform evidence, the platform limits and the checklist's second follow-up |
+| `c2ad285` | phase 3 of the platform work (section 8.1 of the release-readiness audit) and the macOS evidence line |
+| `76d0a3c` | the reporting steps cannot fail a run whose checks passed, and cannot fail silently (D11) |
+| `d56172d` | the window check says which verdict it reached, and why, classifying as the smoke script does |
+| `e803286` | the window check imports `tkinter.ttk` and works under macOS's bash 3.2 (D12) |
 
-Run 38713190679 was triggered by `f38ac49` and is green; the final state of the branch is on GitHub and PR #2
-remains open and unmerged.
+Runs 38713190679 (`f38ac49`), 38716978550 (`76d0a3c`) and 38719357147 (`e803286`) are green, 12 jobs each.
+`e803286` is the state described here; PR #2 remains open and unmerged, and `main` has not been touched.
+
+## 11. What a reader of this file should not conclude
+
+* Not that a person has used the window on any platform. Five runners build and drive it; the manual
+  checklist's window steps are BLOCKED until a human executes them.
+* Not that macOS or Windows *packaging* works: no installer, bundle or signature exists, and no leg tests one.
+* Not that the runner's Tk is the same as the machine's: the versions are recorded per leg in the annotations
+  (`tkinter: Tk 8.6`), and the interpreter and platform strings travel with them.
+* Not that a BLOCKED line means a missing capability. It did not on 2026-10-15 (section 9).

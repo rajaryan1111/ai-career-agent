@@ -109,8 +109,9 @@ These are proposed targets. Do not report them as measured results.
 - Added `cross-platform` GitHub Actions legs (windows-latest, macos-latest x Python 3.10, 3.13) that verify
   installation, `--version`, `--doctor` against a missing and a damaged database, schema creation and
   cross-process persistence, backup/restore that really replaces data, JSON export/import, the discovery
-  invariants, Tk availability plus a minimal widget lifecycle, and the desktop smoke test where a display
-  exists. Every step records its output into one notes file, and `scripts/ci_annotate.py` publishes failures
+  invariants, Tk availability plus a minimal widget lifecycle, and the desktop smoke test on every leg - on the
+  Windows and macOS runners Tk needs no display variable, and both the lifecycle check and the 14-check window
+  smoke test pass there. Every step records its output into one notes file, and `scripts/ci_annotate.py` publishes failures
   (and a green run's counts) as annotations, because this project must be able to read a run through the API.
 - Defects found by the first runs, each fixed with a regression test: the scripted window check inspected a
   notebook's tab *names* as widgets; the owner-only mode helper raised on Windows (no `os.fchmod`), refusing
@@ -128,6 +129,15 @@ These are proposed targets. Do not report them as measured results.
 - Written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` (probe, matrix, root causes,
   transcripts, invariants) with a second dated follow-up in the manual checklist and phase 3 of the
   platform work in `research/release-readiness-audit-2026-10-15.md` (section 8.1).
+- **Corrected later the same day, and this is the part worth remembering:** the first reading of those runs
+  said the window was BLOCKED on Windows and macOS. It was not. Two defects sat between the runs and the
+  reading - D11, the reporting steps turning a green Windows leg red because the notes file mixes the bash
+  steps' UTF-8 with the Python steps' ANSI code page, and D12, a widget-lifecycle check that published every
+  exception as "could not run on this runner" while never having imported `tkinter.ttk` (and whose report a
+  copy of it broke on macOS's bash 3.2). Fixed in `76d0a3c`, `d56172d` and `e803286`; run 38719357147 is green
+  and every leg publishes its own interpreter, Tk version, screen and verdicts. The lesson is in `rules.md`:
+  a BLOCKED is a claim about a machine, so it must name the missing capability and quote the platform, and a
+  reporting step must never be able to fail the run it reports on.
 
 ### 2026-10-14 — Safe offline-core implementation authorized
 - Decision: begin building the software now while source and competitor research continues in parallel. This supersedes the earlier blanket no-code/research-only constraint, but does not waive source-specific permission, data quality, privacy, or application-integrity gates.

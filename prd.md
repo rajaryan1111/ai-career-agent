@@ -198,9 +198,11 @@ compensation is not compared because no compensation field exists yet.
 - Cross-platform distribution to be evaluated before commitment. What is measured as of 2026-10-15:
   the suite, the installed command surface, schema creation and migration, backup/restore, JSON
   export/import, the discovery invariants and the optional résumé extra all execute on real Windows and
-  macOS runners as well as on Linux, and a scripted window check builds and drives the real Tk window
-  on the Linux runner under Xvfb while reporting BLOCKED - never a pass - on a runner with no display
-  session. Interactive GUI acceptance, packaging, code signing and installation remain unmeasured.
+  macOS runners as well as on Linux, and a scripted window check builds and drives the real Tk window on
+  all five: the Linux runner under Xvfb, and the four Windows and macOS legs, where Tk needs no display
+  variable (each leg publishes the Tk version, the screen it reported and its 14 checks). A runner with no
+  display reports BLOCKED - never a pass - and so does this machine. Interactive GUI acceptance, packaging,
+  code signing and installation remain unmeasured.
 
 ## 8. Success metrics (proposed, not yet validated)
 

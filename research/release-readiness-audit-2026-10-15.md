@@ -365,8 +365,13 @@ summarised here with the evidence this audit produced:
    green as of run 38713190679 (`f38ac49`, 12 jobs), and the three states the Windows legs passed through on
    the way there are recorded in section 8.1. Still missing: a CI leg for Python 3.14 (no interpreter here has
    been able to run it), the same rehearsal from a *packaged* build on each operating system, and any human GUI
-   session. On the Windows and macOS runners the Tk widget-lifecycle step reports BLOCKED (no display session),
-   so nothing in these legs claims a window on those platforms.
+   session. **Corrected the same day (runs 38716978550 and 38719357147):** the widget-lifecycle step's
+   BLOCKED was a defect in that check, not a limit of the runners - it had never imported `tkinter.ttk`, and
+   its report broke macOS's bash 3.2 - so both windows checks now pass on the Windows and macOS legs
+   (`PASS: Tk 8.6 built a root, a frame and a label and updated them`; `RESULT: PASS — 14 checks passed`). The
+   two defects are D11 and D12 in
+   [`cross-platform-desktop-ci-evidence-2026-10-15.md`](cross-platform-desktop-ci-evidence-2026-10-15.md)
+   section 9; what these legs still do not claim is a person using the window, or a packaged build.
 6. **Closed (2026-10-15).** A read-only filesystem can now be arranged here with a bind mount, and section 6
    records what it measured — including the write-refusal wording defect that case exposed.
 7. Branch protection, a signed tag and a release archive: none exist, and no package has been published.

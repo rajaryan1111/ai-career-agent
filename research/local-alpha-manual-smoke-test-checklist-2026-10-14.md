@@ -590,10 +590,14 @@ smoke test on Linux; and the four cross-platform legs (`windows-latest` and `mac
 which verify installation, `--version`, `--doctor` against a missing database (0), a file that is not a database
 (1) and a read-only report (2), schema creation and cross-process persistence, backup/restore that really
 replaces data, export/import into a second database, the discovery invariants, Tk availability plus a minimal
-widget lifecycle, and the smoke test. On the Windows and macOS runners the widget-lifecycle step reports
-`exit 2, BLOCKED` — those runners have no display session — and the step is annotated as a warning rather than
-counted as a pass. On the Linux runner the smoke test **passed under Xvfb**, which is the only place in this
-pipeline where a real Tk window is built and driven.
+widget lifecycle, and the smoke test. **Corrected the same day (run 38719357147 at `e803286`): all five legs
+build and drive the real window.** The Linux runner's smoke test passes under Xvfb, and so do the Windows and
+macOS legs' window checks, which publish `PASS: Tk 8.6 built a root, a frame and a label and updated them` and
+`RESULT: PASS — 14 checks passed. The window was built on a real display, its tabs and lists were read, its
+read-only refresh actions were invoked, and its disposable database was released.` They were first read here as
+reporting BLOCKED for the window; that was a defect in the widget-lifecycle check (D12), not a limit of those
+runners. **No numbered step moved.** A scripted window on five runners is not a person using it, and this entry
+still closes none of the 76 BLOCKED steps.
 
 **Defects found by those runs, and fixed (each with a regression test that fails on the old behaviour).**
 
@@ -620,6 +624,25 @@ pipeline where a real Tk window is built and driven.
   annotations could carry ten of them, so most of the inventory could only be guessed at.
   `scripts/ci_annotate.py --names` now publishes one annotation listing every failing test by name, and a green
   run publishes its `Ran N tests` / `RESULT:` lines as a notice.
+
+- **D11 — two reporting steps turned a green Windows leg red.** Run 38715164487 (`c2ad285`) reported both
+  Windows legs red with every check inside them green; the API said only `Process completed with exit code 1`.
+  The notes file mixes encodings (bash steps write UTF-8, Python steps write the platform's ANSI code page), so
+  an em dash arrived as a lone `0x97` byte, was read back as U+FFFD, and could not be printed through the
+  console code page: `UnicodeEncodeError`, exit 1. Reproduced with those exact bytes under cp1252 and cp437
+  (exit 1 before, exit 0 after). Fixed in `76d0a3c`: print workflow commands as UTF-8, drop control bytes that
+  would corrupt a command, and publish anything unexpected as a warning annotation rather than failing the
+  step. Run 38716978550 is green.
+- **D12 — a window check that had never run anywhere, published as a platform limit.** The widget-lifecycle
+  step reported `exit 2, BLOCKED` on all four Windows and macOS legs while the next step on the same runner
+  reported `RESULT: PASS — 14 checks passed` for the real window. Made honest in `d56172d` (classify as
+  `scripts/desktop_smoke_test.looks_like_no_display` does, and publish the reason), the next run named two
+  defects: the step never imported `tkinter.ttk`
+  (`AttributeError("module 'tkinter' has no attribute 'ttk'")`) and its report used a here-document inside a
+  command substitution, which macOS's bash 3.2 does not parse. Both fixed in `e803286`; the step now prints
+  `PASS:`/`BLOCKED:` (with Tk's own phrase) or `FAILED:` and a real failure fails the step. Verified against a
+  tkinter stand-in: working Tk → 0; no-display phrase → 2 with the reason; any other root failure → 1; widgets
+  that do not honour what they were asked for → 1.
 
 **Platform limits, stated and asserted rather than skipped.** The restore's guard cannot be held across
 `os.replace` where the operating system refuses to replace a file another handle has open (Windows), so the
