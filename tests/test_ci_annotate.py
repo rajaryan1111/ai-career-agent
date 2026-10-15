@@ -141,6 +141,29 @@ class MainTests(unittest.TestCase):
         self.assertTrue(output.startswith("::notice "))
         self.assertIn("FAILED (failures=1, errors=1)", output)
 
+    def test_the_names_mode_lists_every_failing_test_once_in_one_annotation(self):
+        status, output = self.run_main(UNITTEST_OUTPUT + UNITTEST_OUTPUT, ["--names", "200"])
+        lines = output.splitlines()
+        self.assertEqual(status, 0)
+        self.assertEqual(len(lines), 1, output)
+        self.assertTrue(lines[0].startswith("::error title=2 distinct failures recorded::"), lines[0])
+        self.assertEqual(lines[0].count("FAIL: test_a_thing"), 1)
+        self.assertEqual(lines[0].count("ERROR: test_another"), 1)
+        self.assertNotIn("\n", lines[0])
+
+    def test_the_names_mode_says_how_many_names_it_left_out(self):
+        status, output = self.run_main(UNITTEST_OUTPUT, ["--names", "1"])
+        self.assertEqual(status, 0)
+        self.assertIn("FAIL: test_a_thing", output)
+        self.assertNotIn("ERROR: test_another", output)
+        self.assertIn(", and 1 more", output)
+
+    def test_the_names_mode_says_so_when_nothing_failed(self):
+        status, output = self.run_main("Ran 3 tests\n\nOK\n", ["--names", "200"])
+        self.assertEqual(status, 0)
+        self.assertNotIn("::", output)
+        self.assertIn("no failure is recorded", output)
+
     def test_a_warning_level_run_still_pairs_each_finding_with_its_detail(self):
         status, output = self.run_main(SMOKE_OUTPUT, ["--level", "warning"])
         self.assertEqual(status, 0)

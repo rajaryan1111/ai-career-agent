@@ -189,11 +189,11 @@ jobs:
         shell: bash
         run: |
           python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
-      - name: Annotate the next failures, if the first group did not reach them
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
         if: failure()
         shell: bash
         run: |
-          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
       - name: Annotate the last thing the step said
         if: failure()
         shell: bash
@@ -243,11 +243,11 @@ jobs:
         shell: bash
         run: |
           python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
-      - name: Annotate the next failures, if the first group did not reach them
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
         if: failure()
         shell: bash
         run: |
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
       - name: Annotate the last thing the step said
         if: failure()
         shell: bash
@@ -592,11 +592,11 @@ jobs:
         shell: bash
         run: |
           python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
-      - name: Annotate the next failures, if the first group did not reach them
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
         if: failure()
         shell: bash
         run: |
-          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 10 --count 10
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
       - name: Annotate the last thing the step said
         if: failure()
         shell: bash

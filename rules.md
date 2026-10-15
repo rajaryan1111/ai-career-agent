@@ -80,8 +80,10 @@
   on a storage host a restricted network cannot reach, and the API answers a failed step with its exit
   status alone. Every step of the new jobs, from the first report to the smoke test, starts with a `tee` into
   one notes file (a step of its own creates the file first), and `scripts/ci_annotate.py` turns the recorded
-  failures into annotations, which the API does return - two slices of ten findings each, because a step may
-  carry ten error and ten warning annotations. A step whose output is not recorded is a step whose failure
+  failures into annotations, which the API does return: one annotation listing every failing test by name, ten
+  findings with the end of each traceback, and the run's last words - because a step may carry only ten error and
+  ten warning annotations, and a run can fail in more places than that. A step whose output is not recorded is a
+  step whose failure
   cannot be diagnosed from this network: the macOS wheel step was exactly that, and stayed unexplained until
   the recording covered it.
 - Optimize for relevant opportunities and outcomes, not raw application count.

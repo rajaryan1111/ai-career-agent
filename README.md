@@ -819,8 +819,10 @@ A failing step is readable without a browser. Job logs are served from a storage
 network cannot reach, and the API's answer for a failed step is its exit status alone, so every step of the new
 jobs, from the interpreter report to the smoke test, records its output into one notes file - the step opens
 with `tee -a` into it, and the file is created by a step of its own first. When the job fails,
-`scripts/ci_annotate.py` turns the recorded failures into annotations: the failing test's name, the smoke
-test's failed check, and the end of each traceback. That is how the first runs of these legs were diagnosed,
+`scripts/ci_annotate.py` turns the recorded failures into annotations: one listing every failing test by name,
+ten findings with the smoke test's failed check and the end of each traceback, and the run's last words. The
+inventory of names is the part that makes a red leg on a platform this checkout cannot run readable past its
+first ten failures. That is how the first runs of these legs were diagnosed,
 and it is why the defects they found (see below) are in this repository's history rather than in a log nobody
 could open. A step that is not recorded is a step that cannot be diagnosed from a restricted network; the
 macOS wheel-verification step was the one such step left, and it stayed unexplained until it was covered.

@@ -19,6 +19,12 @@ Usage::
 
     python scripts/ci_annotate.py NOTES_FILE [--start 0] [--count 10] [--level error]
     python scripts/ci_annotate.py NOTES_FILE --tail 3
+    python scripts/ci_annotate.py NOTES_FILE --names 200
+
+``--names`` exists because a run can fail in more places than an annotation budget covers: a step may
+publish ten error and ten warning annotations, so a suite with a hundred failures would otherwise be
+reported ten of them, and the ten worth fixing first are not necessarily the ten that are listed first.
+One annotation carrying every failing name is the inventory; the slices above are the detail.
 
 Only standard library, no network, no repository state: it reads a file and prints lines.
 """
@@ -40,6 +46,10 @@ FINDING_END = re.compile(
 #: How much of a finding's detail travels with it. Annotations have their own size limit and a traceback
 #: is mostly framework frames; the exception line at the end is the part that names the defect.
 DETAIL_LIMIT = 1200
+
+#: How much of a name list one annotation may carry: an annotation has a size limit of its own, and a run
+#: with hundreds of failing tests is exactly the run whose names are worth having.
+MAX_NAMES_CHARS = 6000
 
 #: GitHub un-escapes these in a command's message, so a message containing them has to escape them first.
 _ESCAPES = (("%", "%25"), ("\r", "%0D"), ("\n", "%0A"))
@@ -89,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--count", type=int, default=10, help="how many findings to report")
     parser.add_argument("--level", choices=("error", "warning", "notice"), default="error")
     parser.add_argument("--tail", type=int, default=0, help="report the last N non-empty lines instead")
+    parser.add_argument("--names", type=int, default=0,
+                        help="one annotation listing up to N failing names instead of the detailed findings")
     arguments = parser.parse_args(argv)
 
     try:
@@ -97,6 +109,26 @@ def main(argv: list[str] | None = None) -> int:
         # The job may have failed before the step that writes notes ran. Nothing to say, and saying
         # nothing is not itself a failure: the step that broke has already failed the job.
         print(f"no notes at {arguments.notes}; nothing to annotate")
+        return 0
+
+    if arguments.names:
+        # Every failure once, in the order it first appears: unittest prints a failure inline *and* again
+        # in its summary, and the inventory is more useful without each name twice.
+        every = list(dict.fromkeys(title for title, _ in findings(text)))
+        if not every:
+            print(f"no failure is recorded in {arguments.notes}")
+            return 0
+        selected = every[:arguments.names] if arguments.names > 0 else every
+        listed, kept = "", 0
+        for name in selected:
+            candidate = f"{listed}, {name}" if listed else name
+            if len(candidate) > MAX_NAMES_CHARS:
+                break
+            listed, kept = candidate, kept + 1
+        omitted = len(every) - kept
+        if omitted:
+            listed += f", and {omitted} more"
+        print(annotation(arguments.level, f"{len(every)} distinct failures recorded", listed))
         return 0
 
     if arguments.tail:
