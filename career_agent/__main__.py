@@ -351,6 +351,28 @@ def looks_like_a_write_failure(message: str) -> bool:
     return any(marker in lowered for marker in _WRITE_FAILURE_MARKERS)
 
 
+def _empty_database_file(database: Path) -> bool:
+    """Whether the path is a file with nothing in it.
+
+    A zero-byte file is not the same thing as a missing one to SQLite: it reads it as a valid, empty
+    database and writes the schema into it. A command that says it only reads therefore has to treat an
+    empty file as the absence of a database that it is, or it would create one and then report that
+    nothing had changed.
+    """
+    try:
+        return database.is_file() and database.stat().st_size == 0
+    except OSError:
+        return False
+
+
+def _say_an_empty_file_was_left_alone(database: Path) -> None:
+    """Explain the empty file the command refused, in the words ``--doctor`` already uses for it."""
+    if _empty_database_file(database):
+        print(f"{database} is empty (0 bytes), so it is not a database this app can read, and nothing "
+              "here creates one. Nothing was created or changed; open the app to create a database "
+              "there.")
+
+
 def _refuse_database_problem(exc: Exception | None = None, *, problems: tuple[str, ...] = ()) -> int:
     """Report a database this build could not read or could not write, having written nothing.
 
@@ -598,9 +620,10 @@ def run_worker_status(args: argparse.Namespace) -> int:
     """
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · scheduled tasks in {database}")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so no tasks are scheduled. Open the app, or run "
               "python -m career_agent --seed-tasks, to add the default schedule.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_OK
     try:
         with CareerStore(database) as store:
@@ -690,8 +713,9 @@ def run_export(args: argparse.Namespace) -> int:
     target = Path(args.export_to).expanduser()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · export local data")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so there is nothing to export. Nothing was written.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
     if target.exists():
         print(f"REFUSED: {target} already exists. Choose another name so the existing file is not "
@@ -769,9 +793,10 @@ def run_follow_ups(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · follow-ups for {today.isoformat()} (local day)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so no follow-up days are recorded. Open the app to save applications "
               "and set the day you plan to follow each one up.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_OK
     try:
         with CareerStore(database) as store:
@@ -810,9 +835,10 @@ def run_next_actions(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · what needs doing on {today.isoformat()} (local day)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so nothing is recorded. Open the app to save applications, plan "
               "follow-ups and write down what you have to do.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_OK
     try:
         with CareerStore(database) as store:
@@ -855,9 +881,10 @@ def run_interviews(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · recorded interview rounds ({today.isoformat()}, local day)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so no rounds are recorded. Open the app to record one after an employer "
               "gets in touch.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_OK
     try:
         with CareerStore(database) as store:
@@ -922,10 +949,11 @@ def run_analytics(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · progress from this database ({today.isoformat()}, local day)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("")
         print("No database yet, so nothing is recorded to add up. The counts start from what you write "
               "down: an application you applied to, a reply you received, a round you have been invited to.")
+        _say_an_empty_file_was_left_alone(database)
         print("")
         print("This report is read-only; nothing was changed, uploaded or sent to anybody.")
         return EXIT_OK
@@ -955,9 +983,10 @@ def run_history(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · your employment and education (local database)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so nothing is recorded. Open the app to add your roles as you go; "
               "nothing is uploaded and no employer is contacted.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_OK
     try:
         with CareerStore(database) as store:
@@ -1155,8 +1184,9 @@ def run_preview_calendar_export(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · calendar export preview (nothing is written)")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so there are no follow-up days to preview. Nothing was written.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
     with CareerStore(database) as store:
         upcoming = reminders(_follow_up_pairs(store), today)
@@ -1346,8 +1376,9 @@ def run_calendar_export(args: argparse.Namespace) -> int:
     today = _local_today()
     database = _database_path(args)
     print(f"AI Career Agent {__version__} · calendar export")
-    if not database.exists():
+    if not database.exists() or _empty_database_file(database):
         print("No database yet, so there are no follow-up days to export. Nothing was written.")
+        _say_an_empty_file_was_left_alone(database)
         return EXIT_REFUSED
     with CareerStore(database) as store:
         pairs = _follow_up_pairs(store)

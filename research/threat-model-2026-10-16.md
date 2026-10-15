@@ -234,7 +234,7 @@ transition with evidence. Nothing was saved.
 | `--record-follow-up <id>` with no mock | `REFUSED: no calendar event was recorded (disabled)`, exit 2 |
 | `--add-role` with identical arguments | second `REFUSED: You already have a record for … starting …`, exit 2; one row |
 
-### 8.4 Four defects this pass fixed
+### 8.4 Five defects this pass fixed
 
 D19 (restoring the database from itself was accepted) and D20 (a non-finite `--poll-seconds` was accepted and
 made the worker poll with no delay, or die after starting). Both are written up with their regression tests in
@@ -285,6 +285,19 @@ different identity, and any repeat of an identifier inside the file, naming the 
 record won) are the regression tests. The refusal wording also changed from "Records that cannot be read" to
 "Records that cannot be imported", because a refused identifier is readable - it simply cannot be used
 without replacing something.
+
+D30 was found by pointing each read-only command at a zero-byte file and comparing the file's digest before
+and after. `--follow-ups`, `--worker-status`, `--next-actions`, `--interviews`, `--analytics`, `--history`,
+`--export-to`, `--preview-calendar-export` and `--calendar-to` all checked `database.exists()`, and an empty
+file exists: SQLite reads it as a valid empty database and **creates the schema inside it**, so each command
+wrote 124 KB and an `application.log` beside a file the person named - and then printed its own line saying
+that nothing had changed ("This report is read-only; nothing was changed, uploaded or sent to anybody").
+`--doctor` already had the right answer for this file (exit 1, "empty (0 bytes)"), so the reports now use
+the same rule: a missing path and a zero-byte file both mean there is no database to read, both are left
+exactly as they are, and the sentence names the empty file. `tests/test_config.py::
+ReadOnlyCommandsLeaveAnEmptyFileAloneTests` is the regression test - it fails before the fix because the
+file grows from 0 bytes to a schema and no message mentions the empty file - and it also pins the other side
+of the line, that `--seed-tasks` still creates the database it is asked for.
 
 ## 9. Verdict
 

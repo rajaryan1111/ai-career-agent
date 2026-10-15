@@ -158,6 +158,60 @@ class SettingsTests(unittest.TestCase):
         self.assertIn(DATABASE_ENV, text, "an ignored setting must be explained")
 
 
+class ReadOnlyCommandsLeaveAnEmptyFileAloneTests(unittest.TestCase):
+    """A report that says it only reads must not create a schema inside a file it was pointed at.
+
+    ``sqlite3`` reads a zero-byte file as a valid empty database and creates the schema in it, so these
+    reports used to write a full schema and an ``application.log`` beside a file that was empty, and then
+    print a line saying that nothing had changed. ``--doctor`` already refused that file (exit 1, "empty
+    (0 bytes)"); the reports now answer the same way: there is no database here, and nothing was created.
+    """
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.empty = self.folder / "empty.sqlite3"
+        self.empty.touch()
+
+    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+        out, err = StringIO(), StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            try:
+                code = cli.main(list(arguments))
+            except SystemExit as exit_request:  # argparse refuses a bad argument list this way
+                code = int(exit_request.code or 0)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_reports_report_nothing_and_change_nothing(self) -> None:
+        for command in ("--follow-ups", "--worker-status", "--next-actions", "--interviews",
+                        "--analytics", "--history"):
+            with self.subTest(command):
+                code, out, _ = self.run_cli("--database", str(self.empty), command)
+                self.assertEqual(code, cli.EXIT_OK, out)
+                self.assertIn("empty (0 bytes)", out)
+                self.assertEqual(self.empty.stat().st_size, 0,
+                                 f"{command} wrote a schema into an empty file it was asked to read")
+                self.assertFalse((self.folder / "logs").exists(),
+                                 f"{command} wrote a log beside an empty file it was asked to read")
+
+    def test_exporting_and_previewing_from_an_empty_file_refuse_rather_than_create_it(self) -> None:
+        export = self.folder / "export.json"
+        for command in (("--export-to", str(export)), ("--preview-calendar-export",)):
+            with self.subTest(command):
+                code, out, _ = self.run_cli("--database", str(self.empty), *command)
+                self.assertEqual(code, cli.EXIT_REFUSED, out)
+                self.assertIn("empty (0 bytes)", out)
+                self.assertEqual(self.empty.stat().st_size, 0)
+                self.assertFalse(export.exists(), "a refusal wrote the file it was asked about")
+
+    def test_a_command_that_writes_still_creates_the_database(self) -> None:
+        """The line is drawn where it should be: a report never creates, a write may."""
+        code, out, _ = self.run_cli("--database", str(self.empty), "--seed-tasks")
+        self.assertEqual(code, cli.EXIT_OK, out)
+        self.assertGreater(self.empty.stat().st_size, 0, "a writing command must still create the database")
+
+
 class DatabasePathForRunTests(unittest.TestCase):
     """The one entry point the window and the command line share, including its single side effect."""
 

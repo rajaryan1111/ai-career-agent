@@ -550,7 +550,14 @@ python -m career_agent --add-study "Coursera" --qualification "Specialisation" -
 ```
 
 `--history` is read-only. `--add-role` and `--add-study` add one record each and never edit or delete one;
-a refusal exits with status `2` and writes nothing at all. `--employment-type` defaults to `unknown`,
+a refusal exits with status `2` and writes nothing at all.
+
+Every report in this section is read-only in a second sense too: pointed at a **file that exists but is
+empty (0 bytes)**, it reports that there is no database there and changes nothing. SQLite reads a zero-byte
+file as a valid empty database and creates the schema inside it, so opening one would have written a
+database into a file you named and then printed a line saying nothing had changed. `--doctor` reports such
+a file as a problem (exit `1`) with the same reason, and a command that *writes* — `--seed-tasks`, the
+window, an import — still creates the database when you ask it to. `--employment-type` defaults to `unknown`,
 which claims nothing, and an unrecognised type in an imported file becomes `unknown` rather than costing
 you the record's employer and dates.
 
