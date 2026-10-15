@@ -265,6 +265,9 @@ def actions(
         selected,
         key=lambda action: (
             _TIMING_ORDER[action.timing],
+            # Across overdue actions, the oldest promise comes first regardless of kind. For the
+            # same day (and for today/coming-up groups), the action-kind priority breaks ties.
+            action.on if action.timing is Timing.OVERDUE else date.min,
             _KIND_ORDER[action.kind],
             action.on or date.max,
             action.listing_id,

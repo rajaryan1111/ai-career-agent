@@ -148,6 +148,39 @@ class ActionTests(unittest.TestCase):
         self.assertEqual([action.what for action in found], ["Two days late", "Due today", "Next week"])
         self.assertEqual([action.is_actionable for action in found], [True, True, False])
 
+    def test_most_overdue_action_wins_across_kinds(self):
+        """Age outranks kind for overdue work; kind priority only breaks same-day ties."""
+        found = actions(
+            [item("Preparation overdue five days", days=-5)],
+            [round_(days=-10)],
+            [reminder(days=-1, note="recent follow-up")],
+            self.jobs,
+            TODAY,
+        )
+
+        self.assertEqual(
+            [(action.kind, action.days_away) for action in found],
+            [
+                (ActionKind.INTERVIEW, -10),
+                (ActionKind.PREPARATION, -5),
+                (ActionKind.FOLLOW_UP, -1),
+            ],
+        )
+
+    def test_kind_priority_breaks_ties_for_overdue_actions(self):
+        found = actions(
+            [item("Preparation", days=-2)],
+            [round_(days=-2)],
+            [reminder(days=-2)],
+            self.jobs,
+            TODAY,
+        )
+
+        self.assertEqual(
+            [action.kind for action in found],
+            [ActionKind.INTERVIEW, ActionKind.FOLLOW_UP, ActionKind.PREPARATION],
+        )
+
     def test_an_appointment_outranks_a_chase_on_the_same_day(self):
         """See the module docstring: somebody else's clock first, then a promise, then your own list."""
         found = actions([item("Tailor the résumé", days=0)], [round_(days=0)], [reminder(days=0)],
