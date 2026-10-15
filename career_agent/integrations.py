@@ -78,6 +78,12 @@ LEDGER_VERSION = 1
 #: failure, not for hammering a provider that is down.
 DEFAULT_MAX_ATTEMPTS = 2
 
+#: Largest ledger file this module will read. The ledger answers "has this already been performed?", so a
+#: file that cannot be read means the application cannot establish that and must perform nothing - the
+#: bound keeps a mistyped path from being loaded into memory *and* keeps that refusal fail-closed. A
+#: ledger this application writes holds a handful of operations; 16 MB is far past any real one.
+MAX_LEDGER_BYTES = 16 * 1024 * 1024
+
 #: The purpose a draft generated from an application's follow-up day carries. A constant rather than a bare
 #: string so the surfaces that build drafts agree on it.
 PURPOSE_FOLLOW_UP = "follow-up"
@@ -561,6 +567,19 @@ class IntegrationLedger:
         target = Path(path)
         if not target.exists():
             return cls()
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            raise IntegrationLedgerError(
+                f"The ledger at {target.name} could not be examined ({exc}). Nothing was performed, because "
+                "this application cannot establish what it has already done and will not risk doing it twice."
+            ) from exc
+        if size > MAX_LEDGER_BYTES:
+            raise IntegrationLedgerError(
+                f"The ledger at {target.name} is {size / (1024 * 1024):.1f} MB, far too large to be one this "
+                "application wrote, so it was not read. Nothing was performed, because this application "
+                "cannot establish what it has already done and will not risk doing it twice."
+            )
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:

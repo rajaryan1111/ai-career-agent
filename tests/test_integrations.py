@@ -20,6 +20,7 @@ keeps the shipped code from acquiring one by accident.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -702,6 +703,46 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(entry.listing_id, "j1")
         self.assertEqual(entry.attempts, 2)
         self.assertIs(entry.kind, integrations.OperationKind.EMAIL)
+
+
+class LedgerSizeBoundTests(unittest.TestCase):
+    """A ledger too large to be one must be refused before it is read, and the refusal must be safe.
+
+    The ledger decides whether an operation has already been performed. A file that cannot be read means
+    the application cannot establish that, and the only safe answer is to perform nothing - so the bound
+    both keeps a mistyped path from being loaded into memory and fails closed, which is what this contract
+    promises everywhere else.
+    """
+
+    def test_a_ledger_over_the_limit_is_refused_without_being_read(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "ledger.json"
+            target.write_text(json.dumps({"ledger_version": 1, "operations": []}), encoding="utf-8")
+
+            with mock.patch.object(integrations, "MAX_LEDGER_BYTES", 16):
+                with self.assertRaises(integrations.IntegrationLedgerError) as caught:
+                    integrations.IntegrationLedger.load(target)
+
+        self.assertIn("too large", str(caught.exception))
+        self.assertIn("Nothing was performed", str(caught.exception))
+        # the shipped bound is a real one, so a patched value in the test cannot hide a useless limit
+        self.assertEqual(integrations.MAX_LEDGER_BYTES, 16 * 1024 * 1024)
+
+    def test_an_ordinary_ledger_still_loads(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "ledger.json"
+            target.write_text(json.dumps({"ledger_version": 1, "operations": [{
+                "operation_id": "email-abc", "kind": "email", "summary": "a synthetic draft",
+                "target": "someone@example.invalid", "attempts": 1, "completed_at": "2026-01-01T00:00:00+00:00",
+            }]}), encoding="utf-8")
+
+            ledger = integrations.IntegrationLedger.load(target)
+
+        self.assertIn("email-abc", ledger)
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger.count_of(integrations.OperationKind.EMAIL), 1)
 
 
 class DraftFromContextTests(unittest.TestCase):
