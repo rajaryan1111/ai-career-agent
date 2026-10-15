@@ -26,12 +26,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        shell: bash
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in this file, so a failure can be published as an annotation."
       - name: Run standard-library tests
-        run: python -m unittest discover -s tests -v
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
       - name: Compile all Python modules
-        run: python -m compileall -q career_agent scripts tests
+        run: |
+          set -o pipefail
+          python -m compileall -q career_agent scripts tests | tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
       - name: Audit research CSV integrity
-        run: python scripts/audit_job_source_csv.py
+        run: |
+          set -euo pipefail
+          python scripts/audit_job_source_csv.py | tee "${RUNNER_TEMP:-$HOME}/csv-audit.json"
+          # The hash and the record count, on one line the summary can carry: a green run should say what
+          # the seed data was as well as what the suite did.
+          python - <<'PY' >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          import json, os
+          from pathlib import Path
+
+          runner = Path(os.environ.get("RUNNER_TEMP") or Path.home())
+          report = json.loads((runner / "csv-audit.json").read_text(encoding="utf-8"))
+          print(f"csv: {report['input_sha256']} over {report['record_count']} records")
+          PY
 
   # The metadata and the wheel can only be trusted if a real build and install is exercised: this job
   # builds the distribution, installs it into a clean environment (no editable install, no repository
@@ -40,6 +61,31 @@ jobs:
   # runs twice, on the floor the metadata declares (3.10) and on the newest interpreter the suite is run
   # on (3.13), because a build backend, a wheel or a console script that only works on the version used
   # to build it is exactly the release defect installing from a checkout would hide.
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These steps turn what the steps above
+      # recorded into annotations, which the API does return - so a failing test stays readable from
+      # outside a browser. A green run publishes the numbers too, because "the job is green" is not
+      # evidence of what ran.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|csv: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
   installed-package:
     name: Installed package
     runs-on: ubuntu-latest
@@ -54,13 +100,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        shell: bash
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in this file, so a failure can be published as an annotation."
       - name: Build the wheel
         run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet build
           python -m build --wheel --outdir dist
       - name: Check the wheel holds the application package and nothing else
         run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
           python - <<'PY'
           import glob, sys, zipfile
 
@@ -76,10 +130,13 @@ jobs:
           print(f"{wheels[0]}: {len(modules)} modules, all under career_agent/")
           PY
       - name: Install the wheel into a clean environment
-        run: python -m pip install --quiet dist/*.whl
+        run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python -m pip install --quiet dist/*.whl
       - name: Run the installed commands outside the checkout
         working-directory: ${{ runner.temp }}
         run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
           set -euo pipefail
           python - <<'PY'
           import importlib.metadata as metadata
@@ -126,6 +183,31 @@ jobs:
   # every other job from going green on a runner that can never show a window - and under the virtual
   # display it must pass. Nothing here is manual acceptance: the checklist in ``research/`` stays
   # BLOCKED for the steps a person has to perform, and a passing smoke run does not close any of them.
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These steps turn what the steps above
+      # recorded into annotations, which the API does return - so a failing test stays readable from
+      # outside a browser. A green run publishes the numbers too, because "the job is green" is not
+      # evidence of what ran.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|csv: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
   desktop-smoke-linux:
     name: Desktop smoke (Linux, display-backed)
     runs-on: ubuntu-latest
