@@ -341,3 +341,63 @@ Runs 38713190679 (`f38ac49`), 38716978550 (`76d0a3c`) and 38719357147 (`e803286`
 * Not that the runner's Tk is the same as the machine's: the versions are recorded per leg in the annotations
   (`tkinter: Tk 8.6`), and the interpreter and platform strings travel with them.
 * Not that a BLOCKED line means a missing capability. It did not on 2026-10-15 (section 9).
+
+
+## 14. The six workflows, run through the real window on three platforms
+
+**What was added.** `scripts/desktop_acceptance.py` drives the real `CareerAgentApp` through its own widgets
+and commands on a disposable synthetic database: it types into the real entries and choosers, presses the real
+buttons with Tk's `invoke`, answers the dialogs a person would answer (recording every one), and then checks the
+stored records and the window's own status line. Six workflows, 38 checks:
+
+| Workflow | The claim it checks | Checks |
+| --- | --- | --- |
+| A — candidate profile | a synthetic profile, a role and a qualification typed through the window come back after close and reopen | A1–A6 |
+| B — the two job URLs | a source listing URL and a blank employer apply URL stay separate fields, the blank one stays blank after a reopen, nothing is submitted and no discovery source is enabled | B1–B5 |
+| C — eligibility safety | no availability evidence means UNKNOWN and a refused shortlist; with the requirements stated explicitly the same application reaches PASS and may be shortlisted | C1–C6 |
+| D — tracker and analytics | the status dialog offers exactly the statuses the domain permits, a confirmation is refused until the person asserts it, and a recorded interview round is never counted as an application sent or as an outcome | D1–D8 |
+| E — export, import and refusal | the export agrees with the database and warns that the file may hold personal data; a malformed file, a damaged record, an unprotected target and a declined plan all write nothing; a repeat import adds nothing | E1–E9 |
+| F — cleanup and lifecycle | every window and connection released, the disposable folder gone, the person's own database bit-identical, including after a forced failure | F1–F4 |
+
+The exit codes are the project's own: `0` for `RESULT: PASS`, `1` for `RESULT: FAIL`, `2` for BLOCKED — no
+`tkinter`, or no display, is never a pass. The run also compares the number of checks it performed against the
+number its own source declares, so a check that stops running fails the run instead of shrinking it.
+
+**Where it runs.** The display-backed Linux job runs it under Xvfb and requires `RESULT: PASS`, all six workflow
+headers and no failure line; a step with `DISPLAY` unset requires BLOCKED; a third step requires that the
+stand-in development run (`--stand-in-tk`, which drives the test suite's stand-in widget module) reports a
+DEVELOPMENT RUN, prints no pass or failure line and exits 2, so a stand-in result can never be CI evidence. The
+Windows and macOS legs run the same workflow script and tolerate only BLOCKED (a runner with no display
+session), and the same run of the suite on those legs re-runs it in a child interpreter.
+
+**The evidence: run 38739493727 at `a530029`, all 12 jobs successful, 38/38 checks on each leg below.**
+
+| Leg | Interpreter and platform | Tk and screen | Acceptance run | Suite |
+| --- | --- | --- | --- | --- |
+| Desktop smoke (Linux, display-backed) | CPython 3.12 (system), ubuntu-latest | Tk 8.6 from `/usr/lib/python3.12/tkinter`; `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` | `RESULT: PASS — 38 checks passed` | — |
+| Cross-platform (windows-latest, 3.13) | 3.13.16, `Windows-2025Server-10.0.26100-SP0` | Tk 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (37 skipped) |
+| Cross-platform (windows-latest, 3.10) | 3.10.11, `Windows-10-10.0.26100-SP0` | Tk 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (44 skipped) |
+| Cross-platform (macos-latest, 3.13) | 3.13.15, `macOS-26.6.2-arm64-arm-64bit-Mach-O` | Tk 8.6; `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (13 skipped) |
+| Cross-platform (macos-latest, 3.10) | 3.10.11, `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6; same screen string | `RESULT: PASS — 38 checks passed` | 1634 tests, OK (20 skipped) |
+
+The same workflows also ran green on run 38737533708 at `dbaa082` (37 checks) and run 38735309770 at `dfea62d`
+(36 checks); each number is what the script declared at that commit, and the count is checked against its own
+source, not against a number kept in CI. The Windows annotation prints the em dash as `�` — the runner's
+encoding, as recorded in section 2.1, not a different result.
+
+**A defect that only real Tk could show (D14).** The first display-backed run of these workflows (38734920175 at
+`115ad2a`) reported 35 of 36 checks passing, and the failure was F4:
+`_tkinter.TclError: can't invoke "winfo" command: application has been destroyed`. After the run's root was
+destroyed, `winfo_exists` did not answer "gone" — it raised, and the check read that exception as the window
+having survived, reporting a defect in a cleanup that had worked. The stand-in could not have produced this: it
+has no interpreter to destroy. Fixed in `dfea62d` by reading Tk's refusal to answer as the window being gone
+(`widget_exists`), with five regression tests pinning an interpreter that is gone, a widget really destroyed,
+and a widget really still there. No other check failed on any leg, before or after.
+
+**What this does not establish.** No person has used this window, on any platform. Layout, clipping at small
+sizes, dialog wording and clarity, keyboard-only navigation and focus order, screen-reader behaviour, real
+mouse-driven flows and general native feel are not examined, and no check inspects pixels. The checklist's
+window steps stay BLOCKED for those reasons; where a step's *functional* claim is now covered by the table
+above, the step records that beside its BLOCKED verdict rather than being marked PASS
+(section "Automated coverage of numbered steps" in the checklist). Automated, machine-observed behaviour on a
+runner is not a substitute for a person using the application, and is not reported as one.

@@ -1,6 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 76 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**  
+**Status:** Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 76 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+
+**Update, 2026-10-15 (later the same day):** the numbered steps' verdicts are unchanged — 22 PASS, 76 BLOCKED, 0 FAIL — and **no box has been ticked**. What is new is 14 steps whose *functional* claim is now checked automatically, through the real window, on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26; CPython 3.10–3.13): each of those steps now carries an "Automated coverage" line naming the checks, the run and the commit. Nothing about layout, wording, focus order, accessibility, mouse-driven use or native feel is covered by those checks, which is what the remaining BLOCKED verdicts are about; see "Automated coverage of numbered steps" below.  
 **Date created:** 2026-10-14
 
 This checklist is intentionally separate from unit tests. It requires a real desktop session and should be completed on each operating system that the project advertises as supported. Do not mark a step passed based only on code inspection.
@@ -33,12 +35,16 @@ This checklist is intentionally separate from unit tests. It requires a real des
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the path rule itself was printed by the doctor run.**
 3. [ ] Enter a profile with country, degree, study status, graduation year, experience, work authorization, and skills. Save, close, reopen, and confirm values persist.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the same profile round-tripped at the storage layer.**
+    → **Automated coverage (2026-10-15): A1–A6 (profile fields persisted and read back; a role and a qualification added through the window's own forms and listed after a reopen) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 4. [ ] Enter a manual job with a source listing URL and leave the employer application URL blank. Save, restart, and confirm the two URL fields remain separate and the employer URL is still blank.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; both URL fields round-tripped at the storage layer.**
+    → **Automated coverage (2026-10-15): B1–B5 (both URL fields kept separate, the blank one still blank after a reopen, nothing submitted, the save confined to the disposable database) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 5. [ ] Mark the listing open but leave the availability evidence/note blank. Evaluate: overall eligibility must remain UNKNOWN; shortlisting must be blocked.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the evaluation rule was executed directly and returned UNKNOWN.**
+    → **Automated coverage (2026-10-15): C1–C4 (open with no evidence evaluates UNKNOWN, shortlisting is refused, and the status does not move) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 6. [ ] Add an availability evidence/note and explicit matching mandatory requirements. Evaluate: eligibility may be PASS only if every applicable hard requirement passes.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the evaluation rule was executed directly and returned PASS.**
+    → **Automated coverage (2026-10-15): C5–C6 (with the requirements stated explicitly the same application reaches PASS on every requirement and is shortlisted) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 7. [ ] Change the allowed country so it excludes the candidate country. Evaluate: eligibility must be FAIL.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the evaluation rule was executed directly and returned FAIL.**
 8. [ ] Add an explicit allowed-work-authorization list. A missing candidate value must be UNKNOWN; an exact matching value may pass that check; a mismatch must fail. Do not accept fuzzy/semantic equivalence.
@@ -47,8 +53,10 @@ This checklist is intentionally separate from unit tests. It requires a real des
     → **BLOCKED — no display and no Tkinter in the acceptance environment; a missing mandatory value never reached PASS when executed directly.**
 10. [ ] Attempt to shortlist a FAIL or UNKNOWN job. The app must block it. Shortlisting an explicit PASS job should update the tracker.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the gate lives in the window handler, and the transition table it consults was verified.**
+    → **Automated coverage (2026-10-15): C4 and C6 (blocked while UNKNOWN, allowed once PASS, and the tracker moves to 'shortlisted') drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 11. [ ] Attempt an invalid tracker transition and confirm the app shows an error without changing the saved status.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; an invalid transition was refused directly and the stored status stayed unchanged.**
+    → **Automated coverage (2026-10-15): D4, D5 and D6 (a status the record may not move to is not offered at all; a refused change shows an error dialog and the saved status is unchanged) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 12. [ ] Attempt to mark an application confirmed without evidence; it must be rejected. Attempt it
     again with the app's own guidance text pasted in (for example "Evidence / note (required to
     confirm)" or "A confirmed application requires evidence. An attempt or timeout is not proof.");
@@ -63,8 +71,10 @@ This checklist is intentionally separate from unit tests. It requires a real des
     as evidence.** If a test record does end up confirmed in the real database, correct it with
     `scripts/correct_tracker_record.py` (dry run first) instead of editing SQL by hand.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; all four evidence cases, the ticked assertion and its preservation were executed directly.**
+    → **Automated coverage (2026-10-15): D6 (confirmed without the assertion is refused with an explanation and nothing is written) — **partial**: the pasted-guidance-text refusal and the in-place evidence rewrite are not driven here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 13. [ ] Export to a user-selected JSON file; verify it parses and contains the profile/jobs/tracker records. Confirm the UI warns that the file may contain personal data.
     → **BLOCKED — no display and no Tkinter in the acceptance environment for the warning line; the export itself ran from the terminal and the file was inspected.**
+    → **Automated coverage (2026-10-15): E2 (the file parses, carries the profile, the listings, the application record that matches the database, the format version and the top-level history arrays, and the window says the file may hold personal data and to keep it private) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 14. [ ] Delete a job and confirm its tracker record is deleted. Delete the profile and confirm it is absent after restart.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; both deletions were executed at the storage layer.**
 15. [ ] Inspect the application workflow for network access: local alpha operations must not send requests or candidate data to external services.
@@ -147,15 +157,18 @@ This checklist is intentionally separate from unit tests. It requires a real des
     dialog does not by itself create a tracker record (close it, refresh, the job must still show
     `discovered` with no stored record).
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the states offered from a new record were read directly.**
+    → **Automated coverage (2026-10-15): D4 (the chooser offers exactly the current status and its permitted moves and nothing else) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 33. [ ] Shortlist the job (only possible on an explicit eligibility PASS), reopen the dialog, and check the
     list again: it must offer only the statuses the record may move to from `shortlisted`. For a
     `submission_attempted` record the list must include `submitted_unverified`, `confirmed`, `failed` and
     `unknown_status` but not `interview` or `response_received`; those appear only after `confirmed`.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the states offered after a submission attempt were read directly.**
+    → **Automated coverage (2026-10-15): D1 and D4 (shortlisted through its own button, then the dialog reopened and its options read) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 34. [ ] Close a record honestly: move an application to `withdrawn` with a note. Reopen **Update selected
     status** for it. The app must say the record is in a final state and must not offer a list of statuses
     at all. The stored note must still be shown in the tracker list, unchanged.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the states offered from withdrawn were read directly.**
+    → **Automated coverage (2026-10-15): D8 (a record moved to 'withdrawn', the chooser then offers no change, the dialog explains that it is final and that nothing was changed, and the database is byte-identical afterwards) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 35. [ ] Cancel the dialog with Escape and confirm with Return on the *Save status* button; both must work
     without a mouse. Pressing Escape must change nothing.
     → **BLOCKED — no display and no Tkinter in the acceptance environment.**
@@ -266,6 +279,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     must not have written anything yet. Press **No**: nothing may change and the status line must say the
     import was cancelled.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the plan printed from the terminal with nothing added.**
+    → **Automated coverage (2026-10-15): E8 and E9 (the plan is shown naming what is already stored before anything is written; declining it leaves the database byte-identical and the status line reports the cancellation) drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 55. [ ] Press **Import an exported file (JSON)** again, choose the same file and press **Yes**. The status
     line must report the result including `left 1 already-stored listing(s) as they were`, the Jobs tab
     must still show exactly one listing with its original first-seen time, and the Tracker tab must show
@@ -310,6 +324,7 @@ the store behind the widgets, and the checklist is where the widgets themselves 
     pick "You felt it went well", save, and confirm the outcome text appears in the row and that no status
     changed.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the round's day, its awaiting state, the recorded outcome and the unchanged status were all verified.**
+    → **Automated coverage (2026-10-15): D2–D3 (stage, day and mode chosen through the dialog; the round is stored as awaiting and the application's status is left alone) — **partial**: whether the round also appears in the other list views is not checked here drove this through the real window on five display-backed CI legs (Linux under Xvfb, Windows 2025 and macOS 26, CPython 3.10–3.13), 38 checks per leg, run `38739493727` at `a530029`.
 64. [ ] Select a **follow-up** row and press **Delete the selected record**. It must explain that a follow-up
     day is cleared on the Follow-ups tab rather than deleted here, and nothing may change.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; clearing the plan was executed at the storage layer.**
@@ -378,7 +393,7 @@ is a plan the person wrote and nothing contacts an employer.
     arrive with the same dates. Import it into the *first* database (which still holds its records) and
     confirm the plan says the stored records are kept and nothing is duplicated.
     → **PASS — the keys, the format version and the record counts were read from the file.**
-
+    → **Automated coverage (2026-10-15), added to the PASS above:** E2 (the format version and the top-level `work_history`/`education` arrays match the stored records) and E5, E8 (import into an empty database, then a repeat import that says the stored records are kept and adds nothing), run `38739493727` at `a530029`.
 ## Progress reporting (added 2026-10-15)
 
 The report adds up records that already exist. Nothing here fetches, estimates or projects, and every manual
@@ -683,3 +698,48 @@ For each operating system tested, record:
 - Any remaining known limitations.
 
 **Release rule:** Until this checklist is executed on a real desktop and the results are recorded, call the UI a local alpha and do not claim GUI or cross-platform acceptance. Passing unit tests does not replace this checklist.
+
+### 2026-10-15 — third follow-up: 14 steps' functional claims are now checked on real displays
+
+**No numbered step changed verdict and no box was ticked.** The 98 steps remain 22 PASS, 76 BLOCKED, 0 FAIL.
+What follows is automated, machine-observed evidence from the project's own acceptance workflows; a person has
+still not used this window, and every judgement a person has to make is still outstanding.
+
+**What was added.** `scripts/desktop_acceptance.py` drives the real `CareerAgentApp` through its own widgets and
+commands on a disposable synthetic database: entries typed into, choosers set, buttons pressed through Tk's
+`invoke`, dialogs answered and recorded, and then the stored records and the window's own status line read back.
+Six workflows (A–F), 38 checks, exit `0`/`1`/`2` for PASS/FAIL/BLOCKED as the smoke test uses them.
+
+**Where it ran, and what it reported.** Run `38739493727` at `a530029`, all 12 jobs successful. Five legs ran the
+workflows against real Tk on a real display and reported `RESULT: PASS — 38 checks passed`:
+
+| Leg | Interpreter, platform | Tk and screen |
+| --- | --- | --- |
+| Desktop smoke (Linux, display-backed) | CPython 3.12 (system), ubuntu-latest | Tk 8.6; `1280x1024 pixels from X11R0 The X.Org Foundation 12101011` |
+| Cross-platform (windows-latest, 3.13) | 3.13.16, `Windows-2025Server-10.0.26100-SP0` | Tk 8.6; `1024x768 pixels from Windows 10.0 26100 Win64` |
+| Cross-platform (windows-latest, 3.10) | 3.10.11, `Windows-10-10.0.26100-SP0` | Tk 8.6; same screen string |
+| Cross-platform (macos-latest, 3.13) | 3.13.15, `macOS-26.6.2-arm64-arm-64bit-Mach-O` | Tk 8.6; `1024x768 pixels from CG0.0 Apple AppKit 2685.7 Mac OS X 1a0602` |
+| Cross-platform (macos-latest, 3.10) | 3.10.11, `macOS-26.6.2-arm64-arm-64bit` | Tk 8.6; same screen string |
+
+The suite on those legs ran `1634 tests … OK` (37–44 skipped, the number differing by interpreter), and the
+window smoke test reported its own `RESULT: PASS — 14 checks passed`. On the Linux job two further steps require
+that the workflows report BLOCKED with no display and that the stand-in development run can never report a pass;
+both passed. The full record, including the defect below and the per-leg annotations, is section 14 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+
+**Automated coverage of numbered steps.** 14 steps now carry an "Automated coverage" line: **3, 4, 5, 6, 10, 11,
+13, 32, 33, 34, 54, 78** are covered for the functional claim the step states, and **12 and 63 are covered in
+part** — step 12's pasted-guidance-text refusal and in-place evidence rewrite are not driven, and step 63's
+appearance in the other list views is not checked. Step 78 already passed by file inspection; its second half
+(the plan for an already-populated database, and the repeat import) is now checked automatically as well.
+
+**A defect that only a real display could show (D14).** The first display-backed run of these workflows
+(38734920175 at `115ad2a`) passed 35 of 36 checks; the failure was F4 reporting a cleanup that had worked,
+because `winfo_exists` *raises* once the Tk interpreter is destroyed rather than answering "gone". Fixed in
+`dfea62d` with five regression tests. The stand-in widget module the unit tests use could not have produced it.
+
+**What remains for a person.** Every one of the 76 BLOCKED verdicts is still exactly that, and the reasons are
+unchanged: a person has to open the window on a machine with a display and judge what a machine cannot — layout
+and clipping at normal and smaller sizes, the wording and clarity of each dialog, keyboard-only navigation and
+focus order, screen-reader behaviour, actual mouse-driven flows, and whether the whole thing feels like a native
+application. Steps 24–31 additionally need the `pdf` extra installed.

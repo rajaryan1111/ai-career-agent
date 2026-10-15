@@ -815,6 +815,30 @@ and never a pass, and the script asserts nothing about pixels, layout or dialog 
 Xvfb on Linux, where it must pass, and on the Windows and macOS legs, where a runner without a display
 session reports BLOCKED instead of being counted as a pass or failing the build.
 
+The workflows themselves are driven the same way, in more depth:
+
+```bash
+python scripts/desktop_acceptance.py
+```
+
+Six workflows run against the real window and a disposable synthetic database: a profile (with a role and a
+qualification) typed, saved, closed and read back; a listing whose source URL and blank apply URL stay separate
+fields and whose blank stays blank; a listing with no availability evidence evaluating to UNKNOWN and refusing
+to be shortlisted, then reaching PASS and being shortlisted once the evidence and requirements are stated; an
+application moved through its permitted statuses with a confirmation refused until the person asserts it, and a
+recorded interview round never counted as an application sent or as an outcome; an export that agrees with the
+database and says the file may hold personal data, imported into a second database, plus refusals (a malformed
+file, a damaged record, an unprotected target, a declined plan, a repeat import) that each write nothing; and
+cleanup that releases every window and connection, deletes its own folder and leaves the person's database
+byte-identical, including after a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports
+38 checks, and compares that number against the checks its own source declares so a check that stops running
+fails the run. The dialogs a person would answer are answered by the run - a file chooser, the import plan and
+the confirmation - and every one of them is recorded and reported. On a machine with no display,
+`--stand-in-tk` runs the same workflows against the test suite's stand-in widget module for development: it
+prints DEVELOPMENT RUN, never prints a pass or a failure, and exits 2, and CI has a step that requires exactly
+that. CI runs the real thing on the display-backed Linux job (where it must pass) and on the Windows and macOS
+legs (where BLOCKED is tolerated and reported, and a failure is a failure).
+
 A failing step is readable without a browser. Job logs are served from a storage host that a restricted
 network cannot reach, and the API's answer for a failed step is its exit status alone, so every step of the new
 jobs, from the interpreter report to the smoke test, records its output into one notes file - the step opens
