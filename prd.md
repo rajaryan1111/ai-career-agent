@@ -80,9 +80,21 @@ The intended audience is cross-industry and cross-experience: students, interns,
 ### Follow-ups and reminders
 
 Implemented today: a day to act on per application, listed in the window and on the command line with
-overdue/due-today distinction, a daily local reminder task, and a calendar file the person can import
-into their own calendar. Reminders never change application state. Email, calendar-account and push
-notifications are **not** implemented and are not simulated.
+overdue/due-today distinction, a daily local reminder task, a preview of the calendar file before it is
+written, and a follow-up email draft built from the application's recorded context and printed in full.
+Reminders never change application state, and neither the draft nor the preview writes anything.
+
+**Partially implemented, and gated by design:** the email and calendar integration *contract*. Preparing an
+email draft (subject, body, the application it belongs to, and a recipient only if one is supplied) and a
+calendar event (title, day, and, only if the person records them from an invitation, a time, a duration and
+an IANA timezone) are implemented, each with a preview that states exactly what would happen and an explicit
+result of completed, duplicate, failed, disabled, unsupported or invalid. Execution is **not** implemented for
+any real provider and is disabled by default: the default integration refuses every operation with a stated
+reason, no configuration selects another, and no credentials, accounts or external calls exist. Idempotency is
+implemented - a stable operation id derived from the operation's content, duplicate detection against a local
+record, and a retry that cannot duplicate a performed operation. A local mock performs operations in a local
+ledger so the contract is testable and demonstrable without any account. Email, calendar-account, push and
+other notification integrations are **not** enabled, and nothing is simulated into looking present.
 
 ### Sources
 

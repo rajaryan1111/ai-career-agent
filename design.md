@@ -73,6 +73,16 @@ The initial UI is Python/Tkinter over the Python domain core and local SQLite. T
 
 - Should company reports be generated on demand or after shortlisting?
 - How should source failures and unavailable integrations be displayed?
+  **Answered for the local alpha (2026-10-15):** integrations are shown as what they are. The reminders tab
+  offers **Preview the calendar export** and **Draft a follow-up email**, both read-only, and both open the
+  same kind of fixed-size, scrollable, close-only dialog the progress report uses - no editable field, no
+  send button, and no setting anywhere that could turn one on. A draft states its status on its own first
+  lines (`Status: DRAFT ONLY`), marks a missing recipient as missing rather than leaving a blank that could
+  read as "ready", and the window's status line repeats that nothing was sent. The command
+  `--integration-status` prints the same state for a terminal: nothing is enabled, what is available
+  instead, and the seven conditions a real provider would have to meet. An unavailable capability is
+  therefore visible as a *refusal with a reason*, never as a disabled button that suggests a setting
+  exists somewhere.
 - How should users set match thresholds without needing ML expertise?
 - What is the clearest distinction between submitted and confirmed applications?
 - Which local PDF/DOCX parser offers sufficient extraction quality without external uploads?

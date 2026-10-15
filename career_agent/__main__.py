@@ -31,6 +31,13 @@ says so rather than implying otherwise.
 database backup) into a database that does not already have those tasks, and leaves any task that
 exists exactly as the person configured it.
 
+``--integration-status``, ``--preview-calendar-export``, ``--draft-follow-up`` and ``--record-follow-up``
+are the email and calendar side of the same promise: a draft is not a send, a preview is not an action, and
+no integration is enabled in this build. ``--draft-follow-up`` writes a message from an application's own
+recorded context and prints it in full; ``--preview-calendar-export`` says which events the local ``.ics``
+export would contain before anything is written. Both are read-only, and the only thing that can be
+performed by any of them is through an explicitly named local mock ledger, which contacts nothing.
+
 Nothing here touches the network. Restoring replaces candidate data, so it always requires an explicit
 confirmation: the file must be named and confirmed interactively, or ``--yes`` must be passed.
 """
@@ -39,7 +46,7 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 import platform
 import sys
 from pathlib import Path
@@ -56,7 +63,8 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file,
 )
 from . import analytics, importer, preparation
-from .followups import calendar_file_name, reminders, summary, to_calendar
+from . import integrations
+from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
 from .worker import Worker, WorkerSettings, worker_status
 # Imported as a namespace: ``default_registry`` here is the *handler* registry the worker runs, and the
@@ -176,6 +184,22 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Add an education record for INSTITUTION (needs --qualification; dates are optional).",
     )
     actions.add_argument(
+        "--integration-status", action="store_true",
+        help="Report which email and calendar integrations exist and why none is enabled, then exit.",
+    )
+    actions.add_argument(
+        "--preview-calendar-export", action="store_true",
+        help="Show what --calendar-to PATH would write, without writing it (read-only).",
+    )
+    actions.add_argument(
+        "--draft-follow-up", metavar="LISTING_ID",
+        help="Write a follow-up email draft for LISTING_ID and print it; nothing is sent.",
+    )
+    actions.add_argument(
+        "--record-follow-up", metavar="LISTING_ID",
+        help="Ask to record a calendar event for LISTING_ID's follow-up day; disabled unless a mock ledger is named.",
+    )
+    actions.add_argument(
         "--calendar-to", metavar="PATH",
         help="Write follow-up reminders to a calendar file (.ics) at PATH, for your own calendar.",
     )
@@ -186,6 +210,30 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--import-from", metavar="PATH",
         help="Show what importing a JSON export at PATH would do (add --yes to apply it).",
+    )
+    parser.add_argument(
+        "--recipient", metavar="ADDRESS", default=None,
+        help="The address to put on a --draft-follow-up; never guessed, and optional (the draft says so).",
+    )
+    parser.add_argument(
+        "--save-draft", metavar="PATH", default=None,
+        help="Also write the --draft-follow-up to a local file at PATH (refused if the file exists).",
+    )
+    parser.add_argument(
+        "--mock-ledger", metavar="PATH", default=None,
+        help="Perform --draft-follow-up or --record-follow-up through the local mock, recording it at PATH.",
+    )
+    parser.add_argument(
+        "--at", metavar="HH:MM", default=None,
+        help="Start time for --record-follow-up. Needs --minutes and --timezone; without it the event is all-day.",
+    )
+    parser.add_argument(
+        "--minutes", metavar="MINUTES", default=None,
+        help="How long the --record-follow-up event is expected to take.",
+    )
+    parser.add_argument(
+        "--timezone", metavar="NAME", default=None,
+        help="The IANA timezone the --record-follow-up start time is in, for example Asia/Kolkata.",
     )
     parser.add_argument(
         "--title", metavar="TITLE", default=None,
@@ -837,6 +885,267 @@ def run_add_study(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ---------------------------------------------------------------------------- email and calendar
+
+#: Options that only mean something together with one of the integration commands. Using one on its own is
+#: refused rather than ignored: a dropped ``--recipient`` would look exactly like a message that went
+#: nowhere, and a dropped ``--at`` would silently turn an appointment into an all-day entry.
+_DEPENDENT_OPTIONS: tuple[tuple[str, str, str], ...] = (
+    ("recipient", "--recipient", "--draft-follow-up"),
+    ("save_draft", "--save-draft", "--draft-follow-up"),
+    ("at", "--at", "--record-follow-up"),
+    ("minutes", "--minutes", "--record-follow-up"),
+    ("timezone", "--timezone", "--record-follow-up"),
+)
+
+
+def describe_orphan_options(args: argparse.Namespace) -> str | None:
+    """The first option that was given without the command it belongs to, or ``None``.
+
+    A command-line option that is quietly ignored is a false statement about what the command did, so this
+    returns a sentence the caller prints as a refusal instead.
+    """
+    for attribute, option, command in _DEPENDENT_OPTIONS:
+        if getattr(args, attribute, None) is None:
+            continue
+        wanted = getattr(args, command.removeprefix("--").replace("-", "_"), None)
+        if not wanted:
+            return f"{option} only means something with {command}."
+    if args.mock_ledger and not (args.draft_follow_up or args.record_follow_up):
+        return "--mock-ledger only means something with --draft-follow-up or --record-follow-up."
+    return None
+
+
+def run_integration_status(args: argparse.Namespace) -> int:
+    """Report which integrations exist and why none is enabled. Database-free and read-only.
+
+    It does not open the database, so it answers on a machine where nothing has been recorded yet - which is
+    exactly when a person asks whether this app can send email on their behalf.
+    """
+    print(f"AI Career Agent {__version__} · email and calendar integrations")
+    for line in integrations.describe_integrations():
+        print(line)
+    print("")
+    print("This report is read-only: nothing was sent, nothing was created, no account was touched and no "
+          "connection was opened to produce it.")
+    return EXIT_OK
+
+
+def _integration_from_options(args: argparse.Namespace) -> integrations.Integration:
+    """The integration these commands use: none at all unless a local mock ledger was named.
+
+    There is no configuration, environment variable or stored setting that selects a provider, so asking for
+    something to be performed without naming the mock gets the disabled integration and its reason. That is
+    the honest answer rather than an error, and it is the same answer the window gives.
+    """
+    if args.mock_ledger:
+        return integrations.LocalMockIntegration(ledger_path=Path(args.mock_ledger).expanduser())
+    return integrations.default_integration()
+
+
+def _reminder_for_listing(
+    store: CareerStore, listing_id: str, today: date,
+) -> tuple[object | None, str | None]:
+    """The follow-up reminder for one stored application, or the reason there is not one.
+
+    Every refusal here is about a fact that is genuinely absent. None of them is filled in: a listing id with
+    no recorded day gets a sentence asking for the day, not today's date, and a listing that has been deleted
+    gets a sentence saying so rather than a draft addressed to a role nobody can look up.
+    """
+    tracker = store.get_tracker(listing_id)
+    if tracker is None:
+        return None, f"No application is stored with listing id {listing_id}, so there is nothing to write from."
+    if tracker.follow_up_on is None:
+        return None, (
+            f"{listing_id} has no follow-up day recorded, and this command will not invent one. Set the day "
+            "on the Reminders tab in the window, then run this again."
+        )
+    job = store.get_job(listing_id)
+    if job is None:
+        return None, (
+            f"The listing {listing_id} is no longer stored, so there is no role or employer to write from. "
+            "Add it again or pick another application."
+        )
+    return reminder_for(tracker, job, today), None
+
+
+def run_preview_calendar_export(args: argparse.Namespace) -> int:
+    """Say exactly which events the local ``.ics`` export would contain. Writes nothing.
+
+    The working calendar path in this application is that file: local, owner-only, importable into whatever
+    calendar the person already uses, with no account and no invitation. Previewing it makes the difference
+    between that and an integration explicit instead of implied - and it is the same code the export uses, so
+    a preview cannot promise a different event from the one the file will hold.
+    """
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · calendar export preview (nothing is written)")
+    if not database.exists():
+        print("No database yet, so there are no follow-up days to preview. Nothing was written.")
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        upcoming = reminders(_follow_up_pairs(store), today)
+    if not upcoming:
+        print("No follow-up days are recorded, so there would be nothing to export. Set a day on an "
+              "application in the window and run this again. Nothing was written.")
+        return EXIT_REFUSED
+    plan = integrations.calendar_export_plan(upcoming)
+    for line in plan.describe():
+        print(line)
+    print(f"To write it: python -m career_agent --calendar-to {calendar_file_name(today)}")
+    print("Nothing was written by this command, no calendar account was contacted, and no invitation was "
+          "sent.")
+    return EXIT_OK
+
+
+def run_draft_follow_up(args: argparse.Namespace) -> int:
+    """Write a follow-up email draft from what is already recorded, and print it. Sends nothing.
+
+    The draft is built from the employer, the role, the day the person chose and their own note - facts the
+    database already holds - and from nothing else. The recipient comes only from ``--recipient``: an address
+    guessed from an employer's name would send somebody's private message to a stranger.
+    """
+    listing_id = args.draft_follow_up
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · follow-up email draft (nothing is sent)")
+    if not database.exists():
+        print("No database yet, so there is no application to write from. Nothing was written.")
+        return EXIT_REFUSED
+    try:
+        integration = _integration_from_options(args)
+    except ValueError as exc:
+        print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        reminder, problem = _reminder_for_listing(store, listing_id, today)
+        if reminder is None:
+            print(f"REFUSED: {problem} Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
+        job = store.get_job(listing_id)
+        try:
+            draft = integrations.draft_for_follow_up(reminder, recipient=args.recipient)
+        except ValueError as exc:
+            print(f"REFUSED: {exc} Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
+        preview = integrations.preview_email(draft, integration=integration, listing=job)
+
+    for line in preview.describe():
+        print(line)
+    print("")
+    print("The draft in full:")
+    print("-" * 72)
+    print(integrations.draft_as_text(draft).rstrip("\n"))
+    print("-" * 72)
+    if args.save_draft:
+        target = Path(args.save_draft).expanduser()
+        if target.exists():
+            print(f"REFUSED: {target} already exists, so the draft was not written over it.", file=sys.stderr)
+            return EXIT_REFUSED
+        try:
+            written = write_private_text_file(target, integrations.draft_as_text(draft))
+        except PrivateWriteError as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        except OSError as exc:
+            print(f"REFUSED: {target} could not be written: {exc.strerror or exc}. Nothing was written.",
+                  file=sys.stderr)
+            return EXIT_REFUSED
+        print(f"Wrote the draft to {written} (a plain text file on this machine, not a message that was sent).")
+    if not args.mock_ledger:
+        print("Nothing was attempted: no email integration is enabled in this build, so this draft could not "
+              "be sent even if you asked. Add --mock-ledger PATH to run it through the local mock, which "
+              "records the operation locally and contacts nothing.")
+        return EXIT_OK
+    result = integrations.dispatch_with_retry(integration, draft)
+    print(result.describe())
+    if not result.succeeded:
+        print(f"REFUSED: the draft was written but not performed ({result.outcome.value}).", file=sys.stderr)
+        return EXIT_REFUSED
+    return EXIT_OK
+
+
+def _requested_start_time(args: argparse.Namespace) -> tuple[time | None, int | None]:
+    """The start time and duration that were asked for, or a refusal explaining the combination.
+
+    Nothing is defaulted here. Without ``--at`` the event stays an all-day entry on the follow-up day, which
+    is what the person recorded; a time invented by the command would be an appointment in somebody's
+    calendar that nobody agreed to.
+    """
+    if not args.at:
+        if args.minutes or args.timezone:
+            raise ValueError(
+                "--minutes and --timezone describe a start time, so they need --at HH:MM. Without --at the "
+                "event is an all-day entry on the follow-up day."
+            )
+        return None, None
+    try:
+        start = time.fromisoformat(args.at.strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"--at {args.at!r} is not a time of day. Write it as HH:MM, for example 10:30."
+        ) from exc
+    if not args.timezone:
+        raise ValueError(
+            "Give --timezone as well, for example --timezone Asia/Kolkata: without it the same clock reading "
+            "means a different moment to whoever receives it."
+        )
+    if not args.minutes:
+        raise ValueError("Give --minutes as well: how long is the event expected to take?")
+    try:
+        minutes = int(str(args.minutes).strip())
+    except ValueError as exc:
+        raise ValueError(f"--minutes {args.minutes!r} is not a whole number of minutes.") from exc
+    return start, minutes
+
+
+def run_record_follow_up(args: argparse.Namespace) -> int:
+    """Ask to record a calendar event for a follow-up day, and report what actually happened.
+
+    With no integration enabled - which is every build of this application - the answer is a refusal that
+    names the reason and points at the local export, and no event exists anywhere afterwards. With
+    ``--mock-ledger`` the operation is performed by the local mock, which records it in that file and
+    contacts nothing. Either way the command reports the outcome it got rather than the outcome it wanted.
+    """
+    listing_id = args.record_follow_up
+    today = _local_today()
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · calendar event for a follow-up (nothing is created on its own)")
+    if not database.exists():
+        print("No database yet, so there is no follow-up day to record. Nothing was created.")
+        return EXIT_REFUSED
+    try:
+        integration = _integration_from_options(args)
+        start, minutes = _requested_start_time(args)
+    except ValueError as exc:
+        print(f"REFUSED: {exc} Nothing was created.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        reminder, problem = _reminder_for_listing(store, listing_id, today)
+        if reminder is None:
+            print(f"REFUSED: {problem} Nothing was created.", file=sys.stderr)
+            return EXIT_REFUSED
+        job = store.get_job(listing_id)
+        try:
+            request = integrations.event_from_reminder(
+                reminder, start_time=start, duration_minutes=minutes, timezone_name=args.timezone)
+        except ValueError as exc:
+            print(f"REFUSED: {exc} Nothing was created.", file=sys.stderr)
+            return EXIT_REFUSED
+        preview = integrations.preview_event(request, integration=integration, listing=job)
+
+    for line in preview.describe():
+        print(line)
+    result = integrations.dispatch_with_retry(integration, request)
+    print("")
+    print(result.describe())
+    if not result.succeeded:
+        print(f"REFUSED: no calendar event was recorded ({result.outcome.value}).", file=sys.stderr)
+        return EXIT_REFUSED
+    print("No calendar account was contacted, and no invitation was sent to anybody.")
+    return EXIT_OK
+
+
 def run_calendar_export(args: argparse.Namespace) -> int:
     """Write the recorded follow-ups to a calendar file at the path the person named.
 
@@ -1018,6 +1327,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_seed_tasks(args)
         if args.sources:
             return run_sources(args)
+        if args.integration_status:
+            return run_integration_status(args)
+        orphan = describe_orphan_options(args)
+        if orphan is not None:
+            print(f"REFUSED: {orphan} Nothing was written.", file=sys.stderr)
+            return EXIT_REFUSED
         if args.follow_ups:
             return run_follow_ups(args)
         if args.next_actions:
@@ -1032,6 +1347,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_add_role(args)
         if args.add_study:
             return run_add_study(args)
+        if args.preview_calendar_export:
+            return run_preview_calendar_export(args)
+        if args.draft_follow_up:
+            return run_draft_follow_up(args)
+        if args.record_follow_up:
+            return run_record_follow_up(args)
         if args.calendar_to:
             return run_calendar_export(args)
         if args.export_to:

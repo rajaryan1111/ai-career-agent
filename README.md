@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Progress reporting adds up the records that already exist (`--analytics`, and the **Progress report** on the Application tracker tab): counts, rates that name their denominator and are withheld below five applications, and an explicit list of what this application cannot measure — an offer, or anything an employer did without telling you — so an unavailable metric is never printed as a zero. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Progress reporting adds up the records that already exist (`--analytics`, and the **Progress report** on the Application tracker tab): counts, rates that name their denominator and are withheld below five applications, and an explicit list of what this application cannot measure — an offer, or anything an employer did without telling you — so an unavailable metric is never printed as a zero. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved. Email and calendar integrations have the same shape: a typed draft and event contract with a preview of exactly what would happen, an operation id that makes a repeat recognisable, and execution that is disabled by default and refuses with a reason — the only thing that can perform anything is an explicitly named local mock that contacts nothing (see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar)).
 
 ## Run the desktop app
 
@@ -59,6 +59,9 @@ career-agent --version           # print the version and database schema version
 career-agent --database "/path/to/career-agent.sqlite3"
 career-agent --doctor            # where is my data, and can this app read it?
 career-agent --analytics         # what the records add up to, with every denominator named
+career-agent --integration-status        # whether this app can email or add events, and why not
+career-agent --preview-calendar-export   # what the .ics export would contain, without writing it
+career-agent --draft-follow-up j1        # a follow-up email draft you can read and copy out; nothing is sent
 ```
 
 ```bash
@@ -637,7 +640,47 @@ Three ways to meet your own reminders:
 
 For the record: the project has no email, calendar-account or notification integration, and none is
 mocked into looking present — a reminder that needs somebody's credentials is documented as unavailable,
-not faked.
+not faked. What it does have is the *interface* for one, with every path to a real side effect switched
+off: see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar).
+
+## Can it send email or add things to my calendar?
+
+Short answer: no, and it will not pretend otherwise. What exists is the interface a real integration would
+need, built so that nothing can happen by accident:
+
+```bash
+python -m career_agent --integration-status                    # what exists, and why none is enabled
+python -m career_agent --preview-calendar-export               # the events the .ics export would hold
+python -m career_agent --draft-follow-up j1                    # a draft, printed in full; nothing is sent
+python -m career_agent --draft-follow-up j1 --recipient you@example.invalid \
+    --save-draft ~/follow-up.txt                               # the same draft as a local text file
+```
+
+**A draft is not an action, and a preview is not an action either.** A draft is a value: a subject, a body,
+the application it belongs to, and — only if you type it — a recipient. The preview says what a person
+would need to know before anything happened, including the facts that are *missing*. Nothing here guesses:
+no address is derived from an employer's name, no interview time is inferred from a date, and an event with
+no recorded time is an all-day entry with the gap stated rather than a made-up appointment. The **Follow-ups**
+tab has the same two read-only actions, **Preview the calendar export** and **Draft a follow-up email**.
+
+**Execution is disabled, and the refusal names the reason.** Every email or calendar operation goes through
+an integration object, and the one this build returns refuses everything with an
+`unsupported`/`disabled` result that says nothing was sent or created and points at what does work — the
+local `.ics` export you import yourself. There is no setting, environment variable or stored value that
+enables one instead; a real provider would need the seven things `--integration-status` lists (an approved
+provider and scope, credentials in the operating system's keyring, provider-side idempotency, a
+data-minimization statement, an off-by-default switch, failure handling that cannot lie, and a provider-level
+test path).
+
+**Doing it twice must not mean doing it twice.** Every draft and every event carries an operation id derived
+from its own content, so asking again produces the same id, and an integration that has already performed
+that operation reports it as a duplicate instead of performing it again. A *failed* attempt is not recorded
+as done, so a retry with the same id is allowed and still performs the operation once. Proving this without
+an account is what `--mock-ledger PATH` is for: it runs the whole sequence against a local mock that records
+operations in a file you choose, contacts nothing, and needs no socket at all (a test runs the full
+draft-and-record path in an interpreter where creating a socket raises). What the mock cannot do is prove
+that a request the network dropped never arrived — that is provider-side idempotency, and it is why a real
+integration is a decision with evidence behind it rather than a flag.
 
 ## Run scheduled tasks (local worker)
 

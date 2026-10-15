@@ -228,6 +228,57 @@ class WorksWithNetworkingSwitchedOffTests(unittest.TestCase):
                                  f"the restore needed the network:\n{restored.stdout}{restored.stderr}")
                 self.assertIn("Restored", restored.stdout)
 
+    def test_the_draft_and_the_local_mock_need_no_network_either(self):
+        """The whole draft-preview-record sequence, in an interpreter that cannot create a socket.
+
+        This is the strongest evidence available here for the promise that an integration interface
+        contacts nothing: not that the mock *chooses* not to, but that the process performing it has no
+        socket at all, and the recorded operation still completes.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "throwaway.sqlite3"
+            ledger = Path(directory) / "ledger.json"
+            draft = Path(directory) / "draft.txt"
+            created = subprocess.run(
+                [sys.executable, "-c", (
+                    "import sys\n"
+                    "from datetime import date, timedelta\n"
+                    "sys.path.insert(0, '.')\n"
+                    "from career_agent import ApplicationTracker, Availability, JobListing\n"
+                    "from career_agent.store import CareerStore\n"
+                    "with CareerStore(sys.argv[1]) as store:\n"
+                    "    store.save_job(JobListing(listing_id='j1', source_id='manual',\n"
+                    "        source_name='Manual entry', source_listing_url='https://example.com/jobs/1',\n"
+                    "        employer_name='Example', role_title='AI Intern',\n"
+                    "        availability_status=Availability.OPEN))\n"
+                    "    store.save_tracker(ApplicationTracker('j1').with_follow_up(\n"
+                    "        date.today() + timedelta(days=2), note='follow up'))\n"
+                ), str(database)],
+                capture_output=True, text=True, cwd=str(REPOSITORY_ROOT), timeout=120,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            with tempfile.TemporaryDirectory() as blocker:
+                environment = self.guarded_environment(blocker)
+
+                status = self.run_guarded(environment, ["--database", str(database),
+                                                        "--integration-status"])
+                self.assertEqual(status.returncode, 0,
+                                 f"the status report needed the network:\n{status.stdout}"
+                                 f"{status.stderr}")
+                self.assertIn("nothing is enabled", status.stdout)
+
+                drafted = self.run_guarded(environment, [
+                    "--database", str(database), "--draft-follow-up", "j1",
+                    "--recipient", "hiring@example.invalid", "--save-draft", str(draft),
+                    "--mock-ledger", str(ledger),
+                ])
+                self.assertEqual(drafted.returncode, 0,
+                                 f"the draft needed the network:\n{drafted.stdout}{drafted.stderr}")
+                self.assertIn("[completed]", drafted.stdout)
+                self.assertIn("No email was sent", drafted.stdout)
+                self.assertTrue(draft.exists(), "the local draft file must exist")
+                self.assertTrue(ledger.exists(), "the local mock ledger must exist")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

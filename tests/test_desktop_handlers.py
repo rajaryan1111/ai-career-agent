@@ -1386,6 +1386,176 @@ class ProgressReportTests(HandlerTestCase):
         self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
 
 
+class IntegrationSurfaceTests(HandlerTestCase):
+    """Drafting an email and previewing the calendar export: text on screen, and nothing else.
+
+    Handler-level only, with stub widgets: this says nothing about how the dialog looks on any platform.
+    What it checks is the part that would be a safety problem if it were wrong - that both actions exist
+    on the reminders tab, that what they show names the application, marks the missing address and states
+    that nothing was sent or created, that neither writes a record or a file, and that a selection that
+    has gone away or a database that cannot be read is reported instead of producing a draft.
+    """
+
+    def reminders_tab(self, *, days=2, note="ask about the panel"):
+        """A window whose store holds one application with a follow-up day."""
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "window.sqlite3")
+        self.addCleanup(app.store.close)
+        app.store.save_job(sample_job())
+        app.store.save_tracker(desktop.ApplicationTracker("j1").with_follow_up(
+            date(2026, 10, 15) + timedelta(days=days), note=note))
+        app._refresh_follow_ups()
+        RecordingToplevel.created = []
+        return root, app
+
+    def dialog_labels(self, created_before):
+        """Every label text drawn since a marker, which is what a dialog body ends up as."""
+        return [label.text for label in RecordingLabel.created[created_before:]]
+
+    def test_the_reminders_tab_offers_both_read_only_actions(self):
+        _root, _app = self.reminders_tab()
+
+        texts = [button.text for button in BUTTONS.created if button.text]
+
+        self.assertIn("Preview the calendar export", texts)
+        self.assertIn("Draft a follow-up email", texts)
+        self.assertIn("Export to a calendar file", texts, "the local export must stay where it was")
+
+    def test_the_preview_lists_the_events_and_writes_nothing(self):
+        _root, app = self.reminders_tab()
+        before = RecordingToplevel.created[:]
+        marker = len(RecordingLabel.created)
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._preview_calendar_export()
+
+        dialog = RecordingToplevel.created[-1]
+        self.assertNotIn(dialog, before, "a dialog must have been opened")
+        self.assertEqual(dialog.requested_geometry, "900x640")
+        self.assertIn("read-only", dialog.title_text)
+        lines = "\n".join(self.dialog_labels(marker))
+        self.assertIn("1 event(s) would be written", lines)
+        self.assertIn("Follow up: AI Intern at Example Inc", lines)
+        self.assertIn("follow-up-j1-20261017@ai-career-agent.local", lines)
+        self.assertIn("Nothing has been written yet", lines)
+        self.assertIn("no attendee is invited", lines)
+        self.assertIn("nothing has been written yet", app.status.get())
+        self.assertEqual(FILEDIALOG.opened, None, "a preview must not open a save dialog")
+        self.assertEqual(
+            [item.name for item in Path(self._directory.name).iterdir()
+             if item.name not in ("logs", "handlers.sqlite3", "window.sqlite3")],
+            [],
+            "a preview must not write a file",
+        )
+
+    def test_the_preview_says_there_is_nothing_to_preview_when_no_day_is_recorded(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "window.sqlite3")
+        self.addCleanup(app.store.close)
+        app.store.save_job(sample_job())
+        app.store.save_tracker(desktop.ApplicationTracker("j1"))
+        RecordingToplevel.created = []
+
+        app._preview_calendar_export()
+
+        self.assertIn("Nothing to preview", MESSAGES.titles("showinfo"))
+        self.assertEqual(RecordingToplevel.created, [], "no dialog should have been built")
+
+    def test_the_draft_carries_the_stored_context_and_states_that_nothing_was_sent(self):
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ("j1",)
+        marker = len(RecordingLabel.created)
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._draft_follow_up_email()
+
+        dialog = RecordingToplevel.created[-1]
+        self.assertIn("nothing is sent", dialog.title_text.lower())
+        lines = "\n".join(self.dialog_labels(marker))
+        self.assertIn("Subject: Following up on my application: AI Intern at Example Inc", lines)
+        self.assertIn("ask about the panel", lines)
+        self.assertIn("To: NOT SUPPLIED", lines)
+        self.assertIn("Status: DRAFT ONLY", lines)
+        self.assertIn("Missing, and not guessed:", lines)
+        self.assertIn("Nothing was sent and nothing was created", lines)
+        self.assertIn("Operation id: email-", lines)
+        self.assertIn("nothing was sent", app.status.get())
+        self.assertEqual(FILEDIALOG.opened, None)
+        self.assertEqual(
+            [item.name for item in Path(self._directory.name).iterdir()
+             if item.name not in ("logs", "handlers.sqlite3", "window.sqlite3")],
+            [],
+            "a draft must not write a file",
+        )
+
+    def test_the_draft_does_not_move_the_application(self):
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ("j1",)
+        before = app.store.get_tracker("j1")
+
+        with mock.patch.object(desktop.tk, "Toplevel", RecordingToplevel):
+            app._draft_follow_up_email()
+
+        after = app.store.get_tracker("j1")
+        self.assertEqual(after.status, before.status)
+        self.assertEqual(after.follow_up_on, before.follow_up_on)
+        self.assertEqual(after.follow_up_note, before.follow_up_note)
+
+    def test_the_draft_needs_a_selected_reminder(self):
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ()
+
+        app._draft_follow_up_email()
+
+        self.assertIn("Select an application", MESSAGES.titles("showinfo"))
+        self.assertEqual(RecordingToplevel.created, [])
+
+    def test_a_selection_that_has_gone_is_reported_rather_than_drafted_from(self):
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ("gone",)
+
+        app._draft_follow_up_email()
+
+        self.assertIn("Listing not found", MESSAGES.titles("showinfo"))
+        self.assertEqual(RecordingToplevel.created, [])
+
+    def test_an_application_without_a_recorded_day_is_refused_with_the_reason(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "window.sqlite3")
+        self.addCleanup(app.store.close)
+        app.store.save_job(sample_job())
+        app.store.save_tracker(desktop.ApplicationTracker("j1"))
+        app._refresh_follow_ups()
+        app.follow_up_tree.selected = ("j1",)
+        RecordingToplevel.created = []
+
+        app._draft_follow_up_email()
+
+        self.assertIn("Nothing to draft from", MESSAGES.titles("showinfo"))
+        self.assertIn("no follow-up day recorded", MESSAGES.text("showinfo"))
+        self.assertEqual(RecordingToplevel.created, [])
+
+    def test_a_database_that_cannot_be_read_refuses_the_preview_instead_of_drawing_one(self):
+        _root, app = self.reminders_tab()
+        app.store.close()
+
+        app._preview_calendar_export()
+
+        self.assertIn("Local database unavailable", MESSAGES.titles("showerror"))
+        self.assertNotIn("Traceback", MESSAGES.text("showerror"))
+        self.assertEqual(RecordingToplevel.created, [])
+
+    def test_a_database_that_cannot_be_read_refuses_the_draft_too(self):
+        _root, app = self.reminders_tab()
+        app.follow_up_tree.selected = ("j1",)
+        app.store.close()
+
+        app._draft_follow_up_email()
+
+        self.assertIn("Local database unavailable", MESSAGES.titles("showerror"))
+        self.assertEqual(RecordingToplevel.created, [])
+
+
 class WindowShutdownTests(HandlerTestCase):
     """Closing the window: the store is closed, the window is destroyed, nothing is written.
 

@@ -2328,3 +2328,84 @@ floor, the zero-denominator sentence, the offers statement, the caveats or the e
 the suite.
 
 **Test reading.** 1399 tests, `OK (skipped=13)` - 1339 before this increment. No assertion was weakened.
+
+## 2026-10-15 — Email and calendar: the interface, with every path to a side effect switched off
+
+**What changed.** `career_agent/integrations.py` is a new module holding the email and calendar contract, and it
+deliberately contains no provider. `EmailDraft` (subject, body, the application it belongs to, a recipient only
+if one is supplied, a purpose, a stable operation id) and `CalendarEventRequest` (title, day, and - only when
+the person records them from an invitation - a start time, a duration and an IANA timezone name, plus notes)
+are values. `preview_email` and `preview_event` turn one into the lines a person would read, list what is
+*missing* separately from what is merely imprecise, and have no side effect of any kind: no ledger entry, no
+attempt, no write. Performing anything goes through an `Integration`: the default is a `DisabledIntegration`
+that refuses every request with an explicit `disabled` result naming the reason and what to do instead, and
+nothing in configuration, the environment, a stored value or a command selects anything else. The one
+implementation that performs anything is `LocalMockIntegration`, which records operations in a
+`IntegrationLedger` (memory, or an owner-only file) and contacts nothing - and it is chosen only by naming it
+(tests, or `--mock-ledger PATH`).
+
+**Why the shape, and not a provider behind a flag.** A real provider needs credentials, an authorization
+decision and provider-side idempotency, in that order, and each is a decision with evidence behind it rather
+than a setting. `ENABLEMENT_REQUIREMENTS` holds the seven conditions as data, printed by
+`--integration-status`: an approved provider and scope; credentials in the OS keyring with a documented way to
+revoke them; provider-side idempotency (a client cannot prove that a request it never saw answered did not
+arrive - without the provider refusing the repeat, the honest answer is "unknown", and this app will not
+guess); a data-minimization statement written before the first request; an off-by-default switch with a
+visible state; failure handling that cannot lie; and a provider-level test path, because a local mock proves
+this module's bookkeeping and not a provider's behaviour.
+
+**Idempotency is structural, not a flag.** An operation id is a SHA-256 digest of the operation's own content
+(no timestamp: a clock would make every attempt a new operation, which is exactly the bug idempotency keys
+exist to prevent), so the same draft asked for twice produces the same id and is reported as `duplicate`
+rather than performed again. A failed attempt is **not** recorded as done, so `dispatch_with_retry` may retry
+with the same key and still perform the operation once. A key already recorded against a *different* kind of
+operation is refused (`invalid`, naming the recorded kind) rather than treated as a repeat, because one key
+must mean one operation. A ledger that exists and cannot be read raises instead of being treated as empty:
+"I could not read the record of what I have already done" and "I have done nothing" are the same thing only in
+a system that is about to do it twice. A ledger write that fails is reported as `failed`, not `completed`.
+
+**Nothing is inferred.** A draft with no address is a valid draft with one missing fact, printed as
+`To: NOT SUPPLIED - this application never guesses an address`; nothing derives an address from an employer's
+name. An event with no time is an all-day entry with the gap stated (`Not recorded, and not invented`), never a
+guessed appointment; a time requires a duration and a named timezone, a timezone without a time is refused
+rather than reinterpreted, a zone-aware `time` is refused so the two cannot disagree, and a name the platform's
+tz database does not know is refused too (an unknown zone would otherwise travel to a provider or move the
+event).
+
+**What a person can actually do with it.** On the reminders tab: **Preview the calendar export** (the events
+the local `.ics` file would hold, read-only) and **Draft a follow-up email** (built from the recorded employer,
+role, follow-up day and note). On the command line: `--integration-status`, `--preview-calendar-export`,
+`--draft-follow-up LISTING_ID [--recipient ADDRESS] [--save-draft PATH]`, and `--record-follow-up LISTING_ID`
+(disabled with no mock named). The two new dialogs reuse one extracted `_open_read_only_dialog` shell that the
+progress report now also uses, so there is one read-only surface rather than three; the window's geometry and
+its widget choices are unchanged. The "listing is gone" branch of the reminder lookup is defensive and is
+tested against a store double, because the store's foreign key makes that state unreachable through its own
+API - the test says so rather than pretending it is a live path.
+
+**Reuse, not a second exporter.** `career_agent/followups.py` gained `event_uid(reminder)` and
+`event_summary(reminder)`, and the `.ics` writer now calls them; the export preview calls the same two, so a
+preview cannot promise a different event from the one the file will hold. The export itself is unchanged:
+all-day entries, no `ATTENDEE`, no `ORGANIZER`, no URLs, owner-only file, and an existing file is never
+replaced silently.
+
+**Verified by running, not by reading.** 82 tests in `tests/test_integrations.py` (draft and event validation
+including every refusal for a bad address, a duration without a time, a zone-aware time and an unknown
+timezone; preview accuracy and purity; the disabled default for both kinds of operation; the mock's success,
+duplicate, failure, retry, collision and ledger-write-failure paths; ledger round trip, damage and version
+refusal; the export preview against the real `.ics` document; and the operation id's stability across three
+fresh interpreters with different hash seeds). 35 more in `tests/test_cli_integrations.py` (status creates no
+database; the preview writes nothing; the draft is printed in full, saved owner-only when asked, refused over
+an existing file, and refused for an unknown listing, a missing follow-up day and a bad address; the mock
+records once and reports a repeat; the timed path and each of its refusals; every orphan option refused with
+the reason; and the database byte-for-byte unchanged, with no new file, after the read-only commands). 10 more
+cover the two desktop surfaces and their refusals, and the no-network suite now runs the whole
+draft-and-record sequence in an interpreter where creating a socket raises, so "contacts nothing" is a property
+of the process rather than a promise in a docstring. Mutation-checked with fifteen mutations (a space allowed
+inside an address, the recipient dropped from the identity, the disabled integration reporting success, the
+mock forgetting what it did, a ledger write failure reported as success, a missing timezone, a preview claiming
+a message would be sent, a retry repeating an invalid request, a guessed recipient, a preview disagreeing with
+the export, an ignored orphan option, a command performing without a named mock, a time read as UTC, a draft
+produced for an application with no day, and a preview writing the file it previews): every one failed the
+suite.
+
+**Test reading.** 1527 tests, `OK (skipped=13)` - 1399 before this increment. No assertion was weakened.

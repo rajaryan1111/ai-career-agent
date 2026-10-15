@@ -54,6 +54,17 @@
 - After the user configures a standing automation policy, do not ask for per-job approval for every routine action that falls inside that policy and is explicitly permitted by the platform/employer. Auto-submit only for supported workflows that pass source permission, eligibility, truthfulness, duplicate, and reliability gates.
 - Pause only the affected application when mandatory facts are missing/conflicting, a sensitive or legally significant declaration needs judgment, an assessment/custom response is restricted, CAPTCHA/OTP or a prohibited/unsupported step appears, or the result is ambiguous. Continue independent safe tasks.
 - Treat standing authorization as scoped and revocable; it does not override platform rules, employer instructions, privacy consent, or the need to avoid false statements.
+- Never claim a message was sent or an event created unless the integration that performed it says so, and
+  never perform either from a routine tracker update, a schedule, or a draft being written.
+  **Implemented as an invariant (2026-10-15):** `career_agent/integrations.py` separates preparing from
+  performing. A draft or an event is a value; previewing one produces text and no side effect; performing one
+  goes through an integration, and the default refuses every request with a `disabled` result naming the
+  reason. The only implementation that performs anything is an explicitly named local mock, which records the
+  operation in a ledger and contacts nothing. Every operation carries an id derived from its own content, so a
+  repeat is reported as a duplicate, a failed attempt is not recorded as done (a retry is allowed and still
+  performs it once), and an id already recorded for a different kind of operation is refused rather than
+  guessed at. Nothing infers a recipient address, an interview time or a timezone: each is either supplied by
+  the person or reported as missing.
 
 ## 6. Privacy and security
 

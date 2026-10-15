@@ -101,6 +101,17 @@ Exit criteria: each advertised source/workflow has current permission evidence, 
 
 Tasks: optional least-privilege email integration; confirmation and interview detection; follow-up drafts/reminders; job-specific truthful resume/cover-letter versions; company research with evidence; and career analytics that separate activity metrics from outcomes.
 
+**Started, deliberately without the integration (2026-10-15).** The parts of this phase that need no
+permission are implemented: follow-up email drafts built from an application's own recorded context, previews
+of the calendar output before anything is written, and the typed contract a real provider would have to
+satisfy (prepare / preview / perform, with an explicit result and a stable operation id). Every path to an
+external side effect is closed: the default integration refuses with a reason, no configuration selects
+another, and the only implementation that performs anything is a local mock that records operations in a local
+ledger and contacts nothing. Enabling a real provider stays gated on the seven conditions
+`--integration-status` prints, which is the same evidence-first rule the source gate uses. The remaining tasks
+of this phase - confirmation and interview detection from real email, and any account connection - stay
+unstarted and untested, and the docs say so rather than implying a capability.
+
 Exit criteria: integrations are revocable, external data boundaries are explicit, and all generated claims are traceable to verified candidate facts or cited sources.
 
 ## Phase 8 — Pilot, release, and continuous maintenance
@@ -115,7 +126,7 @@ Exit criteria: installation, upgrades, recovery, privacy/security checks, and pi
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 1077 tests passing locally (13 skip without the optional `pypdf` library) and a
+implemented, with 1527 tests passing locally (13 skip without the optional `pypdf` library) and a
 Python 3.10–3.12 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout. The suite also holds the safety properties an audit

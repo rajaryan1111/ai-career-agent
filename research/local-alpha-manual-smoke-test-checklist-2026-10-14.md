@@ -321,6 +321,46 @@ check below is about what the window and the terminal *say*, which unit tests ca
     database yet, create no file, and exit with status 0. Then confirm `--history --analytics` together are
     refused by the argument parser with status 2.
 
+## Email and calendar interfaces (added 2026-10-15)
+
+There is no email account and no calendar account, and none can be enabled. These checks are about what the
+window and the terminal *say* and about what does **not** happen: that a draft stays text, that a preview
+writes nothing, and that the only thing able to perform an operation is a named local mock that contacts
+nothing. Only a real machine with real mail/calendar clients open can show that nothing was sent and no
+account was touched, which is why they are here and not in the suite.
+
+86. [ ] Open the **Follow-ups** tab. It must offer **Preview the calendar export** and **Draft a follow-up
+    email** beside the existing controls, and there must be no button, menu item or setting anywhere in the
+    window that connects an account, sends a message, or invites anybody.
+87. [ ] Press **Preview the calendar export** with at least one follow-up recorded. A read-only dialog must
+    list each event as `<day>: Follow up: <role> at <employer>  [follow-up-<id>-<day>@ai-career-agent.local]`,
+    state that nothing has been written yet and that every event is an all-day entry with no attendee, and
+    close with **Close**, Escape and Return. Before and after, the folder holding the database must contain
+    no new `.ics` file.
+88. [ ] Press **Draft a follow-up email** with no row selected: it must ask you to select a reminder, and
+    open nothing. With a reminder selected, the dialog must show the subject, the full body, `To: NOT
+    SUPPLIED`, `Status: DRAFT ONLY`, an `Operation id: email-...`, the "Missing, and not guessed" line for
+    the recipient, and a line saying nothing was sent and nothing was created.
+89. [ ] While that draft dialog is open, check the application's status, its follow-up day and its note, and
+    the reminders list: none may change. Select and copy the draft text out of the dialog by hand; nothing
+    must be written to disk by copying.
+90. [ ] With a mail client configured on this machine, draft a follow-up and watch for any mail window,
+    toast, outbox entry or "draft saved" notice. There must be none: this app cannot reach a mail client.
+91. [ ] Run `python -m career_agent --integration-status` (add `--database /tmp/nothing-here.sqlite3` to be
+    sure). It must print that nothing is enabled, list the seven conditions a real provider would need, end
+    by saying nothing was sent or created, exit with status 0, and create no database file.
+92. [ ] Run `--preview-calendar-export`, then `--calendar-to <file>.ics`, and compare: every UID and summary
+    in the written file must be one the preview listed. Open the `.ics` in a text editor and confirm it
+    contains no `ATTENDEE`, no `ORGANIZER` and no URL, and that the file is owner-only on this platform.
+93. [ ] Try the refusals: `--draft-follow-up <unknown id>`, `--recipient a@b.example` on its own, `--at 10:30`
+    without `--timezone`, `--minutes 30` without `--at`, and `--mock-ledger <path>` on its own. Each must
+    print a reason, say nothing was written (or created), exit with status 2, and write no file.
+94. [ ] Run `--record-follow-up <listing id>` with no mock named: it must print `[disabled]`, say nothing was
+    sent or created, and exit 2. Then run it with `--mock-ledger <file>` twice: the first run must print
+    `[completed]` and record exactly one operation in the file, the second must print `[duplicate]` and add
+    nothing. While both runs happen, watch the machine's network activity and any calendar client: there must
+    be no connection to a mail or calendar provider and no new event in any calendar.
+
 ## Record results
 
 For each operating system tested, record:

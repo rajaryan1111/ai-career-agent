@@ -25,11 +25,14 @@ from .core import (
 )
 from . import __version__
 from . import analytics
+from . import integrations
 from .config import database_path_for_run
 from .event_log import record_event
 from .handlers import seed_default_tasks
 from . import importer as import_export
-from .followups import FollowUpState, calendar_file_name, reminders, summary, to_calendar
+from .followups import (
+    FollowUpState, calendar_file_name, reminder_for, reminders, summary, to_calendar,
+)
 from .matching import DISCLAIMER as MATCHING_DISCLAIMER, FactorStatus, assess
 from .preparation import (
     ActionKind, actions as next_actions, interview_summary, preparation_summary,
@@ -300,19 +303,17 @@ class CareerAgentApp:
             return
         self.progress_summary.set(report.headline())
 
-    def _show_progress_report(self):
-        """Open the whole report in a read-only, scrollable dialog. Writes nothing."""
-        try:
-            report = analytics.report_from_store(self.store, today=datetime.now().date())
-        except (StoredRecordError, TrackerStatusError) as exc:
-            self._report_unreadable_record(exc)
-            return
-        except sqlite3.Error as exc:
-            self._report_database_unavailable(exc)
-            return
+    def _open_read_only_dialog(self, *, title: str, heading: str, intro: str):
+        """Open a fixed-size, read-only, scrollable dialog and return the frame to fill with lines.
 
+        One surface for every "here is what this application would show you" text: the same size as the
+        progress report, closed by Escape or Return, with a single Close button. The text is labels rather
+        than an editable widget, so there is nothing here to type into or accidentally change; a caller
+        that needs to produce an action still has to provide its own button, and no caller gets one from
+        this helper.
+        """
         dialog = tk.Toplevel(self.root)
-        dialog.title("Progress from your records (read-only)")
+        dialog.title(title)
         dialog.transient(self.root)
         dialog.geometry("900x640")
         dialog.minsize(620, 400)
@@ -325,14 +326,8 @@ class CareerAgentApp:
 
         header = ttk.Frame(dialog, padding=(12, 12, 12, 6))
         header.pack(fill=X)
-        ttk.Label(header, text=f"Progress computed for {report.generated_on.isoformat()} (this machine's day)",
-                  font=("TkDefaultFont", 11, "bold")).pack(anchor=W)
-        ttk.Label(
-            header,
-            text=("Nothing here is read from anywhere but this database, and nothing here is sent "
-                  "anywhere. Every figure is a count of what you recorded."),
-            wraplength=820, justify="left",
-        ).pack(anchor=W, pady=(4, 0))
+        ttk.Label(header, text=heading, font=("TkDefaultFont", 11, "bold")).pack(anchor=W)
+        ttk.Label(header, text=intro, wraplength=820, justify="left").pack(anchor=W, pady=(4, 0))
 
         body = ttk.Frame(dialog)
         body.pack(fill=BOTH, expand=True, padx=12, pady=(0, 4))
@@ -359,15 +354,37 @@ class CareerAgentApp:
         canvas.bind("<Configure>", fit_width)
         canvas.bind("<MouseWheel>", scroll_units)
         scrolled.bind("<MouseWheel>", scroll_units)
+        return scrolled
 
-        for line in report.describe():
-            # A blank line is spacing; a short line with no leading indent is a section heading.
+    def _add_read_only_lines(self, parent, lines) -> None:
+        """Pack plain read-only lines into a dialog body, wrapping the long ones."""
+        for line in lines:
             if not line:
-                ttk.Label(scrolled, text="").pack(anchor=W)
+                ttk.Label(parent, text="").pack(anchor=W)
             elif not line.startswith(" ") and line.count(":") <= 1:
-                ttk.Label(scrolled, text=line, font=("TkDefaultFont", 10, "bold")).pack(anchor=W, pady=(6, 0))
+                ttk.Label(parent, text=line, font=("TkDefaultFont", 10, "bold")).pack(anchor=W, pady=(6, 0))
             else:
-                ttk.Label(scrolled, text=line, wraplength=830, justify="left").pack(anchor=W)
+                ttk.Label(parent, text=line, wraplength=830, justify="left").pack(anchor=W)
+
+    def _show_progress_report(self):
+        """Open the whole report in a read-only, scrollable dialog. Writes nothing."""
+        try:
+            report = analytics.report_from_store(self.store, today=datetime.now().date())
+        except (StoredRecordError, TrackerStatusError) as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+
+        scrolled = self._open_read_only_dialog(
+            title="Progress from your records (read-only)",
+            heading=f"Progress computed for {report.generated_on.isoformat()} (this machine's day)",
+            intro=("Nothing here is read from anywhere but this database, and nothing here is sent "
+                   "anywhere. Every figure is a count of what you recorded."),
+        )
+
+        self._add_read_only_lines(scrolled, report.describe())
         self.status.set("Progress report opened: read-only, computed from the records in this database.")
 
 
@@ -1291,6 +1308,10 @@ class CareerAgentApp:
                    command=self._set_follow_up).pack(side="left", padx=8)
         ttk.Button(actions, text="Clear the selected follow-up",
                    command=self._clear_follow_up).pack(side="left", padx=8)
+        ttk.Button(actions, text="Preview the calendar export",
+                   command=self._preview_calendar_export).pack(side="left", padx=8)
+        ttk.Button(actions, text="Draft a follow-up email",
+                   command=self._draft_follow_up_email).pack(side="left", padx=8)
         ttk.Button(actions, text="Export to a calendar file",
                    command=self._export_follow_ups).pack(side="left", padx=8)
         ttk.Label(
@@ -1298,7 +1319,9 @@ class CareerAgentApp:
             text=("A follow-up is a day you plan to act on, not a status: setting one never moves the "
                   "application, and nothing here contacts anybody. The daily reminder task reads this "
                   "list and reports it in the run history; the calendar export writes a file on this "
-                  "machine for your own calendar."),
+                  "machine for your own calendar. A draft written here is text in this window - it "
+                  "cannot be sent, because no email account is connected and none can be enabled in "
+                  "this build."),
         ).pack(anchor=W, pady=(0, 8))
         entry = ttk.Frame(self.follow_up_tab)
         entry.pack(fill=X, pady=(0, 8))
@@ -1507,6 +1530,97 @@ class CareerAgentApp:
                                  parent=self.root)
             return
         self.status.set(f"Wrote {len(found)} reminder(s) to {written}; nothing was sent anywhere.")
+
+    def _preview_calendar_export(self):
+        """Show which events the calendar export would write, without writing anything.
+
+        The working calendar path in this application is a local ``.ics`` file, so this is the preview of
+        something that already exists rather than of an integration that does not. It uses the same reminder
+        list and the same follow-up functions the export uses, so it cannot describe a different event from
+        the one the file would hold.
+        """
+        try:
+            trackers = self.store.list_follow_up_trackers()
+            pairs = [(tracker, self.store.get_job(tracker.listing_id)) for tracker in trackers]
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        today = datetime.now().date()
+        found = reminders([(tracker, job) for tracker, job in pairs if job is not None], today)
+        if not found:
+            messagebox.showinfo(
+                "Nothing to preview",
+                "No follow-up days are recorded, so there would be nothing to put in a calendar.",
+                parent=self.root)
+            return
+        plan = integrations.calendar_export_plan(found)
+        scrolled = self._open_read_only_dialog(
+            title="Calendar export preview (read-only)",
+            heading=f"What the calendar file would contain, for {today.isoformat()} (this machine's day)",
+            intro=("This is the local export, not an account: it is a file on this machine that you import "
+                   "into whatever calendar you already use. Nothing has been written yet, and no invitation "
+                   "is involved."),
+        )
+        self._add_read_only_lines(scrolled, plan.describe())
+        self._add_read_only_lines(scrolled, (
+            "",
+            "To write it: 'Export to a calendar file' on this tab.",
+            "Each event is an all-day entry on the day you recorded, with your own note and no attendee.",
+        ))
+        self.status.set(f"Calendar export previewed: {len(plan.events)} event(s) would be written; "
+                        "nothing has been written yet.")
+
+    def _draft_follow_up_email(self):
+        """Write a follow-up email draft for the selected reminder, in this window, for reading only.
+
+        The draft comes from what is already recorded - employer, role, the day you chose, your note - and
+        from nothing else. It carries no recipient, because no address is stored anywhere in this
+        application and guessing one would send a private message to a stranger; there is also nothing that
+        could send it, since no email integration is enabled in this build.
+        """
+        listing_id = self._selected_follow_up_id()
+        if not listing_id:
+            messagebox.showinfo("Select an application",
+                               "Select the reminder this draft is about first.", parent=self.root)
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+            job = self.store.get_job(listing_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if tracker is None:
+            self._report_stale_selection(listing_id)
+            return
+        if job is None or tracker.follow_up_on is None:
+            messagebox.showinfo(
+                "Nothing to draft from",
+                "This application has no follow-up day recorded, so there is no follow-up to write about. "
+                "Set the day on this tab first.",
+                parent=self.root)
+            return
+        today = datetime.now().date()
+        draft = integrations.draft_for_follow_up(reminder_for(tracker, job, today))
+        integration = integrations.default_integration()
+        preview = integrations.preview_email(draft, integration=integration, listing=job)
+        scrolled = self._open_read_only_dialog(
+            title="Follow-up email draft (read-only, nothing is sent)",
+            heading=f"Draft for {job.role_title} at {job.employer_name}",
+            intro=("This is text in a window. No email account is connected, no integration is enabled, and "
+                   "nothing here can send anything - the draft is yours to read, copy out, or ignore."),
+        )
+        self._add_read_only_lines(scrolled, preview.describe())
+        self._add_read_only_lines(scrolled, ("", "The draft in full:"))
+        for line in integrations.draft_as_text(draft).rstrip("\n").splitlines():
+            ttk.Label(scrolled, text=line, wraplength=830, justify="left").pack(anchor=W)
+        self.status.set("Draft written in this window only: nothing was sent, and no email account is "
+                        "connected.")
 
     def _refresh_scheduler(self):
         """Re-read the schedule and the run history; change nothing.

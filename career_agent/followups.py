@@ -203,6 +203,21 @@ def to_calendar(
     return "\r\n".join(_fold(line) for line in lines) + "\r\n"
 
 
+def event_uid(reminder: FollowUpReminder) -> str:
+    """The identity of one reminder's calendar event: derived from the listing and the day.
+
+    Public because two places need it to agree: the writer below, and any preview that tells a person what
+    re-importing an edited export will do (one changed event, not a duplicate). Deriving it from the listing
+    and the *day* means moving a reminder produces a new event and editing an unrelated application does not.
+    """
+    return f"follow-up-{reminder.listing_id}-{reminder.on.strftime('%Y%m%d')}@ai-career-agent.local"
+
+
+def event_summary(reminder: FollowUpReminder) -> str:
+    """The event's title, exactly as the calendar file writes it."""
+    return f"Follow up: {reminder.role_title} at {reminder.employer_name}"
+
+
 def _events_for(reminder: FollowUpReminder, stamp: str) -> list[str]:
     """The calendar lines for one reminder: an all-day event on its day."""
     day = reminder.on.strftime("%Y%m%d")
@@ -220,13 +235,13 @@ def _events_for(reminder: FollowUpReminder, stamp: str) -> list[str]:
     )
     return [
         "BEGIN:VEVENT",
-        f"UID:follow-up-{reminder.listing_id}-{day}@ai-career-agent.local",
+        f"UID:{event_uid(reminder)}",
         f"DTSTAMP:{stamp}",
         # DTSTART is a DATE (not a DATE-TIME) because an all-day reminder has no invented time of day,
         # and DTEND is exclusive, the following day.
         f"DTSTART;VALUE=DATE:{day}",
         f"DTEND;VALUE=DATE:{next_day}",
-        f"SUMMARY:{_escape('Follow up: ' + reminder.role_title + ' at ' + reminder.employer_name)}",
+        f"SUMMARY:{_escape(event_summary(reminder))}",
         f"DESCRIPTION:{_escape(chr(10).join(description_parts))}",
         "TRANSP:TRANSPARENT",
         "END:VEVENT",
