@@ -391,6 +391,14 @@ summarised here with the evidence this audit produced:
    records what it measured — including the write-refusal wording defect that case exposed.
 7. Branch protection, a signed tag and a release archive: none exist, and no package has been published.
 
+**Where the phase-level verdict now lives (2026-10-16).** This audit lists the flags that keep the
+product from being release-ready; the per-phase verdict, with the evidence beside each phase, is the
+audited table in [`phases.md`](../phases.md) — Phase 0 complete, Phases 1, 1B, 2, 5 and 7 partially
+complete, Phases 3 and 6 blocked, Phases 4 and 8 not started. The distinction that table is built to
+keep is the same one this audit keeps: implemented is not automated-tested, automated-tested is not
+human-accepted, and human-accepted is not release-ready. The run-book for the human half is
+[the desktop acceptance handoff](human-desktop-acceptance-handoff-2026-10-16.md).
+
 ## 11. Reproducing this rehearsal
 
 Outside the checkout, with a built wheel:
