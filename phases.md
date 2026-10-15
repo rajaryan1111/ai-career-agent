@@ -59,6 +59,15 @@ Tasks: finish the 50-record validation sample; measure direct employer applicati
 
 Exit criteria: documented evidence for each enabled source; quality thresholds met or explicitly revised with rationale; unresolved providers remain disabled. The current source-quality gate remains NOT PASSED until the research record says otherwise.
 
+**What would have to be true to leave this state (2026-10-16).** Three things, none of which this
+repository can produce by itself: (1) each candidate source's own terms re-read and recorded with a date
+and a quotation in `research/source-permission-decision-matrix-2026-10-14.md`, with the
+permission/accuracy decisions kept separate; (2) the 50-record validation sample finished with a stated
+denominator and its outcome recorded in `research/source-quality-gate-assessment-2026-10-14.md`; (3) an
+explicit decision that the gate's thresholds are met. The gate code is `career_agent/sources.py:30`
+(`SOURCE_QUALITY_GATE_PASSED`) and `enabled_discovery_sources()` stays empty until those records exist —
+nothing in the codebase needs to change to keep it closed, and nothing may be enabled while it is.
+
 Matching is implemented as a transparent comparison rather than a score:
 `career_agent/matching.py` reports required-skill overlap, the experience range, a stated qualification,
 location, work mode and role type as pass/partial/fail/unknown/not applicable, each with its evidence,
@@ -99,6 +108,15 @@ Exit criteria: reproducible evaluation results and explicit coverage gaps by occ
 **Status: Partially complete** — the engine and both local surfaces exist and are tested; a deployed
 always-on worker and laptop-off operation are unimplemented and unverified; what was missed is now reported, not run (audited 2026-10-16).
 
+**What would have to be true to finish this phase (2026-10-16).** The missing half is deployment, not
+code: a host that stays up, a decision about whether the person's data may leave their machine, and the
+disclosure that goes with it. The rules that govern it are already written — any remote worker must
+document what leaves the machine, minimise it, require explicit opt-in with a disable/revoke path, and
+default to synthetic fixtures — so the next step is a decision by the project owner plus an environment
+to deploy into, not a change to `career_agent/worker.py`. Until that decision exists, `--worker` remains a
+foreground process on the person's own machine, and the occurrence report above is what keeps a missed
+slot visible instead of silent.
+
 **Goal:** Deliver reliable 00:00/12:00 IST runs, including when the user's laptop is off.
 
 Tasks: design a durable queue and worker boundary; compare free/low-cost always-on deployment options; implement health status, missed-run catch-up, idempotent processing, bounded retries, rate limits, and per-source outcome reporting; clearly disclose any remote data transfer and provider limits.
@@ -123,6 +141,14 @@ reviews (audited 2026-10-16).
 Tasks: begin with read-only discovery adapters only after each source's permission gate passes; validate listing freshness and direct application routes; implement platform-specific preparation/submission adapters only when permitted; configure standing user policies; record all actions and evidence; pause only the affected workflow on uncertainty and continue independent safe work.
 
 Exit criteria: each advertised source/workflow has current permission evidence, deterministic fixtures, integration tests, failure recovery, duplicate protection, and real-world pilot validation. CAPTCHA/OTP, access-control, anti-bot, and employer restrictions are never bypassed.
+
+**What would have to be true to leave this state (2026-10-16).** Phase 3's exit criteria first — an
+adapter cannot be permitted before its source is — and then, per adapter: any credential obtained from the
+person with an explicit opt-in and a revocable store (which does not exist yet and would be a new threat
+model section, not an extension of the current one), deterministic fixtures that need no live service,
+integration tests that prove duplicate protection and failure recovery, and a real-world pilot with
+recorded evidence. Submission automation additionally needs a separately authorized workflow; until then
+`scripts/desktop_acceptance.py` and the CLI keep the local mock as the only thing that performs anything.
 
 ## Phase 7 — Email, interview lifecycle, and career intelligence
 
