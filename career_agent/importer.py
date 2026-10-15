@@ -13,7 +13,11 @@ planned and shown before anything is written.
   guessed at.
 * **A listing already stored is not replaced.** Identity is the canonical rule the rest of the app uses
   (`core.duplicate_key`), so an exported copy of a listing the person already has is *linked*, and its
-  first-seen time is left alone. The plan says so and does not touch the row.
+  first-seen time is left alone. The plan says so and does not touch the row. **Two files can disagree
+  about an identifier**, though: a record whose `listing_id` is already stored under a *different* identity
+  is refused rather than written, because `save_job` upserts by that id and would otherwise replace the
+  stored listing's own facts behind a report that says nothing was replaced. The same check applies inside
+  one file, where two records that share an identifier can only be one listing.
 * **An application is imported, its status is not asserted.** The record is created at the initial
   status - so the imported database knows an application exists here and can remind, follow up and take
   a note about it - and the file's later status is *reported as not imported*, with the reason. A stored
@@ -167,8 +171,8 @@ class ImportPlan:
                          f"({', '.join(_short_education(entry) for entry in self.new_education[:3])}"
                          f"{', ...' if len(self.new_education) > 3 else ''}).")
         if self.rejected:
-            lines.append(f"Records that cannot be read: {len(self.rejected)} (nothing is written for "
-                         "them):")
+            lines.append(f"Records that cannot be imported: {len(self.rejected)} (nothing is written "
+                         "for them):")
             for item in self.rejected[:PLAN_DETAIL_LIMIT]:
                 lines.append(f"  - {item.identifier}: {item.reason}")
             if self.truncated_rejections:
@@ -215,7 +219,7 @@ class ImportOutcome:
         if self.activity_added:
             parts.append(f"appended {self.activity_added} activity entr(ies)")
         if self.rejected:
-            parts.append(f"skipped {self.rejected} unreadable record(s)")
+            parts.append(f"skipped {self.rejected} unusable record(s)")
         return "; ".join(parts) if parts else "nothing was added"
 
 
@@ -421,7 +425,14 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
         raise ImportRefused("The document's jobs entry is not a list, so nothing was imported.")
     stored_jobs = store.list_jobs()
     stored_by_key = {duplicate_key(job): job for job in stored_jobs}
+    # Identity decides linking; the identifier decides whether a write can happen at all. The two are not
+    # the same rule, and this is the gap they leave: a record whose listing_id is already stored but whose
+    # identity differs matches nothing above, so it was planned as new - and `save_job`, which upserts by
+    # listing_id, then replaced the stored listing's payload. The row's facts changed, the report said
+    # "Nothing was replaced", and the tracker that names that id was left pointing at a different listing.
+    stored_ids = {job.listing_id for job in stored_jobs}
     file_keys: dict[str, str] = {}
+    file_ids: dict[str, int] = {}
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             plan = _with_rejection(plan, RejectedJob(
@@ -441,7 +452,20 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
                 parsed.listing_id,
                 f"it is the same application as record {file_keys[key]} earlier in this file"))
             continue
+        if parsed.listing_id in stored_ids:
+            plan = _with_rejection(plan, RejectedJob(
+                parsed.listing_id,
+                "this database already stores a different listing under that identifier, and a stored "
+                "listing is never replaced, so nothing was written for this record"))
+            continue
+        if parsed.listing_id in file_ids:
+            plan = _with_rejection(plan, RejectedJob(
+                parsed.listing_id,
+                f"it carries the same identifier as record {file_ids[parsed.listing_id]} earlier in this "
+                "file, and only one listing can be stored under an identifier"))
+            continue
         file_keys[key] = parsed.listing_id
+        file_ids[parsed.listing_id] = index
         plan.new_jobs = plan.new_jobs + (parsed,)
         plan = _plan_application_record(store, plan, record, parsed)
     if len(plan.rejected) > PLAN_DETAIL_LIMIT:

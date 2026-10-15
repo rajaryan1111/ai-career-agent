@@ -1656,9 +1656,18 @@ def workflow_e_export_import(run: Run) -> None:
             "the import was applied without showing what it would do first",
         )
         plan_text = policy.said("Import this file?") + policy.said("Import complete")
+        # The wording of the heading changed on 2026-10-16 ("cannot be read" -> "cannot be imported"),
+        # because a record refused for reusing a stored identifier is readable and simply must not be
+        # written. What this check is for is unchanged, so it asserts the promise rather than a heading:
+        # the plan says these records are not imported, says nothing is written for them, and names the
+        # one it is going to skip.
         require(
-            "cannot be read" in plan_text.lower(),
-            f"the plan does not mention the record it cannot read:\n{plan_text}",
+            "cannot be imported" in plan_text.lower(),
+            f"the plan does not mention the records it cannot import:\n{plan_text}",
+        )
+        require(
+            "nothing is written for them" in plan_text.lower(),
+            f"the plan does not say that nothing is written for a record it cannot import:\n{plan_text}",
         )
         require(
             "synthetic-import-3" in plan_text,

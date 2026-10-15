@@ -225,7 +225,7 @@ class ImportTestCase(unittest.TestCase):
         self.assertEqual(len(stored), 1, "the duplicate is written once")
         text = outcome.describe()
         self.assertIn("added 1 education record(s)", text)
-        self.assertIn("skipped 1 unreadable record(s)", text,
+        self.assertIn("skipped 1 unusable record(s)", text,
                       "the record the write refused is counted among the skipped, not hidden")
 
     def test_a_file_full_of_bad_records_imports_no_history_at_all_and_says_so(self):
@@ -241,7 +241,7 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual(store.list_work_history(), (), "no partial writes from a rejected batch")
 
         text = outcome.describe()
-        self.assertIn("skipped 2 unreadable record(s)", text)
+        self.assertIn("skipped 2 unusable record(s)", text)
         self.assertNotIn("employment record", text, "nothing was added, so nothing is claimed")
 
     def test_an_import_never_mixes_a_files_history_into_records_that_are_already_here(self):
@@ -413,6 +413,59 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual(store.get_job("j1").employer_name, "My own edit")
             self.assertEqual(store.get_record_times("j1"), before,
                              "first_seen_at must not move because a file mentioned the listing")
+
+    def test_a_file_record_that_reuses_a_stored_identifier_is_refused_rather_than_written_over(self):
+        # Two exports can name different listings with the same identifier: identity for linking is
+        # ``duplicate_key`` (the URL here), while the row is keyed by ``listing_id`` and ``save_job`` is an
+        # upsert. So a record that matched no stored identity but reused a stored identifier used to
+        # overwrite the stored listing - facts and all - while the report said "Nothing was replaced".
+        with self.source_store() as store:
+            store.save_job(job("j1", url="https://jobs.example.invalid/from-the-file",
+                               employer="From The File", role="Data Engineer"))
+            source = self.folder / "file.json"
+            importer.write_export(store, source)
+        document = json.loads(source.read_text(encoding="utf-8"))
+        with self.target_store() as store:
+            store.save_job(job("j1", url="https://jobs.example.invalid/mine", employer="My Own Employer"))
+            before = store.get_job("j1")
+
+            plan = importer.plan_import(store, document, source=str(source))
+            outcome = importer.apply_import(store, document, source=str(source))
+            after = store.get_job("j1")
+
+        self.assertEqual(plan.new_jobs, (), "a stored identifier must not be planned as a new listing")
+        self.assertEqual(outcome.added_jobs, 0)
+        self.assertEqual(after, before, "the stored listing was replaced by the file's copy")
+        self.assertEqual(after.employer_name, "My Own Employer")
+        self.assertEqual(after.source_listing_url, "https://jobs.example.invalid/mine")
+        self.assertTrue(
+            any("j1" == rejection.identifier and "identifier" in rejection.reason
+                for rejection in plan.rejected),
+            plan.rejected,
+        )
+
+    def test_two_records_in_one_file_with_the_same_identifier_do_not_overwrite_each_other(self):
+        # The same clash inside a single file: both records have a different identity, so both were
+        # planned - and the second overwrote the first, while the count said two listings were added.
+        with self.source_store() as store:
+            store.save_job(job("j1", url="https://jobs.example.invalid/first", employer="First Employer"))
+            source = self.folder / "file.json"
+            importer.write_export(store, source)
+        document = json.loads(source.read_text(encoding="utf-8"))
+        second = dict(document["jobs"][0])
+        second["source_listing_url"] = "https://jobs.example.invalid/second"
+        second["employer_name"] = "Second Employer"
+        document["jobs"] = [document["jobs"][0], second]
+
+        with self.target_store() as store:
+            outcome = importer.apply_import(store, document, source=str(source))
+            stored = store.list_jobs()
+
+        self.assertEqual([item.listing_id for item in stored], ["j1"])
+        self.assertEqual(stored[0].employer_name, "First Employer",
+                         "the first record in the file is the one that is stored")
+        self.assertEqual(outcome.added_jobs, 1,
+                         "the report must count the listings that are really there, not the records read")
 
     def test_a_status_later_than_the_first_is_reported_rather_than_asserted(self):
         path, document = self.export_file(status=ApplicationStatus.SHORTLISTED)

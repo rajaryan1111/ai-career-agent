@@ -234,7 +234,7 @@ transition with evidence. Nothing was saved.
 | `--record-follow-up <id>` with no mock | `REFUSED: no calendar event was recorded (disabled)`, exit 2 |
 | `--add-role` with identical arguments | second `REFUSED: You already have a record for … starting …`, exit 2; one row |
 
-### 8.4 Three defects this pass fixed
+### 8.4 Four defects this pass fixed
 
 D19 (restoring the database from itself was accepted) and D20 (a non-finite `--poll-seconds` was accepted and
 made the worker poll with no delay, or die after starting). Both are written up with their regression tests in
@@ -269,6 +269,22 @@ and `...::test_the_cap_refusal_also_holds_for_a_name_with_glob_characters`. Each
 passes after it — the second handler test fails by walking past the cap and trying to back up a file that is
 not a database. The other glob in the tree belongs to the desktop harness and interpolates names the harness
 wrote itself.
+
+D29 was found by importing one export into a second database whose listing happened to use the same
+identifier for different content - a hand-edited file, or two machines, is enough. Linking is decided by
+`core.duplicate_key` (here, the listing URL), while the row is keyed by `listing_id` and `store.save_job` is
+an upsert by that id, so a record that matched no stored identity but reused a stored identifier was planned
+as new and then **replaced the stored listing's payload** - employer, URL and availability included - while
+the command printed "Nothing was replaced: a listing or profile already stored wins over the file's copy."
+Two records inside one file could do the same to each other, with the count claiming two listings had been
+added when one was left. `plan_import` now refuses any record whose identifier is already stored under a
+different identity, and any repeat of an identifier inside the file, naming the record and the reason;
+`tests/test_importer.py::ImportTestCase::test_a_file_record_that_reuses_a_stored_identifier_is_refused_rather_than_written_over`
+(before the fix the stored row came back as the file's copy) and
+`...::test_two_records_in_one_file_with_the_same_identifier_do_not_overwrite_each_other` (before: the second
+record won) are the regression tests. The refusal wording also changed from "Records that cannot be read" to
+"Records that cannot be imported", because a refused identifier is readable - it simply cannot be used
+without replacing something.
 
 ## 9. Verdict
 

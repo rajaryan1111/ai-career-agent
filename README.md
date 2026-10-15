@@ -408,9 +408,15 @@ the same plan the window shows. Refusals exit with status `2`.
 - The profile is imported only when you have none stored. If your database already has a profile, it is
   kept and the plan says so — an import never silently replaces the profile you filled in.
 - A listing that is already stored is **linked, never replaced**: identity is the same duplicate key the
-  rest of the app uses (source and listing id), the stored copy stays as it is, and the time it was first
-  seen here is not touched. An export therefore cannot overwrite a listing you edited or hide work you
-  did after it was written.
+  rest of the app uses (the requisition id, else the listing URL, else the source and listing id), the
+  stored copy stays as it is, and the time it was first seen here is not touched. An export therefore
+  cannot overwrite a listing you edited or hide work you did after it was written.
+- **Two files can disagree about an identifier.** If a record carries an identifier your database already
+  stores for a *different* listing — a different duplicate key — it is reported as not imported instead of
+  written, and the report says why: saving is an upsert by that identifier, so writing it would replace
+  your listing's facts behind a sentence claiming nothing was replaced. Two records sharing an identifier
+  inside one file are treated the same way, the first one winning, so the count of listings added is the
+  count really in the database.
 - Every application record in the file becomes a record here at `discovered`, the status a new record
   must start at. A later status in the file (say `shortlisted`) is **reported as not imported** rather
   than used: a confirmation you did not make in this app is exactly the evidence the tracker refuses to
