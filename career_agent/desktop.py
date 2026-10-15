@@ -80,15 +80,17 @@ def stored_status_text(row: dict | None) -> str:
 #: How wide text drawn right across a tab may wrap, in pixels.
 #:
 #: A label that wraps at more than the tab has room for asks for more width than the tab gives it, and Tk
-#: draws the difference outside the tab rather than short of it. Measured by the display-backed harness on
-#: run 38820361412 (2026-10-16): the notebook's page is 878 pixels wide when the window is at its own
-#: declared minimum of 900x600, and two of this window's own labels - wrapped at 900, as they were -
-#: reached 23 and 31 pixels past that page's right edge. 830 is the value the Work history and study tab
-#: has wrapped at since that tab gained a scrolling body: it leaves room for the vertical scrollbar a
-#: scrolling tab carries and for the padding inside the page, and every tab is at least that wide at the
-#: smallest size the window itself permits. A label standing in a narrow row beside a control is not part
-#: of this policy - it is wrapped to the width of the row it shares, which is smaller than any tab.
-_TAB_TEXT_WRAP = 830
+#: draws the difference outside the tab rather than short of it. The number has to hold on every platform,
+#: and the pages are not the same size: at this window's own declared minimum of 900x600 the notebook's page
+#: measured 878x483 on the Linux leg of run 38820361412 (2026-10-16) and only 826x453 on its macOS legs -
+#: where 832- and 828-pixel labels, wrapped at 830, reached 18 and 14 pixels past the page on run
+#: 38822542797. A scrolling tab is the tighter case still, because its canvas gives up the scrollbar's width
+#: to it: 826 - 24 of tab padding - 15 of scrollbar = 787, less a couple of pixels for Tk's own rounding of a
+#: wrapped line. 780 is that number with a little room, and it is not a preference about line length: at the
+#: smallest window this application permits, each platform's page must be able to hold what a tab asks for. A
+#: label standing in a narrow row beside a control is not part of this policy - it is wrapped to the width of
+#: the row it shares, which is smaller than any tab.
+_TAB_TEXT_WRAP = 780
 
 
 class CareerAgentApp:

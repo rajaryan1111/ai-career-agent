@@ -3132,3 +3132,22 @@ scroll and how wide a tab's text may ask to be; `phases.md` moves to 1778 tests.
 `SuiteConnectionLeakTests` fails on all four macOS/Windows legs and is unchanged by this work. No local
 machine here has a display, so the real-display verdict for this fix is the CI run on the commit that carries
 it - the structural tests pin what the window asks for, not whether Tk had room.
+**2026-10-16, this session — D34: the wrap had to fit the smallest page any platform gives, and two new tests errored on Windows.**
+The run carrying D33 (`38822542797` at `7ca7879`) is the first whose Linux display-backed job passed workflow K
+outright, and the first where `Background tasks` stopped being reported on any leg - so D33's fix is verified
+where it was measured. The same run then reported two things about D33. First, K1 failed on both macOS legs on
+two `Data safety` labels and nothing else: 832 px wide and 18 px past the page's right edge, 828 px and 14 px
+past it, against a notebook page of **826x453** at the window's own declared minimum of 900x600 - where the
+Linux page at the same window size is 878x483. One number taken from one platform cannot fit every page, so the
+constant came down from 830 to **780** (826 - 24 of tab padding - 15 of a scrolling tab's scrollbar - a little
+room for Tk's rounding of a wrapped line), and the test's own limit is now derived from the macOS page rather
+than the Linux one so that a number measured on one platform cannot pass on the other. Second, two of D33's
+three tests errored on both Windows legs: they closed the window's database in an `addCleanup`, which runs
+after the temporary folder's own cleanup, and Windows will not delete a file another program holds open - the
+same trap `StartupPathTests` documents, and invisible on Linux and macOS because POSIX unlinks regardless. Both
+now take the window from a context manager that closes it inside the folder's block. Recorded as section 24 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`, with the section 23 wrap number marked superseded
+rather than rewritten. Still open on this run: `SuiteConnectionLeakTests` on every macOS and Windows leg.
+Verified locally: the three desktop suites together (376 tests, `OK`), the full suite 1778 tests
+`OK (skipped=13)`, compileall clean.
+

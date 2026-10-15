@@ -8,6 +8,7 @@ These tests verify handler decisions, validation messages, and database-error
 handling. They do not verify rendering, theming, layout, or macOS behaviour; the
 manual smoke-test checklist in research/ is still required before GUI acceptance.
 """
+import contextlib
 import io
 import json
 import os
@@ -1088,24 +1089,33 @@ class TabLayoutPolicyTests(unittest.TestCase):
                 return frame
         raise AssertionError(f"the window has no tab named {name!r}; it has {app.tabs.labels()!r}")
 
-    def build_window(self, directory, name):
-        app = desktop.CareerAgentApp(Widget(), database_path=Path(directory) / name)
-        # Closed inside the block: a platform that will not delete a file another program holds open
-        # (Windows) otherwise fails the temporary folder's own cleanup and reports this as an error.
-        self.addCleanup(app.close)
-        return app
+    @contextlib.contextmanager
+    def open_window(self, name):
+        """A real window over a disposable database, closed before its folder is cleaned up.
+
+        Closing happens inside the temporary folder's own block, not in a cleanup: Windows will not delete a
+        file another program holds open, so a connection closed afterwards makes the folder's cleanup raise
+        and reports the test as an error - which is what this class did on the Windows legs of run
+        38822542797 before this was fixed.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            app = desktop.CareerAgentApp(Widget(), database_path=Path(directory) / name)
+            try:
+                yield app
+            finally:
+                app.close()
 
     #: How wide a label drawn across a tab may ask to be wrapped, in pixels.
     #:
-    #: The window declares 900 as its own minimum width. The notebook's page measured 878 pixels wide at
-    #: that size on the Linux job of run 38820361412 (2026-10-16), the tab's own padding takes 24 of those,
-    #: and the scrollbar a scrolling tab carries about 15 more. A label wrapped at more than this asks for
-    #: more width than its tab has, and Tk draws the difference outside the tab rather than short of it.
-    NARROWEST_TAB_TEXT_WIDTH = 900 - 22 - 24 - 15
+    #: The window declares 900x600 as its own smallest size, and the page it gets for that is the platform's
+    #: business: 878x483 on the Linux leg of run 38820361412 (2026-10-16), 826x453 on its macOS legs, where
+    #: labels wrapped at 830 reached 18 and 14 pixels past the page on run 38822542797. The tab's own padding
+    #: takes 24 of the width and the scrollbar a scrolling tab carries about 15 more, and Tk rounds a wrapped
+    #: line a pixel or two wide of the number it was given.
+    NARROWEST_TAB_TEXT_WIDTH = 826 - 24 - 15 - 2
 
     def test_every_label_drawn_across_a_tab_wraps_inside_the_narrowest_tab(self):
-        with tempfile.TemporaryDirectory() as directory:
-            app = self.build_window(directory, "wrap.sqlite3")
+        with self.open_window("wrap.sqlite3") as app:
             checked = 0
             for page, label in app.tabs.tabs:
                 for widget in acceptance.descendants(page):
@@ -1128,8 +1138,7 @@ class TabLayoutPolicyTests(unittest.TestCase):
         self.assertLessEqual(desktop._TAB_TEXT_WRAP, self.NARROWEST_TAB_TEXT_WIDTH)
 
     def test_content_taller_than_its_tab_is_reachable_rather_than_clipped(self):
-        with tempfile.TemporaryDirectory() as directory:
-            app = self.build_window(directory, "scroll.sqlite3")
+        with self.open_window("scroll.sqlite3") as app:
             page = self.page_named(app, "Background tasks")
             for tree in (app.tasks_tree, app.task_runs_tree):
                 container = acceptance.layout_container(tree, page)

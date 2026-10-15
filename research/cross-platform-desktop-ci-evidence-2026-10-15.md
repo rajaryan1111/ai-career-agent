@@ -884,7 +884,9 @@ about height at all.
 
 **The fix.**
 
-* One constant, `_TAB_TEXT_WRAP = 830`, is now the only width text drawn across a tab wraps at; the seventeen
+* One constant, `_TAB_TEXT_WRAP = 830` - **superseded by 780 in section 24, on the macOS measurement of this
+  fix's own run; the rest of this bullet still describes the mechanism** - is now the only width text drawn
+  across a tab wraps at; the seventeen
   labels (candidate profile, jobs, tracker activity, tracker progress summary, data safety, scheduler, work
   history, next actions, follow-ups) use it, and the comment beside it carries the arithmetic above. The
   read-only line helpers inside dialogs keep their own 830 for their own reason - they are not tabs - and the
@@ -917,3 +919,38 @@ what the window *asks for*, not whether Tk had room. The macOS pages are shorter
 application declares, and `judge_layout_at` reports both sizes and declines to judge a window below that
 minimum; on these legs it judged, so the fixed layout is being held to the same standard there. The
 `SuiteConnectionLeakTests` failure on all four macOS/Windows legs is unchanged by this work and remains open.
+
+## 24. D34 — the wrap number had to come down to the smallest page any platform gives, and two new tests errored on Windows (run 38822542797 at `7ca7879`, 2026-10-16)
+
+**How it was found.** The run that carried D33's fix is the first one whose Linux display-backed job passed workflow
+K outright (`Desktop smoke (Linux, display-backed): success` - K1, K2 and K3 green), and the first in which
+`Background tasks` stopped being reported on any leg. It also reported two things about D33 itself.
+
+**First: the wrap was still too wide for macOS.** K1 failed on both macOS legs with two `Data safety` labels and
+nothing else - `.!label2` 832 px wide and 18 px past the page's right edge, `.!label3` 828 px wide and 14 px
+past it - against a notebook page of **826x453** at the window's own declared minimum of 900x600. The Linux
+page at the same window size is 878x483. The pages are not the same size on different platforms, so a single
+number chosen from the Linux measurement cannot be right everywhere: 830 fits 878 and does not fit 826. A
+scrolling tab is tighter still, because its canvas hands the scrollbar about 15 px of its width, and Tk rounds
+a wrapped line a pixel or two wide of the number it was given, so the constant is now **780** = 826 - 24 of tab
+padding - 15 of scrollbar - a little room. It is not a preference about line length; it is the largest number
+that holds on every page this application has been measured on at its own minimum size.
+
+**Second: two of D33's own three tests errored on both Windows legs** (`FAILED (failures=1, errors=2,
+skipped=46)`), and the errors were the class this repository has hit before: the test built a window over a
+database inside a temporary folder and closed the connection in an `addCleanup`, which runs *after* the folder's
+own cleanup - and Windows will not delete a file another program holds open. The macOS and Linux legs did not
+notice, because POSIX unlinks the file regardless. Both tests now take the window from a context manager that
+closes it inside the folder's block, with the reason written in its docstring, and the harness's own count is
+unchanged at three tests.
+
+**Regression tests.** The window-tests bug is pinned by the structure itself (the connection is closed before
+the folder is removed on every platform, not only the ones where that matters). The wrap is pinned by
+`TabLayoutPolicyTests.NARROWEST_TAB_TEXT_WIDTH`, which is now derived from the macOS page (826 - 24 - 15 - 2)
+rather than the Linux one, so a future number taken from one platform cannot pass on the other.
+
+**What is established by this run, and what is not.** Linux's display-backed job now passes workflow K with the
+D33 fix in place - a real display, measured. macOS's K1 is *expected* to pass with 780, and that expectation is
+not evidence: the next run on this commit is what says so. Windows' layout checks pass on this run's legs.
+`SuiteConnectionLeakTests` still fails on the macOS and Windows legs (unchanged by any of this, and still the
+one open defect from these runs).
