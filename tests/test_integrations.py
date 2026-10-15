@@ -621,7 +621,8 @@ class LedgerTests(unittest.TestCase):
 
         self.assertIs(result.outcome, integrations.Outcome.COMPLETED)
         self.assertTrue(self.ledger_path.exists())
-        self.assertEqual((self.ledger_path.stat().st_mode & 0o077), 0, "the ledger must be owner-only")
+        if os.name == "posix":  # owner-only where the platform has modes to check
+            self.assertEqual((self.ledger_path.stat().st_mode & 0o077), 0, "the ledger must be owner-only")
 
     def test_an_operation_recorded_by_one_run_is_a_duplicate_in_the_next(self):
         first = integrations.LocalMockIntegration(ledger_path=self.ledger_path)

@@ -280,6 +280,7 @@ class BackupCreationTests(BackupTestCase):
         self.assertFalse(destination.exists(), "an unverified backup must not survive on disk")
         self.assert_no_leftovers(destination)
 
+    @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
     def test_a_failure_to_protect_the_new_file_leaves_nothing_behind(self):
         live = populate(self.directory / "career_agent.sqlite3")
         destination = self.directory / "unprotected.sqlite3"
@@ -879,6 +880,11 @@ class RestoreTests(BackupTestCase):
         with CareerStore(str(live)) as store:
             self.assertEqual([job.listing_id for job in store.list_jobs()], ["j1"])
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "replacing a file another connection holds open is refused by the platform itself here, so the idle "
+        "connection is detected after all",
+    )
     def test_an_idle_connection_is_not_detected_and_sqlite_refuses_its_next_write(self):
         """Documents the limit of the coordination rather than claiming what it cannot establish.
 

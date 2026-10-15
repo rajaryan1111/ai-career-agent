@@ -718,12 +718,15 @@ class StartupPathTests(unittest.TestCase):
     def test_window_construction_and_refresh_paths_execute(self):
         with tempfile.TemporaryDirectory() as directory:
             app = desktop.CareerAgentApp(Widget(), database_path=Path(directory) / "startup.sqlite3")
+            # Closed inside the block: the connection holds the database file open, and a platform that
+            # will not delete a file another program has open (Windows) fails the folder's own cleanup -
+            # which reported this test as an error on the first Windows run rather than as a pass.
+            app.close()
         self.assertTrue(app.job_save_mode is desktop.JobSaveMode.NEW)
         self.assertIn("New listing", app.job_mode.get())
         self.assertEqual(app.job_vars["availability"].get(), "unknown")
         self.assertEqual(app.job_vars["scope"].get(), "unknown")
         self.assertEqual(app.db_path.name, "startup.sqlite3")
-        app.close()
         self.assertTrue(app.root.destroyed)
 
 
@@ -2691,6 +2694,7 @@ class ExportPrivacyTests(HandlerTestCase):
         self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL CONTENT THAT MUST SURVIVE")
         self.assertNotIn("ECE", victim.read_text(encoding="utf-8"))
 
+    @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
     def test_export_reports_failure_and_leaves_no_readable_candidate_data(self):
         with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
             self.app._export()

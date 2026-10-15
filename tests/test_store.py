@@ -2170,6 +2170,7 @@ class PrivateFileWriteTests(unittest.TestCase):
         self.assertIn("symbolic link", str(caught.exception))
         self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL CONTENT THAT MUST SURVIVE")
 
+    @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
     def test_a_failure_to_apply_the_mode_writes_no_candidate_data(self):
         target = self.directory / "blocked.json"
         with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
@@ -2239,6 +2240,7 @@ class PrivateFileCreationTests(unittest.TestCase):
 
         self.assertEqual(existing.read_text(encoding="utf-8"), "existing content")
 
+    @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
     def test_an_exclusive_open_that_cannot_secure_the_mode_removes_the_file_it_created(self):
         target = self.directory / "new.sqlite3"
         with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):

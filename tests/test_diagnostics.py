@@ -151,10 +151,14 @@ class PathRedactionTests(unittest.TestCase):
 
     def test_a_relative_folder_name_is_not_replaced_inside_ordinary_words(self):
         # A folder called "data" must be hidden where it is a path, and left alone where it is prose.
+        # The sample text is built with the platform's own separator: what is compared is a rendered path,
+        # and the module renders it the way the platform does - a forward slash is not a path separator on
+        # Windows, where this test failed for that reason alone.
+        relative_database = str(Path("data") / "db.sqlite3")
         untouched = "the data folder could not be used; data was not written"
-        self.assertEqual(redact_paths(untouched, database_path="data/db.sqlite3", home=Path("/home/someone")),
+        self.assertEqual(redact_paths(untouched, database_path=relative_database, home=Path("/home/someone")),
                          untouched)
-        self.assertEqual(redact_paths("cannot open data/db.sqlite3", database_path="data/db.sqlite3",
+        self.assertEqual(redact_paths(f"cannot open {relative_database}", database_path=relative_database,
                                       home=Path("/home/someone")),
                          "cannot open <database file>")
 

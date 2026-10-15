@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -246,7 +247,8 @@ class DraftFollowUpCommandTests(IntegrationCommandTestCase):
 
         self.assertEqual(code, 0, err)
         self.assertTrue(target.exists())
-        self.assertEqual(target.stat().st_mode & 0o077, 0, "a draft holds a private message")
+        if os.name == "posix":  # owner-only where the platform has modes to check
+            self.assertEqual(target.stat().st_mode & 0o077, 0, "a draft holds a private message")
         text = target.read_text(encoding="utf-8")
         self.assertIn("Status: DRAFT ONLY", text)
         self.assertIn("Data Engineer", text)
@@ -283,7 +285,8 @@ class DraftFollowUpCommandTests(IntegrationCommandTestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("[completed]", out)
         self.assertIn("No email was sent", out)
-        self.assertEqual(ledger.stat().st_mode & 0o077, 0)
+        if os.name == "posix":  # owner-only where the platform has modes to check
+            self.assertEqual(ledger.stat().st_mode & 0o077, 0)
         recorded = json.loads(ledger.read_text(encoding="utf-8"))
         self.assertEqual(recorded["ledger_version"], integrations.LEDGER_VERSION)
         self.assertEqual(len(recorded["operations"]), 1)

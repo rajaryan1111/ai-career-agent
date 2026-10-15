@@ -39,6 +39,10 @@ from career_agent.backup import validate_app_database
 from career_agent.core import Availability, JobListing
 from career_agent.store import SCHEMA_VERSION, CareerStore
 
+#: A path that is absolute on the platform running these tests. ``/srv`` is not one on Windows, where a
+#: path without a drive is relative, and the rules under test are about absolute paths being honoured.
+ABSOLUTE = Path(Path.cwd().anchor)
+
 
 def sample_job(listing_id: str = "j1") -> JobListing:
     return JobListing(
@@ -59,20 +63,20 @@ class SettingsTests(unittest.TestCase):
 
     def test_an_explicit_path_wins_over_the_environment(self) -> None:
         settings = resolve_settings(
-            database_path=Path("/tmp/named.sqlite3"),
-            environ={**self.environ, DATABASE_ENV: "/tmp/from-environment.sqlite3"},
+            database_path=ABSOLUTE / "tmp" / "named.sqlite3",
+            environ={**self.environ, DATABASE_ENV: str(ABSOLUTE / "tmp" / "from-environment.sqlite3")},
             home=self.home, system="Linux",
         )
-        self.assertEqual(settings.database_path, Path("/tmp/named.sqlite3"))
+        self.assertEqual(settings.database_path, ABSOLUTE / "tmp" / "named.sqlite3")
         self.assertEqual(settings.database_source, SOURCE_COMMAND_LINE)
         self.assertEqual(settings.notes, ())
 
     def test_an_absolute_environment_path_is_used(self) -> None:
         settings = resolve_settings(
-            environ={**self.environ, DATABASE_ENV: "/tmp/from-environment.sqlite3"},
+            environ={**self.environ, DATABASE_ENV: str(ABSOLUTE / "tmp" / "from-environment.sqlite3")},
             home=self.home, system="Linux",
         )
-        self.assertEqual(settings.database_path, Path("/tmp/from-environment.sqlite3"))
+        self.assertEqual(settings.database_path, ABSOLUTE / "tmp" / "from-environment.sqlite3")
         self.assertEqual(settings.database_source, SOURCE_ENVIRONMENT)
         self.assertFalse(settings.uses_default_location)
 
@@ -108,11 +112,12 @@ class SettingsTests(unittest.TestCase):
 
     def test_an_absolute_home_override_moves_both_the_folder_and_the_database(self) -> None:
         settings = resolve_settings(
-            environ={**self.environ, CAREER_AGENT_HOME_ENV: "/srv/career"},
+            environ={**self.environ, CAREER_AGENT_HOME_ENV: str(ABSOLUTE / "srv" / "career")},
             home=self.home, system="Linux",
         )
-        self.assertEqual(settings.default_data_folder, Path("/srv/career/ai-career-agent"))
-        self.assertEqual(settings.database_path, Path("/srv/career/ai-career-agent") / DATABASE_FILE_NAME)
+        moved = ABSOLUTE / "srv" / "career" / "ai-career-agent"
+        self.assertEqual(settings.default_data_folder, moved)
+        self.assertEqual(settings.database_path, moved / DATABASE_FILE_NAME)
 
     def test_a_relative_home_override_is_ignored_and_explained(self) -> None:
         settings = resolve_settings(
