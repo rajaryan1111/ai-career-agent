@@ -37,8 +37,9 @@ Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must
 
 ## Phase 2 — Product reliability and security foundation
 
-**Status: Partially complete** — migrations, backup/restore, permissions, logs and packaging metadata exist;
-encryption at rest and a release/upgrade policy do not (audited 2026-10-16).
+**Status: Partially complete** — migrations, backup/restore, owner-only file permissions, redacted logs, the
+[threat model](research/threat-model-2026-10-16.md) and packaging metadata exist; encryption at rest and a
+release/upgrade policy do not (audited 2026-10-16, threat model added the same day).
 
 **Goal:** Make the application recoverable, maintainable, and safe before external actions are enabled.
 

@@ -2835,4 +2835,27 @@ nan, inf, 0 and -1, plus a parser-level refusal for -inf). The command-line fail
 because the unfixed code starts the worker: nan ran until a six-second cap killed it (exit 124), inf exited 3.
 D20 is written up in `research/cross-platform-desktop-ci-evidence-2026-10-15.md` section 19, including what it
 does not establish (a finite but absurd interval such as 1e9 is the operator's own choice and is left alone).
+**2026-10-16, same session - the threat model, and a repeat-idempotence rehearsal.** Phase 2's remaining
+documented task was the threat model, and it was genuinely absent (the release-readiness audit does not
+contain one). It is now `research/threat-model-2026-10-16.md`: assets, six adversary classes, one control per
+threat with the test or code that enforces it, what is explicitly out of scope, and six residual risks named
+honestly - no encryption at rest, no single erase-everything command (records can each be deleted from the
+window and the database file can be removed, but backups, pre-restore snapshots, logs, exports, calendars and
+the mock ledger have to be found and deleted by hand), synchronised folders, exports that travel, Windows ACL
+semantics this project has no evidence about, and no release/upgrade policy. It is linked from `README.md`'s
+safety principles, from the Phase 2 line in `phases.md`, and from the research index.
+
+Writing it required a rehearsal rather than a claim, so a repeat-idempotence battery ran on disposable
+synthetic databases: file modes (every file the app writes came out `600`); the store refusing a new record
+that does not start at `discovered`, and one claiming confirmation without a recorded transition (both with
+"Nothing was saved"); backup twice (second `REFUSED`, never overwritten); restore twice from the same backup
+(both exit 0, snapshots named `-2` so they do not collide); seed twice (three tasks untouched); import twice
+(second adds nothing, the stored record wins, listings stay at 1); import without `--yes` (writes nothing);
+import with no database present (refused); `--calendar-to` twice (second refused); `--save-draft` twice
+(second refused); `--record-follow-up --mock-ledger` twice (second reports `[duplicate]`, ledger stays at one
+operation); `--record-follow-up` without a mock (`REFUSED … (disabled)`); identical `--add-role` twice (second
+refused by name, one row). No defect came out of the battery - the pattern it verifies is already the
+product's, and the point of running it was to be able to say so with commands and exit codes rather than by
+reading code. Phase 2 remains **Partially complete**: encryption at rest and a release/upgrade policy are
+still open, and the threat model claims nothing about either.
 

@@ -1000,6 +1000,7 @@ observed output in the [release-readiness audit](research/release-readiness-audi
 - Do not bypass source restrictions or add unapproved connectors.
 - A relevance score is not a hiring probability.
 - The current alpha does not submit applications. Future automated actions require source/employer permission, reliability evidence, and a scoped, revocable policy; no blanket permission is implied.
+- What the alpha defends against — and what it does not — is set out in [the threat model](research/threat-model-2026-10-16.md): no network path in the shipped code, owner-only files, refusals instead of destructive overwrites, and the residual risks named honestly (no encryption at rest, and no single erase-everything command).
 
 ## Project status
 
