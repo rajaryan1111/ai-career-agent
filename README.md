@@ -370,7 +370,8 @@ staged restores written beside it (`<database>.backup-*`, `.<database>.restore-�
 mock ledger you wrote to a path of your choosing. It names that limit instead of implying the machine is
 clean, so delete those yourself if you want them gone. It also never walks a folder: a file beside the
 database that this app did not write is reported and left alone, and a path that is a folder or a symbolic
-link is refused rather than followed. Nothing is created — no database, no folder, no log — the next time
+link is refused rather than followed, and the `logs` folder it looks in is the one folder it derives for
+itself: when that path is a symbolic link the logs inside it are left alone and named in the report, because the folder standing there is not the folder this application writes to. Nothing is created — no database, no folder, no log — the next time
 you start the app it builds a fresh empty database at that path, and running the command again after a
 successful removal reports that there is nothing left to remove.
 

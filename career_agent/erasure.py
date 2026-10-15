@@ -20,7 +20,11 @@ a folder: an unrecognised file beside the database is left where it is and named
 **How it is safe.** Planning is separate from deleting. The plan is a list of concrete paths with sizes,
 it is computed without creating anything, and nothing is removed until the caller passes
 ``confirmed=True``. A destination that exists but is not a regular file (a directory, or anything reached
-through a symbolic link) is refused rather than followed. After deleting, existence is re-checked: a
+through a symbolic link) is refused rather than followed, and the one folder this module *derives* rather
+than receives - the ``logs`` folder beside the database - is checked the same way: when it is a symbolic
+link, the logs inside it are left alone instead of being deleted through it, because the folder standing
+there is not the folder this application writes to. The database named on the command line is still
+removed in that case: that path is the one the person chose. After deleting, existence is re-checked: a
 command that did not remove what it listed must not report success.
 """
 from __future__ import annotations
@@ -134,10 +138,17 @@ def plan_erasure(database_path: Path) -> ErasurePlan:
             f"{database} is not a regular file, so it is not a database this command may remove. Nothing "
             "was planned and nothing will be deleted."
         )
+    logs = log_folder(database_path=database)
+    # The logs folder is the only directory this module derives instead of being given, so it is the only
+    # one whose own shape matters: a link standing in for it means the files inside belong to whatever the
+    # link points at, and a file that merely shares a log's name is not this application's to delete. The
+    # database's folder is deliberately not checked this way - the person named that path, and on some
+    # platforms a perfectly ordinary folder (``/tmp``, a home directory) is reached through a link.
+    logs_folder_is_a_link = logs.is_symlink()
     data_files = tuple(
         DataFile(path=path, size_bytes=_size_of(path), description=description)
         for path, description in _candidate_paths(database)
-        if _regular_file(path)
+        if _regular_file(path) and not (logs_folder_is_a_link and path.parent == logs)
     )
     refused = [
         path for path, _description in _candidate_paths(database)
@@ -148,6 +159,12 @@ def plan_erasure(database_path: Path) -> ErasurePlan:
         "cannot find those, so delete them yourself if you want them gone.",
         "Every other file in the folder, including anything this application did not write.",
     ]
+    if logs_folder_is_a_link:
+        left_alone.append(
+            f"{logs} is a symbolic link, so the logs inside it were left alone: the folder this "
+            "application writes to is not the folder that is there, and a file reached through a link may "
+            "belong to something else."
+        )
     left_alone.extend(f"{path} was left alone: it is not a regular file this command will delete." for path in refused)
     return ErasurePlan(database=database, data_files=data_files, left_alone=tuple(left_alone))
 

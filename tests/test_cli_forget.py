@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -131,6 +132,36 @@ class ErasurePlanTests(ErasureTestCase):
             plan.left_alone,
         )
         self.assertTrue(outcome.complete, "what remains is not a failure: it was never a candidate")
+
+    def test_a_logs_folder_that_is_itself_a_link_is_not_deleted_through(self):
+        self.make_data()
+        elsewhere = self.folder / "elsewhere"
+        elsewhere.mkdir()
+        same_name = elsewhere / "application.log"
+        same_name.write_text("a file in another folder that happens to share the name\n", encoding="utf-8")
+        shutil.rmtree(self.logs)
+        self.logs.symlink_to(elsewhere, target_is_directory=True)
+
+        plan = plan_erasure(self.database)
+        outcome = erase(plan)
+
+        # The ``logs`` folder is the one directory this module derives from the database path, so a link
+        # standing in for it says the folder is not this application's: the file behind the link shares a
+        # name with a log this application writes and is nothing to do with it. Refusing is the only answer
+        # that cannot delete somebody else's file.
+        self.assertTrue(same_name.exists(), "deleting through a linked folder removes another folder's file")
+        self.assertNotIn(
+            self.logs / "application.log", [item.path for item in plan.data_files],
+            "a file reached through a linked folder is not a file this command may delete",
+        )
+        self.assertTrue(
+            any(str(self.logs) in note for note in plan.left_alone),
+            plan.left_alone,
+        )
+        self.assertTrue(outcome.complete, "what remains is not a failure: it was never a candidate")
+        # The database named on the command line is still removed: the refusal is about the derived
+        # folder, not about the path the person chose.
+        self.assertIn(self.database, outcome.removed)
 
 
 class ErasureExecutionTests(ErasureTestCase):

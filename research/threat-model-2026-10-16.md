@@ -134,7 +134,10 @@ command line passes `--yes`. Candidates that are directories or symbolic links a
 followed, each failure is reported with its reason instead of being counted as a success, and the report
 always states what was left alone. Measured on a disposable folder: the preview left every file in place
 (exit 0), `--yes` removed exactly the four derived files and left a foreign file beside them, and a second
-run reported nothing to remove without creating anything.
+run reported nothing to remove without creating anything. The `logs` folder is the one directory the module
+derives rather than receives, so it is checked as well: when it is a symbolic link, the logs inside it are
+left alone and the report says why (D26 below), while the database named on the command line is still
+removed — that path is the one the person chose.
 
 ### 4.8 Execution and submission are off
 
@@ -231,11 +234,24 @@ transition with evidence. Nothing was saved.
 | `--record-follow-up <id>` with no mock | `REFUSED: no calendar event was recorded (disabled)`, exit 2 |
 | `--add-role` with identical arguments | second `REFUSED: You already have a record for … starting …`, exit 2; one row |
 
-### 8.4 Two defects this pass fixed
+### 8.4 Three defects this pass fixed
 
 D19 (restoring the database from itself was accepted) and D20 (a non-finite `--poll-seconds` was accepted and
 made the worker poll with no delay, or die after starting). Both are written up with their regression tests in
 [the cross-platform CI evidence register](cross-platform-desktop-ci-evidence-2026-10-15.md) sections 17 and 19.
+
+D26 was found by probing `--forget-local-data` after it was written, and is the reason the paragraph above
+names the derived folder. The module promises to refuse anything "reached through a symbolic link", and it
+did refuse a candidate that *was* a link — but the `logs` folder it derives from the database path was not
+checked, so a `logs` folder that was itself a link meant `<logs>/application.log` was deleted *through* the
+link. The probe replaced the real `logs` folder with a link to another folder holding a file of that name:
+the file was removed, and it had never been written by this application. The regression test
+(`tests/test_cli_forget.py::ErasurePlanTests::test_a_logs_folder_that_is_itself_a_link_is_not_deleted_through`)
+fails before the fix and passes after it; the fix excludes log candidates when that folder is a link, names
+the folder in the report, and keeps removing the database the command was pointed at. The asymmetry is
+deliberate and now stated in the module: the database's own folder is *not* checked this way, because the
+person named that path and on some platforms an ordinary folder (`/tmp`, a home directory) is reached through
+a link.
 
 ## 9. Verdict
 
