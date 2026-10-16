@@ -11,8 +11,19 @@ evidence to capture, and where to write the result.
 window. 22 of the 98 steps passed on a headless machine (the ones needing no window), 76 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
-**What automation already established, so a tester does not re-do it by hand.** Eleven workflows and **82 checks**
-now (76 when the per-leg table below was recorded; one check was added to workflow I on 2026-10-16)
+**One tab has no numbered steps yet.** The **HR contacts** tab was added on 2026-10-16, after the 98 steps
+were written. Workflow L exercises its read/refuse/decline/confirm paths automatically, and the tab is inside
+every layout and focus measurement, but a person still has to read its wording, try its chooser, and judge
+whether the confirmation reads well - so treat that tab as **NOT TESTED by hand**, and see the named gaps in
+[the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md) rather than treating the
+automated checks as acceptance of it.
+
+**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **87
+checks** in the current source (eleven and 82 on the last fully green matrix, run `38823626117` at `3a88e6e`;
+76 when the per-leg table below was recorded, and one check was added to workflow I on 2026-10-16). The twelfth
+- workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
+every workflow letter the run defines; its own run is cited in
+[the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
 (`scripts/desktop_acceptance.py`) drove the real window's own widgets on five display-backed CI legs — Linux
 under Xvfb, Windows 2025 and macOS 26, on CPython 3.10 and 3.13 — every leg reporting
 `RESULT: PASS — 76 checks passed` in run `38762008724` at `5b291a7a` for the 76-check state (per-leg table: section 15 of
@@ -59,8 +70,8 @@ steps (14, 19–21, 37–41, 77, 95–97) on anything but a throwaway copy.
 establishes human acceptance; they are how you avoid re-checking the machine's half by hand.
 
 ```bash
-python scripts/desktop_smoke_test.py      # 14 checks: the window is built, eight tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 82 checks: eleven workflows on disposable synthetic databases
+python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
+python scripts/desktop_acceptance.py      # 87 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -286,7 +297,8 @@ result this project has recorded for every window step so far.
 | [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 98 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
-| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the eleven workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab the checklist has no numbered steps for yet |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |
 
 **The distinction this handoff keeps.** Implemented is not automated-tested; automated-tested is not

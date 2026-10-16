@@ -7,7 +7,7 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
 - Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented; resume parsing, source adapters and remote worker remain gated or pending.
-- Last updated: 2026-10-15.
+- Last updated: 2026-10-16.
 
 ## Confirmed user decisions
 
@@ -3166,3 +3166,36 @@ from section 23) rather than edited into it, and section 24 now carries the veri
 could not provide; `phases.md` cites the green run in the Phase 1 row. Nothing in
 `tests/test_resource_lifecycle.py` was changed to bring that about.
 
+**2026-10-16, this session — Phase 0 finished: a reviewed HR contact list is now stored, and what a re-import may not do (schema 7).**
+`062a88c` could read a contact CSV offline and store nothing. The second half of that phase is in
+`168ac31`: schema **7** adds `hr_contact` and `hr_contact_conflict` through the existing migration runner
+(appended, additive, `IF NOT EXISTS`, so an interrupted step is completed by re-running it and a file that
+never imports a list differs from version 6 only by two empty tables), the store gained the seven-method
+contact API (`plan_contact_import`, `import_contacts`, `list_contacts`, `get_contact`,
+`list_contact_conflicts`, `contact_record_counts`, `set_contact_suppression`), and the window gained a ninth
+tab, **HR contacts**, inside a scrolling body. Three rules hold the feature together and each is asserted
+rather than intended: one normaliser (`contacts.normalise_email_key`, called, never re-implemented, so the
+review panel and the store cannot disagree about what "the same contact" means); one record per key however
+many rows name it, with a re-import updating review metadata and never the address, the name or the company a
+person can already see; and nothing merged silently - a later file that names a different non-empty name or
+company has the stored value kept and the other recorded as evidence with its file and date, two rows inside
+one file that disagree are recorded the same way with the first value in file order winning, and a
+disagreement already stored is not recorded twice (which is what makes re-importing the same file ask the same
+question once). `suppressed` is written by exactly one method and never by any import statement, which is why
+a do-not-contact mark survives re-imports, contradictory files, a backup and a restore. Provenance is the
+file's *name* and never its path; `contacts.imported` carries counts and an outcome and no contact value;
+`ContactImportPlan.describe()` prints counts, field names and reasons for the same reason. The import is one
+`BEGIN IMMEDIATE ... COMMIT` with `_roll_back_quietly()` on any exception, so a failure leaves nothing behind
+and can never be reported as success, and the plan a person confirms is computed read-only from the database
+they would be writing to. Covered by `tests/test_contacts_store.py` (39 tests, including zero-write assertions
+against the connection's own `total_changes`), three schema tests in `tests/test_store.py` (a populated
+version-6 file upgraded with its rows intact and its pre-upgrade copy still at version 6, the step re-run, and
+a failing step rolled back with `SchemaMigrationError(target=7, from=6)`), the tab's handler tests in
+`tests/test_desktop_handlers.py::ContactImportTabTests`, and workflow **L** in `scripts/desktop_acceptance.py`
+(five checks through the real window on the five display-backed CI legs). The full suite is
+`Ran 1832 tests ... OK (skipped=13)` locally and the acceptance harness declares **87** checks. Written up in
+`research/hr-contact-import-persistence-and-review-ui-2026-10-16.md`, with the schema, the migration evidence,
+the privacy boundaries and the named gaps; `phases.md`'s row 1C moves from "preview only" to the parse →
+review → store increment, and `design.md`'s contact bullet describes the tab and what it refuses to do. The
+smoke entry point now checks **nine** tabs. Nothing here matches a contact to a listing, drafts a message or
+sends one, and `SOURCE_QUALITY_GATE_PASSED` is still `False` with `enabled_discovery_sources()` still empty.

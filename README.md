@@ -212,11 +212,13 @@ silently truncated:
   neither can reach the window as a raw error. The document is treated as untrusted input: this is text
   extraction, **not** a malware scanner, and no parsing is risk-free.
 - The file you selected is read in place; no copy of it is kept anywhere.
-- **A contact CSV can be previewed offline and nothing is stored.** `--preview-contact-csv PATH` reads one
-  HR contact CSV that you name and reports row/key/flag counts and the lines that need review, printing no
-  email address, name or company label and writing nothing anywhere (see
-  [Preview an HR contact list CSV](#preview-an-hr-contact-list-csv-offline-nothing-stored)). Import,
-  review screen, matching and outreach are **not implemented**; the command says so itself.
+- **An HR contact CSV is read offline, reviewed and - only when you confirm - stored locally.**
+  `--preview-contact-csv PATH` reads one HR contact CSV that you name and reports row/key/flag counts and
+  the lines that need review, printing no email address, name or company label and writing nothing
+  anywhere. The window's **HR contacts** tab reads the same file through the same parser, shows the same
+  report and the rows worth a look, and stores the list only after you confirm what it would change.
+  Matching, drafts and outreach are **not implemented** (see
+  [Read an HR contact list CSV](#read-an-hr-contact-list-csv-offline-and-stored-only-when-you-confirm)).
 
 **PDF support is an optional third-party library.** DOCX import uses the standard library alone. For PDF
 text extraction, install [pypdf](https://pypi.org/project/pypdf/) (BSD-3-Clause, no mandatory
@@ -230,15 +232,15 @@ Without it, everything else in the app — including DOCX import — works uncha
 produces a clear "PDF support is not installed" message instead of a crash. The library is imported only
 when a PDF is actually read.
 
-## Preview an HR contact list CSV (offline, nothing stored)
+## Read an HR contact list CSV (offline, and stored only when you confirm)
 
 ```bash
 python -m career_agent --preview-contact-csv ~/Downloads/hr_contacts.csv
 ```
 
-This reads **one** CSV file that you name and reports what is in it. It is the whole of what this build
-does with a contact list today: there is no import, no database table, no review screen and no matching.
-The report is a preview you can read, and nothing else happens.
+This reads **one** CSV file that you name and reports what is in it. The command itself stores nothing:
+it is a preview you can read, and nothing else happens. Storing a list is a separate, deliberate step in
+the window's **HR contacts** tab, described below.
 
 What it reports:
 
@@ -289,8 +291,51 @@ exit status `2` and **nothing at all on standard output**. The limits are 20 MB 
 are refused rather than truncated: a preview that quietly stopped early would report counts that are not
 your file's.
 
-**What is deliberately not here yet.** Import into the database, the review screen in the window,
-row-by-row selection, exporting rejected rows, suppression/do-not-contact records, matching contacts to
+### Storing the list: the HR contacts tab, and confirming once
+
+Open the window, choose the **HR contacts** tab and press **Choose a contact CSV...**. The file is read on
+this machine through the same parser the command line uses, and what it holds is shown before anything is
+stored: the file's own name, the columns that were used, the same counts and flags as the preview, and the
+rows worth your attention in the file's own order - each with the reason it was listed. **Nothing is stored
+at this point**, the panel says so, and there is no button that stores anything without asking.
+
+Pressing **Import these contacts** computes what storing the file would do *from the database it would be
+stored in* and shows that before asking: how many contacts would be added, how many already stored records
+would be updated, how many disagreements would be kept for review, how many keys are already marked
+do-not-contact, and how many rows cannot be stored at all because they carry no email key. Answer no, or
+close the window, and nothing is written. Answer yes and the import runs as one transaction: either every
+record is written or none is, so a failure part-way through stores nothing and is never reported as a
+success. When it does succeed the window reports the counts and re-reads the stored list.
+
+**What one contact record holds.** The email key (the address trimmed and case-folded - nothing else), the
+address exactly as your file wrote it, the name and company label your file gave, the file's **name** (never
+its folder, so a backup you hand to somebody else does not carry your home directory), when an import first
+and last saw the key, how many imports have seen it, the parser's review flags, any review note your file
+carried, and the do-not-contact mark. The two tables live in the schema (version 7 added `hr_contact` and
+`hr_contact_conflict`), so they travel with your database, your backups and your restores, and the JSON
+export does not carry them.
+
+**A repeat import adds no second record.** One key is one record, however many rows mention it: a file
+listing the same address three times produces one contact whose row says it saw three rows, and importing
+the same file again updates that record rather than adding another. A record's original address text is
+never rewritten, only its review metadata moves forward.
+
+**Nothing is merged silently.** When a later import says a different non-empty name or company for a stored
+key, the value already stored is kept and the other one is recorded beside it as a disagreement, together
+with which file said it and when. Two rows *inside one* file that disagree about a name or company are
+recorded the same way, with the first value in the file's own order kept, so which value wins depends on
+nothing but the order of your own file. An empty cell never disagrees with anything. The tab shows how many
+disagreements are kept, and nothing in this build silently picks a winner, combines two values or invents
+an employer.
+
+**A "do not contact" mark is never cleared by an import.** The flag lives on the contact record: an import
+updates review metadata and never that column, so the mark survives re-imports, files that contradict what
+is stored, and a backup that is restored. The stored list shows it and the summary counts it. Setting the
+mark is not yet a control in the window: it is reachable through the store API this build is tested
+against (`CareerStore.set_contact_suppression`), and the screen for it is not built.
+
+**What is deliberately not here yet.** Row-by-row accept/reject while the file is being read, exporting the
+rows that were refused, resolving or dismissing recorded disagreements from the window, matching contacts to
 listings, drafts, and anything that sends, submits or contacts anybody. The planning document
 (`planning/hr-contact-outreach-and-application-tracking-2026-10-16.md`) describes those phases, and the
 gate that governs the external ones (`SOURCE_QUALITY_GATE_PASSED`) is still closed: no discovery source is
@@ -586,9 +631,9 @@ stored on this machine, and used for nothing else.
 
 This is the tab whose content grows with your career, so it scrolls: the form and the two lists share a
 scrolling area, and the form's fields are pinned to the width you can see, so a long employer name or
-note wraps instead of pushing the buttons off the edge. **Background tasks** scrolls for the same reason -
-its two lists of what runs by itself do not fit under its controls on a small screen - and text drawn
-across any tab wraps inside the width the smallest window size gives it. The add, save, select and delete controls sit in
+note wraps instead of pushing the buttons off the edge. **Background tasks** and **HR contacts** scroll
+for the same reason - their lists do not fit under their controls on a small screen - and text drawn across
+any tab wraps inside the width the smallest window size gives it. The add, save, select and delete controls sit in
 two rows rather than one, on this tab and on the two tabs with the longest button rows (**Next actions** and
 **Follow-ups**), so nothing is squeezed or cut off at the smallest window size the app allows (900x600).
 
@@ -946,7 +991,7 @@ python scripts/desktop_smoke_test.py
 ```
 
 It constructs the real `CareerAgentApp` against a disposable synthetic database in a temporary folder,
-checks the window's title, minimum size, eight tabs in their documented order, that every tab was built,
+checks the window's title, minimum size, nine tabs in their documented order, that every tab was built,
 and that the main lists carry the columns they are read from, switches to every tab with a real rendering
 pass, presses the affected tabs' read-only **Refresh** buttons through Tk's own command dispatch, then
 closes the window, releases the database and deletes the folder it created — and checks that the default
@@ -962,7 +1007,7 @@ The workflows themselves are driven the same way, in more depth:
 python scripts/desktop_acceptance.py
 ```
 
-Ten workflows run against the real window and disposable synthetic databases: a profile (with a role and a
+Twelve workflows run against the real window and disposable synthetic databases: a profile (with a role and a
 qualification) typed, saved, closed and read back; a listing whose source URL and blank apply URL stay separate
 fields and whose blank stays blank; a listing with no availability evidence evaluating to UNKNOWN and refusing
 to be shortlisted, then reaching PASS and being shortlisted once the evidence and requirements are stated; an
@@ -987,9 +1032,12 @@ malformed, foreign, truncated or too-new file is refused with the live database 
 changes nothing, a confirmed restore brings the backed-up records back while keeping the previous database as a
 readable copy, and nothing temporary is left behind on success or failure; what the schedule walked past while
 nothing was running, reported from the same status lines the tab already shows, with the overdue occurrence named
-separately as the one a worker will still claim; and cleanup that releases every
+separately as the one a worker will still claim; the HR contact list, where a file that is not a contact list is
+refused with nothing stored, a chosen file is read and shown with the stored list still empty, a declined
+confirmation stores nothing, a confirmed import stores each contact once (with a repeat adding none and a
+do-not-contact mark surviving a further import), and no address is ever contacted; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 82 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 87 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
 the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by

@@ -625,13 +625,15 @@ point below.
 | Ubuntu runner, CPython 3.13 | `pip install ".[pdf]"`, then the résumé module with the extra (`OK`, no skips) and without it (12 PDF cases skip) | recorded in the same report | see the report | automated |
 
 **What the scripted smoke test does and does not prove.** It builds the real window against a disposable
-synthetic database, checks the title, the minimum size, the eight tabs in order, that every tab was built, the
+synthetic database, checks the title, the minimum size, the nine tabs in order, that every tab was built, the
 main lists' columns, that the status line names the disposable database, that the created file holds the
 current schema, that every tab can be selected with a rendering pass, that each affected tab's read-only
 **Refresh** button can be pressed through Tk's own command dispatch, that the summaries fill, that the event
 log is written beside the disposable database, that closing releases it and the folder can be deleted, and
-that the person's own database was neither created nor modified. It asserts nothing about pixels, layout or
-dialog wording, and it does not press anything with a mouse — every numbered step above that needs a human at
+that the person's own database was neither created nor modified. The tab added on 2026-10-16 (**HR contacts**) is
+covered by the tab list, the refresh press and the focus walk, but has no numbered steps of its own here: a
+person reading this checklist should treat it as NOT TESTED by hand. The script asserts nothing about pixels,
+layout or dialog wording, and it does not press anything with a mouse — every numbered step above that needs a human at
 the window therefore stays **BLOCKED**, and passing it must never be recorded as a passed step.
 
 **PDF steps 24–31 (unchanged).** They are window steps: the import dialog is where a file is chosen and where
