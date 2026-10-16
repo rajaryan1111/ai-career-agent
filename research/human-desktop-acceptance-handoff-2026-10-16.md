@@ -55,9 +55,10 @@ is the one that says a value came out of a *document* and is **not** the person'
 is written up in [its note](candidate-profile-fact-review-and-setup-2026-10-16.md).
 
 **What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **113
-checks** in the current source, and 113 on the matrix below - run `38914820675` at `982e87c`,
-thirteen of thirteen jobs, `RESULT: PASS - 113 checks passed` and `Ran 2065 tests ... OK` on every leg (102 on the
-matrix before it, run `38905204903` at `a22b917d` with `Ran 2004 tests ... OK`; 102 before that, run `38891340290`
+checks** in the current source, and 113 on the matrix below - run `38925910370` at `2514b52`,
+thirteen of thirteen jobs, `RESULT: PASS - 113 checks passed` and `Ran 2071 tests ... OK` on every leg (113
+checks and `Ran 2065 tests ... OK` on the same increment's first run, `38914820675` at `982e87c`, before its
+second verification pass; 102 on the matrix before it, run `38905204903` at `a22b917d` with `Ran 2004 tests ... OK`; 102 before that, run `38891340290`
 at `546d065` with `Ran 1950 tests ... OK`; 97 on the one before it, run `38875397574` at `c1b2ab1` with
 `Ran 1881 tests ... OK`; 94 on the one before that, run `38864632201` at `4b4e752`; 91 on the one before that,
 run `38855211961` at `2d237bc`; 87 on the one before that, run `38828908041` at `02962f6`; eleven and 82 before
@@ -470,7 +471,7 @@ result this project has recorded for every window step so far.
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
 | [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls, 94 with the recorded-disagreement panel, 97 with the per-contact deletion, 102 with the contact export and the provenance increment, 113 with the profile's confirm control and missing-facts setup), per-leg platform/Tk/screen strings, and the defects only a real display could show |
-| [Candidate profile: the saved-facts table, confirming a fact, and the setup for what is missing](candidate-profile-fact-review-and-setup-2026-10-16.md) | what the profile tab now shows about a stored fact, the one control that confirms it, the window that asks only for the required facts a profile does not state, and the three things verification found |
+| [Candidate profile: the saved-facts table, confirming a fact, and the setup for what is missing](candidate-profile-fact-review-and-setup-2026-10-16.md) | what the profile tab now shows about a stored fact, the one control that confirms it, the window that asks only for the required facts a profile does not state, and the eight things verification found |
 | [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab |
 | [HR contact conflict review panel](hr-contact-conflict-review-panel-2026-10-16.md) | how a recorded disagreement is read without being settled: what the record holds and what it does not, the zero-write and privacy assertions, the two defects the display-backed legs found, and the manual steps that still have to be run |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |

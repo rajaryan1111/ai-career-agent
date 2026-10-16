@@ -116,7 +116,12 @@ Transitions must be auditable. A timeout after clicking submit must not be treat
   sentences, the confirmation sentences and the setup questions without importing Tk, so the vocabulary is
   unit-tested and the window only draws it; the confirmation control calls
   ``CareerStore.confirm_profile_fact`` - the one writer of a confirmed fact - and then reads the row back, so
-  what the window reports is the database's answer rather than the handler's intention; the setup flow asks
+  what the window reports is the database's answer rather than the handler's intention. That store call reads
+  the profile on both sides of its one transaction, so a failure raised out of it may have happened after the
+  row was committed: the same rule is applied to the failure, and the window resolves it by reading the state
+  again and reporting what it holds - confirmed, not confirmed, or *not known* when even that read fails. A
+  write that may have happened is never described as having changed nothing, and a failed read never decides a
+  sentence about what the profile states. The setup flow asks
   for what ``core.missing_required_profile_facts`` reports and writes through the same
   ``build_candidate_profile``/``save_profile`` path the form uses, so there is no second model, no second
   store, no second importer and no second write path. The one new piece of state a window keeps is what it says

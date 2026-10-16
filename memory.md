@@ -3595,3 +3595,58 @@ separately versioned export document, not a new key in version 2), asking for pr
 (a product decision, not a bug), and a comparison view for a document's value that disagrees with a stored fact.
 ``SOURCE_QUALITY_GATE_PASSED`` is still ``False``, ``enabled_discovery_sources()`` is still ``()``, and no socket
 is opened. Written up in ``research/candidate-profile-fact-review-and-setup-2026-10-16.md``.
+
+## 2026-10-16 (later) — The same increment, asked one more question: does each sentence still describe what just happened?
+
+**Why there was a second pass.** The increment's first commit was already green on the whole matrix, and every
+test it shipped passed. Then its own rule was turned on the paths *around* the feature: the confirm control and
+the setup save both hand a write to the store and report the result, and both had places where a read failure
+could arrive **after** the write had reached the database. Reading the code was not enough to be sure, so each
+suspicion was reproduced against the real store before anything was changed.
+
+**The three defects, each reproduced first.** (1) ``CareerStore.confirm_profile_fact`` reads the stored profile
+before its one transaction and again after it, and it commits the row before the last of those reads. A read
+failure planted on that post-commit read left the confirmation **stored** - asserted in the reproduction by
+reading it back - while the window's status line said "A saved record could not be read; nothing was changed."
+The same branch covered a database error, whose sentence was "the confirmation could not be written ... so
+nothing was recorded". (2) One step later in the setup save, the loop that records the checks runs after the
+answers have been written *and* read back, and it used the same "nothing was changed" sentence. (3) The state
+read that follows those checks decided the sentence "Still not stated: ...": when it failed, the profile came
+back as ``None`` and the window described a profile that had just stored one fact as missing all six - and the
+status line repeated the count.
+
+**What the window does instead.** The confirm control now separates the reads *before* the attempt (where a
+failure really does mean nothing was written) from the write call itself, and resolves anything raised out of
+that call by reading the stored state and reporting it: confirmed, not confirmed, or - when even that read fails
+- **not known**, with the safe way back said out loud ("confirming a fact that is already confirmed changes
+nothing, including the time"). The store's own refusals (a fact the profile does not state, a file held at a
+schema older than the one that keeps confirmations) remain the one failure that can still say nothing was
+recorded, because each is decided before any row is written. The setup save reports a read failure in its check
+loop as **"Saved, but the rest could not be checked"**: the answers are saved, what was recorded before the
+failure is named, the check it could not read is said to be unknown, and the profile tab's own "Refresh the
+saved facts" is named as where to look. The state read after the checks changes nothing but a sentence: nothing
+is inferred from a failed read, and what the window shows is what it read again, so a failed read never decides
+a claim about what the profile states.
+
+**Tests and mutations.** Six new handler tests (``tests/test_desktop_handlers.py`` is at **386**), including the
+two reproductions, the *not known* branch, and the store-refusal branch, which had **no test at all** - found by
+looking for messages no test named, the same way the previous increment's untested reporting branch was found. One
+existing test was rewritten rather than weakened: it asserted the old sentence for a database error and now
+asserts the database's own answer plus that the status never claims nothing changed. The mutation harness grew to
+**14 mutations, 14 of 14 detected**, and grew a guard of its own: one new mutation left a syntax error behind (a
+two-line call patched as one line), the run failed to import, and the harness counted that as *caught* - which it
+is not. A mutated copy that fails without one named test failing is now reported as an invalid mutation. One of
+the harness's own anchors had also gone stale when the code moved; it said ``[stale]`` instead of silently
+mutating nothing, and was updated. Evidence: full suite ``Ran 2071 tests … OK (skipped=13)``, ``compileall``
+clean, the stand-in acceptance run still ``113 checks passed, 0 failed`` reporting **BLOCKED**, and the CI matrix
+green for the fix commit: run ``38925910370`` at ``2514b52``, **13/13 jobs**, ``Ran 2071 tests … OK`` on every
+unit and cross-platform leg and ``RESULT: PASS — 113 checks passed`` on all five display-backed legs (the
+feature commit ``982e87c`` had been verified the same way by run ``38914820675``, 13/13 on ``Ran 2065 tests``). The acceptance harness gained nothing here on purpose: its faults are real
+conditions (an unwritable folder, a held database), and a read failure inside the store's own confirmation call
+is not one a window can be driven into - so these three paths are covered by the handler tests and the mutations,
+and the six manual steps 118-123 stay **BLOCKED** with no box ticked.
+
+**What this cost, and what it bought.** Two commits instead of one, and a second wait for the matrix. What it
+bought is the rule this project keeps re-learning: a green suite says the tested paths work, never that a
+sentence is true. Three sentences that would have been false about a write that had already happened are now
+either true or explicitly unknown.

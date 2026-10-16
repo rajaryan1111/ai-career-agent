@@ -62,7 +62,10 @@ The intended audience is cross-industry and cross-experience: students, interns,
   application confirms one. A profile that is missing a fact a listing can be blocked on is asked for exactly
   those facts and no others: a fact that is stored is never asked for again whatever its origin, a preference
   is never treated as required, a blank answer stays unknown rather than being inferred, and a setup that is
-  cancelled, refused or still incomplete writes nothing and says what is still missing.
+  cancelled, refused or still incomplete writes nothing and says what is still missing. A failure that arrives
+  after a write has reached the database is reported as what it is and never as "nothing was changed": the
+  window reads the stored state again and reports it, and where even that read fails it says the answer is not
+  known and names a safe way back.
 - Report progress from the records the user actually wrote, and never beyond them: a count is always
   traceable to stored rows; every rate names the denominator it was computed over; a rate is withheld with
   its reason below a floor of five recorded applications; a metric the schema cannot observe (an offer, an
