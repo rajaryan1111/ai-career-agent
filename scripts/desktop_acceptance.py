@@ -48,8 +48,12 @@ the window says about it. Twelve workflows run, in the order a first-time user w
 * **L - the HR contact list.** Choose a synthetic contact CSV through the tab, check that a refused file
   stores nothing and is explained, that a chosen one is read and shown with still no row stored, that a
   declined confirmation stores nothing, and that a confirmed one stores each contact once (a repeat adds
-  none) and shows the stored list - with a do-not-contact mark surviving a further import. No address is
-  ever contacted, and every fixture address is on a reserved ``.invalid`` domain.
+  none) and shows the stored list - with a do-not-contact mark surviving a further import. Then the mark
+  itself: the two controls are reachable by the keyboard and are off until a stored row is selected, a
+  declined removal leaves the mark exactly as it was, a confirmed one clears it and says so, and a mark made
+  from the window with a reason typed beside it is stored with that reason - which must not reach a dialog, a
+  status line or the event log. No address is ever contacted, and every fixture address is on a reserved
+  ``.invalid`` domain.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 
@@ -3401,6 +3405,18 @@ def inside_window(widget, host) -> bool:
     return False
 
 
+def event_log_log_path(database) -> Path:
+    """The log this run's window writes beside its own database, imported where it is needed.
+
+    ``career_agent.event_log`` is imported here rather than at the top of the file for the same reason the
+    window is: this module has to be importable, and report a BLOCKED run, on a machine where the toolkit the
+    application uses is not installed at all.
+    """
+    from career_agent.event_log import log_path  # noqa: PLC0415 - imported with the window, not before it
+
+    return log_path(database)
+
+
 def focus_order(host, start, limit: int = _FOCUS_WALK_LIMIT) -> list:
     """The widgets the keyboard reaches from ``start``, in order, up to the point it comes back."""
     order = []
@@ -3575,14 +3591,21 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
     workspace.close_window(host, app)
 
 
+#: The reason this run types beside a mark. A person's own words about somebody, and the text that must
+#: never reach a dialog, a status line or an event: the run checks exactly that after storing it.
+SYNTHETIC_MARK_REASON = "synthetic note typed by the acceptance run"
+
+
 def workflow_l_contact_import(run: Run) -> None:
-    """The HR contact list: preview, refusal, cancel and confirm, on a disposable database.
+    """The HR contact list: preview, refusal, cancel, confirm and the do-not-contact mark.
 
     Every file used here is synthetic and written into the run's own temporary folder, and every address is
     on a reserved ``.invalid`` domain. What this checks is the part a screenshot cannot show: that choosing a
     file reads and displays it without storing one row, that a refused file and a declined confirmation
-    leave the database exactly as it was, and that a confirmed import writes each contact once - read back
-    from the database the window itself writes through, not from the window's own list.
+    leave the database exactly as it was, that a confirmed import writes each contact once, and that the
+    do-not-contact controls write the mark once, keep it when the removal is declined, and carry no contact
+    value into anything the person is shown - read back from the database the window itself writes through,
+    not from the window's own list.
     """
     workspace, results, policy = run.workspace, run.results, run.dialogs
     host, app = workspace.open_window()
@@ -3665,6 +3688,123 @@ def workflow_l_contact_import(run: Run) -> None:
                 f"the summary does not show the mark: {app.contacts_summary.get()!r}")
         require("Nothing here has been contacted" in app.contacts_summary.get(),
                 f"the summary does not say nothing was contacted: {app.contacts_summary.get()!r}")
+
+    with results.step("L6 the mark controls are reachable by the keyboard and off until a row is selected"):
+        # Nothing selected: both controls are off, so there is no button offering a change that would be
+        # refused. Deselecting is what a person does by clicking empty space in the list.
+        app.stored_contacts_tree.selection_remove(app.stored_contacts_tree.selection())
+        workspace.root.update()
+        require(app.mark_contact_button.instate(["disabled"]),
+                "the mark control is offered with no stored contact selected")
+        require(app.clear_contact_button.instate(["disabled"]),
+                "the removal control is offered with no stored contact selected")
+        require("No stored contact is selected" in app.contact_mark_state.get(),
+                f"the state line does not say what to do: {app.contact_mark_state.get()!r}")
+        before = app.store._connection.total_changes
+        policy.reset()
+        press(app.contacts_tab, "Mark do not contact", workspace.root)
+        require(app.store._connection.total_changes == before,
+                "pressing the mark control with nothing selected wrote to the database")
+        require(not any(record.suppressed for record in app.store.list_contacts()
+                        if record.email_key != SYNTHETIC_CONTACT_ROWS[0][0]),
+                "a contact other than the one already marked carries a mark")
+        # The keyboard's own order reaches the two controls and the reason box: the same walk workflow K
+        # measures every tab with, asked here about this tab's controls specifically.
+        order = focus_order(host, app.stored_contacts_tree)
+        for control, name in ((app.mark_contact_button, "the mark control"),
+                              (app.clear_contact_button, "the removal control"),
+                              (app.contact_note_entry, "the reason box")):
+            require(control in order, f"the keyboard order never reaches {name}")
+
+    with results.step("L7 declining the removal leaves the mark exactly as it was"):
+        key = SYNTHETIC_CONTACT_ROWS[0][0]
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        require(stored[key].suppressed, "the contact this step is about is not marked")
+        marked_at = stored[key].suppressed_at
+        app.stored_contacts_tree.selection_set(str(stored[key].contact_id))
+        workspace.root.update()
+        require(app.clear_contact_button.instate(["!disabled"]),
+                "the removal control is off for a contact that carries a mark")
+        require(app.mark_contact_button.instate(["disabled"]),
+                "the mark control is offered for a contact that already carries a mark")
+        require("Marked do not contact" in app.contact_mark_state.get(),
+                f"the state line does not report the mark: {app.contact_mark_state.get()!r}")
+        policy.reset()
+        policy.answers["Remove this contact's do-not-contact mark"] = False
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        require("Remove this contact's do-not-contact mark" in policy.titles("askyesno"),
+                f"the removal was not confirmed first; dialogs: {policy.titles()!r}")
+        asked = policy.said("Remove this contact's do-not-contact mark")
+        require("row 1 of 2 in the stored list" in asked,
+                f"the confirmation does not say which row it is about: {asked!r}")
+        after = app.store.get_contact(key)
+        require(after.suppressed, "a declined removal cleared the mark anyway")
+        require(after.suppressed_at == marked_at, "a declined removal moved the day the mark was made")
+        require(app.store._connection.total_changes == before,
+                "a declined removal wrote to the database")
+        require("nothing was changed" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("L8 a confirmed removal clears the mark and says so"):
+        key = SYNTHETIC_CONTACT_ROWS[0][0]
+        policy.reset()
+        policy.answers.pop("Remove this contact's do-not-contact mark", None)
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        after = app.store.get_contact(key)
+        require(not after.suppressed, "the removal did not clear the mark")
+        require(after.suppressed_at is None and after.suppressed_note is None,
+                "a cleared mark left its day or its reason behind")
+        require(app.store._connection.total_changes - before == 1,
+                f"the removal changed {app.store._connection.total_changes - before} row(s), not one")
+        require("Do-not-contact mark updated" in policy.titles("showinfo"),
+                f"the change was not reported; dialogs: {policy.titles()!r}")
+        require("no longer marked do not contact" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+        require("0 marked do-not-contact" in app.contacts_summary.get(),
+                f"the summary still counts a mark: {app.contacts_summary.get()!r}")
+        row = app.stored_contacts_tree.item(str(after.contact_id), "values")
+        require("do not contact" not in str(row[5]),
+                f"the stored list still shows a mark: {row!r}")
+
+    with results.step("L9 a mark made from the window keeps its reason and shows it nowhere else"):
+        key = SYNTHETIC_CONTACT_ROWS[0][0]
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        app.stored_contacts_tree.selection_set(str(stored[key].contact_id))
+        workspace.root.update()
+        require("Not marked do not contact" in app.contact_mark_state.get(),
+                f"the state line does not report the cleared mark: {app.contact_mark_state.get()!r}")
+        # Typed into the real entry the way a person types it, through the widget's own methods.
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_MARK_REASON)
+        workspace.root.update()
+        policy.reset()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Mark do not contact", workspace.root)
+        marked = app.store.get_contact(key)
+        require(marked.suppressed, "the mark was not stored")
+        require(marked.suppressed_note == SYNTHETIC_MARK_REASON,
+                f"the reason was not stored with the mark: {marked.suppressed_note!r}")
+        require(app.store._connection.total_changes - before == 1,
+                f"marking changed {app.store._connection.total_changes - before} row(s), not one")
+        row = app.stored_contacts_tree.item(str(marked.contact_id), "values")
+        require("do not contact" in str(row[5]), f"the stored list does not show the mark: {row!r}")
+        require("1 marked do-not-contact" in app.contacts_summary.get(),
+                f"the summary does not count the mark: {app.contacts_summary.get()!r}")
+        require("marked do not contact" in app.status.get(), f"the status line says {app.status.get()!r}")
+        require(app.contact_note.get() == "", "the reason box still holds what was just stored")
+        # The privacy boundary this feature turns on: the reason and the contact's own values are stored,
+        # never displayed anywhere except the screen they belong to, and never written to the log.
+        said = policy.said("Mark this contact do not contact") + "\n" + policy.said(
+            "Do-not-contact mark updated") + "\n" + app.status.get()
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], SYNTHETIC_MARK_REASON):
+            require(value not in said, f"{value!r} reached a dialog or the status line")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        require("event=contacts.suppressed" in written, "the mark wrote no line to the activity log")
+        require("suppressed=true" in written, "the log line does not say what the change was")
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], SYNTHETIC_MARK_REASON,
+                      "synthetic-contacts.csv"):
+            require(value not in written, f"{value!r} reached the activity log")
 
     workspace.close_window(host, app)
 

@@ -115,6 +115,10 @@ class CareerAgentApp:
         #: The contact file currently being reviewed, as the parser returned it, or ``None``. Held in
         #: memory only: a preview that is never confirmed is written nowhere and copied nowhere.
         self.contacts_preview = None
+        #: The email key of the stored contact the mark controls would act on, read from the database
+        #: rather than from what the list shows: the mark is written against the stored record, and a
+        #: screen row is text a person reads, never a value this window writes with.
+        self.contact_selected_key: str | None = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         header = ttk.Frame(root, padding=12)
         header.pack(fill=X)
@@ -490,7 +494,49 @@ class CareerAgentApp:
             self.stored_contacts_tree.heading(column, text=heading)
             self.stored_contacts_tree.column(column, width=width, anchor=W)
         self.stored_contacts_tree.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        # Selecting a row is what tells the controls below which contact they act on, and the line under
+        # them says what that contact's mark is now: the two are read from the database, so a stale row
+        # cannot be acted on as if it still existed.
+        self.stored_contacts_tree.bind("<<TreeviewSelect>>", self._on_contact_selection)
         ttk.Button(body, text="Refresh", command=self._refresh_contacts).grid(row=9, column=0, sticky=W, pady=(8, 0))
+        mark_controls = ttk.Frame(body)
+        mark_controls.grid(row=10, column=0, columnspan=2, sticky=W, pady=(4, 0))
+        # Both are built disabled and are enabled only for the action that would change the selected
+        # contact's state. A control that cannot do anything here is better off greyed out than offering a
+        # change it will refuse, and a disabled Tk button does not run its command when it is invoked.
+        self.mark_contact_button = ttk.Button(
+            mark_controls, text="Mark do not contact", state="disabled", command=self._mark_selected_contact)
+        self.mark_contact_button.pack(side="left")
+        self.clear_contact_button = ttk.Button(
+            mark_controls, text="Remove do-not-contact mark", state="disabled",
+            command=self._clear_selected_contact)
+        self.clear_contact_button.pack(side="left", padx=8)
+        # The reason sits on its own row rather than beside the buttons: two buttons with these labels
+        # plus a labelled box on one line is wider than a tab can be at the window's own minimum size on
+        # the platforms whose default font is not this one, and Tk clips rather than wrapping a row.
+        note_row = ttk.Frame(body)
+        note_row.grid(row=11, column=0, columnspan=2, sticky=W, pady=(4, 0))
+        ttk.Label(note_row, text="Reason (optional):").pack(side="left")
+        self.contact_note = tk.StringVar()
+        self.contact_note_entry = ttk.Entry(note_row, textvariable=self.contact_note, width=24,
+                                            state="disabled")
+        self.contact_note_entry.pack(side="left", padx=(4, 0))
+        self.contact_mark_state = tk.StringVar(value="No stored contact is selected.")
+        ttk.Label(body, textvariable=self.contact_mark_state, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=12, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        # What a mark is, said in the place it is made: it is the person's own record, it survives an
+        # import, and it cannot be mistaken for something that stops a message - because nothing in this
+        # build sends anything.
+        ttk.Label(
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "A do-not-contact mark is a note you keep in your own database: no import can clear it, it "
+                "travels with your backups and restores, and the reason you type is stored on the record "
+                "alone - never in a log, a dialog or an activity event. Nothing in this build sends "
+                "anything, so a mark records your decision; the state line above says whether a reason is "
+                "already recorded with it."
+            ),
+        ).grid(row=13, column=0, columnspan=2, sticky=W, pady=(6, 0))
         ttk.Label(
             body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=(
@@ -500,7 +546,7 @@ class CareerAgentApp:
                 "where the file says, or whether this list may be used for outreach at all. A stored "
                 "contact is never written to, and no send button exists in this build."
             ),
-        ).grid(row=10, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        ).grid(row=14, column=0, columnspan=2, sticky=W, pady=(10, 0))
         body.columnconfigure(0, weight=1)
 
     def _choose_contact_csv(self):
@@ -639,7 +685,7 @@ class CareerAgentApp:
         self._clear_tree(self.stored_contacts_tree)
         for record in records:
             marked = "do not contact" if record.suppressed else ", ".join(record.review_flags)
-            self.stored_contacts_tree.insert("", END, values=(
+            self.stored_contacts_tree.insert("", END, iid=str(record.contact_id), values=(
                 record.email, record.name or "", record.company or "", record.source_file,
                 record.seen_count, marked,
             ))
@@ -647,6 +693,190 @@ class CareerAgentApp:
             f"Stored here: {counts['contacts']} contact(s) · {counts['do_not_contact']} marked "
             f"do-not-contact · {counts['with_review_flags']} carrying a review flag · "
             f"{counts['conflicts']} disagreement(s) kept for review. Nothing here has been contacted.")
+        self._sync_contact_actions()
+
+    # ------------------------------------------------------------------ the do-not-contact mark
+    #
+    # The mark is the person's own decision about somebody on their list, and this is the only screen that
+    # writes it: the store method it calls is the only writer of the column, and no import statement
+    # mentions it at all, which is what makes the mark survive a re-import, a contradicting file, a backup,
+    # a restore and a restart. Two rules the handlers below keep:
+    #
+    # * **A contact is described by where it sits, never by what it says.** A confirmation names the row's
+    #   position in the list and the file it came from. The address, the name and the company are the
+    #   person's own data on their own screen, and dialog text is what a screenshot or a bug report keeps.
+    # * **Nothing is written unless the store call returns.** A declined confirmation, a refusal or an
+    #   exception leaves the mark exactly as it was, and no message claims otherwise.
+
+    def _selected_contact_id(self) -> int | None:
+        """The stored contact id behind the list's selected row, or ``None`` when nothing usable is selected."""
+        tree = getattr(self, "stored_contacts_tree", None)
+        selection = tree.selection() if tree is not None else ()
+        if not selection:
+            return None
+        try:
+            return int(selection[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _on_contact_selection(self, _event=None):
+        """Show what the newly selected contact's mark is, and enable the action that would change it."""
+        self._sync_contact_actions()
+
+    def _sync_contact_actions(self):
+        """Read the selected contact and set the controls from what the database holds. Writes nothing.
+
+        Called after every refresh, so a mark changed anywhere - here, by a restore, or by another window -
+        is reflected rather than remembered: what a control offers is decided from the stored record at the
+        moment it is shown, and a contact whose row has gone leaves both controls disabled.
+        """
+        if not hasattr(self, "stored_contacts_tree"):
+            return
+        try:
+            records = self.store.list_contacts()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected_id = self._selected_contact_id()
+        chosen = next((record for record in records if record.contact_id == selected_id), None)
+        self.contact_selected_key = chosen.email_key if chosen is not None else None
+        if chosen is None:
+            self.mark_contact_button.state(["disabled"])
+            self.clear_contact_button.state(["disabled"])
+            self.contact_note_entry.state(["disabled"])
+            self.contact_mark_state.set(
+                "No stored contact is selected. Select a row in the list above to mark it, or to clear "
+                "the mark it already carries."
+            )
+            return
+        self.mark_contact_button.state(["disabled"] if chosen.suppressed else ["!disabled"])
+        self.clear_contact_button.state(["!disabled"] if chosen.suppressed else ["disabled"])
+        self.contact_note_entry.state(["disabled"] if chosen.suppressed else ["!disabled"])
+        position = [record.contact_id for record in records].index(chosen.contact_id) + 1
+        if chosen.suppressed:
+            reason = "a reason is recorded with it" if chosen.suppressed_note else "no reason is recorded with it"
+            state = f"Marked do not contact, and {reason}."
+        else:
+            state = ("Not marked do not contact. A reason typed below is recorded with the mark when you "
+                     "press the mark button.")
+        self.contact_mark_state.set(
+            f"Selected contact {position} of {len(records)} in the stored list: {state}")
+
+    def _mark_selected_contact(self):
+        """Mark the selected stored contact as do not contact, after one confirmation."""
+        self._change_contact_mark(suppressed=True)
+
+    def _clear_selected_contact(self):
+        """Take the do-not-contact mark off the selected stored contact, after one confirmation."""
+        self._change_contact_mark(suppressed=False)
+
+    def _change_contact_mark(self, *, suppressed: bool):
+        """Set or clear one stored contact's mark. Writes once, and only after the person confirms.
+
+        The person is told which row they are acting on - its position in the list and the file it came
+        from - and what the mark means. Nothing is claimed before the store call returns, and every refusal
+        path leaves the stored mark untouched and says so.
+        """
+        try:
+            records = self.store.list_contacts()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected_id = self._selected_contact_id()
+        chosen = next((record for record in records if record.contact_id == selected_id), None)
+        if chosen is None:
+            if selected_id is None:
+                messagebox.showinfo(
+                    "Select a contact first",
+                    "Select the stored contact you want to mark in the list above, then press the button "
+                    "again; nothing was changed.",
+                    parent=self.root,
+                )
+                self.status.set("Select a stored contact in the list first; nothing was changed.")
+            else:
+                # The row was deleted by another window, or by a restore that replaced this database: the
+                # screen is showing a contact the database no longer holds, and it is not written to.
+                messagebox.showinfo(
+                    "That contact is no longer stored",
+                    "The selected contact is no longer in this database, so nothing was changed. The list "
+                    "has been refreshed; select a stored contact and try again.",
+                    parent=self.root,
+                )
+                self.status.set("That contact is no longer stored; nothing was changed.")
+                self._refresh_contacts()
+            return
+        if chosen.suppressed == suppressed:
+            messagebox.showinfo(
+                "Nothing to change",
+                ("That contact is already marked do not contact; nothing was changed."
+                 if suppressed else
+                 "That contact does not carry a do-not-contact mark; nothing was changed."),
+                parent=self.root,
+            )
+            self.status.set("That contact's mark is already what was asked for; nothing was changed.")
+            self._refresh_contacts()
+            return
+        note = self.contact_note.get().strip() if suppressed else ""
+        position = [record.contact_id for record in records].index(chosen.contact_id) + 1
+        where = f"row {position} of {len(records)} in the stored list"
+        origin = f"from {chosen.source_file!r}" if chosen.source_file else "whose source file is not recorded"
+        if suppressed:
+            title = "Mark this contact do not contact"
+            question = (
+                f"Mark {where} - the contact {origin} - as do not contact?\n\n"
+                "The mark is stored in this database, travels with your backups and restores, and no "
+                "import can clear it. Nothing is sent to this contact by anything in this build: the mark "
+                "records your decision."
+            )
+            if note:
+                question += "\n\nThe reason you typed is stored with the mark."
+        else:
+            title = "Remove this contact's do-not-contact mark"
+            question = (
+                f"Take the do-not-contact mark off {where} - the contact {origin}?\n\n"
+                "The stored reason and the day the mark was made are removed with it, and the contact can "
+                "be marked again later. Nothing is sent either way."
+            )
+        if not messagebox.askyesno(title, question + "\n\nDo this now?", parent=self.root):
+            self.status.set("Cancelled; nothing was changed.")
+            return
+        try:
+            stored = self.store.set_contact_suppression(chosen.email_key, suppressed, note=note or None)
+        except ValueError as exc:
+            # The store's own refusal, with its own sentence: the address it was asked about has no record
+            # here, which is what happens when the list changed under this window. Nothing was written.
+            messagebox.showerror("Nothing was changed", f"{exc}\n\nThe mark was left as it was.",
+                                 parent=self.root)
+            self.status.set("The do-not-contact mark was not changed; nothing was written.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.contact_note.set("")
+        self._refresh_contacts()
+        # Keep the row the person just acted on selected, so the line under the controls reads that
+        # contact's new state rather than "nothing is selected" the moment the mark changed.
+        self.stored_contacts_tree.selection_set(str(stored.contact_id))
+        self._sync_contact_actions()
+        said = "marked do not contact" if stored.suppressed else "no longer marked do not contact"
+        self.status.set(f"The selected contact is now {said}; nothing was contacted.")
+        messagebox.showinfo(
+            "Do-not-contact mark updated",
+            f"Row {position} of the stored list is now {said}.\n\n"
+            + ("A later feature must respect this mark; nothing in this build contacts anybody."
+               if stored.suppressed else
+               "The contact stays in the list, with no reason recorded against it."),
+            parent=self.root,
+        )
 
     @staticmethod
     def _clear_tree(tree) -> None:

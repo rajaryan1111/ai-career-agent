@@ -3226,6 +3226,10 @@ class CareerStore:
                 )
         record = self.get_contact(key)
         assert record is not None  # the row was just read and is updated, never deleted, above
+        # One line about the change itself, recorded only once the write returned: a flag and nothing else.
+        # The note a person typed is stored on the row and never here - an event is the part of this
+        # program that gets read by somebody other than the person the list belongs to.
+        self._record("contacts.suppressed", f"suppressed={str(bool(suppressed)).lower()}")
         return record
 
     def _contact_decisions(self, parsed: ContactImport) -> tuple[tuple["_ContactDecision", ...], int]:

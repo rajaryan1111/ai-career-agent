@@ -27,6 +27,7 @@ from career_agent import (
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
 from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
+from career_agent import backup as backup_module
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import analytics as career_agent_analytics
 from career_agent import resume
@@ -148,6 +149,9 @@ class Widget:
 
     def __init__(self, *args, **kwargs):
         self.options = kwargs
+        # Tk reads a widget's state flags back, so the stub keeps them: a widget built ``state="disabled"``
+        # has the disabled flag from the moment it exists, which is what ``instate`` then answers.
+        self._state_flags = {"disabled"} if kwargs.get("state") == "disabled" else set()
         # The first positional argument is the parent widget in every real Tk constructor, so tests can
         # check where a widget was placed (inside the scrolling area, or in the fixed footer).
         self.master = args[0] if args else kwargs.get("master")
@@ -189,6 +193,21 @@ class Widget:
 
     def winfo_exists(self):
         return not self.destroyed
+
+    def instate(self, spec, *rest):
+        """Real ``instate``: whether every named flag is set (a leading ``!`` asks for it to be clear).
+
+        Takes the same spellings ``state`` does - one flag, a list of them, or several arguments - because
+        real Tk's ``instate ["disabled"]`` is how a widget's state is read back, and a stub that only
+        understood the bare spelling would answer a different question than the platform does.
+        """
+        for item in (spec, *rest):
+            for flag in (item if isinstance(item, (list, tuple)) else (item,)):
+                name = str(flag)
+                present = name.lstrip("!") in self._state_flags
+                if present == name.startswith("!"):
+                    return False
+        return True
 
     #: What a widget reports when asked for the size it would like to be. Real Tk measures the text and
     #: the padding; this is a constant, which is the honest limit of a stub. These numbers exist so that
@@ -253,6 +272,22 @@ class Widget:
         return None
 
     def state(self, *args, **kwargs):
+        """Real Tk's ``state``, in both of the shapes this window uses.
+
+        Called with no arguments it answers how a window is being shown - ``withdrawn`` or ``normal``, which
+        is what ``wm state`` reports. Called with flags it is ``ttk``'s own spelling,
+        ``state(["!disabled"])``, which sets or clears a control's state flags; a control that is enabled and
+        disabled while the window is open is read back with ``instate``, exactly as on a display.
+        """
+        if args or kwargs:
+            for item in args:
+                for flag in (item if isinstance(item, (list, tuple)) else (item,)):
+                    name = str(flag)
+                    if name.startswith("!"):
+                        self._state_flags.discard(name[1:])
+                    else:
+                        self._state_flags.add(name)
+            return tuple(sorted(self._state_flags))
         return "withdrawn" if getattr(self, "withdrawn", False) else "normal"
 
     def focus_set(self, *args, **kwargs):
@@ -312,6 +347,15 @@ class Widget:
         return self
 
     def configure(self, *args, **kwargs):
+        # Real Tk applies the options it is given and answers ``cget`` with what the widget is configured
+        # with *now*. Recording them is what lets a handler that turns a widget's read-only mode on and off
+        # be checked where there is no display; nothing in the suite reads an option expecting the value it
+        # was constructed with.
+        self.options.update(kwargs)
+        if kwargs.get("state") == "disabled":
+            self._state_flags.add("disabled")
+        elif kwargs.get("state") == "normal":
+            self._state_flags.discard("disabled")
         return self
 
     def rowconfigure(self, *args, **kwargs):
@@ -515,9 +559,21 @@ class Tree(ValidatedWidget):
     def selection(self):
         return self.selected
 
+    def _fire_select(self):
+        """Real Tk's ``<<TreeviewSelect>>``: a selection change runs the handler bound to it.
+
+        On a display the widget queues that virtual event and the window re-reads whatever the selection
+        means; a stub that changed the selection silently would let a handler that only ever runs on a
+        display look correct here, which is the opposite of what this stand-in is for.
+        """
+        handler = getattr(self, "bindings", {}).get("<<TreeviewSelect>>")
+        if handler is not None:
+            handler(None)
+
     def selection_set(self, selection):
         # Real Tk accepts either one item id or a sequence; a bare string is one item.
         self.selected = (selection,) if isinstance(selection, str) else tuple(selection)
+        self._fire_select()
 
     def delete(self, item):
         # A deleted row leaves the tree: it is no longer a child, can no longer be read, and is no longer
@@ -527,9 +583,11 @@ class Tree(ValidatedWidget):
         self.children = tuple(child for child in self.children if str(child) != str(item))
         self.current.pop(str(item), None)
         self.selected = tuple(chosen for chosen in self.selected if str(chosen) != str(item))
+        self._fire_select()
 
     def selection_remove(self, selection):
         self.selected = ()
+        self._fire_select()
 
     def get_children(self):
         return self.children
@@ -988,6 +1046,14 @@ class HandlerTestCase(unittest.TestCase):
         app.contacts_preview_text = Text()
         app.contact_rows_tree = Tree()
         self.stored_contacts_tree = app.stored_contacts_tree = Tree()
+        # The do-not-contact controls, built the way the real tab builds them: disabled until the list has
+        # a selected row, with the reason box beside them.
+        app.contact_selected_key = None
+        app.contact_mark_state = StringVar(value="No stored contact is selected.")
+        app.contact_note = StringVar()
+        app.contact_note_entry = Entry(textvariable=app.contact_note, state="disabled")
+        app.mark_contact_button = Button(text="Mark do not contact", state="disabled")
+        app.clear_contact_button = Button(text="Remove do-not-contact mark", state="disabled")
         selected_tabs = []
         app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
@@ -1171,6 +1237,14 @@ class TabLayoutPolicyTests(unittest.TestCase):
                 )
                 self.assertTrue(acceptance.is_scrolled_frame(container),
                                 f"{tree.winfo_class()} {tree} is not inside an area that scrolls")
+            # The controls that write the do-not-contact mark are in the same body, so they scroll with the
+            # list they act on rather than being pinned below content that can grow past the page.
+            for widget in (app.mark_contact_button, app.clear_contact_button, app.contact_note_entry):
+                container = acceptance.layout_container(widget, contacts_page)
+                self.assertIsNot(container, contacts_page,
+                                 f"{widget.winfo_class()} {widget} is judged against its tab")
+                self.assertTrue(acceptance.is_scrolled_frame(container),
+                                f"{widget.winfo_class()} {widget} is not inside an area that scrolls")
             # And a tab that holds no growing content is still judged against itself, so "scrolls" below
             # cannot be a helper that answers yes for every widget in the window.
             data_page = self.page_named(app, "Data safety")
@@ -5810,13 +5884,12 @@ CONTACT_COMPANIES = ("Sample Employer One", "Sample Employer Two")
 ALL_CONTACT_FIXTURE_VALUES = CONTACT_EMAILS + CONTACT_NAMES + CONTACT_COMPANIES
 
 
-class ContactImportTabTests(HandlerTestCase):
-    """The HR contacts tab: what a preview writes (nothing), and what each path promises.
+class ContactTabTestCase(HandlerTestCase):
+    """The fixtures the HR contacts tab's tests share: synthetic CSV files and what a write costs.
 
-    The window is the second half of the increment the parser started: a person chooses their own export,
-    sees what was read before anything is stored, and confirms once. These tests drive the tab's own
-    handlers against the real store in a disposable folder, so "nothing was written" is asserted with the
-    connection's change counter and the stored row count rather than with a message.
+    Both classes below drive the tab's own handlers against the real store in a disposable folder, so
+    "nothing was written" is asserted with the connection's change counter and the stored rows rather than
+    with a message.
     """
 
     def write_csv(self, rows: str, name: str = "contacts.csv") -> Path:
@@ -5834,6 +5907,43 @@ class ContactImportTabTests(HandlerTestCase):
         return self.write_csv(
             f"{CONTACT_EMAILS[0]},{CONTACT_NAMES[0]},{CONTACT_COMPANIES[0]},1,\r\n"
             f"{CONTACT_EMAILS[1]},{CONTACT_NAMES[1]},{CONTACT_COMPANIES[1]},2,\r\n")
+
+    def import_two(self, app) -> None:
+        """Store both synthetic contacts through the tab's own read-and-confirm path."""
+        filedialog_path = str(self.two_contacts())
+        FILEDIALOG.path = filedialog_path
+        app._choose_contact_csv()
+        app._store_contact_preview()
+
+    def ids_of(self, app) -> dict:
+        """Every stored contact's id by the address it was imported under, as the list keys its rows.
+
+        Read from the application's own store: the tests that reopen a database give the application a second
+        connection, and the fixture's is closed by then.
+        """
+        return {record.email_key: record.contact_id for record in app.store.list_contacts()}
+
+    def select(self, app, contact_id) -> None:
+        """Select one row of the stored list the way the tab's own selection event would."""
+        app.stored_contacts_tree.selected = (() if contact_id is None else (str(contact_id),))
+        app._sync_contact_actions()
+
+    def stored_row(self, app, position: int):
+        """One row of the stored list as the tab last rendered it, by position in the list.
+
+        Read from the application's own store rather than the fixture's: the tests that reopen a database
+        give the application a second connection, and the fixture's is closed by then.
+        """
+        rows = [values for _iid, values in app.stored_contacts_tree.inserted]
+        return rows[len(rows) - len(app.store.list_contacts()) + position]
+
+
+class ContactImportTabTests(ContactTabTestCase):
+    """The HR contacts tab: what a preview writes (nothing), and what each path promises.
+
+    The window is the second half of the increment the parser started: a person chooses their own export,
+    sees what was read before anything is stored, and confirms once.
+    """
 
     def test_choosing_a_file_shows_what_it_holds_and_writes_nothing(self):
         path = self.two_contacts()
@@ -6033,6 +6143,297 @@ class ContactImportTabTests(HandlerTestCase):
         self.assertEqual(rows[0][4], 1)
         self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
         self.assertIn("Nothing here has been contacted", app.contacts_summary.get())
+
+
+#: The synthetic reason a test types beside a mark: a person's own words about somebody, which is exactly
+#: the text that must never reach a log, an activity event or a dialog.
+CONTACT_NOTE = "asked not to be written to again (synthetic)"
+MARK_TITLE = "Mark this contact do not contact"
+CLEAR_TITLE = "Remove this contact's do-not-contact mark"
+
+
+class ContactMarkControlTests(ContactTabTestCase):
+    """The do-not-contact controls: one confirmation, one write, and nothing on every other path.
+
+    The mark is the person's own decision about somebody on their list, and this is the only screen that
+    writes it - the store's own method is the only writer of the column, and no import statement mentions
+    it. These tests drive the tab's handlers against a real store, so "nothing was written" is the
+    connection's change counter and the stored row rather than a message, and they read a contact's state
+    back through the same panel the person does.
+    """
+
+    def test_the_controls_offer_only_the_action_that_would_change_the_selected_contact(self):
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+
+        # Nothing selected: both controls are off, and the line under them says what to do.
+        self.select(app, None)
+        self.assertTrue(app.mark_contact_button.instate(["disabled"]))
+        self.assertTrue(app.clear_contact_button.instate(["disabled"]))
+        self.assertTrue(app.contact_note_entry.instate(["disabled"]))
+        self.assertIn("No stored contact is selected", app.contact_mark_state.get())
+
+        # An unmarked contact: marking is offered, removing is not.
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        self.assertFalse(app.mark_contact_button.instate(["disabled"]))
+        self.assertTrue(app.clear_contact_button.instate(["disabled"]))
+        self.assertIn("Selected contact 1 of 2", app.contact_mark_state.get())
+        self.assertIn("Not marked do not contact", app.contact_mark_state.get())
+
+        # A marked contact: the other way round, and the reason box is off because the only action left is
+        # removing the mark - which removes the reason with it. The mark is made the way a person makes it.
+        app.contact_note.set(CONTACT_NOTE)
+        app._mark_selected_contact()
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        self.assertTrue(app.mark_contact_button.instate(["disabled"]))
+        self.assertFalse(app.clear_contact_button.instate(["disabled"]))
+        self.assertTrue(app.contact_note_entry.instate(["disabled"]))
+        self.assertIn("Marked do not contact, and a reason is recorded with it",
+                      app.contact_mark_state.get())
+
+    def test_marking_asks_first_and_stores_the_mark_with_the_reason_typed(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+        before = self.changes()
+
+        app._mark_selected_contact()
+
+        self.assertIn(MARK_TITLE, MESSAGES.titles("askyesno"))
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("row 1 of 2 in the stored list", asked)
+        self.assertIn("contacts.csv", asked, "the file the row came from is how a person tells rows apart")
+        self.assertIn("no import can clear it", asked)
+        self.assertIn("The reason you typed is stored with the mark", asked)
+        record = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertTrue(record.suppressed)
+        self.assertEqual(record.suppressed_note, CONTACT_NOTE)
+        self.assertEqual(self.changes() - before, 1, "one update and nothing else")
+        self.assertIn("Do-not-contact mark updated", MESSAGES.titles("showinfo"))
+        self.assertIn("marked do not contact", app.status.get())
+        self.assertEqual(app.contact_note.get(), "", "the reason box is cleared with the mark it recorded")
+        self.assertEqual(self.stored_row(app, 0)[5], "do not contact")
+        self.assertEqual(self.stored_row(app, 0)[0], CONTACT_EMAILS[0])
+        self.assertEqual(self.stored_row(app, 1)[5], "", "the other contact is left alone")
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+        self.assertIn("Marked do not contact", app.contact_mark_state.get())
+        # The row the person acted on is the one still selected, so the line above reads its new state.
+        self.assertEqual(app.stored_contacts_tree.selected, (str(record.contact_id),))
+
+    def test_declining_the_mark_writes_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        CONFIG[MARK_TITLE] = False
+        before = self.changes()
+
+        app._mark_selected_contact()
+
+        self.assertEqual(self.changes(), before, "a declined confirmation must write nothing")
+        self.assertFalse(self.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertIsNone(self.store.get_contact(CONTACT_EMAILS[0]).suppressed_note)
+        self.assertEqual(app.contact_note.get(), "")
+        self.assertIn("Cancelled; nothing was changed.", app.status.get())
+        self.assertNotIn("Do-not-contact mark updated", MESSAGES.titles("showinfo"))
+
+    def test_removing_the_mark_asks_first_and_clears_the_reason_with_it(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.store.set_contact_suppression(CONTACT_EMAILS[0], note=CONTACT_NOTE)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertIn(CLEAR_TITLE, MESSAGES.titles("askyesno"))
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("row 1 of 2 in the stored list", asked)
+        self.assertIn("The stored reason and the day the mark was made are removed with it", asked)
+        record = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertFalse(record.suppressed)
+        self.assertIsNone(record.suppressed_note, "a cleared mark leaves no reason behind that no longer applies")
+        self.assertIsNone(record.suppressed_at)
+        self.assertEqual(self.changes() - before, 1, "one update and nothing else")
+        self.assertEqual(self.stored_row(app, 0)[5], "")
+        self.assertIn("0 marked do-not-contact", app.contacts_summary.get())
+        self.assertIn("Not marked do not contact", app.contact_mark_state.get())
+        self.assertIn("no longer marked do not contact", app.status.get())
+
+    def test_declining_the_removal_keeps_the_mark_and_its_reason(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+        app._mark_selected_contact()
+        marked = self.store.get_contact(CONTACT_EMAILS[0])
+        MESSAGES.reset()
+        CONFIG[CLEAR_TITLE] = False
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertEqual(self.changes(), before)
+        after = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertTrue(after.suppressed)
+        self.assertEqual(after.suppressed_note, CONTACT_NOTE)
+        self.assertEqual(after.suppressed_at, marked.suppressed_at, "the day the mark was made is unchanged")
+        self.assertIn("Cancelled; nothing was changed.", app.status.get())
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+
+    def test_pressing_mark_with_nothing_selected_writes_nothing_and_explains(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, None)
+        before = self.changes()
+
+        app._mark_selected_contact()
+
+        self.assertIn("Select a contact first", MESSAGES.titles("showinfo"))
+        self.assertIn("nothing was changed", MESSAGES.text("showinfo"))
+        self.assertIn("Select a stored contact in the list first; nothing was changed.", app.status.get())
+        self.assertEqual(self.changes(), before)
+
+    def test_a_selection_whose_contact_is_gone_is_reported_and_writes_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, 9999)  # a row id the database does not hold: what a restore can leave behind
+        before = self.changes()
+
+        app._mark_selected_contact()
+
+        self.assertIn("That contact is no longer stored", MESSAGES.titles("showinfo"))
+        self.assertIn("nothing was changed", MESSAGES.text("showinfo"))
+        self.assertEqual(self.changes(), before)
+        self.assertFalse(any(record.suppressed for record in self.store.list_contacts()))
+        self.assertIn("no longer stored; nothing was changed", app.status.get())
+        self.assertEqual(len(app.stored_contacts_tree.inserted), 4, "the list was refreshed, not emptied")
+
+    def test_marking_a_contact_that_is_already_marked_changes_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.store.set_contact_suppression(CONTACT_EMAILS[0])
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        before = self.changes()
+
+        # The control that would do nothing is off, so this is the stale-screen path: the handler is called
+        # as if the row had been marked by something else since the panel was drawn.
+        app._mark_selected_contact()
+
+        self.assertIn("Nothing to change", MESSAGES.titles("showinfo"))
+        self.assertNotIn(MARK_TITLE, MESSAGES.titles("askyesno"),
+                         "an action that would change nothing is never confirmed")
+        self.assertEqual(self.changes(), before)
+        self.assertIn("already what was asked for; nothing was changed.", app.status.get())
+
+    def test_an_injected_storage_failure_leaves_the_mark_alone_and_claims_no_success(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+
+        with mock.patch.object(self.store, "set_contact_suppression",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            app._mark_selected_contact()
+
+        self.assertNotIn("Do-not-contact mark updated", MESSAGES.titles("showinfo"),
+                         "a failed write must never be reported as a stored mark")
+        self.assertEqual(MESSAGES.titles("showerror"), ["Local database unavailable"])
+        self.assertEqual(app.status.get(), "The local database could not be read; nothing was changed.")
+        self.assertFalse(self.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertEqual(app.contact_note.get(), CONTACT_NOTE,
+                         "a failed write does not throw away what the person typed")
+
+    def test_the_mark_survives_a_re_import_through_the_tab(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+        app._mark_selected_contact()
+
+        self.import_two(app)  # the same file, read and confirmed again
+
+        record = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertTrue(record.suppressed, "an import never clears a do-not-contact mark")
+        self.assertEqual(record.suppressed_note, CONTACT_NOTE)
+        self.assertEqual(record.seen_count, 2, "the import still did its own work")
+        self.assertEqual(self.stored_row(app, 0)[5], "do not contact")
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+        self.assertIn("that mark was left alone", app.status.get())
+        # A file that contradicts the stored record is recorded as a disagreement and still cannot clear
+        # the mark: the second contact's name and company are replaced in the file below.
+        contradicted = self.write_csv(
+            f"{CONTACT_EMAILS[0]},{CONTACT_NAMES[2]},{CONTACT_COMPANIES[1]},3,\r\n",
+            name="later-list.csv")
+        FILEDIALOG.path = str(contradicted)
+        app._choose_contact_csv()
+        app._store_contact_preview()
+        after = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertTrue(after.suppressed)
+        self.assertEqual(after.name, CONTACT_NAMES[0], "the stored name is kept, not overwritten")
+        self.assertEqual(len(self.store.list_contact_conflicts(email_key=after.email_key)), 2)
+
+    def test_the_mark_is_still_shown_after_a_restart_and_a_backup_restore(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+        app._mark_selected_contact()
+        database = Path(self.store.database_path)
+        backup = database.parent / "chosen-backup.sqlite3"
+
+        # A restart: a second connection on the same file, read back through the tab's own refresh.
+        app.store.close()
+        app.store = CareerStore(database)
+        app._refresh_contacts()
+        self.assertEqual(self.stored_row(app, 0)[5], "do not contact")
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        self.assertIn("Marked do not contact", app.contact_mark_state.get())
+
+        create_backup(database, backup)
+        # The live database loses the mark, so a restore that works is the only way the screen shows it.
+        app.store.set_contact_suppression(CONTACT_EMAILS[0], suppressed=False)
+        app._refresh_contacts()
+        self.assertIn("0 marked do-not-contact", app.contacts_summary.get())
+        validate_app_database(backup)
+        backup_module.restore_backup(backup, database)
+        app.store.close()
+        app.store = CareerStore(database)
+        app._refresh_contacts()
+        self.assertEqual(self.stored_row(app, 0)[5], "do not contact")
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+        restored_record = app.store.get_contact(CONTACT_EMAILS[0])
+        self.assertEqual(restored_record.suppressed_note, CONTACT_NOTE,
+                         "the reason travels with the mark in a backup and a restore")
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        self.assertIn("Marked do not contact, and a reason is recorded with it",
+                      app.contact_mark_state.get())
+
+    def test_no_contact_value_or_reason_reaches_a_dialog_the_status_line_or_the_log(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        app.contact_note.set(CONTACT_NOTE)
+
+        app._mark_selected_contact()
+        app._clear_selected_contact()
+
+        said = MESSAGES.text() + "\n" + app.status.get()
+        for value in ALL_CONTACT_FIXTURE_VALUES + (CONTACT_NOTE,):
+            self.assertNotIn(value, said, f"{value!r} must not reach a dialog or the status line")
+        written = self.log_text()
+        self.assertIn("event=contacts.suppressed", written)
+        self.assertIn("suppressed=true", written)
+        self.assertIn("suppressed=false", written)
+        for value in ALL_CONTACT_FIXTURE_VALUES + (CONTACT_NOTE, "contacts.csv"):
+            self.assertNotIn(value, written, f"{value!r} must not reach the activity log")
+        details = [line.rsplit("detail=", 1)[-1].strip() for line in written.splitlines()
+                   if "event=contacts.suppressed" in line]
+        self.assertTrue(details, "the mark wrote no event at all")
+        self.assertEqual(set(details), {"suppressed=true", "suppressed=false"},
+                         "an event about a mark carries the flag and nothing else")
 
 
 if __name__ == "__main__":

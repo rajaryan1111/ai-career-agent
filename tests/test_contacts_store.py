@@ -583,6 +583,22 @@ class ContactPrivacyTests(ContactStoreTestCase):
     def test_the_imported_event_is_part_of_the_declared_vocabulary(self):
         self.assertIn("contacts.imported", EVENTS)
 
+    def test_a_change_to_the_mark_records_the_flag_and_nothing_else(self):
+        """The one screen that writes this column writes one line about it: a flag, never a reason or a row."""
+        self.store.import_contacts(self.parsed_file)
+        reason = "a reason the log must never carry"
+
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], note=reason)
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], suppressed=False)
+
+        written = self.log_text()
+        marks = [line for line in written.splitlines() if "event=contacts.suppressed" in line]
+        self.assertEqual(len(marks), 2, "one line per change to the mark, and no line for a read")
+        self.assertEqual([line.rsplit("detail=", 1)[-1].strip() for line in marks],
+                         ["suppressed=true", "suppressed=false"])
+        for value in ALL_SAMPLE_VALUES + (reason, "contacts.csv"):
+            self.assertNotIn(value, written, f"{value!r} must not reach the event log")
+
     def test_a_printed_summary_carries_counts_and_no_contact_value(self):
         plan = self.store.plan_contact_import(self.parsed_file)
         outcome = self.store.import_contacts(self.parsed_file)
