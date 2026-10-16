@@ -216,6 +216,38 @@ class PathRedactionTests(unittest.TestCase):
 
         self.assertEqual(redact_paths(text, home=Path("/home/someone")), text)
 
+    def test_a_path_that_follows_a_placeholder_is_still_hidden(self):
+        """The sweep must reach the rest of a path that a replacement has already shortened (D36).
+
+        Found by the Windows display-backed leg of the desktop acceptance run, on the event a refused
+        backup writes: the destination's folder is under ``Path.home()``\'s *parent* on Windows
+        (``C:\\Users\\RUNNER~1\\...``), so the home-folder replacement shortens the message to
+        ``<home folder>\\RUNNER~1\\...`` before the sweep runs - and the sweep could not match what
+        followed, because the guard that keeps a public URL from being hidden also refused a match after
+        a ``<`` or ``>``. The result was a folder name inside the activity log on Windows and not on
+        POSIX, where the temporary folder is not under the home folder's parent at all. The claim here is
+        the one the note this text goes into makes in its own words: a local location is hidden.
+        """
+        cases = {
+            "posix path under the home folder's parent": (
+                "reason=The folder /home/other/matter-notes/no-such-folder does not exist.",
+                "/home/user",
+                "matter-notes",
+            ),
+            "windows path after the placeholder": (
+                "reason=The folder <home folder>\\AppData\\Local\\Temp\\tmp-but-private\\no-such-folder "
+                "does not exist.",
+                "/home/someone",
+                "tmp-but-private",
+            ),
+        }
+        for label, (text, home, secret) in cases.items():
+            with self.subTest(shape=label):
+                redacted = redact_paths(text, home=Path(home))
+
+                self.assertIn("<local path>", redacted, f"no location was hidden in {redacted!r}")
+                self.assertNotIn(secret, redacted, f"the folder name survived in {redacted!r}")
+
 class StartupFailureExplanationTests(unittest.TestCase):
     """The message shown when the window cannot open must be useful and must not leak."""
 

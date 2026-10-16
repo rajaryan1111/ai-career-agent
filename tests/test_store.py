@@ -2432,6 +2432,51 @@ class PrivateBytesWriteTests(unittest.TestCase):
             # replaced, so a refused attempt may leave the empty file behind - and no data in it.
             self.assertEqual(target.read_bytes(), b"", "a refused write left its data on disk")
 
+    def test_a_write_that_fails_part_way_leaves_no_partial_export_behind(self):
+        """A truncated export is worse than none: it is a file that looks like the list and is not.
+
+        The disk filling up, a quota, a device error - whichever it was, the bytes that did make it to the
+        destination are a fragment of a documented format, and a person who finds that file at the path
+        they chose has no way to tell it from an export this application wrote and verified. So the
+        writer's own promise - a file that holds exactly these bytes or nothing - is asserted here rather
+        than left to the caller, which never sees the file at all: it only sees the exception.
+        """
+        target = self.directory / "half-written.csv"
+        real_fdopen = os.fdopen
+
+        class FailingHandle:
+            """The handle the writer opens, writing some of the data before the device refuses."""
+
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                self._handle.__enter__()
+                return self
+
+            def write(self, data):
+                self._handle.write(data[:8])
+                raise OSError(28, "No space left on device")
+
+            def __exit__(self, *exc):
+                return self._handle.__exit__(*exc)
+
+            def __getattr__(self, name):
+                return getattr(self._handle, name)
+
+        os.fdopen = lambda descriptor, *args, **kwargs: FailingHandle(
+            real_fdopen(descriptor, *args, **kwargs))
+        try:
+            with self.assertRaises(PrivateWriteError) as caught:
+                write_private_bytes_file(target, self.data)
+        finally:
+            os.fdopen = real_fdopen
+
+        self.assertIn("No space left on device", str(caught.exception))
+        self.assertFalse(target.exists(),
+                         "a write that failed part way left a fragment of the export where a person would "
+                         "read it as one")
+
     def test_a_missing_parent_directory_reports_a_useful_error(self):
         with self.assertRaises(PrivateWriteError) as caught:
             write_private_bytes_file(self.directory / "absent" / "export.csv", self.data)

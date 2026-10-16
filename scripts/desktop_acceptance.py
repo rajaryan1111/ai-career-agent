@@ -4283,7 +4283,11 @@ def workflow_l_contact_import(run: Run) -> None:
         require(app.store._connection.total_changes == before, "a failed export wrote to the database")
         written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
         require("event=contacts.export.failed" in written, "the failure was not recorded")
-        require("no-such-folder" not in written, "the path the person chose reached the activity log")
+        # The path is what this check is about: the refusal's own words name the folder, and the log this
+        # build writes is written to be safe to share, so the location must have been replaced before the
+        # line was written. Both the folder name and the whole path are asserted absent.
+        for fragment in ("no-such-folder", str(missing)):
+            require(fragment not in written, f"{fragment!r} reached the activity log")
 
     workspace.close_window(host, app)
 

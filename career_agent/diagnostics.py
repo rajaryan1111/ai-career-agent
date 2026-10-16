@@ -81,6 +81,12 @@ def _path_replacements(value: str | Path, placeholder: str) -> list[tuple[str, s
 #: a match: it names a public address rather than a location on this machine, and hiding it would lose
 #: the one piece of information that diagnoses a link problem. A bare relative word is never a match
 #: either, which is what keeps a folder name such as ``data`` out of ordinary sentences.
+#:
+#: The guards exclude ``<`` and ``>``, so these two patterns never match immediately after one of this
+#: module's own placeholders - which is deliberate, because ``<application data folder>/career_agent.sqlite3``
+#: is the product's own file name and the text a person needs to read. What that guard *cannot* leave
+#: alone is a location that continues past a placeholder into further folders; the third pattern in the
+#: tuple below covers exactly that shape, and it is the fix for D36.
 _ABSOLUTE_LOCATION_PATTERNS = (
     re.compile(r"""(?P<quote>['"])(?P<path>(?:/|[A-Za-z]:[\\/]|\\\\)[^'"\n]*)(?P=quote)"""),
     re.compile(
@@ -88,6 +94,21 @@ _ABSOLUTE_LOCATION_PATTERNS = (
         r"(?:/[^\s/<>\"'|]+)+(?: [^\s/<>\"'|]+(?:/[^\s/<>\"'|]+)+)*/?"
         r"|(?<![\w:])(?:[A-Za-z]:[\\/]|\\\\)(?:[^\s\\/<>\"'|]+[\\/]?)+"
     ),
+    # A location continuing past a placeholder this module wrote: the text reads ``<home folder>/x/y`` or
+    # ``<home folder>\\x\\y``, because a replacement earlier in this function shortened the original
+    # message. Two further segments are required, and that is the whole reason this is a separate pattern
+    # rather than a wider guard on the two above - one segment after a placeholder is a file name under a
+    # folder that is already hidden (``<application data folder>/career_agent.sqlite3`` names the product,
+    # not a location), while two or more are the person's own folder structure.
+    #
+    # Why it exists at all (D36): the Windows display-backed leg of the desktop acceptance run reported
+    # that a refused backup's own log line held a folder name, and only on Windows. The refusal mentions
+    # the destination folder, which on that runner is under the *parent* of ``Path.home()``
+    # (``C:\\Users\\RUNNER~1\\AppData\\...``), so the home-folder replacement produced
+    # ``<home folder>\\RUNNER~1\\AppData\\Local\\Temp\\<run folder>\\no-such-folder`` - and the
+    # two patterns above refused to match anything after the placeholder's ``>``. The location that no
+    # caller supplied, which the sweep exists to hide, survived into a log written to be safe to share.
+    re.compile(r"(?<=>)(?:[/\\][^\s/\\<>\"'|]+){2,}"),
 )
 
 #: Punctuation that ends a sentence rather than a file name. Trimmed from a match so that

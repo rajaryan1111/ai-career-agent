@@ -495,6 +495,20 @@ def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf
     return target
 
 
+def _discard_after_failed_write(target: Path) -> str:
+    """Remove a file whose write failed part way; say which of the two things happened.
+
+    Returns a clause for the error message, because "the export was not completed" on its own leaves a
+    person wondering what is at the path they chose. Deleting is the outcome this function aims for, and
+    the one it reports; a file it could not delete is named as still present so nobody has to guess.
+    """
+    try:
+        target.unlink()
+    except OSError:
+        return "the incomplete file it started is still there and should be deleted"
+    return "nothing was left behind"
+
+
 def write_private_bytes_file(path: str | Path, data: bytes) -> Path:
     """Write ``data`` to ``path`` byte for byte, owner-only from the first byte.
 
@@ -505,6 +519,10 @@ def write_private_bytes_file(path: str | Path, data: bytes) -> Path:
     platform's own line separator, and a *documented* file format that is one thing on Linux and another
     on Windows is not a format - a person comparing two exports, or a test asserting the bytes of a
     comma-separated file, would be reading a machine's convention rather than the file's.
+
+    A write that fails part way - a full device, a quota, an I/O error - removes the fragment it started
+    and says so, because a truncated file at the destination would look to the person exactly like an
+    export this application had written and verified.
 
     Raises :class:`PrivateWriteError` (an ``OSError``) with a user-facing message. POSIX mode guarantees
     apply on POSIX systems; other platforms get the same write path without the permission guarantee,
@@ -517,8 +535,16 @@ def write_private_bytes_file(path: str | Path, data: bytes) -> Path:
             descriptor = None  # the file object owns the descriptor from here
             handle.write(data)
     except OSError as exc:
+        # A write can fail with some of the data already on the disk - a full device, a quota, an I/O
+        # error - and what is left at the destination is then a *fragment* of the documented format. A
+        # person looking at that path cannot tell it from an export this application wrote and verified,
+        # so it is removed: this call either writes the whole file or leaves the folder as it found it.
+        # (A destination that already existed has been truncated by now, so there is nothing to restore;
+        # the message says what happened rather than implying the previous file is still there.)
+        discarded = _discard_after_failed_write(target)
         raise PrivateWriteError(
-            f"{target} could not be written: {exc.strerror or exc}. The export was not completed."
+            f"{target} could not be written: {exc.strerror or exc}. The export was not completed, and "
+            f"{discarded}"
         ) from exc
     finally:
         if descriptor is not None:

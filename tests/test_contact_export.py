@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from career_agent import contact_export, contacts as contacts_module
+from career_agent import contact_export, contacts as contacts_module, importer
 from career_agent.event_log import log_path
 from career_agent.store import (
     SCHEMA_VERSION, CareerStore, ContactRecord, PrivateWriteError, StoredRecordError,
@@ -237,6 +238,53 @@ class TheFormatsOwnClaimsTests(unittest.TestCase):
                          ("yes", "no"))
 
 
+class TheJsonExportIsUntouchedTests(ContactExportTestCase):
+    """The other export this application has, asserted against fixed values rather than the module.
+
+    The contact list deliberately does not travel in the version-2 JSON document, and this increment was
+    written so that it never could: the contact export is a second, separate file, and ``importer`` was not
+    edited at all. "Not edited" is not something a test can see, so what is asserted here is the contract
+    itself - the version number as the literal **2** rather than as whatever the module happens to declare
+    (a test that reads the constant back can never notice the constant changing), no key of the document
+    mentioning a contact, and the JSON bytes a database produces being *identical* before and after a
+    contact export is written beside it. The last one is the closest a test can get to "this increment did
+    not reach the other export": if the contact export changed anything that document carries, the two
+    renderings would differ.
+    """
+
+    def json_document(self, name: str = "export.json") -> bytes:
+        target = self.folder / name
+        importer.write_export(self.store, target)
+        return target.read_bytes()
+
+    def test_the_version_two_document_carries_no_contact_and_no_contact_value(self):
+        self.two_contacts()
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], note=SAMPLE_MARK_REASON)
+
+        document = importer.export_document(self.store)
+
+        self.assertEqual(document["format_version"], 2,
+                         "the JSON export contract is not the version this project documents")
+        self.assertEqual(importer.EXPORT_FORMAT_VERSION, 2)
+        self.assertEqual([key for key in document if "contact" in key.casefold()], [],
+                         "the JSON document grew a contact section")
+        rendered = json.dumps(document)
+        for value in (*SAMPLE_EMAILS[:2], *SAMPLE_NAMES[:2], SAMPLE_MARK_REASON,
+                      contact_export.CONTACT_EXPORT_FORMAT):
+            self.assertNotIn(value, rendered, f"{value!r} reached the version-2 JSON document")
+
+    def test_writing_a_contact_export_leaves_the_json_export_byte_identical(self):
+        self.two_contacts()
+        before = self.json_document(name="before.json")
+
+        self.export()
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], note=SAMPLE_MARK_REASON)
+        self.export(name="export-2.csv")
+
+        self.assertEqual(self.json_document(name="after.json"), before,
+                         "a contact export changed what the version-2 JSON document holds")
+
+
 class ValueEncodingTests(ContactExportTestCase):
     """What a value becomes in the file, and what the shipped parser reads back out of it."""
 
@@ -254,6 +302,14 @@ class ValueEncodingTests(ContactExportTestCase):
                       "a cell holding a comma, a quote and a line ending must be quoted and doubled")
         read = contacts_module.read_contact_csv(target)
         self.assertEqual(read.rows[0].name, awkward, "the parser no longer reads the value the file holds")
+        # Two line-ending claims, kept apart because they are different claims. Every *record* separator
+        # is CRLF - that is the format's own rule and the reason this module writes bytes - while a line
+        # ending that is part of a value stays exactly as the value holds it, inside the quotes the writer
+        # put around it. Counting them is the honest way to say both at once: the file holds this
+        # fixture's one data newline and no others.
+        self.assertEqual(raw.replace(b"\r\n", b"").count(b"\n"), 1,
+                         "the file holds a line ending that is neither the record separator nor the "
+                         "value's own")
 
     def test_non_ascii_text_is_written_as_utf8_and_reads_back_unchanged(self):
         name = "Zo\u00eb \u00c5ngstr\u00f6m \u2014 \u00dcn\u00efcode"
@@ -466,6 +522,50 @@ class FileSafetyTests(ContactExportTestCase):
         self.assertIn("Nothing was exported", str(caught.exception))
         self.assertFalse(target.exists(), "a file that is not the export must not be left where it would "
                                           "be read as one")
+
+    def test_a_write_that_fails_part_way_is_never_reported_and_leaves_no_list(self):
+        """The failure the read-back check cannot catch, because there is nothing complete to read back.
+
+        A device error part way through the write is the one case where a fragment of the format reaches
+        the person's own path. What must not happen is that the fragment stays there: this application
+        must either write the whole list or leave the folder as it found it, and the error it reports has
+        to be the truth about both.
+        """
+        self.two_contacts()
+        target = self.folder / "interrupted.csv"
+        real_fdopen = os.fdopen
+
+        class FailingHandle:
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                self._handle.__enter__()
+                return self
+
+            def write(self, data):
+                self._handle.write(data[:16])
+                raise OSError(28, "No space left on device")
+
+            def __exit__(self, *exc):
+                return self._handle.__exit__(*exc)
+
+            def __getattr__(self, name):
+                return getattr(self._handle, name)
+
+        os.fdopen = lambda descriptor, *args, **kwargs: FailingHandle(
+            real_fdopen(descriptor, *args, **kwargs))
+        try:
+            with self.assertRaises(PrivateWriteError) as caught:
+                contact_export.write_export(self.store, target)
+        finally:
+            os.fdopen = real_fdopen
+
+        self.assertIn("not completed", str(caught.exception))
+        self.assertFalse(target.exists(),
+                         "a partial file was left where the person chose to write their contact list")
+        for value in SAMPLE_EMAILS[:2]:
+            self.assertNotIn(value, str(caught.exception))
 
     @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
     def test_a_file_that_cannot_be_kept_owner_only_is_refused_and_does_not_remain(self):
