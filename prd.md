@@ -56,7 +56,13 @@ The intended audience is cross-industry and cross-experience: students, interns,
   confirms a fact, and a write changes the origin of the facts it changed and no others. A document is
   remembered by name, never by folder; a fact stored before origins were recorded reads as unknown; and
   which required facts a profile does not state stays answerable without a display, so a setup flow can ask
-  for exactly those. The origins are local bookkeeping and do not enter the version-2 JSON export.
+  for exactly those. The origins are local bookkeeping and do not enter the version-2 JSON export. The window
+  shows every stored fact with its value, its origin and its confirmation state, names a document by its file
+  name and never by a folder, and offers one explicit action to confirm the selected fact; nothing else in the
+  application confirms one. A profile that is missing a fact a listing can be blocked on is asked for exactly
+  those facts and no others: a fact that is stored is never asked for again whatever its origin, a preference
+  is never treated as required, a blank answer stays unknown rather than being inferred, and a setup that is
+  cancelled, refused or still incomplete writes nothing and says what is still missing.
 - Report progress from the records the user actually wrote, and never beyond them: a count is always
   traceable to stored rows; every rate names the denominator it was computed over; a rate is withheld with
   its reason below a floor of five recorded applications; a metric the schema cannot observe (an offer, an

@@ -3507,3 +3507,91 @@ display-backed legs reporting `RESULT: PASS — 102 checks passed`.
 setup flow that also asks for the required facts a profile does not state, where the value can be shown beside
 the control. Work-history and education records (schema 6) still have no per-record provenance. Written up in
 `research/candidate-profile-provenance-2026-10-16.md`.
+
+## 2026-10-16 — The profile shows what it holds, a person confirms one fact, and the setup asks only for what is missing
+
+**What was built.** The profile tab now carries a panel under the form: *Saved facts: the value, where it came
+from, and whether you confirmed it*. One row per fact the stored profile **states** - a fact with no value has no
+row, because there is nothing to show and nothing anybody could confirm - with the value, an origin in plain
+words (``You typed it in this app``, ``Read out of a document you chose (cv.docx)``, ``Imported from a file you
+chose (export.json)``, ``Not recorded — this profile was saved before the app kept track``), and whether the
+person has confirmed it with the time the database holds. A document is named by its **file name** and never by a
+folder: the store keeps no folder and the sentence has none to show. The row id is the fact's canonical name, so
+the table cannot select something that is not a fact, and no value a person typed is ever read back to decide
+which fact is being acted on. One control, **This is correct — confirm it**, is built disabled and enabled only
+while exactly one row is selected; it calls ``CareerStore.confirm_profile_fact`` - the only writer of a confirmed
+fact, with no SQL in the window - and then **reads the row, the value and the provenance back out of the
+database**, so what the window reports is the database's answer rather than the handler's intention: a
+confirmation that did not take effect, a value that moved, a fact the profile no longer states, a file older than
+schema 8 and an unwritable database are each reported as what they are, and a second press on the same fact says
+it was already confirmed and moves nothing, including the time of the first confirmation. Confirming a fact never
+rewrites the value or where it came from: a fact read out of a CV stays a fact read out of a CV, now confirmed.
+
+**The setup for what is missing.** **Set up missing required facts...** opens one window at a time - opening it
+again lifts the window already open rather than drawing a second one over answers it would have changed - and
+that window is rebuilt from storage every time it is drawn, so it asks for what the database does not state
+rather than for what the last handler believed. It asks one question per fact
+``core.missing_required_profile_facts`` reports, from one mapping keyed by the canonical fact names with a test
+binding it to ``REQUIRED_PROFILE_FACTS``; a fact that is stored is **never** asked for again whatever its origin
+and whatever its confirmation state, and the required facts that are stored but not yet confirmed are shown beside
+their values and origins with a checkbox instead of being re-asked, because the open question about those is
+whether the value is right. The four preferences are never asked at all: a listing cannot be blocked on them.
+Answers go through the same ``build_candidate_profile`` validation and the same ``save_profile`` write the form
+above uses, so there is no second and weaker route into the stored profile; a blank is never inferred from the
+other answers and stays unknown; the profile is read back and compared before anything is confirmed, and only
+then is one ``confirm_profile_fact`` call made per fact the person typed here or ticked. The window is rebuilt
+afterwards and reports what is still not stated instead of claiming completion. Cancel, Escape, the close button
+and a declined confirmation write nothing; a validation refusal keeps what was typed on screen; a failed write
+leaves the stored profile alone; and a write that succeeded but cannot be read back says **"Saved, but not
+verified"** with the facts left unconfirmed. The study-status question offers ``resume.study_status_choices()``,
+and the profile form's own combobox now uses that same list, so an answer the dialog accepts is an answer the form
+can hold.
+
+**What changed around it, and what deliberately did not.** The table is redrawn after a profile save, a profile
+deletion and an accepted résumé import, so a value read out of a document appears as that document's value and as
+not confirmed by the person. No schema change (schema 8 already had every column this needs), no change to the
+version-2 JSON export - origins and confirmations stay local bookkeeping - and no new model, store, importer or
+tab: the panel lives on the existing profile tab inside the tab's scrolling body, and the write path is the
+form's own.
+
+**Three things verification found, all by running the code.** (1) The table dropped the row the person had just
+used: confirming a fact redraws the table, and the redraw lost the selection, so a second press - and any reading
+of "what happened to that row" - needed the row to be clicked again. Found by the repeated-confirmation test,
+fixed by capturing the selected fact's key before the redraw and restoring it when that fact is still stored; a
+mutation that removes it is caught. (2) A write that had **happened** was reported as *"Nothing was changed"*:
+the setup save used the shared unreadable-record report, whose sentence promises that nothing was changed, on the
+read-back after the profile had already been written. Found by a handler test that fails the read once the write
+has succeeded; the post-write path now has its own honest sentence, *"Saved, but not verified"*. (3) One
+reporting branch had **no test at all**, and the mutation run is what said so: the first pass ran eleven
+mutations and caught ten, the miss being the branch that reports a fact as *already confirmed* when the setup
+save finds it confirmed at write time. That branch is reachable - two windows, or two runs of the application,
+on one database - and a test now drives exactly that (the same fact confirmed elsewhere while the setup window
+was open; the earlier confirmation's own time must stand and this press must not claim the work). Second
+increment in a row where a green suite said nothing about an untested path and the mutation harness asked.
+
+**Evidence.** ``Ran 2065 tests … OK (skipped=13)`` on this machine (the suite stood at 2004 before the
+increment's own tests: 25 added to ``tests/test_profile_provenance.py``, which now holds 74, and 36 to
+``tests/test_desktop_handlers.py``, which now holds 380), ``compileall`` clean, the stand-in acceptance run
+``113 checks passed, 0 failed`` - which reports **BLOCKED**, by design, because a stand-in Tk is not a desktop -
+and **11 of 11 mutation checks detected** on a disposable copy, one of them only after the miss above was closed.
+The harness gained **eleven checks inside workflow A** (A7-A17) rather than a thirteenth workflow, so the CI
+job's loop over workflow letters is unchanged and ``declared_step_count()`` is 113; A17 builds a synthetic DOCX
+in the run's own disposable folder and drives the real résumé review, so "a document's value is shown as that
+document's and is not confirmed" is checked end to end, and A9 asserts the log line the store writes
+(``profile.fact_confirmed detail=fact=country``) **and that no candidate value reaches the log**. The window
+smoke test's ``EXPECTED_TREES`` gained ``facts_tree`` with its four columns and ``EXPECTED_SUMMARY_VARIABLES``
+gained ``facts_summary``, so all five display-backed legs check the new controls exist and fill. CI: run
+``38914820675`` at ``982e87c``, 13/13 jobs, ``RESULT: PASS — 113 checks passed`` on the five display-backed legs.
+
+**What is deliberately not done.** No manual step was ticked: this increment adds widgets, so it adds **six**
+numbered steps (118-123), all of them **BLOCKED**, and the checklist stands at **123 steps, 22 PASS / 101
+BLOCKED / 0 FAIL**. Whether the table and its sentences read clearly and fit the tab at both sizes, whether a
+greyed-out confirm button looks greyed out, whether the keyboard alone can work it, what a screen reader
+announces for a table of a person's own facts, whether the setup window's wording makes it clear that a blank
+stays unknown and that an answer typed there becomes the person's own statement - none of that is measurable, and
+no automated check is offered as a substitute. Still open, and named in the note's follow-ups: per-record
+provenance for the work-history and education tables (schema 6), origins travelling between machines (a
+separately versioned export document, not a new key in version 2), asking for preferences as part of onboarding
+(a product decision, not a bug), and a comparison view for a document's value that disagrees with a stored fact.
+``SOURCE_QUALITY_GATE_PASSED`` is still ``False``, ``enabled_discovery_sources()`` is still ``()``, and no socket
+is opened. Written up in ``research/candidate-profile-fact-review-and-setup-2026-10-16.md``.

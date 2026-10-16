@@ -221,8 +221,13 @@ than left pointing at a control that does not exist. This is the first follow-up
 
 ## 9. Follow-ups
 
-1. The confirmation control and the targeted-questions setup flow (section 8), within the profile tab's existing
-   1120×760 non-scrollable budget or with the tab's layout measured again if it grows.
+1. ~~The confirmation control and the targeted-questions setup flow (section 8)~~ - **delivered**: the profile
+   tab now lists every stored fact with its value, origin and confirmation state, one control confirms the
+   selected fact (calling this note's own `confirm_profile_fact`, and nothing else in the application confirms
+   one), and the setup window asks only for the required facts a profile does not state. Written up in
+   [the fact-review and setup note](candidate-profile-fact-review-and-setup-2026-10-16.md); the profile tab
+   scrolls, so the 1120×760 budget it was asked to respect is a measurement the harness makes rather than a
+   constraint on the layout.
 2. Provenance for **work-history and education records** (schema 6) — they have their own tables and their own
    records, and per-record provenance for them is a separate decision.
 3. If origins should travel between machines, a **separately versioned** export document; version 2 stays as it

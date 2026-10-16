@@ -1,7 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 117 steps — at this revision **22 PASS, 95 BLOCKED, 0 FAIL, no box ticked** (the six
-newest steps, 112-117, are for the HR contacts export and all six are BLOCKED). Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 123 steps — at this revision **22 PASS, 101 BLOCKED, 0 FAIL, no box ticked** (the six
+newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
+BLOCKED). Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -98,6 +99,25 @@ carries one). The harness gained **five** checks inside workflow L (L16-L20) rat
 it declares **102** checks and the suite is at **1945 tests**; run `38883986337` at `bdf443b` is green on the
 whole matrix (**13/13 jobs**), and all five display-backed legs drove L16-L20 through the real window, each
 reporting `RESULT: PASS — 102 checks passed`.
+
+**Update, 2026-10-16 (the profile tab gains its confirmation control and its missing-facts setup):** the verdicts
+are now **22 PASS, 101 BLOCKED, 0 FAIL** — six steps (**118-123**) are new and all six are BLOCKED — and **no box
+has been ticked**. They cover the panel that shows every stored profile fact with its value, where it came from
+and whether the person confirmed it, the one control that confirms a selected fact, and the window that asks for
+the required facts a listing can be blocked on and the saved profile does not state. The behaviour is
+[written up in its own note](candidate-profile-fact-review-and-setup-2026-10-16.md); the six steps ask a person
+for what no harness can judge — whether the table and its sentences read clearly and fit the tab at the window's
+opening size and at 900x600, whether a greyed-out confirm button *looks* greyed out, whether the keyboard and the
+mouse can reach every control without a pointer, what a screen reader announces for a table of a person's own
+facts, whether the setup window's wording makes it clear that a blank stays unknown and that an answer typed
+there is recorded as confirmed *by the person*, and whether the confirmation a save is about to record is
+understood. The harness gained **eleven** checks inside workflow A (A7-A17) rather than a thirteenth workflow, so
+it declares **113** checks and the suite is at **2065 tests**; run `38914820675` at `982e87c` is green on the whole
+matrix (**13/13 jobs**), and all five display-backed legs drove A7-A17 through the real window, each reporting
+`RESULT: PASS — 113 checks passed`. The panel's own vocabulary is asserted in `tests/test_profile_provenance.py`
+(74 tests in the file) and the handlers behind the widgets in `tests/test_desktop_handlers.py` (380 tests in the
+file); eleven mutations of the new rules were all caught, one of them only after the miss exposed an untested
+reporting branch (section 7 of the note).
 
 **Date created:** 2026-10-14
 
@@ -819,6 +839,115 @@ deletes, imports or marks anything; every step is about one file this window wri
     → **BLOCKED — no display and no Tkinter in the acceptance environment; every comparison and both imports were made against the store and the log at the handler, store and file levels, but reading the window after a restore, and judging whether the sentence about the mark column makes the limitation clear, needs a person.**
     → **Automated coverage (2026-10-16): L18/L19 (`total_changes` and every stored row and conflict unchanged; the log's `detail=contacts=2 marked=1`; no contact value, mark reason, disagreement value, source file name or internal column name in the file, the report or the log), `tests/test_contact_export.py::ReadOnlyTests` (before and after a restart), `::PrivacyTests`, `tests/test_contacts_store.py::ContactExportReadBackTests` and `::ContactExportReadBackTests::test_the_marked_column_in_the_file_cannot_mark_or_unmark_anything`. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
 
+## The profile's saved facts, their confirmation, and the setup for what is missing (added 2026-10-16)
+
+Run these on a profile that states at least one fact and is missing at least one required fact, with one value
+you accepted out of a résumé earlier in the run. Everything here is on the existing **Candidate profile** tab
+and in one window it opens; nothing here leaves the machine.
+
+118. [ ] Open the window, choose the **Candidate profile** tab and scroll to the panel headed *Saved facts: the
+    value, where it came from, and whether you confirmed it*. It must hold a paragraph, a summary line, a
+    four-column table (**Fact**, **Value stored**, **Where it came from**, **Confirmed by you**) and three
+    controls (**This is correct — confirm it**, **Refresh the saved facts**, **Set up missing required facts...**).
+    Read the whole panel at the size the window opens with and at 900x600. Then check the table against the form
+    above it, fact by fact: every fact your saved profile states must have a row and a fact with no value must
+    have none; the values must be exactly what the form shows; a fact you typed must say you typed it; a value
+    you accepted out of a résumé must say it was read out of a document **and name that file**; a fact whose
+    origin was never recorded (an old database) must say so rather than claiming you typed it. No row may show a
+    folder or a full path, and the summary line must count the stored facts, the confirmed ones and - where there
+    are any - name the required facts that are not stated yet.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the rows, their origins, the summary
+    and the absence of any path were asserted through the real window and at the handler level, but whether the
+    panel reads clearly and fits the tab is a person's judgement.**
+    → **Automated coverage (2026-10-16): A7 (every stored fact has a row, in the profile's own order, with its
+    label, its value, "You typed it in this app" and "Not confirmed yet", the summary's counts and the sentence
+    that every required fact is stated) and `tests/test_desktop_handlers.py::ProfileFactReviewTests` (rows and
+    order per stated fact, an empty fact having no row, a document named and no folder, a legacy row reading
+    "Not recorded"). Five display-backed CI legs, 113 checks per leg, run `38914820675` at `982e87c`.** Whether the
+    words are clear and the panel is legible at each size is not covered by any of it.
+119. [ ] Select one stored fact with a single click and watch the confirm control: it must be greyed out before
+    anything is selected and usable once exactly one row is selected, and it must go grey again when the
+    selection is cleared. Press it and read the status line and the row: the value and the origin must be
+    **exactly what they were**, the row must now read *Confirmed by you* with a time, the summary's confirmed
+    count must rise by one, and nothing may be written anywhere else. Press it a second time on the same row: it
+    must say the fact was already confirmed, the time must be the same one, and no count may move. Then press it
+    with no row selected: it must say it needs a selected fact, and nothing may change.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; every one of those comparisons was
+    made against the database through the real window and at the handler level. What a greyed-out button looks
+    like on this platform with this font, and whether the enabled one is obvious, is what a person is here for.**
+    → **Automated coverage (2026-10-16): A8 (greyed before a selection, usable after one, greyed again when the
+    selection is cleared, and a moved selection confirming nothing), A9 (the value, the source and the document
+    name unchanged, a time recorded, the row and the status line saying so, exactly one fact confirmed, the log
+    line `profile.fact_confirmed detail=fact=country` and no value in the log), A10 (a repeated confirmation
+    changing nothing, including the time) and `ProfileFactReviewTests` (the confirm handler writing through the
+    store, a repeated confirmation, a refusal with nothing selected, a stale row left from a deleted profile).
+    Five display-backed CI legs, 113 checks per leg, run `38914820675` at `982e87c`.** Whether the control *looks*
+    actionable and whether its sentence reads well are not measured by any of it.
+120. [ ] Keyboard and screen reader: reach the table with **Tab** and move through its rows with the arrow keys.
+    Note whether the selection follows the keyboard, whether the confirm control becomes usable without ever
+    clicking, whether the focused row is visibly focused, and whether the scroll of the tab keeps the panel in
+    view at 900x600. Then, with a screen reader running, have the table, one row and the confirm control read
+    aloud: the column headings must be announced with the row's own values, and the button's purpose must be
+    clear without seeing it.
+    → **BLOCKED — no display, no Tkinter and no accessibility tooling in the acceptance environment; the focus
+    order and the reachability of every control are measured, but what a screen reader announces is not.**
+    → **Automated coverage (2026-10-16): workflow K measures every widget against the box it is drawn in at the
+    window's declared minimum, at its opening size and larger, with the new panel in its list; A8 drives the
+    selection through the table's own selection mechanism. Whether a *person* can work the table without a
+    pointer, and what an assistive technology says about it, is not measured by any of it.**
+121. [ ] Clear one required field in the form above, save, and open **Set up missing required facts...**. Check
+    that it asks for **only** the required fact(s) your profile does not state, in plain language with a hint
+    under each question, that the required facts it already holds are shown beside their values and origins with
+    a checkbox instead of being asked for again, and that no preference (skills, locations, work modes, role
+    types) is asked for at all. Read the sentence about a blank staying unknown and note anything you would call
+    unclear. Then close it three ways in turn - **Cancel**, **Escape**, and the window's own close box - and,
+    before and after each, compare by hand the table, the form and the summary: nothing may change, no dialog may
+    appear, and the status line must say that nothing was saved. Open it twice in a row and confirm only one
+    window exists.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the questions, the boxes, the
+    refusals and the unchanged database were asserted through the real window and at the handler level, but
+    whether the questions and hints read clearly, and what closing the window by hand feels like, is a person's
+    check.**
+    → **Automated coverage (2026-10-16): A11 (a complete profile is asked for nothing, the stored required facts
+    are offered with their values in the window's own record, and opening it asks no question), A12 (Cancel
+    writing nothing and leaving no window behind), A13 (clearing work authorization makes the window ask for
+    exactly that fact) and `ProfileSetupTests` (a first run asking the six required facts and no preference, only
+    the missing facts for a partly filled profile, a stored fact never asked again whatever its origin, a blank
+    staying unknown, cancelling, Escape and a second window). Five display-backed CI legs, 113 checks per leg,
+    run `38914820675` at `982e87c`.**
+122. [ ] Answer one missing fact and press **Save and confirm these answers**. Read the confirmation in full
+    before answering it: it must name the field **and the value** you are about to save, and say that the answer
+    is recorded as confirmed **by you**. Answer **Yes**, then read the window and the table: the value must be
+    stored and shown in the form above, the row must read *Confirmed by you*, and the window must recompute what
+    is still missing rather than reporting completion - and must report the remaining fact(s) by name. Then
+    repeat with a blank answer and an already-checked saved fact: the blank must stay unknown (no value invented
+    from the other answers) and the ticked fact must be confirmed with **its own saved value**, not a new one.
+    Then decline the confirmation once: nothing may be written at all.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the stored rows, the origins and the
+    window's own sentences were asserted, but whether the confirmation's wording is understood as "this is now
+    your own statement" is a person's judgement.**
+    → **Automated coverage (2026-10-16): A14 (a save with nothing typed and nothing ticked writing nothing and
+    saying so), A15 (the answer stored as the person's own and confirmed, the confirmation naming the field and
+    the value, the table reading "Confirmed by you"), A16 (the rebuild from storage, the facts still awaiting a
+    check, and the profile stating every required fact) and `ProfileSetupTests` (answers stored as the person's
+    own and confirmed, a blank never guessed, a declined confirmation, a confirmation keeping the document
+    origin, a repeated confirmation reported as unchanged, and a write whose read-back does not match never
+    reported as saved). Five display-backed CI legs, 113 checks per leg, run `38914820675` at `982e87c`.**
+123. [ ] Import a résumé and accept one of its values, then read the table: that row must say the value was read
+    out of the document **by name** and that it is **not** confirmed by you, and the completion message must say
+    the same without naming the folder you chose. Confirm that row and read it again: the origin must still name
+    the document, now with a confirmation beside it. Close and reopen the window and confirm the row, the
+    document's name and the confirmation are all still there.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the row, the document's name, the
+    absence of a path and the unconfirmed state were asserted end to end through the real window with a
+    synthetic DOCX, but reading the panel after a real import, with your own file, is a person's check.**
+    → **Automated coverage (2026-10-16): A17 (a synthetic DOCX imported through the real résumé review, the
+    accepted value stored as read out of that document and unverified, the row naming the file and never the
+    folder, "Not confirmed yet", and the completion message saying "not confirmed by you") plus
+    `ProfileFactReviewTests` (an import's origin shown as unverified, confirming a fact keeping its document
+    origin) and the eleven mutation checks in the note's section 7. Five display-backed CI legs, 113 checks per
+    leg, run `38914820675` at `982e87c`.**
+
 ## Record results
 
 ### 2026-10-15 — headless Linux execution (CPython 3.11.2, no display, no Tkinter)
@@ -1114,3 +1243,34 @@ and a stand-in widget module is not a desktop. The behaviour they cover is
   evaluate; whether non-ASCII names look right in their tools rather than like mojibake; and whether the sentence
   about the mark column is understood as the limitation it is — that an import of the file can neither set nor
   clear a do-not-contact mark, and that the whole-database backup is what carries one.
+
+### 2026-10-16 — the profile's confirmation control and the missing-facts setup: six steps, all BLOCKED
+
+**No box was ticked and no verdict changed by any of this.** The numbered steps are 123 now (22 PASS, 101
+BLOCKED, 0 FAIL) and the six new ones — **118–123**, the saved-facts table, the confirm control and the setup
+window — are BLOCKED for the same named reason as the rest: no display, no Tkinter and no assistive technology
+in this environment, and a stand-in widget module is not a desktop. The behaviour they cover is
+[written up in its own note](candidate-profile-fact-review-and-setup-2026-10-16.md), which also records the
+three things verification found (a table that dropped the row it had just used, a write that had happened being
+reported as "Nothing was changed", and one reporting branch with no test at all, found by a mutation miss) and
+the one harness-side change that made the window's own record the thing a check reads.
+
+- **What the harness established on a real display (workflow A, checks A7–A17).** Eleven checks were added
+  inside workflow **A** rather than as a new workflow letter, so the CI job's loop over workflow letters is
+  unchanged and `declared_step_count()` is **113** while the suite is at **2065 tests**. All eleven ran on all
+  five display-backed legs of run `38914820675` at `982e87c` and reported `RESULT: PASS — 113 checks passed`. A17
+  builds a synthetic DOCX inside the run's disposable folder and drives the real résumé review, the real save
+  and the real table, so the claim "a document's value is shown as that document's and is not confirmed" is
+  checked end to end rather than at the store alone; A9 asserts the log line and that **no candidate value
+  reaches it**; A10 asserts that a repeated confirmation does not even move the recorded time.
+- **The window smoke test now checks the new controls exist on every platform.** `EXPECTED_TREES` gained
+  `facts_tree` with its four columns and `EXPECTED_SUMMARY_VARIABLES` gained `facts_summary`, so the
+  display-backed smoke run on each of the five legs fails if the panel stops being built or its summary stops
+  filling — not only if a workflow check happens to reach it.
+- **What a person still has to judge, and cannot be automated.** Whether the table, its four column headings and
+  its summary read clearly and fit the tab at 1120x760 and at 900x600; whether a greyed-out confirm button looks
+  greyed out and an enabled one is obvious; whether the keyboard alone can move the selection and use the
+  control; what a screen reader announces for a table whose rows are the person's own facts; whether the setup
+  window's questions and hints read clearly and its sentence about a blank staying unknown is understood;
+  whether the confirmation that a save is about to record makes it clear that the answer becomes the person's own
+  statement; and whether the whole panel looks like part of the profile tab rather than bolted on.

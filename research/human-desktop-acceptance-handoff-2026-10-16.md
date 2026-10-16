@@ -3,12 +3,12 @@
 **What this document is.** A run-book for the one thing this project has never done: a person opening the
 window on a real desktop and judging what a machine cannot. It does **not** replace or duplicate the
 [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) — the
-98 numbered steps, their expected behaviour and their result lines stay there, and they are the record. This
+123 numbered steps, their expected behaviour and their result lines stay there, and they are the record. This
 file says how to get to a state where those steps can be executed, which steps carry which area, what
 evidence to capture, and where to write the result.
 
 **Status of every window step today: BLOCKED, and nothing here changes that.** No human has opened this
-window. 22 of the 117 steps passed on a headless machine (the ones needing no window), 95 are blocked for the
+window. 22 of the 123 steps passed on a headless machine (the ones needing no window), 101 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
 **One thing the first export run is worth reading for.** Run `38883986337` at `bdf443b` was 11 of 13 jobs
@@ -43,16 +43,30 @@ well and whether the two new panels fit the tab - so see the named gaps in
 [the panel's note](hr-contact-conflict-review-panel-2026-10-16.md) rather than treating the automated checks as
 acceptance of it.
 
-**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **102
-checks** in the current source, and 102 on the matrix below - run `38891340290` at `546d065`,
-thirteen of thirteen jobs, `RESULT: PASS - 102 checks passed` and `Ran 1950 tests ... OK` on every leg (97 on the
-matrix before it, run `38875397574` at `c1b2ab1` with `Ran 1881 tests ... OK`; 94 on the one before that, run
-`38864632201` at `4b4e752`; 91 on the one before that, run `38855211961` at `2d237bc`; 87 on the one before that,
-run `38828908041` at `02962f6`; eleven and 82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg
-table below was recorded, and one check was added to workflow I on 2026-10-16, five to workflow L with the
-contact list, four more when the do-not-contact controls were added, three more for the recorded-disagreement
-panel, three more for deleting one stored contact and its recorded disagreements, and five more for exporting
-the stored list). The twelfth
+**The profile tab now shows what is stored and asks for what is missing (steps 118-123, all BLOCKED).** The
+newest six steps cover the panel under the profile form: every stored fact with its value, where it came from
+(typed, read out of a named document, imported, or not recorded for an older database) and whether the person
+has confirmed it; the one control that confirms the selected fact, which is the only path in this application to
+a confirmed fact and never changes a value or an origin; and the window that asks for the required facts a
+listing can be blocked on and the saved profile does not state, offering the stored-but-unconfirmed required
+facts for confirmation instead of asking for them again, and never asking for a preference. A tester should
+read steps 118-123 as one sitting with a résumé-imported value in the profile, because the interesting sentence
+is the one that says a value came out of a *document* and is **not** the person's own statement. The behaviour
+is written up in [its note](candidate-profile-fact-review-and-setup-2026-10-16.md).
+
+**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **113
+checks** in the current source, and 113 on the matrix below - run `38914820675` at `982e87c`,
+thirteen of thirteen jobs, `RESULT: PASS - 113 checks passed` and `Ran 2065 tests ... OK` on every leg (102 on the
+matrix before it, run `38905204903` at `a22b917d` with `Ran 2004 tests ... OK`; 102 before that, run `38891340290`
+at `546d065` with `Ran 1950 tests ... OK`; 97 on the one before it, run `38875397574` at `c1b2ab1` with
+`Ran 1881 tests ... OK`; 94 on the one before that, run `38864632201` at `4b4e752`; 91 on the one before that,
+run `38855211961` at `2d237bc`; 87 on the one before that, run `38828908041` at `02962f6`; eleven and 82 before
+that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and since then one check was added to
+workflow I on 2026-10-16, five for the layout, focus-order and labelling pass (workflow K), five to workflow L
+with the contact list, four more when the do-not-contact controls were added, three more for the
+recorded-disagreement panel, three more for deleting one stored contact and its recorded disagreements, five
+more for exporting the stored list, and eleven more inside workflow A for the profile's saved-facts table, its
+confirm control and the missing-facts setup - 76, then 77, 82, 87, 91, 94, 97, 102 and 113 in order). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
@@ -103,7 +117,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 102 checks: twelve workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 113 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -247,7 +261,7 @@ what to capture. "Human-only judgement" is the part no automated run covers for 
 - **Human-only judgement:** all of it. Automated runs answer these dialogs themselves and only check that a
   refusal was explained; they cannot read them as prose.
 
-### J. Keyboard-only navigation, tab order, focus — steps 27, 35, 64, 65, 81
+### J. Keyboard-only navigation, tab order, focus — steps 27, 35, 64, 65, 81, 118-123
 
 - **Do:** without touching the mouse, reach every control on every tab: `Tab`/`Shift-Tab` through each form, the
   arrow keys and `Enter` in each list, `Space` on the checkbuttons, `Escape` and `Return` in every dialog. Note
@@ -259,10 +273,11 @@ what to capture. "Human-only judgement" is the part no automated run covers for 
   where you could not tell what had focus.
 - **Human-only judgement:** all of it — no automated check presses `Tab`.
 
-### K. Screen reader and assistive technology — no numbered step; run this pass explicitly
+### K. Screen reader and assistive technology — steps 120 and 123, and the whole run
 
-This area has **no coverage anywhere** in this project and is unrun. It is included so that its absence is
-visible. No automated check can judge it.
+Steps 120 and 123 now ask explicitly for a screen reader to read the saved-facts table and the setup window;
+beyond those, this area has **no coverage anywhere** in this project and is unrun. It is included so that its
+absence is visible. No automated check can judge it.
 
 - **Setup:** VoiceOver on macOS (`Cmd-F5`), NVDA or Narrator on Windows, Orca on Linux; one platform each is enough
   to start, and the result must state which one you used.
@@ -276,7 +291,7 @@ visible. No automated check can judge it.
   control that announces nothing or announces the wrong thing.
 - **Human-only judgement:** all of it.
 
-### L. Real mouse usability and native feel — steps 26, 81, and the whole run
+### L. Real mouse usability and native feel — steps 26, 81, 118-123, and the whole run
 
 - **Do:** perform the run with a mouse: click every button, drag the window, resize it by its edges, scroll with
   the wheel, use the lists' scrollbars, and try the app's own closing button.
@@ -377,6 +392,39 @@ visible. No automated check can judge it.
   than evaluating it, whether non-ASCII names look right in their tools rather than like mojibake, and whether
   the sentence about the mark column is understood as the limitation it is rather than as a defect.
 
+### Q. Profile: the saved-facts table, confirming one fact, and the missing-facts setup — steps 118–123
+
+- **Setup:** the disposable `CAREER_AGENT_HOME` from area A, a profile that states most facts but is **missing at
+  least one required fact** (clear one field and save), and one value accepted out of a résumé earlier in the run
+  so that a row in the table reads *read out of a document you chose (<name>)*. No real candidate data: use the
+  synthetic values the rest of the run uses.
+- **Do:** read the whole saved-facts panel, its summary and its table against the form above (118); select one
+  fact, confirm it, confirm it again, then clear the selection and press the control (119); do the keyboard and
+  screen-reader pass over the table and the control (120); clear a required field, save, and open **Set up
+  missing required facts...** to read what it asks and what it refuses to ask, then close it with Cancel, Escape
+  and the window's close box, and open it twice in a row (121); answer one missing fact and save, reading the
+  confirmation in full before answering it, then repeat with a blank answer and a ticked saved fact, and decline
+  once (122); import a résumé, accept one value, read the table, confirm that row, and reopen the window (123).
+- **Expected:** every stated fact has exactly one row and no empty fact has any; the value column matches the
+  form exactly; the origin column names the person, the **document's file name** or the imported file's name, or
+  says the origin was not recorded — never a folder or a path; a confirmation changes no value and no origin,
+  moves no count twice, and leaves the time of the first confirmation alone; a fact with no value cannot be
+  confirmed; the setup window asks only for the required facts the profile does not state, offers stored
+  unconfirmed ones for a check instead of re-asking, never asks for a preference, keeps a blank unknown, records
+  an answer as confirmed **by the person**, recomputes what is still missing instead of claiming completion, and
+  writes nothing on cancel, Escape, the close box or a declined confirmation.
+- **Evidence to capture:** a screenshot of the panel at 1120x760 and at 900x600; the table's rows before and
+  after a confirmation (value, origin and confirmation columns); the status line after a confirmation, a repeat
+  and a refusal with nothing selected; the setup window as it opens, and again after a save, with its question,
+  hint and summary text quoted; the confirmation's own wording; and the table row of a value accepted from a
+  résumé, before and after confirming it.
+- **Human-only judgement:** whether the table and its four headings read clearly and fit the tab at both sizes,
+  whether a greyed-out confirm button looks greyed out, whether the keyboard alone can move the selection and use
+  the control, what a screen reader announces for a table of the person's own facts, whether the setup window's
+  questions and its sentence about a blank staying unknown are understood, whether the confirmation makes it
+  clear that an answer becomes the person's own statement, and whether the panel looks like part of the profile
+  tab rather than bolted on.
+
 ### M. Operating-system specifics
 
 Run the checklist once per operating system you intend to claim support for, and record the environment facts
@@ -418,10 +466,11 @@ result this project has recorded for every window step so far.
 
 | Document | What it holds |
 | --- | --- |
-| [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 105 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
+| [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 123 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
-| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls, 94 with the recorded-disagreement panel), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls, 94 with the recorded-disagreement panel, 97 with the per-contact deletion, 102 with the contact export and the provenance increment, 113 with the profile's confirm control and missing-facts setup), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [Candidate profile: the saved-facts table, confirming a fact, and the setup for what is missing](candidate-profile-fact-review-and-setup-2026-10-16.md) | what the profile tab now shows about a stored fact, the one control that confirms it, the window that asks only for the required facts a profile does not state, and the three things verification found |
 | [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab |
 | [HR contact conflict review panel](hr-contact-conflict-review-panel-2026-10-16.md) | how a recorded disagreement is read without being settled: what the record holds and what it does not, the zero-write and privacy assertions, the two defects the display-backed legs found, and the manual steps that still have to be run |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |
