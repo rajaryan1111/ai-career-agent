@@ -13,6 +13,7 @@ from career_agent import ApplicationStatus, ApplicationTracker, Availability, Ca
 from career_agent.core import (ActivityKind, ApplicationActivity, InterviewOutcome)
 from career_agent.core import EducationEntry, WorkHistoryEntry  # noqa: F401  (named in the history tests)
 import career_agent.store as store_module
+from career_agent import contacts as contacts_module
 from career_agent.core import duplicate_key
 from career_agent.backup import BackupError, validate_app_database
 from career_agent.store import (
@@ -1630,15 +1631,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 6)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 6)
+        self.assertEqual(SCHEMA_VERSION, 7)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 7)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
         # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
         # the current version's contract names - so it is written as the version it is checking.
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[6]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[7]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1744,6 +1745,103 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(added.entry_id, 1)
         self.assertEqual(upgraded.add_education("IIT Delhi", "B.Tech").entry_id, 1)
         self.assertEqual(upgraded.profile_record_counts(), {"work_history": 1, "education": 1})
+
+    def test_the_contact_step_adds_its_tables_to_a_database_full_of_records(self):
+        """The v6 file a person has been using for weeks: every row stays, the contact tables arrive empty.
+
+        The step is the last one in the chain, so this is also the update a real file runs when this build
+        opens it. The new tables are then written to on the *upgraded* file - an additive step is only
+        correct if the thing it added is immediately usable - and the pre-upgrade copy the update takes is
+        checked to hold the version and the rows the update started from.
+        """
+        older = self._open_at_version(6)
+        for table in ("hr_contact", "hr_contact_conflict"):
+            self.assertNotIn(table, {
+                row[0] for row in older._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            }, "version 6 predates the imported contact list")
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027)
+        older.save_profile(profile)
+        older.save_job(self._job())
+        older.save_tracker(ApplicationTracker("j1"))
+        older.set_follow_up("j1", date(2026, 11, 5), note="chase the reply")
+        preparation = older.add_preparation("j1", "Tailor the résumé", due_on=date(2026, 11, 1))
+        older.record_interview("j1", "screening", date(2026, 11, 3))
+        older.add_work_history("Sandbox Systems", "Data Engineer", date(2023, 4, 1), is_current=True)
+        older.add_education("Example Institute", "B.Tech")
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_profile(), profile)
+        self.assertEqual(upgraded.get_job("j1"), self._job())
+        self.assertEqual(upgraded.get_tracker("j1").follow_up_note, "chase the reply")
+        self.assertEqual(len(upgraded.list_preparation()), 1)
+        self.assertEqual(len(upgraded.list_interviews()), 1)
+        self.assertEqual(len(upgraded.list_work_history()), 1)
+        self.assertEqual(len(upgraded.list_education()), 1)
+        self.assertEqual(upgraded.list_contacts(), (), "the new tables start empty, not guessed at")
+        self.assertEqual(upgraded.list_contact_conflicts(), ())
+        # Usable at once, on the file that was just upgraded: a synthetic list is imported through the real
+        # parser and the real store, and carries a mark that must come back after a restart.
+        source = self.path.parent / "upgrade-contacts.csv"
+        source.write_bytes(
+            b"Email,Name,Company Label\r\n"
+            b"first.contact@example.invalid,Sample Person,Sample Employer\r\n")
+        outcome = upgraded.import_contacts(contacts_module.read_contact_csv(source))
+        self.assertEqual(outcome.added, 1)
+        upgraded.set_contact_suppression("first.contact@example.invalid", note="do not contact")
+        upgraded.close()
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertTrue(reopened.get_contact("first.contact@example.invalid").suppressed)
+
+        copies = sorted(path for path in self.path.parent.iterdir() if ".backup-" in path.name)
+        self.assertEqual(len(copies), 1, "one update, one copy")
+        info = validate_app_database(copies[0])
+        self.assertEqual(info.schema_version, 6, "the copy holds the version the update started from")
+        self.assertEqual(info.job_count, 1, "and the rows it was about to change")
+        self.assertIn(f"event=database.migrated detail=from=6 to=7",
+                      (self.path.parent / "logs" / "application.log").read_text(encoding="utf-8"))
+
+    def test_the_contact_step_can_run_again_on_a_database_that_already_has_its_tables(self):
+        """An interrupted step must never leave a database that cannot be opened by re-running it."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        before = store._connection.execute("PRAGMA user_version").fetchone()[0]
+
+        with store._connection:
+            store_module._migration_to_v7(store._connection)
+            store_module._migration_to_v7(store._connection)
+
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], before)
+        self.assertEqual(store.list_contacts(), ())
+        self.assertEqual(store.contact_record_counts()["contacts"], 0)
+
+    def test_a_failed_contact_step_leaves_the_version_and_the_data_untouched(self):
+        """The last step failing is the case a person's file must survive without losing anything."""
+        older = self._open_at_version(6)
+        older.save_job(self._job())
+        older.save_tracker(ApplicationTracker("j1"))
+        older.close()
+
+        def failing_step(connection):
+            connection.execute("CREATE TABLE half_applied (value TEXT)")
+            raise sqlite3.OperationalError("no such table: missing_thing")
+
+        with mock.patch.object(store_module, "_MIGRATIONS",
+                               store_module._MIGRATIONS[:6] + ((7, "a step that fails", failing_step),)):
+            with self.assertRaises(SchemaMigrationError) as caught:
+                CareerStore(self.path)
+
+        self.assertEqual((caught.exception.target_version, caught.exception.from_version), (7, 6))
+        reopened = CareerStore(self.path)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.get_job("j1"), self._job(), "the rows survive a failed update")
+        self.assertIsNotNone(reopened.get_tracker("j1"))
+        self.assertEqual(reopened.list_contacts(), (), "the failed step added nothing")
 
     def test_the_history_tables_are_deleted_with_the_profile_rather_than_left_behind(self):
         """A person who deletes their profile must not leave their employment record in the file."""

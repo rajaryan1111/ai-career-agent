@@ -7,10 +7,10 @@ cannot drift apart.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Callable
+from typing import Callable, Iterable, Mapping, Sequence
 import errno
 import json
 import os
@@ -18,6 +18,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from .contacts import ContactImport, ContactRow, Flag, normalise_email_key
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
@@ -31,7 +32,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -51,6 +52,9 @@ SCHEMA_TABLES_BY_VERSION = {
     6: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
         "candidate_profile", "candidate_work_history", "interview_round", "job_listings",
         "scheduled_task", "task_run", "worker_lease"),
+    7: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+        "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+        "interview_round", "job_listings", "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -893,6 +897,79 @@ def _migration_to_v6(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v7(connection: sqlite3.Connection) -> None:
+    """Schema 7: the imported HR contact list, and the disagreements an import found in it.
+
+    Two new tables, additive and empty. Nothing existing is touched: a database that never imports a
+    contact list is unchanged apart from two empty tables, which is what makes this a safe step to run
+    on somebody's real data.
+
+    ``hr_contact`` holds one row per email key - the address trimmed and case-folded by
+    :func:`career_agent.contacts.normalise_email_key` and nothing else - with the original text beside it,
+    so a review screen shows the person's own strings while every comparison uses the key. The row records
+    the file that first supplied it and the file that last saw it (by *name*, never by path: a folder
+    written into a database that gets backed up and restored elsewhere is somebody's home directory in a
+    file they might hand to someone else), when each of those happened, and how many imports have seen the
+    key since. ``suppressed`` is the do-not-contact mark: an import never writes that column, which is what
+    makes the mark survive re-imports, conflicting files, backups and restores.
+
+    ``hr_contact_conflict`` is the evidence behind "nothing is merged silently": one row per pair of
+    disagreeing non-empty values for a key, with which field they disagree about, which value this
+    application kept, which one it did not, and whether the disagreement is between two rows of one file
+    (``file``) or between the file and what the database already held (``stored``). The values stay as the
+    files wrote them; a person resolves a disagreement by editing their own list, not by this table.
+
+    ``ON DELETE CASCADE`` on the conflicts is what keeps the two consistent when a contact is deleted: the
+    evidence about a key that no longer exists is nothing a person can act on.
+
+    ``IF NOT EXISTS`` on every statement keeps the step re-runnable, like every other step, because a step
+    interrupted after its first statement must not leave a database that cannot be opened.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS hr_contact (
+               contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               email_key TEXT NOT NULL UNIQUE,
+               email TEXT NOT NULL,
+               name TEXT,
+               company TEXT,
+               review_flags TEXT NOT NULL DEFAULT '',
+               review_reason TEXT,
+               source_row TEXT,
+               source_file TEXT NOT NULL,
+               first_seen_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL,
+               seen_count INTEGER NOT NULL DEFAULT 1,
+               suppressed INTEGER NOT NULL DEFAULT 0,
+               suppressed_at TEXT,
+               suppressed_note TEXT
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_hr_contact_company
+               ON hr_contact(company, email_key)"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_hr_contact_review
+               ON hr_contact(suppressed, last_seen_at, email_key)"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS hr_contact_conflict (
+               conflict_id INTEGER PRIMARY KEY AUTOINCREMENT,
+               email_key TEXT NOT NULL REFERENCES hr_contact(email_key) ON DELETE CASCADE,
+               field TEXT NOT NULL,
+               kept_value TEXT NOT NULL,
+               other_value TEXT NOT NULL,
+               origin TEXT NOT NULL,
+               source_file TEXT NOT NULL,
+               observed_at TEXT NOT NULL
+           )"""
+    )
+    connection.execute(
+        """CREATE INDEX IF NOT EXISTS idx_hr_contact_conflict_contact
+               ON hr_contact_conflict(email_key, field, conflict_id)"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -904,12 +981,314 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (4, "add the follow-up plan columns to the application tracker", _migration_to_v4),
     (5, "add the preparation checklist and the interview rounds", _migration_to_v5),
     (6, "add the candidate's own employment history and education", _migration_to_v6),
+    (7, "add the imported HR contact list and the disagreements found in it", _migration_to_v7),
 )
 
 
 #: The version numbers of the steps above, in order, for callers that report or verify them. Derived
 #: from the migration table so it cannot drift from what actually runs.
 MIGRATION_STEPS: tuple[int, ...] = tuple(target for target, _, _ in _MIGRATIONS)
+
+
+# ------------------------------------------------------------------ the imported HR contact list
+#
+# A contact list is imported, never discovered: the file is the person's own export, and everything in
+# this section describes what one import did with it. Three rules hold it together, and each follows from
+# the file being somebody else's data about people.
+#
+# * **One normaliser.** The comparison key is the address trimmed and case-folded, and it is computed by
+#   calling ``career_agent.contacts.normalise_email_key`` rather than re-implementing it here, so the
+#   review screen and the store cannot disagree about what "the same contact" means.
+# * **A re-import never rewrites what the stored record already says.** The original address text, the
+#   name and the company kept for a key are the first ones recorded; a later file that says something
+#   different is kept as a disagreement and the stored value is left alone. Nothing is merged silently in
+#   either direction, and the evidence stays readable.
+# * **An import never touches suppression.** ``suppressed`` is only ever written by
+#   :meth:`CareerStore.set_contact_suppression`, which is what makes a do-not-contact mark survive
+#   re-imports, conflicting files, backups and restores.
+#
+# Provenance is the file's *name*, never its path. Nothing in this section logs an address, a name or a
+# company: the events carry counts, and the printable summaries carry counts.
+
+
+class ContactConflictOrigin(str, Enum):
+    """Which two places disagree about a contact's field.
+
+    Two rows of *one* file can disagree with each other, and a file can disagree with what the database
+    already holds. Both are questions for the person who owns the list, and both are recorded; which kind
+    they are is part of the evidence, because the answer for "my export contradicts itself" is a different
+    one from "my export contradicts my records".
+    """
+
+    FILE = "file"
+    STORED = "stored"
+
+
+class ContactImportAction(str, Enum):
+    """What one import does with one email key: adds a record, or updates the one already stored."""
+
+    ADDED = "added"
+    UPDATED = "updated"
+
+
+@dataclass(frozen=True)
+class ContactRecord:
+    """One imported HR contact as this application stores it.
+
+    ``email_key`` is the comparison key and ``email`` the text the person's file held, kept separately so
+    that a case difference is never silently rewritten in what they can see. ``review_flags`` names the
+    parser's heuristics that applied to the rows of the most recent import that saw this key, and
+    ``review_reason`` is any note the file itself carried. ``suppressed`` is the do-not-contact mark.
+    """
+
+    contact_id: int
+    email_key: str
+    email: str
+    name: str | None
+    company: str | None
+    review_flags: tuple[str, ...]
+    review_reason: str | None
+    source_row: str | None
+    source_file: str
+    first_seen_at: str
+    last_seen_at: str
+    seen_count: int
+    suppressed: bool
+    suppressed_at: str | None
+    suppressed_note: str | None
+
+    def label(self) -> str:
+        """The person's own text for this contact in a list row: the name they were given, else the address."""
+        return self.name or self.email
+
+
+@dataclass(frozen=True)
+class ContactConflict:
+    """One stored disagreement about a contact: two non-empty values that cannot both be right.
+
+    ``kept_value`` is the one this application stores (the first the file gave, or what was already
+    stored) and ``other_value`` the one it did not. Neither is deleted.
+    """
+
+    conflict_id: int
+    email_key: str
+    field: str
+    kept_value: str
+    other_value: str
+    origin: ContactConflictOrigin
+    source_file: str
+    observed_at: str
+
+
+@dataclass(frozen=True)
+class ContactConflictPreview:
+    """A disagreement an import *would* record, with no identifier or timestamp yet."""
+
+    email_key: str
+    field: str
+    kept_value: str
+    other_value: str
+    origin: ContactConflictOrigin
+
+
+@dataclass(frozen=True)
+class ContactPlanEntry:
+    """One email key an import would write, and the record it would leave behind."""
+
+    email_key: str
+    action: ContactImportAction
+    email: str
+    name: str | None
+    company: str | None
+    review_flags: tuple[str, ...]
+    conflicts: tuple[ContactConflictPreview, ...]
+    suppressed: bool
+
+    def describe_values(self) -> str:
+        """The row's own text, for the private review screen. Never logged, never printed by a report."""
+        parts = [self.name or "", self.email, self.company or ""]
+        return " | ".join(part for part in parts if part)
+
+
+@dataclass(frozen=True)
+class ContactImportPlan:
+    """What an import would write, decided by reading the database, having written nothing.
+
+    This is the object a review screen shows and the confirmation is asked about. It holds the person's own
+    values in memory so they can be displayed to the person who owns the file, and its
+    :meth:`describe` output deliberately does not: a summary that can be pasted into a report, a
+    screenshot or a bug report carries counts and field names, never a contact.
+    """
+
+    source_file: str
+    entries: tuple[ContactPlanEntry, ...]
+    conflicts: tuple[ContactConflictPreview, ...]
+    rows_read: int
+    keys_in_file: int
+    skipped_without_key: int
+
+    @property
+    def added(self) -> int:
+        return sum(1 for entry in self.entries if entry.action is ContactImportAction.ADDED)
+
+    @property
+    def updated(self) -> int:
+        return sum(1 for entry in self.entries if entry.action is ContactImportAction.UPDATED)
+
+    @property
+    def flagged(self) -> int:
+        return sum(1 for entry in self.entries if entry.review_flags)
+
+    @property
+    def suppressed(self) -> int:
+        return sum(1 for entry in self.entries if entry.suppressed)
+
+    def counts(self) -> Mapping[str, int]:
+        """The numbers a review screen reports, in the order a person reads them."""
+        return {
+            "rows read from the file": self.rows_read,
+            "unique email keys in the file": self.keys_in_file,
+            "contacts to add": self.added,
+            "contacts already stored, to be updated": self.updated,
+            "new disagreements that will be kept for review": len(self.conflicts),
+            "keys already marked do-not-contact (an import never clears that)": self.suppressed,
+            "rows with no email key, which cannot be stored": self.skipped_without_key,
+        }
+
+    def describe(self) -> tuple[str, ...]:
+        """The printable summary: counts, field names and reasons - never a contact's values."""
+        lines = [f"File: {self.source_file} - nothing has been written yet."]
+        for name, value in self.counts().items():
+            lines.append(f"  {name}: {value}")
+        if self.conflicts:
+            by_field: dict[str, int] = {}
+            for conflict in self.conflicts:
+                by_field[conflict.field] = by_field.get(conflict.field, 0) + 1
+            listed = ", ".join(f"{field} ({count})" for field, count in sorted(by_field.items()))
+            lines.append(f"  disagreements by field: {listed}")
+        if self.flagged:
+            lines.append(f"  keys stored with a review flag: {self.flagged}")
+        lines.append(
+            "  An import adds and updates review metadata only. It never rewrites an address, a name or a "
+            "company already stored, never merges two values into one, and never clears a do-not-contact "
+            "mark. Every disagreement above is kept beside the record for you to look at."
+        )
+        return tuple(lines)
+
+
+@dataclass(frozen=True)
+class ContactImportOutcome:
+    """What one committed import did: counts only, which is also all the event log records."""
+
+    source_file: str
+    added: int
+    updated: int
+    conflicts: int
+    skipped_without_key: int
+    suppressed: int
+
+    def describe(self) -> str:
+        """One sentence for the status line and the completion dialog. Counts, never a value."""
+        sentence = (f"{self.added} contact(s) added, {self.updated} updated, "
+                    f"{self.conflicts} new disagreement(s) kept for review, "
+                    f"{self.skipped_without_key} row(s) without an email key not stored")
+        if self.suppressed:
+            sentence += f"; {self.suppressed} of them are marked do-not-contact and that mark was left alone"
+        return sentence
+
+
+def _first_text(values: Iterable[str]) -> str:
+    """The first non-blank value in the order given, stripped: the answer a file leads with."""
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _contact_disagreements(key: str, rows: Sequence[ContactRow], incoming_name: str, incoming_company: str,
+                           stored: ContactRecord | None,
+                           recorded: set[tuple[str, str, str, ContactConflictOrigin]]
+                           ) -> tuple[ContactConflictPreview, ...]:
+    """Every pair of non-empty values that disagree about one key's name or company.
+
+    Two kinds are kept, and both are questions for the person who owns the list:
+
+    * the file against **itself** - a later row giving a different non-empty answer for a field the file
+      has already answered. The first answer in file order is the one that is kept, so which value wins
+      does not depend on anything but the order of the person's own file.
+    * the file against the **database** - the stored value is kept and the file's value is kept beside it,
+      which is what "an import never overwrites what your records say" means in practice.
+
+    One entry per field and value: a file that lists the same second value twice has one question, not
+    two. An empty value never disagrees with anything - a column nobody filled in is not a contradiction.
+    ``recorded`` holds the disagreements this key already has stored, so importing the same file twice
+    asks the same question once rather than burying the evidence under its own repeats.
+    """
+    found: list[ContactConflictPreview] = []
+    seen: set[tuple[str, str]] = set()
+
+    def note(field: str, kept: str, other: str, origin: ContactConflictOrigin) -> None:
+        kept, other = kept.strip(), other.strip()
+        if not kept or not other or kept == other or (field, other) in seen:
+            return
+        seen.add((field, other))
+        if (field, kept, other, origin) in recorded:
+            return
+        found.append(ContactConflictPreview(email_key=key, field=field, kept_value=kept,
+                                           other_value=other, origin=origin))
+
+    for field, first, value_of in (("name", incoming_name, lambda row: row.name),
+                                   ("company", incoming_company, lambda row: row.company)):
+        for row in rows:
+            note(field, first, value_of(row), ContactConflictOrigin.FILE)
+    if stored is not None:
+        for field, incoming, stored_value in (("name", incoming_name, stored.name or ""),
+                                              ("company", incoming_company, stored.company or "")):
+            note(field, stored_value, incoming, ContactConflictOrigin.STORED)
+    return tuple(found)
+
+
+def _source_file_name(file_name: str) -> str:
+    """The file's own name, never its folder: provenance that does not export somebody's home directory."""
+    name = Path(str(file_name)).name.strip()
+    return name or "contact list"
+
+
+def _stored_flag(value: object, noun: str, field: str) -> bool:
+    """A stored 0/1 flag as a boolean, or a named problem when it is neither."""
+    if value in (0, 1, True, False):
+        return bool(value)
+    try:
+        number = int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise StoredRecordError(noun, f"its {field} is {value!r} rather than 0 or 1") from exc
+    if number not in (0, 1):
+        raise StoredRecordError(noun, f"its {field} is {value!r} rather than 0 or 1")
+    return bool(number)
+
+
+@dataclass(frozen=True)
+class _ContactDecision:
+    """What one import would do with one email key, decided from the stored record. Not part of the API.
+
+    It holds the values the record would be left with, so the plan a person confirms and the row that is
+    written are the same decision seen twice rather than two calculations that could drift apart.
+    """
+
+    key: str
+    stored: ContactRecord | None
+    email: str
+    name: str | None
+    company: str | None
+    review_flags: tuple[str, ...]
+    review_reason: str | None
+    source_row: str | None
+    conflicts: tuple[ContactConflictPreview, ...]
+
+    @property
+    def action(self) -> ContactImportAction:
+        return ContactImportAction.UPDATED if self.stored is not None else ContactImportAction.ADDED
 
 
 class CareerStore:
@@ -2657,6 +3036,288 @@ class CareerStore:
         except TypeError as exc:
             raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc
 
+    # ------------------------------------------------------------------ the imported HR contact list
+
+    def plan_contact_import(self, parsed: ContactImport) -> ContactImportPlan:
+        """Say what importing one parsed file would do, having written nothing.
+
+        Reads the stored contacts and decides key by key, using the same function the import itself uses,
+        so the counts a person confirms and the counts that are written cannot come from two different
+        readings of one file. It opens no transaction and changes no row, which is what makes "cancel
+        changes nothing" true rather than a promise: at the moment the plan exists, nothing has happened.
+        """
+        decisions, skipped = self._contact_decisions(parsed)
+        entries = tuple(
+            ContactPlanEntry(
+                email_key=decision.key, action=decision.action, email=decision.email, name=decision.name,
+                company=decision.company, review_flags=decision.review_flags, conflicts=decision.conflicts,
+                suppressed=bool(decision.stored is not None and decision.stored.suppressed),
+            )
+            for decision in decisions
+        )
+        conflicts = tuple(conflict for decision in decisions for conflict in decision.conflicts)
+        return ContactImportPlan(
+            source_file=_source_file_name(parsed.file_name), entries=entries, conflicts=conflicts,
+            rows_read=len(parsed.rows), keys_in_file=len(parsed.groups),
+            skipped_without_key=skipped,
+        )
+
+    def import_contacts(self, parsed: ContactImport, *, observed_at: str | None = None) -> ContactImportOutcome:
+        """Store one parsed contact file in a single transaction, and report counts only.
+
+        All or nothing: every row of the import is written inside one ``BEGIN IMMEDIATE`` transaction, so a
+        failure anywhere - a full disk, a locked file - leaves the contact state exactly as it was. Nothing
+        is written before the caller has decided, because this method is only reached after a confirmation.
+
+        What a re-import does is deliberately narrow. The address text, the name and the company a record
+        already holds are not rewritten, so a later file cannot quietly replace somebody's own strings; a
+        field the record does not have is filled in from the file, because an unknown is being answered
+        rather than contradicted. Marks and reasons that describe a *file* - its name, the row number, the
+        heuristics that applied, any note the file carried - are refreshed by the import that last saw the
+        key, because those describe provenance rather than the contact. The do-not-contact mark is not in
+        this method's statements at all.
+
+        Duplicate rows cannot become duplicate records: the parser groups a file by email key, and this
+        writes one row per key, so a file that lists the same address five times updates one record once.
+        A disagreement this key already has stored is not recorded a second time either: importing the same
+        file again asks the same question once rather than burying the evidence under its own repeats.
+        """
+        stamp = observed_at or _now()
+        source_file = _source_file_name(parsed.file_name)
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            decisions, skipped = self._contact_decisions(parsed)
+            for decision in decisions:
+                if decision.stored is None:
+                    self._connection.execute(
+                        """INSERT INTO hr_contact(email_key, email, name, company, review_flags,
+                                                  review_reason, source_row, source_file, first_seen_at,
+                                                  last_seen_at, seen_count)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                        (decision.key, decision.email, decision.name, decision.company,
+                         ",".join(decision.review_flags), decision.review_reason, decision.source_row,
+                         source_file, stamp, stamp),
+                    )
+                else:
+                    # No address and no do-not-contact column is mentioned here: the stored record's own
+                    # text is not this statement's to change, and its mark belongs to the person alone.
+                    self._connection.execute(
+                        """UPDATE hr_contact
+                              SET name=?, company=?, review_flags=?, review_reason=?, source_row=?,
+                                  source_file=?, last_seen_at=?, seen_count=?
+                            WHERE email_key=?""",
+                        (decision.name, decision.company, ",".join(decision.review_flags),
+                         decision.review_reason, decision.source_row, source_file, stamp,
+                         decision.stored.seen_count + 1, decision.key),
+                    )
+                for conflict in decision.conflicts:
+                    self._connection.execute(
+                        """INSERT INTO hr_contact_conflict(email_key, field, kept_value, other_value,
+                                                          origin, source_file, observed_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (conflict.email_key, conflict.field, conflict.kept_value, conflict.other_value,
+                         conflict.origin.value, source_file, stamp),
+                    )
+            self._connection.execute("COMMIT")
+        except BaseException:
+            # Everything written above goes back with the failure: a half-imported list would leave a
+            # person unable to tell which of their rows are in, and the review screen would disagree with
+            # the database about what happened.
+            self._roll_back_quietly()
+            raise
+        outcome = ContactImportOutcome(
+            source_file=source_file,
+            added=sum(1 for decision in decisions if decision.stored is None),
+            updated=sum(1 for decision in decisions if decision.stored is not None),
+            conflicts=sum(len(decision.conflicts) for decision in decisions),
+            skipped_without_key=skipped,
+            suppressed=sum(1 for decision in decisions
+                           if decision.stored is not None and decision.stored.suppressed),
+        )
+        # Counts only, and only after the commit: the log never claims a change the database did not keep,
+        # and it never carries an address, a name or a company. The file's name is not logged either - it
+        # is the person's own choice of words, and this line exists to be shareable.
+        self._record(
+            "contacts.imported",
+            f"added={outcome.added} updated={outcome.updated} conflicts={outcome.conflicts} "
+            f"skipped={outcome.skipped_without_key} suppressed_untouched={outcome.suppressed}",
+        )
+        return outcome
+
+    def list_contacts(self, *, suppressed: bool | None = None) -> tuple[ContactRecord, ...]:
+        """Every stored contact, in the order the first import that saw each one listed it.
+
+        ``suppressed`` narrows the list to the do-not-contact marks, or to the records without one, which
+        is what a review screen asks for. Read-only and counts nothing here: a caller that wants numbers
+        uses :meth:`contact_record_counts`.
+        """
+        query = "SELECT * FROM hr_contact"
+        parameters: tuple = ()
+        if suppressed is not None:
+            query += " WHERE suppressed = ?"
+            parameters = (1 if suppressed else 0,)
+        query += " ORDER BY contact_id"
+        rows = self._connection.execute(query, parameters).fetchall()
+        return tuple(self._decode_contact(row) for row in rows)
+
+    def get_contact(self, email_key: str) -> ContactRecord | None:
+        """One contact by address, or ``None``. The address is normalised here, so any spelling finds it."""
+        row = self._connection.execute(
+            "SELECT * FROM hr_contact WHERE email_key = ?", (normalise_email_key(str(email_key)),)
+        ).fetchone()
+        return None if row is None else self._decode_contact(row)
+
+    def list_contact_conflicts(self, *, email_key: str | None = None) -> tuple[ContactConflict, ...]:
+        """Every stored disagreement, for one key or for the whole list, oldest first. Read-only."""
+        if email_key is None:
+            rows = self._connection.execute(
+                "SELECT * FROM hr_contact_conflict ORDER BY conflict_id").fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT * FROM hr_contact_conflict WHERE email_key = ? ORDER BY conflict_id",
+                (normalise_email_key(str(email_key)),),
+            ).fetchall()
+        return tuple(self._decode_contact_conflict(row) for row in rows)
+
+    def contact_record_counts(self) -> dict[str, int]:
+        """How many contacts, marks and disagreements this database holds. Read-only, counts only."""
+        return {
+            "contacts": int(self._connection.execute("SELECT COUNT(*) FROM hr_contact").fetchone()[0]),
+            "do_not_contact": int(self._connection.execute(
+                "SELECT COUNT(*) FROM hr_contact WHERE suppressed = 1").fetchone()[0]),
+            "with_review_flags": int(self._connection.execute(
+                "SELECT COUNT(*) FROM hr_contact WHERE review_flags <> ''").fetchone()[0]),
+            "conflicts": int(self._connection.execute(
+                "SELECT COUNT(*) FROM hr_contact_conflict").fetchone()[0]),
+        }
+
+    def set_contact_suppression(self, email_key: str, suppressed: bool = True, *,
+                                note: str | None = None) -> ContactRecord:
+        """Mark one stored contact as do-not-contact, or clear the mark. Returns the stored record.
+
+        This is the only method that writes ``suppressed``: no import statement mentions the column, which
+        is what makes the mark survive re-imports, files that contradict each other, a backup, a restore and
+        a restart. Clearing the mark clears the note and the day with it, so a record that is no longer
+        marked is not left carrying a reason that no longer applies.
+
+        Refused - with ``ValueError`` and no write - for an address no import has stored. This increment has
+        no screen for marking an address nobody listed, and inventing a record for one would put a contact
+        in the list that no file ever supplied.
+        """
+        key = normalise_email_key(str(email_key))
+        if self.get_contact(key) is None:
+            raise ValueError(
+                "No contact is stored under that address, so there is no record to mark. Import the list "
+                "that holds it first; nothing was changed."
+            )
+        if suppressed:
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE hr_contact SET suppressed = 1, suppressed_at = ?, suppressed_note = ? "
+                    "WHERE email_key = ?",
+                    (_now(), note, key),
+                )
+        else:
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE hr_contact SET suppressed = 0, suppressed_at = NULL, suppressed_note = NULL "
+                    "WHERE email_key = ?",
+                    (key,),
+                )
+        record = self.get_contact(key)
+        assert record is not None  # the row was just read and is updated, never deleted, above
+        return record
+
+    def _contact_decisions(self, parsed: ContactImport) -> tuple[tuple["_ContactDecision", ...], int]:
+        """What one parsed file would change, decided from the database as it is now. Reads only.
+
+        One reading of the stored contacts serves the whole file, and the same function answers both "what
+        would happen" and "make it happen", so the confirmation a person saw and the work that follows it
+        cannot disagree. Rows with no email key are not decisions: they are counted and left alone, because
+        a contact this application cannot identify is one it must not store.
+        """
+        stored_by_key = {record.email_key: record for record in self.list_contacts()}
+        recorded: dict[str, set[tuple[str, str, str, ContactConflictOrigin]]] = {}
+        for conflict in self.list_contact_conflicts():
+            recorded.setdefault(conflict.email_key, set()).add(
+                (conflict.field, conflict.kept_value, conflict.other_value, conflict.origin))
+        decisions: list[_ContactDecision] = []
+        for group in parsed.groups:
+            rows = group.rows
+            # The parser grouped by an already-normalised key; it goes through the shared normaliser once
+            # more so that a key in this database can only ever have come from that one function.
+            key = normalise_email_key(group.key)
+            stored = stored_by_key.get(key)
+            incoming_email = _first_text(row.email for row in rows)
+            incoming_name = _first_text(row.name for row in rows)
+            incoming_company = _first_text(row.company for row in rows)
+            decisions.append(_ContactDecision(
+                key=key,
+                stored=stored,
+                email=stored.email if stored is not None else incoming_email,
+                # A field the record does not have is filled from the file; a field it does have is kept,
+                # and any disagreement with the file is recorded rather than applied.
+                name=stored.name if stored is not None and stored.name else (incoming_name or None),
+                company=stored.company if stored is not None and stored.company else (incoming_company or None),
+                review_flags=tuple(flag.value for flag in Flag if any(flag in row.flags for row in rows)),
+                review_reason=_first_text(row.recorded_reasons for row in rows) or None,
+                source_row=_first_text(row.source_row for row in rows) or None,
+                conflicts=_contact_disagreements(key, rows, incoming_name, incoming_company, stored,
+                                                  recorded.get(key, set())),
+            ))
+        return tuple(decisions), len(parsed.rows_without_key)
+
+    @staticmethod
+    def _decode_contact(row: sqlite3.Row) -> ContactRecord:
+        noun = "HR contact record"
+        key = str(row["email_key"] or "").strip()
+        if not key:
+            raise StoredRecordError(
+                noun, "it has no email key, so no import could ever be matched against it")
+        seen_count = _stored_int(row["seen_count"], noun, "seen count")
+        if seen_count < 1:
+            raise StoredRecordError(
+                noun, f"it says it has been seen {seen_count} time(s), which cannot describe a stored row")
+        return ContactRecord(
+            contact_id=_stored_int(row["contact_id"], noun, "identifier"),
+            email_key=key,
+            email=str(row["email"] or ""),
+            name=row["name"] or None,
+            company=row["company"] or None,
+            # The flag names are kept as the file wrote them: a name this version does not know is a
+            # question for the person reading the row, not a record to refuse.
+            review_flags=tuple(part.strip() for part in str(row["review_flags"] or "").split(",")
+                               if part.strip()),
+            review_reason=row["review_reason"] or None,
+            source_row=row["source_row"] or None,
+            source_file=str(row["source_file"] or ""),
+            first_seen_at=str(row["first_seen_at"] or ""),
+            last_seen_at=str(row["last_seen_at"] or ""),
+            seen_count=seen_count,
+            suppressed=_stored_flag(row["suppressed"], noun, "do-not-contact mark"),
+            suppressed_at=row["suppressed_at"] or None,
+            suppressed_note=row["suppressed_note"] or None,
+        )
+
+    @staticmethod
+    def _decode_contact_conflict(row: sqlite3.Row) -> ContactConflict:
+        noun = "HR contact disagreement"
+        try:
+            origin = ContactConflictOrigin(str(row["origin"]))
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its origin {row['origin']!r} is not one this version recognises") from exc
+        return ContactConflict(
+            conflict_id=_stored_int(row["conflict_id"], noun, "identifier"),
+            email_key=str(row["email_key"] or ""),
+            field=str(row["field"] or ""),
+            kept_value=str(row["kept_value"] or ""),
+            other_value=str(row["other_value"] or ""),
+            origin=origin,
+            source_file=str(row["source_file"] or ""),
+            observed_at=str(row["observed_at"] or ""),
+        )
+
 
 # ---------------------------------------------------------------- reading a file without opening it
 #
@@ -2677,6 +3338,11 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     ("interview_round", "round_id", CareerStore._decode_interview),
     ("candidate_work_history", "entry_id", CareerStore._decode_work_history),
     ("candidate_education", "entry_id", CareerStore._decode_education),
+    # The imported contact list is the person's own export, stored locally: the doctor reads it through the
+    # same decoder the list itself uses, so a row this build cannot make sense of is reported rather than
+    # discovered later by a screen that cannot render it.
+    ("hr_contact", "contact_id", CareerStore._decode_contact),
+    ("hr_contact_conflict", "conflict_id", CareerStore._decode_contact_conflict),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
     ("worker_lease", "worker_id", CareerStore._decode_worker_lease),

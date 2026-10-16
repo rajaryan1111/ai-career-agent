@@ -67,6 +67,7 @@ EXPECTED_TABS = (
     "Follow-ups",
     "Data safety",
     "Background tasks",
+    "HR contacts",
 )
 
 #: The lists carried by the tabs, with the columns each one must expose. These are the controls a person
@@ -77,6 +78,8 @@ EXPECTED_TREES = {
     "work_tree": ("employer", "title", "type", "period", "current"),
     "actions_tree": ("when", "what", "application", "detail"),
     "follow_up_tree": ("employer", "role", "status", "day", "when", "note"),
+    "contact_rows_tree": ("line", "contact", "name", "company", "why"),
+    "stored_contacts_tree": ("contact", "name", "company", "source", "seen", "marked"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
@@ -87,13 +90,15 @@ EXPECTED_SUMMARY_VARIABLES = (
     "actions_summary",
     "follow_up_summary",
     "scheduler_summary",
+    "contacts_summary",
 )
 
 #: The tabs whose whole point is a read-only refresh, and therefore the buttons this script presses. The
 #: button is found in the built widget tree and invoked through Tk, so what runs is the same command a
 #: click would run, not a re-implementation of it.
 REFRESH_BUTTON_TEXT = "Refresh"
-REFRESH_TAB_LABELS = ("Application tracker", "Next actions", "Follow-ups", "Background tasks")
+REFRESH_TAB_LABELS = ("Application tracker", "Next actions", "Follow-ups", "Background tasks",
+                     "HR contacts")
 
 #: Phrases Tk uses when it cannot reach a display. Only these turn a failure into BLOCKED: on Windows and
 #: macOS a window needs no display variable at all, and anything else that goes wrong while a root is being
@@ -315,7 +320,7 @@ def main() -> int:
             numbers = tuple(int(part) for part in parts)
             require(numbers == (900, 600), f"the minimum window size is {numbers!r}, not (900, 600)")
 
-        with results.step("the notebook holds the eight tabs in the documented order"):
+        with results.step("the notebook holds the nine tabs in the documented order"):
             labels = tuple(app.tabs.tab(tab, "text") for tab in app.tabs.tabs())
             require(labels == EXPECTED_TABS, f"the tabs are {labels!r}")
 

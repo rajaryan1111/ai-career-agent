@@ -856,6 +856,7 @@ _tkinter.ttk = types.SimpleNamespace(
 _ORIGINAL_TKINTER = sys.modules.get("tkinter")
 sys.modules["tkinter"] = _tkinter
 
+from career_agent import contacts as contacts_module  # noqa: E402  (after the stub, like the window)
 from career_agent import desktop  # noqa: E402  (imported after the stub is installed)
 from career_agent.handlers import default_tasks, seed_default_tasks  # noqa: E402  (after the stub, like the window)
 from career_agent.tasks import build_task  # noqa: E402  (the product's own task builder)
@@ -981,6 +982,12 @@ class HandlerTestCase(unittest.TestCase):
         app.tracker_tab = Widget()
         app.data_tab = Widget()
         app.history_tab = Widget()
+        app.contacts_tab = Widget()
+        app.contacts_preview = None
+        app.contacts_summary = StringVar()
+        app.contacts_preview_text = Text()
+        app.contact_rows_tree = Tree()
+        self.stored_contacts_tree = app.stored_contacts_tree = Tree()
         selected_tabs = []
         app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
@@ -1151,6 +1158,19 @@ class TabLayoutPolicyTests(unittest.TestCase):
                     acceptance.is_scrolled_frame(container),
                     f"{tree.winfo_class()} {tree} is not inside an area that scrolls",
                 )
+            # The HR contacts tab holds two lists that grow with the person's own export, so its lists
+            # must be inside a scrolling body for the same reason - and this is checked where the tab is
+            # built, not only on a display.
+            contacts_page = self.page_named(app, "HR contacts")
+            for tree in (app.contact_rows_tree, app.stored_contacts_tree):
+                container = acceptance.layout_container(tree, contacts_page)
+                self.assertIsNot(
+                    container, contacts_page,
+                    f"{tree.winfo_class()} {tree} is judged against its tab: the contact lists grow with "
+                    "the person's own file and would be clipped without something to scroll them",
+                )
+                self.assertTrue(acceptance.is_scrolled_frame(container),
+                                f"{tree.winfo_class()} {tree} is not inside an area that scrolls")
             # And a tab that holds no growing content is still judged against itself, so "scrolls" below
             # cannot be a helper that answers yes for every widget in the window.
             data_page = self.page_named(app, "Data safety")
@@ -5778,6 +5798,241 @@ class SchedulerTabTests(HandlerTestCase):
         assert paused is not None
         self.assertEqual(paused.times, ("22:00",), "the stored definition is the one that was changed")
         self.assertFalse(paused.enabled)
+
+
+#: The synthetic contact fixtures this class imports: reserved ``.invalid`` domains only, and every value
+#: listed here so the privacy assertions can name them instead of a wording.
+CONTACT_HEADER = "Email,Name,Company Label,Source Rows,Review Reason\r\n"
+CONTACT_EMAILS = ("first.contact@example.invalid", "second.contact@example.invalid",
+                  "third.contact@example.invalid")
+CONTACT_NAMES = ("Sample Person One", "Sample Person Two", "Sample Person Three")
+CONTACT_COMPANIES = ("Sample Employer One", "Sample Employer Two")
+ALL_CONTACT_FIXTURE_VALUES = CONTACT_EMAILS + CONTACT_NAMES + CONTACT_COMPANIES
+
+
+class ContactImportTabTests(HandlerTestCase):
+    """The HR contacts tab: what a preview writes (nothing), and what each path promises.
+
+    The window is the second half of the increment the parser started: a person chooses their own export,
+    sees what was read before anything is stored, and confirms once. These tests drive the tab's own
+    handlers against the real store in a disposable folder, so "nothing was written" is asserted with the
+    connection's change counter and the stored row count rather than with a message.
+    """
+
+    def write_csv(self, rows: str, name: str = "contacts.csv") -> Path:
+        path = Path(self._directory.name) / name
+        path.write_bytes((CONTACT_HEADER + rows).encode("utf-8"))
+        return path
+
+    def changes(self) -> int:
+        return self.store._connection.total_changes
+
+    def log_text(self) -> str:
+        return (Path(self._directory.name) / "logs" / "application.log").read_text(encoding="utf-8")
+
+    def two_contacts(self) -> Path:
+        return self.write_csv(
+            f"{CONTACT_EMAILS[0]},{CONTACT_NAMES[0]},{CONTACT_COMPANIES[0]},1,\r\n"
+            f"{CONTACT_EMAILS[1]},{CONTACT_NAMES[1]},{CONTACT_COMPANIES[1]},2,\r\n")
+
+    def test_choosing_a_file_shows_what_it_holds_and_writes_nothing(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        before = self.changes()
+
+        app._choose_contact_csv()
+
+        shown = app.contacts_preview_text.get("1.0", "end")
+        self.assertIn("File: contacts.csv", shown)
+        self.assertIn("Nothing was written", shown)
+        self.assertIn("Nothing was written", shown)
+        self.assertEqual(self.changes(), before, "a preview must not write a row")
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+        self.assertEqual(app.contact_rows_tree.inserted, (), "nothing in this file needs a look")
+        self.assertIn("Nothing has been stored yet", app.status.get())
+        self.assertIn("nothing has been stored yet", app.status.get().lower())
+        self.assertEqual(MESSAGES.titles(), [], "a readable file needs no dialog")
+
+    def test_a_file_that_needs_review_lists_the_rows_and_their_reasons(self):
+        path = self.write_csv(
+            f",{CONTACT_NAMES[0]},{CONTACT_COMPANIES[0]},1,\r\n"
+            f"{CONTACT_EMAILS[1].upper()},{CONTACT_NAMES[1]},{CONTACT_COMPANIES[1]},2,\r\n"
+            f"{CONTACT_EMAILS[1].lower()},{CONTACT_NAMES[2]},{CONTACT_COMPANIES[0]},3,review this one\r\n")
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+
+        app._choose_contact_csv()
+
+        rows = [values for _iid, values in app.contact_rows_tree.inserted]
+        self.assertEqual(len(rows), 3, "each flagged row is listed once, in file order")
+        self.assertEqual([row[0] for row in rows], [2, 3, 4], "the file's own line numbers")
+        self.assertIn("email-missing", rows[0][4])
+        self.assertIn("duplicate-key", rows[1][4])
+        self.assertIn("review this one", rows[2][4])
+        self.assertIn("rows to review: 3", app.contacts_preview_text.get("1.0", "end"))
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+
+    def test_a_refused_file_is_explained_and_writes_nothing(self):
+        path = Path(self._directory.name) / "not-a-list.csv"
+        path.write_bytes(b"Name,Company Label\r\nSample Person,Somewhere\r\n")
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        before = self.changes()
+
+        app._choose_contact_csv()
+
+        self.assertEqual(MESSAGES.titles("showerror"), ["Nothing was imported"])
+        self.assertIn("nothing was changed", MESSAGES.text("showerror").lower())
+        self.assertEqual(self.changes(), before)
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+        self.assertIn("was not changed", app.status.get())
+        self.assertIn("event=import.refused", self.log_text())
+
+    def test_a_cancelled_chooser_changes_nothing(self):
+        app = self.make_app()
+        FILEDIALOG.path = ""
+
+        app._choose_contact_csv()
+
+        self.assertEqual(MESSAGES.titles(), [])
+        self.assertIn("cancelled", app.status.get())
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+
+    def test_declining_the_confirmation_writes_nothing(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        CONFIG["Import these contacts?"] = False
+        before = self.changes()
+
+        app._store_contact_preview()
+
+        self.assertIn("Import these contacts?", MESSAGES.titles("askyesno"))
+        self.assertEqual(self.changes(), before, "a declined confirmation must write nothing")
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+        self.assertEqual(app.stored_contacts_tree.inserted, ())
+        self.assertIn("cancelled", app.status.get())
+        self.assertNotIn("Contact import complete", MESSAGES.titles("showinfo"))
+
+    def test_confirming_stores_each_contact_once_and_shows_it(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        before = self.changes()
+
+        app._store_contact_preview()
+
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 2)
+        self.assertEqual([record.seen_count for record in self.store.list_contacts()], [1, 1])
+        self.assertEqual(self.changes() - before, 2, "one insert per contact and nothing else")
+        self.assertEqual(len(app.stored_contacts_tree.inserted), 2)
+        self.assertIn("Contact import complete", MESSAGES.titles("showinfo"))
+        self.assertIn("2 contact(s) added", app.status.get())
+        # Importing the same previewed file again updates the two records and adds none.
+        app._store_contact_preview()
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 2)
+        self.assertEqual([record.seen_count for record in self.store.list_contacts()], [2, 2])
+
+    def test_the_confirmation_dialog_carries_counts_and_no_contact_value(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+
+        app._store_contact_preview()
+
+        said = MESSAGES.text("askyesno") + "\n" + MESSAGES.text("showinfo") + "\n" + app.status.get()
+        for values in app.contact_rows_tree.inserted + app.stored_contacts_tree.inserted:
+            self.assertNotEqual(values, ())
+        for value in ALL_CONTACT_FIXTURE_VALUES:
+            self.assertNotIn(value, said, f"{value!r} must not reach a dialog or the status line")
+        # The file's own name is shown to the person (they chose it), and the event log deliberately
+        # carries none: `contacts.imported` is a counts-only line, checked in test_contacts_store.
+        self.assertIn("contacts.csv", said)
+        self.assertNotIn("contacts.csv", self.log_text())
+        self.assertIn("2 contact(s) added", said)
+
+    def test_nothing_to_store_is_reported_without_a_preview(self):
+        app = self.make_app()
+
+        app._store_contact_preview()
+
+        self.assertIn("Choose a file first", MESSAGES.titles("showinfo"))
+        self.assertIn("nothing was changed", MESSAGES.text("showinfo").lower())
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+
+    def test_a_storage_failure_is_reported_and_no_success_is_shown(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+
+        with mock.patch.object(self.store, "import_contacts",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            app._store_contact_preview()
+
+        self.assertNotIn("Contact import complete", MESSAGES.titles("showinfo"),
+                         "a failed import must never be reported as a completed one")
+        self.assertEqual(MESSAGES.titles("showerror"), ["Local database unavailable"])
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+
+    def test_a_damaged_stored_contact_is_reported_by_name_and_nothing_is_written(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        self.store.import_contacts(contacts_module.read_contact_csv(path))
+        self.store.close()
+        connection = sqlite3.connect(str(self.store.database_path))
+        try:
+            connection.execute("UPDATE hr_contact SET seen_count = 0")
+            connection.commit()
+        finally:
+            connection.close()
+        app.store = CareerStore(self.store.database_path)
+        self.addCleanup(app.store.close)
+        before = app.store._connection.total_changes
+
+        app._store_contact_preview()
+
+        self.assertEqual(MESSAGES.titles("showerror"), ["Saved record could not be read"])
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertEqual(app.store._connection.total_changes, before)
+
+    def test_clearing_the_preview_changes_nothing(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        before = self.changes()
+
+        app._clear_contact_preview()
+
+        self.assertIsNone(app.contacts_preview)
+        self.assertEqual(app.contact_rows_tree.inserted, ())
+        self.assertEqual(self.changes(), before)
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 0)
+        self.assertIn("cleared", app.status.get())
+
+    def test_the_stored_list_shows_a_do_not_contact_mark_and_the_counts(self):
+        path = self.two_contacts()
+        app = self.make_app()
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        app._store_contact_preview()
+        self.store.set_contact_suppression(CONTACT_EMAILS[0], note="asked not to be written to")
+
+        app._refresh_contacts()
+
+        rows = [values for _iid, values in app.stored_contacts_tree.inserted[-2:]]
+        self.assertEqual(rows[0][5], "do not contact")
+        self.assertEqual(rows[0][4], 1)
+        self.assertIn("1 marked do-not-contact", app.contacts_summary.get())
+        self.assertIn("Nothing here has been contacted", app.contacts_summary.get())
 
 
 if __name__ == "__main__":

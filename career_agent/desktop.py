@@ -25,6 +25,7 @@ from .core import (
 )
 from . import __version__
 from . import analytics
+from . import contacts
 from . import integrations
 from .config import database_path_for_run
 from .event_log import record_event
@@ -111,6 +112,9 @@ class CareerAgentApp:
         self.selected_job_id = None
         self.job_save_mode = JobSaveMode.NEW
         self.job_edit_baseline = None
+        #: The contact file currently being reviewed, as the parser returned it, or ``None``. Held in
+        #: memory only: a preview that is never confirmed is written nowhere and copied nowhere.
+        self.contacts_preview = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         header = ttk.Frame(root, padding=12)
         header.pack(fill=X)
@@ -126,6 +130,7 @@ class CareerAgentApp:
         self.follow_up_tab = ttk.Frame(self.tabs, padding=12)
         self.actions_tab = ttk.Frame(self.tabs, padding=12)
         self.history_tab = ttk.Frame(self.tabs, padding=12)
+        self.contacts_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -134,6 +139,7 @@ class CareerAgentApp:
         self.tabs.add(self.follow_up_tab, text="Follow-ups")
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
+        self.tabs.add(self.contacts_tab, text="HR contacts")
         self.profile_vars = {}
         self.job_vars = {}
         self._build_profile()
@@ -144,6 +150,7 @@ class CareerAgentApp:
         self._build_follow_ups()
         self._build_data_safety()
         self._build_scheduler()
+        self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
@@ -154,6 +161,7 @@ class CareerAgentApp:
         self._refresh_history()
         self._refresh_actions()
         self._refresh_scheduler()
+        self._refresh_contacts()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -417,6 +425,234 @@ class CareerAgentApp:
         self._add_read_only_lines(scrolled, report.describe())
         self.status.set("Progress report opened: read-only, computed from the records in this database.")
 
+
+    # ------------------------------------------------------------------ the HR contact list
+    #
+    # The list is *imported*, never discovered: the person exports it themselves and chooses the file
+    # here. The parser is the shipped one (``career_agent.contacts``) and the store owns the transaction
+    # (``CareerStore.import_contacts``); this tab supplies the file chooser, shows what was read, and asks
+    # once before anything is written. There is no sending here and no matching to jobs: this increment
+    # stores a reviewed list and nothing else.
+
+    def _build_contacts(self):
+        """The tab about the contact list: what the chosen file holds, and what storing it would do.
+
+        Inside a scrolling body, like the Work history and study tab and for the same reason: the preview,
+        the rows worth a person's attention and the stored list together are taller than the smallest page
+        this window can be given, and content below the fold cannot be reached at all unless something
+        scrolls it. The contact values live in the two trees rather than in labels: a tree a person drags
+        through is the right control for rows, and the text the acceptance harness reports measurements
+        about is label text, which must never carry somebody's address.
+        """
+        body = self._scrollable_body(self.contacts_tab)
+        ttk.Label(
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "An HR contact list you exported is read from this machine, checked, and shown here before "
+                "anything is stored. Nothing is sent, nothing is fetched and no address is contacted: the "
+                "file is read from disk and the list is kept in this local database until you delete it. "
+                "A mark of \"do not contact\" is never cleared by an import."
+            ),
+        ).grid(row=0, column=0, columnspan=2, sticky=W, pady=(0, 8))
+        actions = ttk.Frame(body)
+        actions.grid(row=1, column=0, columnspan=2, sticky=W, pady=(0, 4))
+        ttk.Button(actions, text="Choose a contact CSV...",
+                   command=self._choose_contact_csv).pack(side="left")
+        ttk.Button(actions, text="Import these contacts",
+                   command=self._store_contact_preview).pack(side="left", padx=8)
+        ttk.Button(actions, text="Clear the preview",
+                   command=self._clear_contact_preview).pack(side="left", padx=(0, 8))
+        self.contacts_summary = tk.StringVar(value="Reading the stored contact list...")
+        ttk.Label(body, textvariable=self.contacts_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=2, column=0, columnspan=2, sticky=W, pady=(4, 8))
+        ttk.Label(body, text="What the chosen file holds (nothing is stored until you confirm)").grid(
+            row=3, column=0, columnspan=2, sticky=W, pady=(6, 2))
+        self.contacts_preview_text = tk.Text(body, height=14, wrap="word", state="disabled")
+        self.contacts_preview_text.grid(row=4, column=0, columnspan=2, sticky="ew")
+        ttk.Label(body, text="Rows worth your attention, in the file's own order").grid(
+            row=5, column=0, columnspan=2, sticky=W, pady=(10, 2))
+        self.contact_rows_tree = ttk.Treeview(
+            body, columns=("line", "contact", "name", "company", "why"), show="headings", height=7)
+        for column, heading, width in (("line", "Line", 60), ("contact", "Address as written", 220),
+                                       ("name", "Name as written", 150), ("company", "Company label", 150),
+                                       ("why", "Why it needs a look", 220)):
+            self.contact_rows_tree.heading(column, text=heading)
+            self.contact_rows_tree.column(column, width=width, anchor=W)
+        self.contact_rows_tree.grid(row=6, column=0, columnspan=2, sticky="nsew")
+        ttk.Label(body, text="Stored contacts (what this database holds now)").grid(
+            row=7, column=0, columnspan=2, sticky=W, pady=(10, 2))
+        self.stored_contacts_tree = ttk.Treeview(
+            body, columns=("contact", "name", "company", "source", "seen", "marked"),
+            show="headings", height=7)
+        for column, heading, width in (("contact", "Address as written", 220), ("name", "Name", 150),
+                                       ("company", "Company label", 150), ("source", "From file", 140),
+                                       ("seen", "Imports seen", 90), ("marked", "Flags or mark", 180)):
+            self.stored_contacts_tree.heading(column, text=heading)
+            self.stored_contacts_tree.column(column, width=width, anchor=W)
+        self.stored_contacts_tree.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        ttk.Button(body, text="Refresh", command=self._refresh_contacts).grid(row=9, column=0, sticky=W, pady=(8, 0))
+        ttk.Label(
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "Checked: the shape of each address, which is a heuristic about text, and whether the "
+                "columns agree with one another. Not checked, and not claimable from a file: whether a "
+                "mailbox exists or is reachable, whether anybody agreed to be contacted, who still works "
+                "where the file says, or whether this list may be used for outreach at all. A stored "
+                "contact is never written to, and no send button exists in this build."
+            ),
+        ).grid(row=10, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        body.columnconfigure(0, weight=1)
+
+    def _choose_contact_csv(self):
+        """Read one chosen contact CSV locally and show what it holds. Writes nothing at all."""
+        chosen = filedialog.askopenfilename(
+            parent=self.root, title="Choose a contact CSV to review",
+            filetypes=[("Contact list (CSV)", "*.csv"), ("All files", "*.*")])
+        if not chosen:
+            self.status.set("Contact import cancelled; the database was not changed.")
+            return
+        try:
+            parsed = contacts.read_contact_csv(chosen)
+        except contacts.ContactImportError as exc:
+            # The parser's sentence names the file and the problem and never a cell value, so it can be
+            # shown as it stands; the second line is the promise this window keeps.
+            messagebox.showerror("Nothing was imported", f"{exc}\n\nThe database was not changed.",
+                                 parent=self.root)
+            self.status.set("Contact file not read; the database was not changed.")
+            self._record("import.refused", f"reason={type(exc).__name__}")
+            return
+        except Exception as exc:  # noqa: BLE001 - defensive: a Tk callback has no handler above it
+            # The reader is written to refuse every unreadable file with its own error type, so this is the
+            # last line of defence against a failure shape this build does not know about. Only the type is
+            # reported: an unexpected message could quote a cell.
+            messagebox.showerror(
+                "Nothing was imported",
+                "This file could not be read, so nothing was proposed and the database was not changed.\n\n"
+                f"The reader reported {type(exc).__name__}; the file itself was not modified.",
+                parent=self.root)
+            self.status.set("Contact file not read; the database was not changed.")
+            self._record("import.refused", f"reason={type(exc).__name__}")
+            return
+        # Counts only: the parsed values are shown in the panels below and are not events.
+        self.contacts_preview = parsed
+        self._render_contact_preview("")
+        counts = parsed.counts()
+        self.status.set(
+            f"Contact file read: {counts['rows read']} row(s), {counts['unique email keys']} email "
+            f"key(s), {counts['rows to review']} to review. Nothing has been stored yet.")
+
+    def _render_contact_preview(self, note: str) -> None:
+        """Fill the read-only panels from the previewed file. Shows values to the person, logs none."""
+        parsed = self.contacts_preview
+        lines = [note, ""] if note else []
+        lines.extend(parsed.describe())
+        self.contacts_preview_text.configure(state="normal")
+        self.contacts_preview_text.delete("1.0", END)
+        self.contacts_preview_text.insert("1.0", "\n".join(lines))
+        self.contacts_preview_text.configure(state="disabled")
+        self._clear_tree(self.contact_rows_tree)
+        # The rows the parser flagged, plus the ones the file itself put in a review column: these are the
+        # rows a person can still act on before confirming, and the values are theirs to read here only.
+        for row in parsed.rows_to_review():
+            # Both reasons are shown when both apply: the parser's own findings about the text, and any note
+            # the person's export carried in its review column. This is the one place a row's values appear,
+            # and it is the person's own file on their own screen.
+            why = ", ".join(part for part in (row.describe_flags(), row.recorded_reasons.strip()) if part)
+            self.contact_rows_tree.insert("", END, values=(
+                row.line, row.email or "(no address)", row.name or "", row.company or "",
+                why or "listed in the file's review column",
+            ))
+
+    def _store_contact_preview(self):
+        """Store the previewed file, after showing what it would do and asking once.
+
+        The plan is computed from the database first and shown in full, so an import into a list that
+        already holds records is a decision the person makes with the consequences in front of them: how
+        many contacts are added, how many are updated, how many disagreements will be kept for review, and
+        how many rows cannot be stored at all because they have no address.
+        """
+        if self.contacts_preview is None:
+            messagebox.showinfo(
+                "Choose a file first",
+                "No contact CSV has been read yet, so there is nothing to store. Use \"Choose a contact "
+                "CSV...\" first; nothing was changed.",
+                parent=self.root)
+            return
+        try:
+            plan = self.store.plan_contact_import(self.contacts_preview)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if not messagebox.askyesno(
+                "Import these contacts?",
+                "\n".join(plan.describe()) + "\n\nStore them now?", parent=self.root):
+            self.status.set("Contact import cancelled; nothing was written.")
+            return
+        try:
+            outcome = self.store.import_contacts(self.contacts_preview)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        except ValueError as exc:
+            # A refusal from the store itself, with its own sentence: nothing is claimed to have happened.
+            messagebox.showerror("Nothing was imported", f"{exc}\n\nNo contact was stored.",
+                                 parent=self.root)
+            self._record("import.failed", "reason=a stored contact record was refused")
+            return
+        self._refresh_contacts()
+        self._render_contact_preview(f"Imported: {outcome.describe()}.")
+        self.status.set(f"Contact import complete: {outcome.describe()}.")
+        messagebox.showinfo(
+            "Contact import complete",
+            f"{outcome.describe()}.\n\nNothing was contacted, no email was sent, and no address left this "
+            "machine. The stored list is below; a do-not-contact mark survives every later import.",
+            parent=self.root)
+
+    def _clear_contact_preview(self):
+        """Forget the previewed file. Nothing was ever stored for it, so there is nothing to undo."""
+        self.contacts_preview = None
+        self.contacts_preview_text.configure(state="normal")
+        self.contacts_preview_text.delete("1.0", END)
+        self.contacts_preview_text.insert(
+            "1.0", "No contact file is being reviewed. Nothing has been stored by this panel.")
+        self.contacts_preview_text.configure(state="disabled")
+        self._clear_tree(self.contact_rows_tree)
+        self.status.set("Contact preview cleared; nothing was stored or changed.")
+
+    def _refresh_contacts(self):
+        """Re-read the stored contact list and the counts beside it. Read-only."""
+        try:
+            records = self.store.list_contacts()
+            counts = self.store.contact_record_counts()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._clear_tree(self.stored_contacts_tree)
+        for record in records:
+            marked = "do not contact" if record.suppressed else ", ".join(record.review_flags)
+            self.stored_contacts_tree.insert("", END, values=(
+                record.email, record.name or "", record.company or "", record.source_file,
+                record.seen_count, marked,
+            ))
+        self.contacts_summary.set(
+            f"Stored here: {counts['contacts']} contact(s) · {counts['do_not_contact']} marked "
+            f"do-not-contact · {counts['with_review_flags']} carrying a review flag · "
+            f"{counts['conflicts']} disagreement(s) kept for review. Nothing here has been contacted.")
+
+    @staticmethod
+    def _clear_tree(tree) -> None:
+        """Empty a list before refilling it, so it can never show a row the database no longer holds."""
+        for item in tree.get_children():
+            tree.delete(item)
 
     def _build_data_safety(self):
         ttk.Label(

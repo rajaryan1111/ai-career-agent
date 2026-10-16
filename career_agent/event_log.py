@@ -96,6 +96,9 @@ EVENTS: tuple[str, ...] = (
     "import.written",
     "import.refused",
     "import.failed",
+    # The imported HR contact list: one event per import that committed. Counts only - an event never
+    # carries an address, a name, a company or the name of the file they came from.
+    "contacts.imported",
     "backup.written",
     "backup.refused",
     "restore.completed",

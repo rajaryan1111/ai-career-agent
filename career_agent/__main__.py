@@ -35,9 +35,10 @@ exists exactly as the person configured it.
 rows, how many distinct email keys, how many rows share a key, and which rows need a person's eye - and
 stores nothing at all. It opens no database, writes no file, reaches no network, and prints no email
 address, name or company label from the file: the report is counts, flag names and line numbers, so it
-can be read or pasted anywhere without copying somebody's contact details. This build has no review
-screen and no import for these files yet; the command says so rather than implying a workflow that is
-not there.
+can be read or pasted anywhere without copying somebody's contact details. This command has no review
+screen and no import: it is the read-only preview, and the window's HR contacts tab is where a list is
+reviewed, confirmed and stored locally. The command says so rather than implying a workflow it does not
+have.
 
 ``--integration-status``, ``--preview-calendar-export``, ``--draft-follow-up`` and ``--record-follow-up``
 are the email and calendar side of the same promise: a draft is not a send, a preview is not an action, and

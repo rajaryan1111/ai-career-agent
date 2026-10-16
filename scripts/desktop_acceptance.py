@@ -4,7 +4,7 @@ The manual checklist in ``research/`` is what a *person* has to do, and this scr
 replace it. What it does is narrower and still worth having: it builds the real ``CareerAgentApp`` window on
 a disposable synthetic database, types into the real ``Entry`` widgets, presses the real buttons through
 Tk's own ``invoke``, answers the dialogs a person would answer, and then checks the *stored* result and what
-the window says about it. Eleven workflows run, in the order a first-time user would meet them:
+the window says about it. Twelve workflows run, in the order a first-time user would meet them:
 
 * **A - the candidate profile.** Type a synthetic profile, add a role and a qualification through the
   window's own forms, save, close the window, open a second window on the same database, and check that the
@@ -45,6 +45,11 @@ the window says about it. Eleven workflows run, in the order a first-time user w
   makes and how many of the tab's controls it reaches; and whether every control carries text of its own or a
   label beside it. It also writes a screenshot per tab when a capture tool is available and the run was asked
   for one (``--screenshots DIR``), because a picture is what a person reviewing layout actually needs.
+* **L - the HR contact list.** Choose a synthetic contact CSV through the tab, check that a refused file
+  stores nothing and is explained, that a chosen one is read and shown with still no row stored, that a
+  declined confirmation stores nothing, and that a confirmed one stores each contact once (a repeat adds
+  none) and shows the stored list - with a do-not-contact mark surviving a further import. No address is
+  ever contacted, and every fixture address is on a reserved ``.invalid`` domain.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
 
@@ -155,6 +160,14 @@ SYNTHETIC_ROLE = {
     "start_date": "2025-01-06",
     "summary": "Fixture record created by the desktop acceptance run.",
 }
+#: The HR contacts workflow's own file: three rows, two email keys (one of them listed twice, so the
+#: duplicate path is exercised by the run itself) and every address on a reserved ``.invalid`` domain.
+SYNTHETIC_CONTACT_ROWS = (
+    ("first.contact@example.invalid", "Sample Person One", "Sample Employer One", "1"),
+    ("second.contact@example.invalid", "Sample Person Two", "Sample Employer Two", "2"),
+    ("first.contact@example.invalid", "Sample Person One", "Sample Employer One", "3"),
+)
+SYNTHETIC_CONTACT_HEADER = "Email,Name,Company Label,Source Rows\r\n"
 SYNTHETIC_QUALIFICATION = {
     "institution": "Fixture Institute of Technology",
     "qualification": "BSc Fictional Computing",
@@ -3562,6 +3575,100 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
     workspace.close_window(host, app)
 
 
+def workflow_l_contact_import(run: Run) -> None:
+    """The HR contact list: preview, refusal, cancel and confirm, on a disposable database.
+
+    Every file used here is synthetic and written into the run's own temporary folder, and every address is
+    on a reserved ``.invalid`` domain. What this checks is the part a screenshot cannot show: that choosing a
+    file reads and displays it without storing one row, that a refused file and a declined confirmation
+    leave the database exactly as it was, and that a confirmed import writes each contact once - read back
+    from the database the window itself writes through, not from the window's own list.
+    """
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.contacts_tab)
+    list_path = workspace.folder / "synthetic-contacts.csv"
+    list_path.write_text(
+        SYNTHETIC_CONTACT_HEADER + "".join(",".join(row) + "\r\n" for row in SYNTHETIC_CONTACT_ROWS),
+        encoding="utf-8",
+    )
+    refused_path = workspace.folder / "not-a-contact-list.csv"
+    refused_path.write_text("Name,Company Label\r\nSample Person,Sample Employer\r\n", encoding="utf-8")
+
+    with results.step("L1 a file that is not a contact list is refused, and nothing is stored"):
+        policy.reset()
+        policy.files.append(str(refused_path))
+        press(app.contacts_tab, "Choose a contact CSV...", workspace.root)
+        require(
+            "Nothing was imported" in policy.titles("showerror"),
+            f"the refusal was not shown to the person; dialogs: {policy.titles()!r}",
+        )
+        said = policy.said("Nothing was imported")
+        require("not changed" in said or "was not changed" in said,
+                f"the refusal does not promise that nothing changed: {said!r}")
+        counts = app.store.contact_record_counts()
+        require(counts["contacts"] == 0, f"a refused file stored {counts['contacts']} contact(s)")
+        require("not read" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("L2 a chosen file is read and shown, and still nothing is stored"):
+        policy.reset()
+        policy.files.append(str(list_path))
+        press(app.contacts_tab, "Choose a contact CSV...", workspace.root)
+        shown = app.contacts_preview_text.get("1.0", "end")
+        require("File: synthetic-contacts.csv" in shown, f"the preview does not name the file: {shown[:200]!r}")
+        require("Nothing was written" in shown, "the preview does not say that nothing has been written")
+        require(app.store.contact_record_counts()["contacts"] == 0, "a preview stored a contact")
+        require(len(app.stored_contacts_tree.get_children()) == 0,
+                "the stored list shows a contact before anything was confirmed")
+        require(not policy.titles("askyesno"), f"reading a file asked a question: {policy.titles()!r}")
+        require("Nothing has been stored yet" in app.status.get(), f"the status says {app.status.get()!r}")
+
+    with results.step("L3 a declined confirmation stores nothing at all"):
+        policy.reset()
+        policy.answers["Import these contacts?"] = False
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        require("Import these contacts?" in policy.titles("askyesno"),
+                f"the confirmation was not asked; dialogs: {policy.titles()!r}")
+        asked = policy.said("Import these contacts?")
+        require("contacts to add" in asked, f"the confirmation does not count what it would add: {asked!r}")
+        require(app.store.contact_record_counts()["contacts"] == 0, "a declined confirmation stored a contact")
+        require("nothing was written" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("L4 a confirmed import stores each contact once, and a repeat adds none"):
+        policy.reset()
+        policy.answers.pop("Import these contacts?", None)
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        counts = app.store.contact_record_counts()
+        require(counts["contacts"] == 2, f"three rows with two email keys stored {counts['contacts']} contact(s)")
+        seen = sorted(record.seen_count for record in app.store.list_contacts())
+        require(seen == [1, 1], f"after one import the records report seen counts {seen!r}")
+        require("Contact import complete" in policy.titles("showinfo"),
+                f"the completion was not reported; dialogs: {policy.titles()!r}")
+        require("2 contact(s) added" in app.status.get(), f"the status line says {app.status.get()!r}")
+        require(len(app.stored_contacts_tree.get_children()) == 2,
+                "the stored list does not show the two contacts just stored")
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        counts = app.store.contact_record_counts()
+        require(counts["contacts"] == 2, f"importing the same file again stored {counts['contacts']} contacts")
+        seen = sorted(record.seen_count for record in app.store.list_contacts())
+        require(seen == [2, 2], f"the second import reports seen counts {seen!r}")
+
+    with results.step("L5 a do-not-contact mark survives a further import of the same file"):
+        key = SYNTHETIC_CONTACT_ROWS[0][0]
+        marked = app.store.set_contact_suppression(key, note="synthetic opt-out for the acceptance run")
+        require(marked.suppressed, "the mark was not stored")
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        after = app.store.get_contact(key)
+        require(after.suppressed, "an import cleared a do-not-contact mark")
+        require(after.seen_count == 3, f"the third import reports a seen count of {after.seen_count}")
+        require("1 marked do-not-contact" in app.contacts_summary.get(),
+                f"the summary does not show the mark: {app.contacts_summary.get()!r}")
+        require("Nothing here has been contacted" in app.contacts_summary.get(),
+                f"the summary does not say nothing was contacted: {app.contacts_summary.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 #: The workflows, in the order they run. Named rather than numbered so the report line for a failure says
 #: which part of the application it belongs to, and ordered deliberately: F releases the run's own Tk root
 #: and deletes the disposable folder, so every workflow that needs a window on the run's database comes
@@ -3577,6 +3684,7 @@ WORKFLOWS = (
     ("I - the schedule, paused and resumed", workflow_i_scheduler),
     ("J - data safety: backup and restore", workflow_j_data_safety),
     ("K - layout, focus order and labelling, measured", workflow_k_layout_focus_labels),
+    ("L - HR contact import: preview, refusal, cancel and confirm", workflow_l_contact_import),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
