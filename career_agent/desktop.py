@@ -3518,12 +3518,17 @@ class CareerAgentApp:
                     "Save and confirm these answers?",
                     f"{detail}\n\nThese answers are saved as the facts they name and recorded as confirmed "
                     "by you, because you typed them here and pressed this button - no document, no import "
-                    "and no other action in this app can confirm a fact. A question you leave blank stays "
-                    "unknown. Save now?", parent=setup.dialog):
+                    "and no other action in this app can confirm a fact. The values already in the form on "
+                    "the profile tab are saved with them, as yours and left unconfirmed, so an edit made "
+                    "there is not lost by saving here. A question you leave blank stays unknown. Save now?",
+                    parent=setup.dialog):
                 self.status.set("Profile setup: nothing was saved.")
                 return
         try:
-            self.store.save_profile(profile)
+            # The facts this write recorded an origin for: the answers typed here, and any value the form
+            # above held that the stored profile did not. The second set is named rather than passed over,
+            # because the confirmation above has just said what this press saves.
+            recorded = self.store.save_profile(profile)
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return
@@ -3558,16 +3563,20 @@ class CareerAgentApp:
                 "relying on it.", parent=setup.dialog)
             self.status.set("Profile setup: written but not verified.")
             return
-        mismatched = profile_fields_not_matching(stored, answers)
+        # Everything this write was asked to store is verified, not only the answers typed here: the form's
+        # own values go into the same `save_profile` call, and verifying a subset would let a value the
+        # person never saw named be written under a "saved" that was only checked for the rest.
+        mismatched = profile_fields_not_matching(stored, merged)
         if mismatched:
             labels = ", ".join(fact_label(fact) for fact in mismatched)
             messagebox.showerror(
                 "Profile not saved",
-                f"The stored profile does not match the answer(s) you gave ({labels}), so this is reported "
-                "as failed rather than saved. Nothing was confirmed.", parent=setup.dialog)
+                f"The stored profile does not match what this window was about to save ({labels}), so this is "
+                "reported as failed rather than saved. Nothing was confirmed.", parent=setup.dialog)
             self.status.set("Profile setup: the stored profile did not match the answers.")
             self._refresh_fact_review()
             return
+        written_from_the_form = [fact for fact in recorded if fact not in answers]
         confirmed, already_confirmed, failed = [], [], []
         for fact in dict.fromkeys([*answers, *checked]):
             try:
@@ -3581,7 +3590,8 @@ class CareerAgentApp:
                     # was changed" - would be false here: the answers are saved and some checks may already
                     # be recorded. Reported as what it is instead.
                     self._setup_saved_but_unchecked(confirmed, already_confirmed, fact, str(exc),
-                                                    answers_saved=bool(answers))
+                                                    answers_saved=bool(answers),
+                                                    form_values_saved=bool(written_from_the_form))
                     return
                 # The store's own refusal - a fact the profile does not state, a file held at an older
                 # schema - is decided before anything is written, so this fact is simply not confirmed and
@@ -3593,7 +3603,8 @@ class CareerAgentApp:
                 # that follows a committed row. Nearly always a dead connection, so the loop stops rather
                 # than reporting a list of failures that might each be untrue.
                 self._setup_saved_but_unchecked(confirmed, already_confirmed, fact, str(exc),
-                                                answers_saved=bool(answers))
+                                                answers_saved=bool(answers),
+                                                form_values_saved=bool(written_from_the_form))
                 return
             (already_confirmed if before is not None and before.is_confirmed else confirmed).append(fact)
         state_read_failed = False
@@ -3617,6 +3628,12 @@ class CareerAgentApp:
         if confirmed:
             note_parts.append("Saved and confirmed by you: "
                               + ", ".join(fact_label(fact) for fact in confirmed) + ".")
+        if written_from_the_form:
+            # Named, not passed over: this same press stored them, so a report that listed only the typed
+            # answers would leave a change to the saved profile unmentioned.
+            note_parts.append(
+                "Saved with them from the form on the profile tab, left unconfirmed: "
+                + ", ".join(fact_label(fact) for fact in written_from_the_form) + ".")
         if already_confirmed:
             note_parts.append("Already confirmed, so unchanged: "
                               + ", ".join(fact_label(fact) for fact in already_confirmed) + ".")
@@ -3654,13 +3671,16 @@ class CareerAgentApp:
                else "every fact a listing can require is stated."))
 
     def _setup_saved_but_unchecked(self, confirmed, already_confirmed, fact: str, detail: str,
-                                  *, answers_saved: bool) -> None:
+                                  *, answers_saved: bool, form_values_saved: bool = False) -> None:
         """Report a setup save whose checks could not be finished, without claiming nothing happened.
 
-        By the time this is reached the answers have been written to the database **and** read back, so the
+        By the time this is reached the values have been written to the database **and** read back, so the
         save is a fact; what failed is the read that decides whether the remaining checks can be recorded.
-        The person is told what was recorded, that the rest is unknown, and where to look - and the window
-        is filled again from storage, which is truthful whenever the database answers this time.
+        Which values those were is passed in rather than assumed: one press writes the answers *and* whatever
+        the profile form already held, so "no answer was typed" is not the same as "nothing was written", and
+        each case gets its own sentence. The person is told what was recorded, that the rest is unknown, and
+        where to look - and the window is filled again from storage, which is truthful whenever the database
+        answers this time.
         """
         setup = self.profile_setup
         done = []
@@ -3670,29 +3690,39 @@ class CareerAgentApp:
         if already_confirmed:
             done.append("already confirmed, so unchanged: "
                         + ", ".join(fact_label(item) for item in already_confirmed))
+        if answers_saved and form_values_saved:
+            written = ("Your answers, and the values the form on the profile tab already held, were written to "
+                       "the local database and read back, so they are saved. ")
+        elif answers_saved:
+            written = "Your answers were written to the local database and read back, so they are saved. "
+        elif form_values_saved:
+            written = ("The values the form on the profile tab already held were written to the local "
+                       "database and read back, so they are saved. ")
+        else:
+            written = "No value was typed or changed, so this press changed nothing in your profile. "
         messagebox.showerror(
             "Saved, but the rest could not be checked",
-            ("Your answers were written to the local database and read back, so they are saved. "
-             if answers_saved else "No answer was typed, so this press changed no value in your profile. ")
+            written
             + ("; ".join(done) + ". " if done else "")
             + f"The saved facts could not be read again while recording the check for {fact_label(fact)}, so "
             "it is not known whether that check was recorded, and this window cannot say which facts are "
             "still missing. Open the profile tab and press \"Refresh the saved facts\" to see what the "
             f"database holds before relying on it.\n\n{detail}",
             parent=setup.dialog if setup is not None else self.root)
+        saved_something = answers_saved or form_values_saved
         self._refresh_fact_review()
         re_rendered = self._render_profile_setup(note=(
             "The last save was written and read back; the checks after it could not all be recorded, so "
-            "what is below was read from the database again." if answers_saved else
+            "what is below was read from the database again." if saved_something else
             "The checks below could not all be recorded, so what is below was read from the database "
             "again."))
         if not re_rendered:
-            self.status.set("Profile setup: saved, but the rest could not be checked." if answers_saved
-                            else "Profile setup: nothing was typed, and the rest could not be checked.")
+            self.status.set("Profile setup: saved, but the rest could not be checked." if saved_something
+                            else "Profile setup: nothing was changed; the checks could not all be recorded.")
             return
         self.status.set("Profile setup: saved; the checks after it could not all be recorded."
-                        if answers_saved else
-                        "Profile setup: no answer was saved; the checks could not all be recorded.")
+                        if saved_something else
+                        "Profile setup: nothing was changed; the checks could not all be recorded.")
 
 
     def _setup_written_but_unverified(self, detail: str) -> None:

@@ -1126,6 +1126,10 @@ def workflow_a_profile(run: Run) -> None:
         require("Work authorization" in asked, f"the confirmation does not name the answer: {asked!r}")
         require("confirmed by you" in asked,
                 f"the confirmation does not say how the answer is recorded: {asked!r}")
+        # One press writes the form too, so the question is checked for saying so: a confirmation that asked
+        # about the typed answers alone would be asking permission for less than the press does.
+        require("in the form on the profile tab are saved with them" in asked,
+                f"the confirmation does not say what else this press writes: {asked!r}")
         entry = provenance_by_fact(app3)["work_authorization"]
         require(entry.is_confirmed and entry.source is FactSource.USER_ENTERED,
                 f"the answered fact is stored as {(entry.source, entry.verification)!r}")

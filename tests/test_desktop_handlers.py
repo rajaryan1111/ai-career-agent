@@ -8250,6 +8250,77 @@ class ProfileSetupTests(HandlerTestCase):
                          "a refused confirmation leaves the stored value exactly where it was")
         self.assertIn("confirm them again from the table above", setup.summary.get())
 
+    def test_a_form_value_this_save_writes_is_named_and_left_unconfirmed(self):
+        """The setup save writes the whole form, so neither the question nor the report may speak of answers alone.
+
+        The answers are mirrored into the same variables the profile tab's entries are bound to, and the save
+        is built from those variables, so a value sitting in the form - typed on the profile tab and not yet
+        saved - is stored by this press as well. Only an answer typed into *this* window is a confirmation, so
+        that value stays unconfirmed; but it is named, in the question that asks permission and in the report
+        that says what happened, because a press that changes what is saved must not describe itself as
+        saving something narrower.
+        """
+        app = self.empty_form(self.make_app())
+        app.profile_vars["country"].set("Otherland")  # typed on the profile tab, deliberately never saved
+
+        setup = self.ask(app, work_authorization="Synthetic Permit Class C")
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("Synthetic Permit Class C", asked)
+        self.assertIn("values already in the form on the profile tab are saved with them", asked,
+                      "the question asks about everything this press writes, not only the typed answers")
+        entries = {item.fact: item for item in self.store.get_profile_fact_provenance()}
+        self.assertEqual(profile_form_values(self.store.get_profile())["country"], "Otherland",
+                         "the form value is what the write stored")
+        self.assertIs(entries["country"].verification, FactVerification.UNVERIFIED,
+                      "a value this window never asked about is not confirmed by saving it")
+        self.assertIs(entries["work_authorization"].verification, FactVerification.USER_CONFIRMED,
+                      "the answer typed here is the one this press confirms")
+        self.assertIn("Saved with them from the form on the profile tab, left unconfirmed: Country",
+                      setup.summary.get())
+        self.assertNotIn("left unconfirmed: Work authorization", setup.summary.get())
+
+    def test_a_check_that_cannot_be_recorded_after_a_form_only_write_says_what_was_written(self):
+        """No answer typed is not the same as nothing written, and the report may not blur the two.
+
+        One press writes the profile form as well as the answers, so a save with no answer typed can still
+        have written a value - an edit sitting on the profile tab. When a check after that write cannot be
+        recorded, the sentence "no answer was typed, so this press changed no value" would be false, and it
+        is the one sentence a person reading this dialog is relying on. The three cases are therefore named
+        apart: answers, the form's own values, or genuinely nothing.
+        """
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app.profile_vars["country"].set("Otherland")  # on the profile tab, not saved yet
+        setup = self.open_setup(app)
+        self.assertIn("degree", setup.confirm_vars, "a stored required fact is offered for a check")
+        setup.confirm_vars["degree"].set(True)
+        MESSAGES.reset()
+        real_provenance = self.store.get_profile_fact_provenance
+        calls = []
+
+        def unreadable_while_recording_the_check():
+            calls.append(len(calls))
+            if len(calls) == 1:
+                raise StoredRecordError("profile fact origin",
+                                        "its source is an origin this version does not know")
+            return real_provenance()
+
+        with mock.patch.object(self.store, "get_profile_fact_provenance",
+                               side_effect=unreadable_while_recording_the_check):
+            app._save_profile_setup()
+
+        detail = MESSAGES.text("showerror")
+        self.assertIn("Saved, but the rest could not be checked", MESSAGES.titles("showerror"))
+        self.assertIn("The values the form on the profile tab already held were written to the local database "
+                      "and read back, so they are saved.", detail)
+        self.assertNotIn("No answer was typed", detail)
+        self.assertNotIn("No value was typed or changed", detail)
+        self.assertNotIn("changed nothing", detail.casefold())
+        self.assertEqual(profile_form_values(self.store.get_profile())["country"], "Otherland",
+                         "the form value was written before the read that failed")
+        self.assertIn("saved", app.status.get())
+
     def test_a_complete_and_confirmed_profile_is_asked_for_nothing(self):
         app = self.empty_form(self.make_app())
         self.ask(app, country="Syntheticland", degree="Synthetic Computing",
