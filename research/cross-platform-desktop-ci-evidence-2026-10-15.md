@@ -1028,3 +1028,60 @@ moved). This is the part of D35 that no local run could find and no Linux or mac
 ran `Ran 1857 tests ... OK` and the same `RESULT: PASS — 94 checks passed` for the acceptance workflow. D35 is
 therefore closed with evidence on all three platforms: the treeview focus item Tk's navigation starts from, and
 the widget focus Tk requires before it will deliver a generated key event at all.
+
+## 26. D36 — a location that continued past a redaction placeholder (run 38883986337 at `bdf443b`, 2026-10-16)
+
+**How it was found.** The first run to carry the HR contact export (13 jobs, 11 green) failed **both Windows
+legs** with `FAILED: L20 a destination that cannot be written claims nothing and changes nothing`, the new
+check that points the export control at a folder that does not exist:
+
+```
+File ".../scripts/desktop_acceptance.py", line 4286, in workflow_l_contact_import
+    require("no-such-folder" not in written, "the path the person chose reached the activity log")
+desktop_smoke_test.SmokeFailure: the path the person chose reached the activity log
+```
+
+The three other display-backed legs - Linux under Xvfb and both macOS legs - passed that check, and the unit,
+installed-package and PDF-extra jobs were green (`Ran 1945 tests ... OK`). Nothing in the check itself was
+wrong, which is what made the finding worth having: the log line the check read is written to be safe to
+share, and on Windows it held the folder name the person had chosen.
+
+**What it was.** `career_agent.diagnostics.redact_paths` hides a location in three passes: the paths the
+caller *declared* (the database, its folder, the home folder, anything passed as `extra_paths`), then any
+remaining **absolute** location, so that a path named only inside an unexpected exception's message cannot
+reach a note written to be safe to share. The refusal reported by a failed backup quotes the destination
+folder, and on the Windows runners that folder is under the *parent* of `Path.home()`
+(`C:\Users\RUNNER~1\AppData\Local\Temp\career-agent-acceptance-*`): the home-folder replacement shortened the
+message to `<home folder>\RUNNER~1\AppData\Local\Temp\<run folder>\no-such-folder`, and the sweep could not
+match any of what followed. Both of its patterns carry the guard `(?<![\w:/<>"'])` - which refuses to match
+after the `>` that every placeholder this module writes ends with - and the alternative that handles a
+Windows path needs a drive letter or a `\\` share prefix, neither of which survives the replacement. On POSIX
+the temporary folder is `/tmp/...`, which is not under the home folder's parent at all, so there was no
+leftover to hide and every Linux and macOS leg stayed green.
+
+**The fix.** A third pattern, not a wider guard on the two that exist:
+`(?<=>)(?:[/\\][^\s/\\<>"'|]+){2,}` - a location continuing past one of this module's own placeholders into
+**two or more** further segments. One trailing segment is deliberately left alone, because that shape is
+`<application data folder>/career_agent.sqlite3`: the product's own file name, which this module keeps on
+purpose and which a person is meant to be able to read. Widening the shared guard instead was written and
+measured first precisely because it is the obvious fix: it broke
+`test_the_database_location_is_replaced_without_leaking_its_folder` by replacing that file name too, which is
+how the two-segment rule was arrived at.
+
+**Regression tests.** `tests/test_diagnostics.py::PathRedactionTests::test_a_path_that_follows_a_placeholder_is_still_hidden`
+covers both shapes - a POSIX path under the home folder's parent (which the shipped code left visible on
+Linux too, discovered while writing the test rather than assumed) and a Windows path immediately after a
+placeholder - and requires the placeholder to be written and the private folder name to be gone. The
+mutation that removes the new pattern fails it. **Verified by run 38891340290 at `546d065`: 13/13 jobs green**,
+both Windows legs `Ran 1950 tests ... OK (skipped=45 / 52)` and reporting `RESULT: PASS — 102 checks passed`
+with L20 `[ ok ]`, and the Linux display job `116941315130` listing L16-L20 `[ ok ]` beside L1-L15. D36 is
+closed with evidence from a real display on all three platforms.
+
+**A second defect, found while verifying the same check's claims and fixed in the same commit.** The export's
+writer promised a file that holds exactly the bytes it was given or nothing, but a write that failed part way
+(a full device, a quota, an I/O error) left the fragment it had already written at the destination - ten bytes
+of byte-order mark and header in the reproduction - while the error said the export was not completed. A file
+at the path the person chose that looks like an export and is not is worse than no file, so
+`store.write_private_bytes_file` now removes what it started and says in the message whether the removal
+succeeded. Two regression tests hold it (`tests/test_store.py::PrivateBytesWriteTests`, and the export module's
+own `FileSafetyTests`), and the mutation that removes the removal fails both.

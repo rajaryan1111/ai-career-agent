@@ -8,10 +8,18 @@ file says how to get to a state where those steps can be executed, which steps c
 evidence to capture, and where to write the result.
 
 **Status of every window step today: BLOCKED, and nothing here changes that.** No human has opened this
-window. 22 of the 111 steps passed on a headless machine (the ones needing no window), 89 are blocked for the
+window. 22 of the 117 steps passed on a headless machine (the ones needing no window), 95 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
-**The HR contacts tab now has numbered steps of its own (99-111), and this handoff's advice to treat it as
+**One thing the first export run is worth reading for.** Run `38883986337` at `bdf443b` was 11 of 13 jobs
+green: both Windows legs failed the new L20 check with `the path the person chose reached the activity log`,
+which is **D36** - a path redaction that could not match a location continuing past one of its own placeholders,
+so a refused backup's log line kept a folder name on that platform (`/tmp` sits outside the home folder on
+Linux, which is why no other leg saw it). It is fixed in `546d065`, with a regression test that fails without the
+fix (on Linux too, as writing the test showed), and closed by the green run above. The first run is kept in the
+record rather than replaced: it is the evidence that the check can fail.
+
+**The HR contacts tab now has numbered steps of its own (99-117), and this handoff's advice to treat it as
 untested by hand still stands.** Steps 99-105 cover the read-only panel that lists the disagreements the
 application already records: its empty state, the rows and their provenance, the selected row's two sides, the
 keyboard (including Tk's own focus-item behaviour, which the steps ask a tester to observe and write down), a
@@ -20,22 +28,31 @@ destructive action on the tab: what a greyed-out **Delete selected contact** loo
 reached at the window's minimum size, whether the confirmation's wording is clear when read on a real screen
 (it names the row's position, the file the record came from and how many disagreements go with it, and never a
 contact value), what the keyboard and the mouse do with it, what a screen reader announces, and whether the
-sentence about a backup written before the deletion is understood as the limit it is. Workflow L still exercises the tab's
-read/refuse/decline/confirm/mark/review paths automatically and the tab is inside every layout and focus
+sentence about a backup written before the deletion is understood as the limit it is. Steps 112-117 cover the
+tab's other direction: exporting the stored list to a CSV the person names the location of - where the control
+and its sentence sit, whether a closed save dialog leaves everything alone, what the completion report says,
+what the file looks like in the person's own tools (encoding, the five documented columns, one cell per value,
+the leading apostrophe the format writes in front of a cell a spreadsheet would otherwise evaluate), the two
+refusals (replacing an existing file and choosing a folder that cannot be written), and the mark column's
+documented limitation - that an import of the file can neither set nor clear a mark, and that the
+whole-database backup is what carries one. Workflow L still exercises the tab's
+read/refuse/decline/confirm/mark/review/export paths automatically and the tab is inside every layout and focus
 measurement, but a person still has to read its wording, try its chooser, judge whether the confirmation reads
 well and whether the two new panels fit the tab - so see the named gaps in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md) and in
 [the panel's note](hr-contact-conflict-review-panel-2026-10-16.md) rather than treating the automated checks as
 acceptance of it.
 
-**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **94
-checks** in the current source, and 97 on the matrix below - run `38875397574` at `c1b2ab1`,
-thirteen of thirteen jobs, `RESULT: PASS - 97 checks passed` and `Ran 1881 tests ... OK` on every leg (91 on the
-matrix before it, run `38855211961` at `2d237bc`; 87 on the one before that, run `38828908041` at `02962f6`;
-eleven and 82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and one
-check was added to workflow I on 2026-10-16, five to workflow L with the contact list, four more when the
-do-not-contact controls were added, three more for the recorded-disagreement panel, and three more for deleting
-one stored contact and its recorded disagreements). The twelfth
+**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **102
+checks** in the current source, and 102 on the matrix below - run `38891340290` at `546d065`,
+thirteen of thirteen jobs, `RESULT: PASS - 102 checks passed` and `Ran 1950 tests ... OK` on every leg (97 on the
+matrix before it, run `38875397574` at `c1b2ab1` with `Ran 1881 tests ... OK`; 94 on the one before that, run
+`38864632201` at `4b4e752`; 91 on the one before that, run `38855211961` at `2d237bc`; 87 on the one before that,
+run `38828908041` at `02962f6`; eleven and 82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg
+table below was recorded, and one check was added to workflow I on 2026-10-16, five to workflow L with the
+contact list, four more when the do-not-contact controls were added, three more for the recorded-disagreement
+panel, three more for deleting one stored contact and its recorded disagreements, and five more for exporting
+the stored list). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
@@ -86,7 +103,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 97 checks: twelve workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 102 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -326,6 +343,39 @@ visible. No automated check can judge it.
   answer without hesitating, what a focused destructive button looks like on this platform, whether the control
   is reachable and comfortable at 900x600, what a screen reader announces, and whether "a backup written before
   this still holds the record" is understood as the limit it is rather than as an oversight.
+
+### P. HR contacts: exporting the stored list to a CSV — steps 112–117
+
+- **Setup:** the same disposable `CAREER_AGENT_HOME` as the sections above, with two stored contacts (one of
+  them marked do-not-contact with a reason typed beside it) and at least one recorded disagreement, plus a
+  folder you can write to and one you cannot (or a path with a folder name that does not exist). No real contact
+  data: every address stays on a reserved `.invalid` domain.
+- **Do:** read the export's heading, button and paragraph at the window's opening size and at 900x600 without
+  pressing anything (112); press it and close the save dialog (113); export to a name you choose and read the
+  completion dialog and status line (114); open the file in a text editor and in your own spreadsheet, then read
+  it back with `--preview-contact-csv` and try `--export-contacts-to` at the same path (115); exercise the
+  overwrite question with both answers, an unwritable destination, and a database with no contacts (116); and
+  finally compare the stored list, the marks and the disagreements with what they were, read the new activity-log
+  line, restore the whole-database backup and import the exported CSV into a database that does not hold the
+  contacts (117).
+- **Expected:** the file has a byte-order mark, CRLF lines, the header `Email,Name,Company,Do Not Contact,Export
+  Format`, one row per stored contact in the list's order, the mark column matching the list, and
+  `hr-contact-export/1` on every row; a value holding a comma, a quote or a newline stays in one cell; a cell
+  that starts with `=` (or `+`, `-`, `@`) is text, not a formula; the completion report carries the counts and
+  the limit sentence and **not** the folder you chose; a closed dialog writes nothing and says nothing; declining
+  the overwrite leaves the file byte-identical; an unwritable destination reports a failure and creates nothing;
+  and after all of it the database is exactly as it was, with one log line carrying counts only. The
+  do-not-contact mark does **not** travel as state: importing the file arrives without it.
+- **Evidence to capture:** a screenshot of the tab's export area and of the completion dialog with its text; the
+  file's first two lines as bytes (`xxd | head`) and one row with a non-ASCII name, one with a comma/quote and
+  one with a leading `=`; the folder listing before and after a cancelled dialog; the file's size or hash before
+  and after a declined overwrite; the error dialog for the unwritable destination; the activity log's new line;
+  and the stored list, marks and disagreement count before and after the export.
+- **Human-only judgement:** whether the paragraph beside the control is readable and honest at both sizes,
+  whether the save dialog is reachable and answerable by keyboard and by mouse alone, whether the file opens
+  where the person expects it to, whether their spreadsheet shows the apostrophe-guarded cell as text rather
+  than evaluating it, whether non-ASCII names look right in their tools rather than like mojibake, and whether
+  the sentence about the mark column is understood as the limitation it is rather than as a defect.
 
 ### M. Operating-system specifics
 

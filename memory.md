@@ -3368,3 +3368,75 @@ still `()`, and nothing in the increment opens a socket. Written up in
 contact-list export and row-by-row CSV decisions as the next candidates; `phases.md`, `design.md`, `README.md`
 and the handoff carry the new counts; and no new defect (D36) was found, so the cross-platform register is
 unchanged.
+
+## 2026-10-16 — Exporting the stored HR contact list, and the two defects the verification found
+
+The HR contacts tab could read a list, store it, mark it, review its disagreements and delete one record, but
+the list itself could not leave the database: the only export was the version-2 JSON document, which
+deliberately carries no contact table. This increment adds a **separate, user-initiated CSV export** with its
+own contract - `career_agent/contact_export.py`, format `hr-contact-export/1`: UTF-8 **with a byte-order mark**,
+`\r\n` record separators, one row per stored contact with `Email`, `Name`, `Company`, `Do Not Contact` (the
+mark as readable text, `yes`/`no`, never empty) and `Export Format` on every row. Excluded on purpose and
+documented as such: internal ids, first/last seen, import counts, the source file and row, review flags and
+notes, every disagreement value, the mark's date and note, and every activity record - all of which the
+whole-database backup on the Data safety tab carries instead, because it copies the database itself.
+
+The safety decision was made from the code before anything was written, and it is the one the task allowed:
+`set_contact_suppression` is the only writer of the mark in the whole application and no import statement names
+that column, so the export does **not** claim to preserve suppression state. The column is text a person reads,
+an import can neither set nor clear it, and one sentence (`MARK_COLUMN_LIMITATION`) is repeated by the window,
+the completion dialog and the command rather than paraphrased three ways. Both directions are asserted: a file
+saying `yes` everywhere marks nobody, and a file edited to say `no` unmarks nobody. A mutation showed those
+tests were asserting the sentence's *identity* and would have accepted a sentence that said nothing useful, so
+three of them now assert its substance too.
+
+The write is byte-for-byte (`store.write_private_bytes_file`, because a text write would translate `\n` and make
+one documented format two files), owner-only on POSIX, never through a symbolic link, and read back and compared
+before success is claimed; over 50,000 rows or 20 MiB the export refuses before creating a path and names the
+backup. Cells that would make a spreadsheet evaluate them are written with a leading apostrophe. The window asks
+before replacing a file, says nothing at all when the dialog is closed, and reports every failure without
+claiming an export; `--export-contacts-to` refuses an existing path outright. The database is only read, and the
+log carries counts (`contacts.exported`, `contacts.export.failed`).
+
+**Two defects were found by verification rather than by reading, and both are fixed with tests that fail
+without them.** **D36**: the Windows display-backed legs of run `38883986337` at `bdf443b` failed the new L20
+check - `the path the person chose reached the activity log` - while Linux, macOS and every other job were
+green. `diagnostics.redact_paths` hides declared paths and then any remaining absolute location, but both of its
+patterns refuse to match after the `>` that every placeholder ends with, and its Windows branch needs a drive
+letter or share prefix that does not survive the home-folder replacement; on the runners the temporary folder
+sits under the *parent* of `Path.home()` (`C:\Users\RUNNER~1\AppData\Local\Temp\...`), so
+`<home folder>\RUNNER~1\...\no-such-folder` stayed in a log written to be safe to share. The fix is a third
+pattern - a location continuing past a placeholder into two or more further segments - and one trailing segment
+stays visible because that shape is `<application data folder>/career_agent.sqlite3`, the product's own file
+name; widening the shared guard was tried first and is exactly what that test caught. While writing the
+regression test, the POSIX half turned out to fail on the shipped code as well (`/home/other/matter-notes/...`
+kept its folder name), so D36 was never really Windows-only. **The partial write**: `write_private_bytes_file`
+promised the bytes it was given or nothing, but a mid-write I/O failure left a ten-byte fragment of the header
+at the person's chosen path while the error said the export was not completed; the writer now removes what it
+started and says whether the removal succeeded. Two regression tests hold it.
+
+**Mutation checks were rebuilt before they were trusted.** The first version mutated the real working tree and
+restored from a backup taken on its first run, so a reused backup restored an older revision over a newer edit -
+the tests correctly reported the resulting failure, but the harness had caused it. The harness now copies the
+worktree to a temporary directory removed in a `finally`, verifies the unmutated copy green **first** so a
+failure can be attributed to the mutation, requires the failing test to be in the module the entry names, checks
+that each mutation actually changed the file and still compiles, and verifies every file restored byte for byte
+afterwards. **Twenty mutations - both spreadsheet guards, the read-back, the byte-order mark, the line endings,
+the version cell, the mark column, the mark's note, both limits, the shared sentence, the partial-write discard,
+the D36 pattern, two window claims, two command claims and the JSON version - were all caught**, and the run
+prints the failing test for each.
+
+Evidence: 37 tests in `tests/test_contact_export.py`, 11 in `tests/test_cli_export_contacts.py`, 6 in
+`tests/test_store.py::PrivateBytesWriteTests`, 3 in `tests/test_contacts_store.py::ContactExportReadBackTests`,
+10 in `tests/test_desktop_handlers.py::ContactsExportHandlerTests`, acceptance checks **L16-L20** (102 declared
+checks), `Ran 1950 tests ... OK (skipped=13)` locally, and run `38891340290` at `546d065` green **13/13** with
+`RESULT: PASS — 102 checks passed` on all five display-backed legs. Commits: `bdf443b` (feature) and `546d065`
+(the two fixes). No schema change (still **7**), `EXPORT_FORMAT_VERSION` is asserted to still be **2** and the
+JSON document is asserted byte-identical across a contact export, no new table, no change to
+`--forget-local-data`, backup or restore, and nothing opens a socket: `SOURCE_QUALITY_GATE_PASSED` is still
+`False` and `enabled_discovery_sources()` still `()`. **No human has used it**: the six new manual steps
+**112-117** are BLOCKED, the checklist's head count moves to 117 steps (22 PASS / 95 BLOCKED / 0 FAIL, no box
+ticked), and whether the paragraph reads clearly, whether the save dialog is reachable at 900x600, what a
+spreadsheet does with the apostrophe and whether non-ASCII names look right in a person's own tools stay
+unverified. Written up in `research/hr-contact-export-2026-10-16.md`; D36 is recorded in section 26 of
+`research/cross-platform-desktop-ci-evidence-2026-10-15.md`.

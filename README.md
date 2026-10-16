@@ -368,9 +368,33 @@ wrote earlier still holds the record, and restoring that copy brings it back, be
 database with the copy you choose. `--forget-local-data` remains the whole-database erasure, and the difference
 between the two is stated where each is offered.
 
+**Taking the list with you: exporting it to a CSV.** Press **Export the stored list...** at the bottom of the
+tab and choose where the file goes. One row is written per stored contact, in the order the list shows them,
+with the address, the name and the company label as they are stored, whether each one is marked do not contact,
+and a final cell naming the format (`hr-contact-export/1`). It is UTF-8 with a byte-order mark, so a spreadsheet
+reads names with accents correctly, and a value holding a comma, a quote or a line break stays in one cell. A
+cell whose first character would make a spreadsheet treat it as a formula (`=`, `+`, `-` or `@`) is written with
+a leading apostrophe - that apostrophe is part of the text in the file, which is the price of the file being
+safe to open.
+
+**What the file is not.** It is a list to read or to carry between machines, **not a backup of this
+application**: a mark's reason, the date of a mark, the recorded disagreements, the review notes your source
+files carried, the internal identifiers and every activity record stay in the database. The whole-database
+backup on the Data safety tab is what copies those - it copies the database itself. The do-not-contact column is
+**text for you to read, and an import of the file can neither set nor clear a mark**: a mark is only ever made in
+the window that belongs to the database, so a person who moves their list to a new machine re-applies the marks
+there. The window's sentence, the completion dialog and the command's output all say exactly that, in the format
+module's own words. The file is written owner-only where the platform has permissions, only after the list has
+been read back from the disk and compared with what was written, and an existing file is replaced **only** after
+you confirm the overwrite. Nothing is sent anywhere and the database is not changed by an export; the same is
+available from the command line with
+`python -m career_agent --export-contacts-to PATH`, which refuses a path that already exists rather than
+replacing it.
+
 **What is deliberately not here yet.** Deleting several contacts at once, deleting from anywhere except the
-selected row, exporting the list, row-by-row accept/reject while the file is being read, exporting the
-rows that were refused, resolving or dismissing recorded disagreements from the window, keeping several
+selected row, exporting only the rows you selected, importing a do-not-contact mark from a file (the column is
+readable, and section above says why it is not applied), row-by-row accept/reject while the file is being read,
+exporting the rows that were refused, resolving or dismissing recorded disagreements from the window, keeping several
 reasons or a history of marks per contact (the record keeps the current mark, its date and its one reason),
 matching contacts to listings, drafts, and anything that sends, submits or contacts anybody. The planning document
 (`planning/hr-contact-outreach-and-application-tracking-2026-10-16.md`) describes those phases, and the
@@ -1076,9 +1100,13 @@ a stored row is selected, a declined removal leaves the mark exactly as it was, 
 mark made from the window with a reason typed beside it is stored with that reason and shown in no dialog, status
 line or event, and no address is ever contacted; a recorded disagreement between two files listed with
 both sides, the provenance the schema holds, and a description that calls neither side right, listed and read
-without a single write; and cleanup that releases every
+without a single write; the stored contact list written out to a CSV file you name - a closed save dialog
+writing nothing and saying nothing, a named destination receiving the documented file (byte-order mark, CRLF
+record separators, five columns, one row per stored contact, read back through this application's own parser),
+the database unchanged by it and the activity log carrying the counts and nothing else, and a destination that
+cannot be written claiming nothing and creating nothing; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 97 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 102 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
 the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by

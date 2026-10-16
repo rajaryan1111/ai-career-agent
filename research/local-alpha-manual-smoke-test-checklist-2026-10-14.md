@@ -1,6 +1,7 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 111 steps. Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 117 steps — at this revision **22 PASS, 95 BLOCKED, 0 FAIL, no box ticked** (the six
+newest steps, 112-117, are for the HR contacts export and all six are BLOCKED). Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -81,6 +82,22 @@ whether the sentence about a backup written earlier is understood as the limit i
 the suite is at **1881 tests**; run `38875397574` at `c1b2ab1` is green on the whole matrix (**13/13 jobs**),
 and all five display-backed legs drove L13-L15 through the real window, each reporting `RESULT: PASS — 97
 checks passed`.
+
+**Update, 2026-10-16 (the HR contacts tab gains a third numbered section):** the verdicts are now
+**22 PASS, 95 BLOCKED, 0 FAIL** — six steps (**112-117**) are new and all six are BLOCKED — and **no box has
+been ticked**. They cover the tab's second direction from the import: exporting the stored contact list to a CSV
+file the person names and chooses the location of. The behaviour, the format's own columns and the decision about
+the do-not-contact mark are [written up in their own note](hr-contact-export-2026-10-16.md); the six steps ask a
+person for what no harness can judge — where the control and its sentence sit on the tab and whether the sentence
+reads clearly, whether the save dialog is reachable and answerable by keyboard and mouse at the window's own
+minimum size, whether the file opens where the person expects it to, what their own spreadsheet does with the
+apostrophe the format writes in front of a cell that would otherwise be a formula, whether non-ASCII names look
+right in their tools rather than like mojibake, and whether the sentence about the mark column is understood as
+the limitation it is (an import of the file can neither set nor clear a mark; the whole-database backup is what
+carries one). The harness gained **five** checks inside workflow L (L16-L20) rather than a thirteenth workflow, so
+it declares **102** checks and the suite is at **1945 tests**; run `38883986337` at `bdf443b` is green on the
+whole matrix (**13/13 jobs**), and all five display-backed legs drove L16-L20 through the real window, each
+reporting `RESULT: PASS — 102 checks passed`.
 
 **Date created:** 2026-10-14
 
@@ -625,7 +642,7 @@ log file.
     on the tab may have changed the stored contacts: their names and companies must still be exactly what the
     first import stored, and a do-not-contact mark must still be there with its reason.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the rows, their numbering, their fields, their origins and their file column were asserted against the stored data.**
-    → **Automated coverage (2026-10-16): L10's second half (three rows, rows numbered 1-3, fields `name`, `name`, `company`, origins `two rows of one file` and `your records vs the file`, the file name on each row, the count in the note, and the stored name and the mark read back through the store) and `ContactConflictPanelTests::test_each_recorded_disagreement_is_listed_with_its_own_provenance`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+    → **Automated coverage (2026-10-16): L10's second half (three rows, rows numbered 1-3, fields `name`, `name`, `company`, origins `two rows of one file` and `your records vs the file`, the file name on each row, the count in the note, and the stored name and the mark read back through the store) and `ContactConflictPanelTests::test_each_recorded_disagreement_is_listed_with_its_own_provenance`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**
 101. [ ] Click the first row and read the detail area in full. It must show `Disagreement <n> about <address>`,
     the field, `Kept in this database:` and `Recorded from the file:` with both values exactly as they are
     stored (compare them against the two files by hand), a `Where each side comes from:` block with one line per
@@ -633,7 +650,7 @@ log file.
     dismissible. Neither side may be called correct, right, newer or better, and the status line must not change
     as rows are selected.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the same wording was asserted at the handler level.**
-    → **Automated coverage (2026-10-16): L11 (all three rows read in turn, both labels and the provenance lines asserted, and four phrases that would claim a winner asserted absent) and `ContactConflictPanelTests::test_both_sides_are_labelled_and_neither_is_called_the_right_one`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+    → **Automated coverage (2026-10-16): L11 (all three rows read in turn, both labels and the provenance lines asserted, and four phrases that would claim a winner asserted absent) and `ContactConflictPanelTests::test_both_sides_are_labelled_and_neither_is_called_the_right_one`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**
 102. [ ] Keyboard only: reach the list with **Tab**, then **click a row once** and press the up and down arrow
     keys. The selection must move and the detail area must follow it - the address named in the detail text must
     be the newly selected row's. Note what Tk itself does while you try this: the arrow keys move from the row
@@ -641,26 +658,26 @@ log file.
     that is the platform's behaviour in every list in this window and not something this screen adds. Then
     scroll the tab and the list with the mouse wheel and the scrollbar.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; this is where a real keyboard is required.**
-    → **Automated coverage (2026-10-16): L11's keyboard half — a real `<Down>` is generated after the focus item is set the way a click sets it, and the check requires the selection to move and the detail text to name the newly selected row — plus K4, whose focus walk reaches the list. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. The mouse wheel, the scrollbar and the *feel* of the navigation are not covered by any of it.**"
+    → **Automated coverage (2026-10-16): L11's keyboard half — a real `<Down>` is generated after the focus item is set the way a click sets it, and the check requires the selection to move and the detail text to name the newly selected row — plus K4, whose focus walk reaches the list. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. The mouse wheel, the scrollbar and the *feel* of the navigation are not covered by any of it.**
 103. [ ] A long and unusual value: import a file whose answer for a stored address is several hundred characters
     with tabs and a line break in it, and whose file name is unusually long. The list cell must stay one line
     and be clipped; the detail area must show the beginning of the value followed by
     `[this value is <n> characters long; only the first 400 are shown here]`, with `<n>` the real length. The
     panel must not look as though it has printed the whole value.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the two bounds and the stated length were asserted at the handler level.**
-    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_long_value_is_bounded_in_the_detail_and_a_long_file_name_is_clipped_in_the_list` (a 893-character name, the 400-character cap with its real length, the 60-character cell, and that the whole value is not drawn into the panel). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_long_value_is_bounded_in_the_detail_and_a_long_file_name_is_clipped_in_the_list` (a 893-character name, the 400-character cap with its real length, the 60-character cell, and that the whole value is not drawn into the panel). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**
 104. [ ] Refresh and revisit: with another process (or a second window) importing a file into the same database,
     leave the tab and come back — the new disagreement must be listed without pressing **Refresh**. Then press
     **Refresh** and confirm nothing is duplicated. While doing all of it, watch the folder holding the database:
     no file may appear, the row count in `hr_contact_conflict` may not move because of the review, and the
     do-not-contact mark and its reason must be exactly as they were.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the same refresh path ran against the database at the handler level.**
-    → **Automated coverage (2026-10-16): L12 (a second `CareerStore` connection imports while the tab is away, re-showing the tab lists what is recorded, `total_changes` is unchanged through the refresh, listing and selecting every row, and the mark and its reason are untouched) and `ContactConflictPanelTests::test_a_disagreement_recorded_while_the_tab_was_elsewhere_appears_when_it_is_shown` and `::test_reviewing_every_row_writes_nothing_and_leaves_the_mark_alone`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+    → **Automated coverage (2026-10-16): L12 (a second `CareerStore` connection imports while the tab is away, re-showing the tab lists what is recorded, `total_changes` is unchanged through the refresh, listing and selecting every row, and the mark and its reason are untouched) and `ContactConflictPanelTests::test_a_disagreement_recorded_while_the_tab_was_elsewhere_appears_when_it_is_shown` and `::test_reviewing_every_row_writes_nothing_and_leaves_the_mark_alone`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**
 105. [ ] The cap: on the throwaway copy with more than 40 recorded disagreements, the list must hold the first
     40 and the line under it must say how many are recorded and that the rest are still stored with no way to
     page to them from this build. Nothing may be dropped silently.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the cap and its sentence were asserted at the handler level.**
-    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_list_longer_than_the_panel_shows_says_so` (45 stored disagreements, 40 rows listed, the paging sentence asserted word for word). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. Paging itself does not exist, and the note says so rather than pretending.**"
+    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_list_longer_than_the_panel_shows_says_so` (45 stored disagreements, 40 rows listed, the paging sentence asserted word for word). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. Paging itself does not exist, and the note says so rather than pretending.**
 
 ## HR contacts: deleting one stored contact and the disagreements recorded about it (added 2026-10-16)
 
@@ -682,7 +699,7 @@ or the log file, and nothing here sends anything to anybody.
     distinguishable, and whether the sentence under the button (stored in `app.contact_delete_note`) reads
     clearly on this platform with this font. Write both down.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the disabled/enabled states and the sentence's words were asserted through the real window on the Linux display leg.**
-    → **Automated coverage (2026-10-16): L13 (nothing selected -> `instate(["disabled"])`, a marked row and an unmarked row both enable it, the sentence carrying "no undo", "disagreement", "backup" and "Nothing is sent to anybody", and the state line naming deleting among the actions) and `tests/test_desktop_handlers.py::ContactDeletionControlTests::test_the_control_is_off_until_a_stored_row_is_selected`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. Whether the greyed button *looks* greyed out and whether the wording is clear are not covered by any of it.**"
+    → **Automated coverage (2026-10-16): L13 (nothing selected -> `instate(["disabled"])`, a marked row and an unmarked row both enable it, the sentence carrying "no undo", "disagreement", "backup" and "Nothing is sent to anybody", and the state line naming deleting among the actions) and `tests/test_desktop_handlers.py::ContactDeletionControlTests::test_the_control_is_off_until_a_stored_row_is_selected`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. Whether the greyed button *looks* greyed out and whether the wording is clear are not covered by any of it.**
 107. [ ] Select a stored row and press **Delete selected contact**. Read the confirmation in full and check it
     against what you know by hand: the row's position in the stored list, the file the record came from, and the
     exact number of disagreements that go with it. It must say that the disagreements are deleted with the
@@ -692,7 +709,7 @@ or the log file, and nothing here sends anything to anybody.
     mark and every disagreement value must be **absent** from the dialog - check each one by looking, not by
     trusting the wording - and the dialog must be answerable with the keyboard alone. Then answer **No**.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the same wording was asserted through the real window on the Linux display leg and at the handler level. Whether the text is readable on this screen, and how it feels to answer, is a person's judgement.**
-    → **Automated coverage (2026-10-16): L14's first half (the question names `row <n> of 2 in the stored list`, the source file, `2 recorded disagreement(s)`, "no undo" and the sentence about nothing being sent, with the contact's own address, name and company, the other contact's mark reason and the disagreements' values all asserted absent) and `ContactDeletionControlTests::test_the_confirmation_names_a_position_and_a_file_and_no_contact_value`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+    → **Automated coverage (2026-10-16): L14's first half (the question names `row <n> of 2 in the stored list`, the source file, `2 recorded disagreement(s)`, "no undo" and the sentence about nothing being sent, with the contact's own address, name and company, the other contact's mark reason and the disagreements' values all asserted absent) and `ContactDeletionControlTests::test_the_confirmation_names_a_position_and_a_file_and_no_contact_value`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**
 108. [ ] After answering **No**, the contact must still be listed and still be openable, its disagreements must
     still be in the panel below, and its do-not-contact mark - with the reason you typed beside it - must be
     exactly as it was. The status line must say that nothing was deleted, and the activity log for that
@@ -700,7 +717,7 @@ or the log file, and nothing here sends anything to anybody.
     (**Delete selected contact** greyed out): nothing may happen at all, and the line above must tell you to
     select a row.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; both refusals were asserted against the database's change counter through the real window and at the handler level.**
-    → **Automated coverage (2026-10-16): L14's second half (`total_changes` unchanged, the contact and its disagreements still stored, both marks and the reason intact, the status line saying nothing was deleted, and no `contacts.deleted` line in the log) plus `ContactDeletionControlTests::test_a_declined_confirmation_deletes_nothing_and_says_so` and `::test_deleting_with_nothing_selected_asks_for_a_selection_and_writes_nothing`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+    → **Automated coverage (2026-10-16): L14's second half (`total_changes` unchanged, the contact and its disagreements still stored, both marks and the reason intact, the status line saying nothing was deleted, and no `contacts.deleted` line in the log) plus `ContactDeletionControlTests::test_a_declined_confirmation_deletes_nothing_and_says_so` and `::test_deleting_with_nothing_selected_asks_for_a_selection_and_writes_nothing`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**
 109. [ ] First give the contact you are **keeping** a mark of its own: select it, type a different reason and
     press **Mark do not contact**. Then select the contact you are deleting (the one already carrying a mark) and
     answer **Yes**. Watch both views: the row must leave the stored list,
@@ -713,7 +730,7 @@ or the log file, and nothing here sends anything to anybody.
     deleted contact's old row if the list still shows one: it must not be there, and the selection must have
     cleared itself.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; every one of those comparisons was made against the store through the real window and at the handler level. Reading the screen after a destructive action is a person's check, not a harness's.**
-    → **Automated coverage (2026-10-16): L15 (three rows changed - the contact and its two disagreements - the deleted record gone from the store, the other contact's mark and reason intact, one row left in the list, one in the panel, the summary counting one and one, the selection cleared, the button greyed out, the status line's counts, "Nothing was contacted", and a dialog/log privacy sweep) and `ContactDeletionControlTests::test_a_confirmed_deletion_removes_the_contact_and_its_evidence_and_leaves_the_rest`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+    → **Automated coverage (2026-10-16): L15 (three rows changed - the contact and its two disagreements - the deleted record gone from the store, the other contact's mark and reason intact, one row left in the list, one in the panel, the summary counting one and one, the selection cleared, the button greyed out, the status line's counts, "Nothing was contacted", and a dialog/log privacy sweep) and `ContactDeletionControlTests::test_a_confirmed_deletion_removes_the_contact_and_its_evidence_and_leaves_the_rest`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**
 110. [ ] Keyboard and mouse, at the window's own minimum size: tab to the button and press **Space** and
     **Enter** - a focused destructive control must look focused before it is pressed - and note whether the
     button is reachable at all at 900x600, scrolling the tab if it is not, with the mouse wheel and the
@@ -721,7 +738,7 @@ or the log file, and nothing here sends anything to anybody.
     behind the window, a dialog that cannot be answered without the mouse. Write down what you saw, including
     anything you would call a defect.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; this is where a real keyboard, a real mouse and a person's expectations are required.**
-    → **Automated coverage (2026-10-16): L13 checks the control's state through the real widgets on the Linux display leg, and workflow K measures every tab at the window's declared minimum, at its opening size and larger - what is on screen, what sits outside the box it is drawn in and what was given less room than its text asked for. Whether a *person* can reach and comfortably use the button at that size, and what a focused destructive button looks like, is not measured by any of it.**"
+    → **Automated coverage (2026-10-16): L13 checks the control's state through the real widgets on the Linux display leg, and workflow K measures every tab at the window's declared minimum, at its opening size and larger - what is on screen, what sits outside the box it is drawn in and what was given less room than its text asked for. Whether a *person* can reach and comfortably use the button at that size, and what a focused destructive button looks like, is not measured by any of it.**
 111. [ ] On a machine with a screen reader or the platform's accessibility tools: open the confirmation and
     have it read aloud. Nothing about the contact must be announced (the question is about a row, not a person),
     the words "no undo" must be audible before the answer is given, and the buttons must have the labels the
@@ -731,7 +748,76 @@ or the log file, and nothing here sends anything to anybody.
     hand that the contact and its disagreements come back: that is the limit the sentence promises, and the one
     thing this application cannot undo.
     → **BLOCKED — no display with a screen reader, no Tkinter and no accessibility tooling in the acceptance environment; the log line and the restore were asserted against the database and the file at the handler and store levels.**
-    → **Automated coverage (2026-10-16): L14/L15's log assertions (`event=contacts.deleted`, `detail=contacts=1 conflicts=2`, and none of the fixture values nor either file name present) and `tests/test_contacts_store.py::ContactDeletionTests::test_a_backup_written_before_the_deletion_still_holds_the_record`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. What a screen reader actually announces is not tested anywhere, and no automated run can judge it.**"
+    → **Automated coverage (2026-10-16): L14/L15's log assertions (`event=contacts.deleted`, `detail=contacts=1 conflicts=2`, and none of the fixture values nor either file name present) and `tests/test_contacts_store.py::ContactDeletionTests::test_a_backup_written_before_the_deletion_still_holds_the_record`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. What a screen reader actually announces is not tested anywhere, and no automated run can judge it.**
+
+## HR contacts: exporting the stored list to a CSV a person chooses (added 2026-10-16)
+
+Run these on the same database the two sections above used: a stored list with at least two contacts, one of
+them marked do-not-contact with a reason typed beside it, and at least one recorded disagreement. Nothing here
+deletes, imports or marks anything; every step is about one file this window writes.
+
+112. [ ] Open the window, choose the **HR contacts** tab and scroll to the bottom, without pressing anything
+    yet. There must be a heading of its own ("Take a copy of the stored list (a CSV file you choose)"), a
+    button **Export the stored list...** beside it (never greyed out, including on a database with no contacts),
+    and a paragraph under it. Read that paragraph at the size the window opens with and at 900x600, scrolling if
+    you have to. It must say, in words you can follow: that the file holds one CSV row per stored contact - the
+    address, the name, the company label as stored, and whether each one is marked do not contact; that it is a
+    list to move between machines or read and **not a backup of this application**; that marks, their reasons
+    and the recorded disagreements stay in this database and nothing is sent anywhere; that an existing file is
+    only replaced after you confirm it in the save dialog; and that an import of this file **cannot set or clear
+    a do-not-contact mark**, so the column is there to be read. Write down anything in it you would call unclear,
+    wrong or too long to read.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; where the controls sit, whether the paragraph is legible at each size and whether it reads clearly are a person's judgement, and no assertion here can stand in for it.**
+    → **Automated coverage (2026-10-16): L16 finds the control by its own text inside the tab's scrolling body, requires it not disabled, and reads the sentence from the window - it must carry the format module's own `MARK_COLUMN_LIMITATION` and the words "one CSV row per stored contact", "not a backup", "replaced" and "Nothing is sent anywhere" - and `tests/test_desktop_handlers.py::TabLayoutPolicyTests` measures the tab at the window's declared minimum, at its opening size and larger, with the new control in its list of widgets that must be reachable inside a scrolling body. What a paragraph *reads* like is not measurable, which is why the step stays BLOCKED. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
+113. [ ] Press **Export the stored list...** and then close the save dialog without naming a file (Escape, the
+    window's close box, or Cancel). Nothing may happen at all: no dialog of any kind, no change to the status
+    line, no new line in the activity log, and nothing new in the folder you had open - check the folder by
+    hand before and after rather than trusting the absence of a message.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the dialog cannot be closed by hand here, and the log and the folder were compared through the real window and at the handler level instead.**
+    → **Automated coverage (2026-10-16): L17 (a closed dialog leaves the folder listing, the dialogs, `total_changes`, the status line and the log exactly as they were, the log compared byte for byte) and `tests/test_desktop_handlers.py::ContactsExportHandlerTests::test_a_closed_dialog_writes_nothing_and_says_nothing`. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
+114. [ ] Export to a file you name somewhere you can find again. Read the completion dialog against the list on
+    screen: the counts ("Exported N contact(s)"), how many of them are marked, the file's size, the fields the
+    file holds and the ones it deliberately does not (no reason stored beside a mark, no recorded disagreement,
+    no internal identifier), the sentence that an import cannot set or clear the mark, and that nothing was sent
+    and the database was not changed. The dialog must **not** name the folder or the full path you chose. Then
+    answer it and read the status line: it must carry the count and "Nothing was contacted".
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the dialog's wording was read from a real window's own build in CI and driven at the handler level, but whether it is complete and clear on the screen is a person's check.**
+    → **Automated coverage (2026-10-16): L18 (the counts, "Nothing was contacted", and the report asserted *not* to carry the chosen path) and `ContactsExportHandlerTests::test_the_control_writes_the_documented_file_and_reports_what_it_held` plus `::test_the_completion_report_carries_the_counts_and_the_marks_limitation`. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
+115. [ ] Open the exported file where you would open it yourself: a text editor first, then your own
+    spreadsheet. The header row must read exactly `Email,Name,Company,Do Not Contact,Export Format`; there must
+    be one row per stored contact in the order the list shows; the address must be the text as stored (the case
+    your file wrote, not a normalised key); the mark column must say `yes` for the contact you marked and `no`
+    for the others; every row must carry `hr-contact-export/1`; a name or company label holding a comma, a quote
+    or a line break must sit in one cell rather than breaking the row; non-ASCII names must show as the letters
+    you expect rather than as mojibake; and a value that **starts** with `=` (or `+`, `-`, `@`) must be shown as
+    text - the format writes an apostrophe in front of it - rather than being evaluated by the spreadsheet.
+    Then read it back with the command: `python -m career_agent --preview-contact-csv <the file>` must report the
+    same addresses, names and companies and no refused rows, and running
+    `python -m career_agent --export-contacts-to <the file>` a second time must refuse, naming the existing file.
+    → **BLOCKED — no display, no spreadsheet and no Tkinter in the acceptance environment; the bytes, the columns and the parser's own read-back are asserted, but how the file *looks* in a person's spreadsheet - and what their spreadsheet does with the apostrophe - is exactly what this step is for.**
+    → **Automated coverage (2026-10-16): L18 reads the file back through the application's own parser and checks the byte-order mark, CRLF-only lines and the five-column header; `tests/test_contact_export.py::ValueEncodingTests` covers a comma/quote/line-ending name, non-ASCII text, the four formula leaders and ordinary values written untouched; `::ImportReadBackTests` imports the file into a second database; and `tests/test_cli_export_contacts.py::ExportContactsCommandTests::test_the_command_refuses_to_replace_an_existing_file` proves the second command refuses. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
+116. [ ] Exercise the two ways it can refuse. Export to a name that already exists: the save dialog must ask
+    before replacing it, and answer **No** - the file must be exactly what it was (compare its size or hash by
+    hand, or its contents) and the status line must say the export was cancelled rather than reporting one.
+    Answer **Yes** the second time and confirm the file that appears is the new export. Then name a folder that
+    does not exist (type a path with a folder name that is not there) and press it again: an error dialog must
+    say the file could not be written and that **nothing was saved** and the database was not changed, nothing
+    may appear in that folder, and the status line must not claim an export. On a database with no contacts at
+    all, the export must still write the documented header row, report zero contacts, and say the list holds no
+    rows.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; both refusals and the empty list are asserted against the filesystem and the database's change counter, but the save dialog's own question and the error dialog are a person's check.**
+    → **Automated coverage (2026-10-16): `ContactsExportHandlerTests::test_an_existing_file_is_replaced_only_after_the_question_is_answered` (the declined answer leaves the file byte-identical, the question names "no undo", the confirmed one replaces it), `::test_a_folder_that_cannot_be_written_is_reported_without_claiming_success`, `::test_a_list_over_the_formats_own_limit_is_refused_and_writes_no_file` (through the real module constant) and `::test_an_empty_list_still_writes_the_documented_file_and_says_it_is_empty`; L20 covers the unwritable destination end to end. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
+117. [ ] After a successful export, check by hand that **nothing changed**: the stored list, the summaries, the
+    marks - each with the reason you typed - and the recorded disagreements, both sides, are exactly as they
+    were before. Open the activity log file in a text editor: the new line must carry the event name and the
+    counts (`event=contacts.exported`, `detail=contacts=N marked=M`) and nothing else - no address, no name, no
+    company, no reason stored beside a mark, no disagreement value, and not the folder or file you chose. Then
+    the safety half, in the app: restore the whole-database backup you took earlier (Data safety) and confirm the
+    marks and their dates come back with it, because that file copies the database itself. Then import the
+    exported CSV into a database that does not hold the contacts and confirm, by looking at the list, that the
+    contacts arrive and the do-not-contact column does **not** - no mark is set from a file, in either direction.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; every comparison and both imports were made against the store and the log at the handler, store and file levels, but reading the window after a restore, and judging whether the sentence about the mark column makes the limitation clear, needs a person.**
+    → **Automated coverage (2026-10-16): L18/L19 (`total_changes` and every stored row and conflict unchanged; the log's `detail=contacts=2 marked=1`; no contact value, mark reason, disagreement value, source file name or internal column name in the file, the report or the log), `tests/test_contact_export.py::ReadOnlyTests` (before and after a restart), `::PrivacyTests`, `tests/test_contacts_store.py::ContactExportReadBackTests` and `::ContactExportReadBackTests::test_the_marked_column_in_the_file_cannot_mark_or_unmark_anything`. Five display-backed CI legs, 102 checks per leg, run `38883986337` at `bdf443b`.**
 
 ## Record results
 
@@ -986,3 +1072,45 @@ unchanged: a person has to open the window on a machine with a display and judge
 and clipping at normal and smaller sizes, the wording and clarity of each dialog, keyboard-only navigation and
 focus order, screen-reader behaviour, actual mouse-driven flows, and whether the whole thing feels like a native
 application. Steps 24–31 additionally need the `pdf` extra installed.
+
+### 2026-10-16 — the export increment's five checks, and the defect that needed two platforms to appear
+
+**No box was ticked and no verdict changed by any of this.** The numbered steps are 117 now (22 PASS, 95
+BLOCKED, 0 FAIL) and the six new ones — **112-117**, the export of the stored contact list — are BLOCKED for the
+same named reason as the rest: no display with Tkinter, no spreadsheet and no screen reader in this environment,
+and a stand-in widget module is not a desktop. The behaviour they cover is
+[written up in its own note](hr-contact-export-2026-10-16.md).
+
+- **What the harness established on a real display.** Five checks were added inside workflow **L** (L16-L20, so
+  the CI job's loop over workflow letters is unchanged; `declared_step_count()` is **102** and the suite is at
+  **1950 tests**). All five ran on all five display-backed legs of run `38891340290` at `546d065` and reported
+  `RESULT: PASS — 102 checks passed` beside `Ran 1950 tests ... OK`. L17 in particular asserts the activity log is
+  **byte-identical** after a closed save dialog, and L18 reads the written file back through the application's own
+  parser rather than through a second implementation of the same rules.
+- **The defect the run found, and why one platform was not enough (D36).** The first run to carry the export,
+  `38883986337` at `bdf443b`, was **11 of 13 jobs green**: both Windows legs failed **L20**, the new check that
+  points the export control at a folder that does not exist, with
+  `the path the person chose reached the activity log`. The log is written to be safe to share and
+  `diagnostics.redact_paths` hides any absolute location in it — but both of its patterns refuse to match after
+  the `>` that every placeholder it writes ends with, and on the Windows runners the run's temporary folder sits
+  under the *parent* of `Path.home()`, so the home-folder replacement left
+  `<home folder>\RUNNER~1\AppData\Local\Temp\...\no-such-folder` in the line. Linux and macOS never showed
+  it, because `/tmp/...` is not under the home folder's parent; the reproduction written for the regression test
+  then showed the same class of leak on Linux too (`/home/other/matter-notes/...` kept its folder name). The fix
+  is a third pattern requiring **two or more** further segments past a placeholder — one segment stays visible,
+  because that shape is `<application data folder>/career_agent.sqlite3`, the product's own file name. Recorded
+  as **D36** in [the cross-platform register](cross-platform-desktop-ci-evidence-2026-10-15.md) §26 and closed by
+  run `38891340290` at `546d065`, green on all thirteen jobs with both Windows legs reporting
+  `RESULT: PASS — 102 checks passed`.
+- **The second defect, found while verifying the same check's claims.** A write that failed part way — a full
+  device, a quota, an I/O error — left a ten-byte fragment of the export (byte-order mark and header) at the
+  person's chosen path while the error said the export was not completed. The writer now removes what it started
+  and says whether the removal succeeded; two regression tests fail without it, and the window's own sentence
+  ("Nothing was saved; the database was not changed.") is now literally true of the disk as well as the database.
+- **What a person still has to judge, and cannot be automated.** Whether the paragraph beside the export control
+  is readable at the window's opening size and at 900x600; whether the save dialog is reachable and answerable
+  with the keyboard and with the mouse alone; whether the file opens where a person expects to open it; what
+  their own spreadsheet does with the apostrophe the format writes in front of a cell it would otherwise
+  evaluate; whether non-ASCII names look right in their tools rather than like mojibake; and whether the sentence
+  about the mark column is understood as the limitation it is — that an import of the file can neither set nor
+  clear a do-not-contact mark, and that the whole-database backup is what carries one.

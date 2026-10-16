@@ -29,7 +29,36 @@ After resume upload and one-time setup, the agent should autonomously discover r
   Evidence: 12 tests in `tests/test_contacts_store.py::ContactDeletionTests`, 11 in
   `tests/test_desktop_handlers.py::ContactDeletionControlTests`, acceptance checks L13-L15, [the increment's
   research note](research/hr-contact-per-contact-deletion-2026-10-16.md); no schema change, schema stays **7**.
+- [x] Let a person take a copy of the stored HR contact list, as a separate user-initiated export that
+  cannot disturb the version-2 JSON contract: `career_agent/contact_export.py` documents and alone writes the
+  format `hr-contact-export/1` - UTF-8 with a byte-order mark, `\r\n` record separators, one row per stored
+  contact with `Email`, `Name`, `Company`, `Do Not Contact` and `Export Format` (the version cell on every
+  row) - and the file is written through `store.write_private_bytes_file`, owner-only where the platform has
+  permissions, never through a symbolic link, and reported as written **only after it has been read back and
+  compared byte for byte**. The mark travels as readable text and **an import of the file cannot set or clear
+  it** (`set_contact_suppression` stays the only writer), so the format module owns one sentence -
+  `MARK_COLUMN_LIMITATION` - that the window, the command and the research note all repeat, and the file is
+  never described as a backup: the whole-database backup on the Data safety tab is what copies everything.
+  A cell a spreadsheet would execute is written with a leading apostrophe; over 50,000 contacts or 20 MiB the
+  export refuses **before a path is created** and names the backup instead. **Export the stored list...** asks
+  before replacing an existing file, writes and says nothing when the dialog is closed, and reports every
+  failure without claiming an export; `--export-contacts-to PATH` refuses an existing path outright. The
+  database is only read (asserted against `total_changes`), and the log carries counts only
+  (`contacts.exported`, `contacts.export.failed`). Evidence: 37 tests in `tests/test_contact_export.py`, 11 in
+  `tests/test_cli_export_contacts.py`, 6 in `tests/test_store.py::PrivateBytesWriteTests`, 3 in
+  `tests/test_contacts_store.py::ContactExportReadBackTests`, 10 in
+  `tests/test_desktop_handlers.py::ContactsExportHandlerTests`, acceptance checks L16-L20, [the increment's
+  research note](research/hr-contact-export-2026-10-16.md); no schema change, schema stays **7**, and
+  `EXPORT_FORMAT_VERSION` is asserted to still be **2**.
 - [x] Give the mark a control: **Mark do not contact** / **Remove do-not-contact mark** on the HR contacts tab, enabled only for the action that would change the selected row, each confirmed once, with an optional reason stored on the record and never in a dialog, the status line or an event; zero writes on a declined confirmation, a stale selection or an injected failure, and the mark (with its reason) still shown after a re-import, a restart and a backup restore. Evidence: 12 tests in `tests/test_desktop_handlers.py::ContactMarkControlTests` (alongside the import tab's own 12), one in `tests/test_contacts_store.py::ContactPrivacyTests`, acceptance checks L6-L9, and [the control's research note](research/hr-contact-do-not-contact-control-2026-10-16.md); no schema change was needed, because the store could already represent the mark.
+
+**Found and fixed while verifying this increment (both with regression tests
+that fail without the fix):** **D36** - a path redaction in `career_agent/diagnostics.py` could not match a
+location that continued past one of its own placeholders, so a refused backup's activity-log line kept a
+folder name on Windows (the run that added the export, `38883986337` at `bdf443b`, failed both Windows legs on
+that check); and a write that failed part way left a ten-byte fragment of the export at the person's chosen
+path while reporting that nothing had been written. Evidence: `tests/test_diagnostics.py::PathRedactionTests`
+and `tests/test_store.py::PrivateBytesWriteTests`, run `38891340290` at `546d065` (13/13 jobs).
 
 **Next Arena task (candidates, smallest first):** a **conflict review panel** that lists a key's recorded disagreements so the evidence already stored is readable in the window, or **per-contact deletion** with the erasure rules the rest of the app follows. Both are local and need no new table; neither is decided here - see the named gaps in [the control's note](research/hr-contact-do-not-contact-control-2026-10-16.md) and in [the persistence note](research/hr-contact-import-persistence-and-review-ui-2026-10-16.md). The completed task this line named is [the do-not-contact control](planning/arena-task-phase-0-contact-do-not-contact-control-2026-10-16.md).
 
