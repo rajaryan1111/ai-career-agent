@@ -3203,4 +3203,8 @@ Verified where the window actually is: run `38828908041` at `02962f6` completed 
 display-backed leg reporting `RESULT: PASS - 87 checks passed` (workflow L's L1-L5 `[ ok ]`, K4 and K5 `[ ok ]`,
 and the focus walk reaching `HR contacts` in the same shape as `Jobs & eligibility`) and `Ran 1832 tests ...
 OK` (skips 13/20/39/46 by platform), so the ninth tab is inside every layout measurement on Linux, macOS 26 and
-Windows 2025 without a K1/K2/K3 failure.
+Windows 2025 without a K1/K2/K3 failure. One process defect worth recording, because its evidence is in
+the repository rather than in a report: the commit message of `a868275` was passed through a shell that
+expanded its backticked phrases as commands, so it arrived full of gaps. A pushed message is not rewritten;
+the sentence above names the run instead, and every commit message in this increment otherwise went through
+`git commit -F`.
