@@ -3240,10 +3240,16 @@ let a handler that only ever runs on a display look correct here), one new priva
 four new acceptance checks **L6-L9** - the controls off until a row is selected with the keyboard's own
 walk reaching the one that can act, a declined removal leaving the mark and its date untouched, a confirmed
 one clearing both, and a mark made from the window through the real entry with its reason stored and shown in
-no dialog, status line or log line. The first submission of those checks failed on the display-backed legs,
-which is the second thing this increment learned: it asked the focus walk to reach all three controls while
-two of them were disabled, and Tk walks a control only while it can act - the assertion that replaced it asks
-for the one control that can, which is both true and the property worth having. The suite is `Ran 1845 tests ... OK (skipped=13)` locally and the harness
+no dialog, status line or log line. Both of the defects this increment had were found by the display-backed
+legs rather than by anything runnable here, and both are worth recording because each is a class. The first
+was an assertion of mine: the keyboard check asked Tk's focus walk to reach all three new controls while two
+of them were disabled, and Tk walks a control only while it can act, so the check was asking for something the
+platform deliberately does not do; it now asks for the control that can act, which is the property worth
+having. The second is D34's family appearing in a new place, on Windows only: the restart-and-restore test
+replaced the database while its own connection was still open, and an open handle makes `os.replace` fail
+there with `PermissionError: [WinError 5]` instead of merely racing it - the fix is the sequence the window's
+own restore handler already used, close for the swap and reopen afterwards, and the guarantee is that the test
+now runs that way on the Windows legs too. The suite is `Ran 1845 tests ... OK (skipped=13)` locally and the harness
 now declares **91** checks. Written up in `research/hr-contact-do-not-contact-control-2026-10-16.md`; `task.md`
 ticks the control, `phases.md` row 1C and `design.md`'s contacts bullet describe it, and the README's contact
 section states the two controls, the reason rule and what is still absent. What this does not do: no human has

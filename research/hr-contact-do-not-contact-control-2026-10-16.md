@@ -68,6 +68,15 @@ difference between "the store keeps the flag" and "the screen shows the flag aft
 | The acceptance harness, as far as this machine can go | `python3 scripts/desktop_acceptance.py --stand-in-tk` | `91 checks passed, 0 failed`, `RESULT: BLOCKED` (no display) |
 | Syntax of every touched file | `python3 -m compileall -q career_agent scripts tests` | clean |
 
+Two things the display-backed legs settled, and neither could have been settled here. The first
+submission's keyboard check asked the focus walk for all three controls while two of them were disabled, and
+Tk walks a control only while it can act - so the check now asks for the control that can act, which is the
+property worth having. The second was a Windows-only failure in the restart-and-restore test: it replaced the
+database while its own connection was still open, and on Windows an open handle makes `os.replace` fail with
+`PermissionError: [WinError 5]` rather than merely race it - the fix is the one the window's own restore
+handler already used (close for the swap, reopen after), and the regression guarantee is that the test now
+runs that way on the Windows legs as well as here.
+
 `ContactMarkControlTests` (12 tests) covers: the enablement of each control in each state; marking through
 the handler with one change counted, the note stored, the summary, state line, row cell and selection all
 read back; a declined mark writing nothing; clearing through the handler with the date and reason gone; a

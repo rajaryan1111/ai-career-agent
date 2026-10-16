@@ -6398,8 +6398,11 @@ class ContactMarkControlTests(ContactTabTestCase):
         app._refresh_contacts()
         self.assertIn("0 marked do-not-contact", app.contacts_summary.get())
         validate_app_database(backup)
-        backup_module.restore_backup(backup, database)
+        # The connection is closed for the swap and reopened after it, the same way the window's own
+        # restore handler does it: replacing the file cannot be coordinated with an open connection, and
+        # on Windows an open handle makes the replacement fail rather than merely race it.
         app.store.close()
+        backup_module.restore_backup(backup, database)
         app.store = CareerStore(database)
         app._refresh_contacts()
         self.assertEqual(self.stored_row(app, 0)[5], "do not contact")
