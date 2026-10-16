@@ -469,7 +469,15 @@ class ConfirmingAFactTests(ProvenanceTestCase):
                           "the old confirmation is cleared with the value it was about")
 
     def test_deleting_the_profile_deletes_every_origin_with_it(self):
-        """An origin row is a statement about personal data; "delete my profile" takes it too."""
+        """An origin row is a statement about personal data; "delete my profile" takes it too.
+
+        Asserted on the rows, which is what this application promises: the origin table holds nothing, and
+        no profile is stored. The *bytes* a deleted row occupied are not asserted absent - SQLite does not
+        scrub the pages a deleted row came from, ``research/threat-model-2026-10-16.md`` says so plainly,
+        and ``--forget-local-data`` is the path that removes the file itself. An assertion on the raw file
+        would have been a promise this project deliberately does not make (and, as the four
+        cross-platform CI legs showed, one that only held on Linux).
+        """
         store = self.open_store()
         store.save_profile(SYNTHETIC, source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name="CV.docx")
 
@@ -478,7 +486,7 @@ class ConfirmingAFactTests(ProvenanceTestCase):
         self.assertEqual(store.get_profile_fact_provenance(), ())
         rows = store._connection.execute("SELECT count(*) FROM profile_fact_provenance").fetchone()[0]
         self.assertEqual(rows, 0, "no row is left describing data that is gone")
-        self.assertNotIn(b"CV.docx", self.database.read_bytes())
+        self.assertIsNone(store.get_profile(), "the profile it described is gone too")
 
 
 class PersistenceTests(ProvenanceTestCase):
