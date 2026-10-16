@@ -3249,7 +3249,12 @@ having. The second is D34's family appearing in a new place, on Windows only: th
 replaced the database while its own connection was still open, and an open handle makes `os.replace` fail
 there with `PermissionError: [WinError 5]` instead of merely racing it - the fix is the sequence the window's
 own restore handler already used, close for the swap and reopen afterwards, and the guarantee is that the test
-now runs that way on the Windows legs too. The suite is `Ran 1845 tests ... OK (skipped=13)` locally and the harness
+now runs that way on the Windows legs too. The increment is verified where the window is: run `38855211961`
+at `2d237bc` completed **13/13 jobs green**, every display-backed leg reporting `RESULT: PASS - 91 checks
+passed` (L1-L9 `[ ok ]`, K4 and K5 `[ ok ]`, the contacts tab measured at 24 widgets with none outside the box
+they are in) and `RESULT: PASS - 14 checks passed`, with `Ran 1845 tests ... OK` per leg (skips 13 on Linux, 20
+on macOS, 39 and 46 on Windows). The runs that carried the two defects above are red and are history rather
+than evidence. The suite is `Ran 1845 tests ... OK (skipped=13)` locally and the harness
 now declares **91** checks. Written up in `research/hr-contact-do-not-contact-control-2026-10-16.md`; `task.md`
 ticks the control, `phases.md` row 1C and `design.md`'s contacts bullet describe it, and the README's contact
 section states the two controls, the reason rule and what is still absent. What this does not do: no human has

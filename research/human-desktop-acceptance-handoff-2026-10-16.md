@@ -19,10 +19,11 @@ whether the confirmation reads well - so treat that tab as **NOT TESTED by hand*
 automated checks as acceptance of it.
 
 **What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **91
-checks** in the current source (87 on the last fully green matrix, run `38828908041` at `02962f6`; eleven and
-82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and one check was
-added to workflow I on 2026-10-16, five to workflow L with the contact list, and four more when the
-do-not-contact controls were added). The twelfth
+checks** in the current source, and 91 on the last fully green matrix - run `38855211961` at `2d237bc`,
+thirteen of thirteen jobs, `RESULT: PASS - 91 checks passed` and `Ran 1845 tests ... OK` on every leg (87 on the
+matrix before it, run `38828908041` at `02962f6`; eleven and 82 before that, run `38823626117` at `3a88e6e`; 76
+when the per-leg table below was recorded, and one check was added to workflow I on 2026-10-16, five to workflow
+L with the contact list, and four more when the do-not-contact controls were added). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)

@@ -67,6 +67,7 @@ difference between "the store keeps the flag" and "the screen shows the flag aft
 | The whole suite | `python3 -m unittest discover -s tests` | `Ran 1845 tests … OK (skipped=13)` |
 | The acceptance harness, as far as this machine can go | `python3 scripts/desktop_acceptance.py --stand-in-tk` | `91 checks passed, 0 failed`, `RESULT: BLOCKED` (no display) |
 | Syntax of every touched file | `python3 -m compileall -q career_agent scripts tests` | clean |
+| The same checks on a display, five legs | CI run `38855211961` at `2d237bc` | **13/13 jobs green**: `RESULT: PASS - 91 checks passed` and `RESULT: PASS - 14 checks passed` on the Linux display-backed leg (workflow L's L1-L9 `[ ok ]`, K4 and K5 `[ ok ]`), on both macOS 26 legs and on both Windows 2025 legs; every unit-test, installed-package and PDF-extra job green; `Ran 1845 tests ... OK` per leg with the usual platform skips (13 Linux, 20 macOS, 39/46 Windows) |
 
 Two things the display-backed legs settled, and neither could have been settled here. The first
 submission's keyboard check asked the focus walk for all three controls while two of them were disabled, and
@@ -111,6 +112,14 @@ which is the sort of assertion only a real window can settle; the check above is
   reason this note calls the boundary explicit rather than incidental.
 - **The event carries a flag only.** Counts are already the import's shape; a mark has nothing to count.
   Prose would be an unbounded channel into a log file.
+
+**Where the window actually is.** Run `38855211961` at `2d237bc` completed **13/13 jobs green** on
+2026-10-16. The four new checks passed on every display-backed leg, and workflow K's measurements over the
+contacts tab put 24 widgets on screen with none outside the box they are in and no unwrappable text short of
+its request, so the tab the controls live on is inside the layout guarantees the other tabs have. The run
+before the fix commits, `38853977373` at `df75ad7`, had the Linux and macOS legs green and the Windows legs
+red; the two runs before that carried the two defects described above. Those red runs are history, not
+evidence, and are named here only so the sequence is not mistaken for a clean first attempt.
 
 ## Named gaps (not claimed, not implied)
 
