@@ -71,10 +71,9 @@ After resume upload and one-time setup, the agent should autonomously discover r
 
 ## Next focused increment
 
-**Completed since:** [local HR contact conflict review panel](planning/arena-task-phase-0-contact-conflict-review-panel-2026-10-16.md) - the read-only view over the disagreements schema 7 already records, in the existing HR contacts tab, with no new table, no migration and no way to resolve or merge anything. `career_agent/desktop.py`, `tests/test_desktop_handlers.py`, acceptance checks L10-L12 and the checklist's steps 99-105; commits `7323457` and `3778a39`, green matrix run `38864632201` at `4b4e752`. See [the panel's note](research/hr-contact-conflict-review-panel-2026-10-16.md).
+**Completed since:** [local HR contact conflict review panel](planning/arena-task-phase-0-contact-conflict-review-panel-2026-10-16.md) — the read-only view over disagreements schema 7 already records, in the existing HR contacts tab, with no new table, no migration and no way to resolve or merge anything. See [the panel's research note](research/hr-contact-conflict-review-panel-2026-10-16.md). The reported matrix run `38866461389` at `1f6c38c` is green; manual GUI acceptance remains blocked.
 
-**Next Arena task:** **per-contact deletion** with the erasure rules the rest of the app follows, or an **export of the contact list** with the same privacy review the JSON export had - both local, neither decided here. Manual GUI acceptance remains blocked until a human uses the real window on a display, and the HR contacts tab's steps 99-105 are the newest part of that.
-
+**Next Arena task:** [per-contact deletion with verified erasure semantics](planning/arena-task-phase-0-per-contact-deletion-2026-10-16.md). This is a destructive local action and must follow the existing erasure contract, use a transactional store operation, and remove dependent conflict records without leaving partial state. Manual GUI acceptance for the desktop remains blocked until a human uses the real window on a display.
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.
