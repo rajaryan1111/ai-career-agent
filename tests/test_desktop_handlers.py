@@ -10,6 +10,7 @@ manual smoke-test checklist in research/ is still required before GUI acceptance
 """
 import contextlib
 import csv
+import inspect
 import io
 import json
 import os
@@ -7604,19 +7605,111 @@ class ProfileFactReviewTests(HandlerTestCase):
         self.assertEqual(self.rows(app), [], "the table was redrawn and the profile is not there")
         self.assertIn("No profile is saved", app.facts_summary.get())
 
-    def test_a_write_that_fails_is_reported_and_leaves_every_fact_unconfirmed(self):
+    def test_a_write_that_fails_is_reported_from_the_database_and_leaves_every_fact_unconfirmed(self):
+        """A store call that raises may have failed before its row or after it: the database is asked.
+
+        ``confirm_profile_fact`` reads the stored profile, writes one row, and reads it back - so the one
+        thing this handler must not do is announce "nothing was changed" on the strength of an exception.
+        Here the call raises and the database agrees nothing was confirmed, which is what is reported.
+        """
         self.store.save_profile(PROFILE)
         app = self.make_app()
         app._refresh_fact_review()
         self.select(app, "country")
+        MESSAGES.reset()
 
         with mock.patch.object(self.store, "confirm_profile_fact",
                                side_effect=sqlite3.OperationalError("database is locked")):
             app._confirm_selected_fact()
 
-        self.assertIn("Not confirmed", MESSAGES.titles("showerror"))
+        self.assertIn("Nothing was confirmed", MESSAGES.titles("showerror"))
+        self.assertIn("Country is not confirmed in the saved profile", MESSAGES.text("showerror"))
         self.assertNotIn("Confirmed: you checked", app.status.get())
-        self.assertIn("local database error", app.status.get())
+        self.assertIn("Nothing was confirmed for Country", app.status.get())
+        self.assertNotIn("nothing was changed", app.status.get().casefold(),
+                         "a call that may have written is never reported as having changed nothing")
+        self.assertTrue(all(not item.is_confirmed
+                            for item in self.store.get_profile_fact_provenance()))
+
+    def test_a_confirmation_whose_read_back_fails_is_reported_from_the_database_not_as_nothing_changed(self):
+        """The store committed the row and then failed to read it back: the window reports the row.
+
+        ``confirm_profile_fact`` writes its one row and only afterwards reads the state it returns, so an
+        error raised out of it can arrive *after* the person's confirmation is stored. The window asks the
+        database what it holds rather than claiming the press changed nothing.
+        """
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+        MESSAGES.reset()
+        real_read = self.store.get_profile
+        reads = []
+
+        def fails_after_the_row_is_written():
+            """The confirmation's own pre-reads work; the read it makes after the write does not."""
+            reads.append(len(reads))
+            if len(reads) == 5:
+                raise StoredRecordError("candidate profile", "the file is locked")
+            return real_read()
+
+        with mock.patch.object(self.store, "get_profile", side_effect=fails_after_the_row_is_written):
+            app._confirm_selected_fact()
+
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.USER_CONFIRMED,
+                      "the row was written before the read that failed")
+        self.assertNotIn("nothing was changed", app.status.get().casefold())
+        self.assertIn("Confirmed: you checked Country", app.status.get(),
+                      "what is reported is what the database holds, not what the error suggested")
+        self.assertIn("Confirmed by you", self.row_for(app, "country")[3])
+
+    def test_a_confirmation_that_cannot_be_read_back_at_all_is_reported_as_not_known(self):
+        """Neither answer can be given, so neither is: the uncertainty is named, with a safe way back."""
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+        MESSAGES.reset()
+        real_provenance = self.store.get_profile_fact_provenance
+        calls = []
+
+        def readable_once_then_unreadable():
+            calls.append(len(calls))
+            if len(calls) == 1:
+                return real_provenance()
+            raise StoredRecordError("profile fact origin", "its source is an origin this version does not know")
+
+        with mock.patch.object(self.store, "confirm_profile_fact",
+                               side_effect=StoredRecordError("candidate profile", "it is damaged")), \
+             mock.patch.object(self.store, "get_profile_fact_provenance",
+                               side_effect=readable_once_then_unreadable):
+            app._confirm_selected_fact()
+
+        self.assertIn("Confirmation not verified", MESSAGES.titles("showerror"))
+        self.assertIn("it is not known whether Country was recorded as confirmed",
+                      MESSAGES.text("showerror"))
+        self.assertIn("confirming a fact that is already confirmed changes nothing",
+                      MESSAGES.text("showerror"),
+                      "the recovery path is stated, and it is safe to press the control again")
+        self.assertNotIn("nothing was changed", MESSAGES.text("showerror").casefold())
+        self.assertIn("Not known whether Country was confirmed", app.status.get())
+
+    def test_a_read_that_fails_before_the_attempt_says_nothing_was_confirmed(self):
+        """The one failure with no ambiguity: the state to act on could not be read, so nothing was tried."""
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+        MESSAGES.reset()
+
+        with mock.patch.object(self.store, "get_profile_fact_provenance",
+                               side_effect=sqlite3.OperationalError("database is locked")):
+            app._confirm_selected_fact()
+
+        self.assertIn("Local database unavailable", MESSAGES.titles("showerror"))
+        self.assertIn("Nothing was confirmed", app.status.get())
+        self.assertNotIn("Confirmed: you checked", app.status.get())
         self.assertTrue(all(not item.is_confirmed
                             for item in self.store.get_profile_fact_provenance()))
 
@@ -8038,6 +8131,124 @@ class ProfileSetupTests(HandlerTestCase):
         self.assertIn("could not be read", setup.summary.get())
         self.assertEqual(setup.save_button.options["state"], "disabled",
                          "a window that cannot read the profile offers no write")
+
+    def test_a_check_the_store_cannot_read_back_is_reported_as_saved_with_the_rest_unchecked(self):
+        """The checks run after the write: a read failure there must not say nothing was changed.
+
+        This is the same defect class as the post-write read-back one above, one step later. By the time the
+        loop reaches this fact the answers have been written *and* read back, so the shared sentence
+        ("nothing was changed") would be false; what is true is that the save happened and the rest of the
+        checks did not.
+        """
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+        MESSAGES.reset()
+        real_provenance = self.store.get_profile_fact_provenance
+        calls = []
+
+        def unreadable_while_recording_the_check():
+            """The read the loop makes before its first check fails; every later read is the real one."""
+            calls.append(len(calls))
+            if len(calls) == 1:
+                raise StoredRecordError("profile fact origin",
+                                        "its source is an origin this version does not know")
+            return real_provenance()
+
+        with mock.patch.object(self.store, "get_profile_fact_provenance",
+                               side_effect=unreadable_while_recording_the_check):
+            app._save_profile_setup()
+
+        self.assertIn("Saved, but the rest could not be checked", MESSAGES.titles("showerror"))
+        self.assertIn("read back, so they are saved", MESSAGES.text("showerror"))
+        self.assertIn("it is not known whether that check was recorded", MESSAGES.text("showerror"))
+        self.assertIn("Refresh the saved facts", MESSAGES.text("showerror"),
+                      "the person is told where to look instead of being left to guess")
+        self.assertNotIn("nothing was changed", MESSAGES.text("showerror").casefold())
+        stored = self.store.get_profile()
+        self.assertEqual(profile_form_values(stored)["country"], "Syntheticland",
+                         "the answer was written before the read that failed")
+        entry = next(item for item in self.store.get_profile_fact_provenance()
+                     if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.UNVERIFIED,
+                      "a check that could not be recorded leaves the fact unconfirmed")
+        self.assertIn("saved", app.status.get())
+        self.assertNotIn("nothing was changed", app.status.get().casefold())
+        self.assertEqual([question.fact for question in setup.questions],
+                         ["degree", "study_status", "graduation_year", "experience", "work_authorization"],
+                         "the window is filled again from the database, not from the last belief")
+
+    def test_what_is_still_missing_is_never_claimed_from_a_failed_read(self):
+        """A read that fails after the checks is not turned into "all six are missing".
+
+        The state read after the checks decides the sentence "Still not stated: ...". Reported from a
+        ``None`` profile it would say a profile that states five facts states none of them, which is a claim
+        about a database this handler could not read at that moment.
+        """
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+        MESSAGES.reset()
+        real_read = self.store.get_profile
+        handler_reads = []
+
+        def fails_after_the_checks():
+            """The save's own read-back works; the one this handler makes after the checks does not.
+
+            Patched in with ``new=`` rather than as a mock's side effect, so the frame this reads really is
+            the caller's: the two reads that come straight from the handler are what this has to tell apart,
+            and the store's own reads must keep working.
+            """
+            if inspect.currentframe().f_back.f_code.co_name == "_save_profile_setup":
+                handler_reads.append(1)
+                if len(handler_reads) == 2:
+                    raise StoredRecordError("candidate profile", "the file is locked")
+            return real_read()
+
+        with mock.patch.object(self.store, "get_profile", new=fails_after_the_checks):
+            app._save_profile_setup()
+
+        self.assertIn("One read of your saved facts failed after this save", setup.summary.get())
+        self.assertIn("Saved and confirmed by you: Country", setup.summary.get(),
+                      "what this save did record is still reported")
+        self.assertIn("5 required fact(s) are not in your saved profile", setup.summary.get(),
+                      "the state shown is the database's own answer, read again")
+        self.assertNotIn("6 required fact(s)", setup.summary.get(),
+                         "a failed read is never reported as a profile that states nothing")
+        self.assertNotIn("every fact a listing can require is stated", setup.summary.get())
+        self.assertIn("had to be read again", app.status.get())
+        self.assertNotIn("nothing was changed", app.status.get().casefold())
+
+    def test_a_check_the_store_refuses_is_named_and_leaves_the_value_saved(self):
+        """The store's own refusal is reported as a refusal - and the value it names is still stored.
+
+        A refusal is decided before anything is written, which is what separates it from the failures above:
+        the fact is simply not confirmed, its stored value is untouched, and the window says which one.
+        """
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        setup = self.open_setup(app)
+        self.assertIn("degree", setup.confirm_vars, "a stored required fact is offered for a check")
+        setup.confirm_vars["degree"].set(True)
+        MESSAGES.reset()
+        real_confirm = self.store.confirm_profile_fact
+
+        def refuses_one_fact(fact):
+            if fact == "degree":
+                raise ValueError("the stored profile does not state 'degree', so there is no value to confirm")
+            return real_confirm(fact)
+
+        with mock.patch.object(self.store, "confirm_profile_fact", side_effect=refuses_one_fact):
+            app._save_profile_setup()
+
+        self.assertIn("Could not be confirmed (the local database refused the write): Degree / discipline",
+                      setup.summary.get())
+        self.assertNotIn("Saved and confirmed by you", setup.summary.get())
+        entries = {item.fact: item for item in self.store.get_profile_fact_provenance()}
+        self.assertIs(entries["degree"].verification, FactVerification.UNVERIFIED)
+        self.assertEqual(profile_form_values(self.store.get_profile())["degree"], "ECE",
+                         "a refused confirmation leaves the stored value exactly where it was")
+        self.assertIn("confirm them again from the table above", setup.summary.get())
 
     def test_a_complete_and_confirmed_profile_is_asked_for_nothing(self):
         app = self.empty_form(self.make_app())

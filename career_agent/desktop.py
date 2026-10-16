@@ -3214,19 +3214,32 @@ class CareerAgentApp:
         try:
             before = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
             profile = self.store.get_profile()
-            already = fact in before and before[fact].is_confirmed
-            value = "" if profile is None else profile_fact_values(profile)[fact]
+        except StoredRecordError as exc:
+            # Nothing has been attempted yet: even the state to act on could not be read, so there is
+            # nothing to report about a confirmation and nothing was written.
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            self.status.set("Nothing was confirmed; the saved facts could not be read.")
+            return
+        already = fact in before and before[fact].is_confirmed
+        value = "" if profile is None else profile_fact_values(profile)[fact]
+        try:
             self.store.confirm_profile_fact(fact)
             after = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
             stored = self.store.get_profile()
-        except StoredRecordError as exc:
-            # Reading the stored provenance is what failed, so there is nothing to report about a
-            # confirmation: the read is refused and nothing was written.
-            self._report_unreadable_record(exc)
-            return
         except ValueError as exc:
+            if isinstance(exc, StoredRecordError):
+                # The store reads the profile before its one transaction and again after it, and the row is
+                # committed before the last of those reads - so this may be a failure *after* the person's
+                # confirmation was written. The window therefore does not say nothing changed; it reads the
+                # stored state and reports the database's own answer.
+                self._resolve_confirmation_after_failure(fact, label, already, str(exc))
+                return
             # The store's own refusal: a fact the profile does not state, or a file held at a schema older
-            # than the table that keeps confirmations. Reported as it stands, with nothing claimed.
+            # than the table that keeps confirmations. Every refusal is decided before a row is written, so
+            # this is the one failure that can say nothing was recorded.
             messagebox.showerror(
                 "Nothing was confirmed",
                 f"{exc}\n\nNothing in your saved profile was changed.", parent=self.root)
@@ -3234,12 +3247,9 @@ class CareerAgentApp:
             self._refresh_fact_review()
             return
         except sqlite3.Error as exc:
-            messagebox.showerror(
-                "Not confirmed",
-                "The confirmation could not be written to the local database, so nothing was recorded. "
-                f"Your saved profile is unchanged.\n\n{exc}", parent=self.root)
-            self.status.set("Nothing was confirmed (local database error).")
-            self._refresh_fact_review()
+            # A database error is not distinguishable from here either: it may have come from the read that
+            # follows a committed row. Reported by reading the state back, not by claiming nothing changed.
+            self._resolve_confirmation_after_failure(fact, label, already, str(exc))
             return
         self._refresh_fact_review()
         stored_value = "" if stored is None else profile_fact_values(stored)[fact]
@@ -3259,6 +3269,51 @@ class CareerAgentApp:
         else:
             self.status.set(
                 f"Confirmed: you checked {label}. Its value and where it came from are unchanged.")
+
+    def _resolve_confirmation_after_failure(self, fact: str, label: str, already: bool,
+                                            detail: str) -> None:
+        """Report what the database holds after a confirmation whose own write call failed.
+
+        ``CareerStore.confirm_profile_fact`` reads the stored profile before its one transaction and again
+        after it, and the row is committed before the last of those reads. A failure raised out of that call
+        may therefore have happened *before* the confirmation was written or *after* it, and the two cannot
+        be told apart from here. What this window must never do is call a write that may have happened
+        "nothing was changed", so it reads the stored state and reports the database's own answer: confirmed,
+        not confirmed, or not known because even that read failed. The recovery is safe and the same either
+        way, which is said out loud: confirming a fact that is already confirmed changes nothing, including
+        the time of the first confirmation.
+        """
+        try:
+            after = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+        except (StoredRecordError, sqlite3.Error):
+            after = None
+        self._refresh_fact_review()
+        if after is None:
+            messagebox.showerror(
+                "Confirmation not verified",
+                f"The saved facts could not be read again after this attempt, so it is not known whether "
+                f"{label} was recorded as confirmed. The value you confirmed is untouched either way, and "
+                "confirming a fact that is already confirmed changes nothing - so confirm it again from the "
+                f"table once the saved facts can be read.\n\n{detail}", parent=self.root)
+            self.status.set(
+                f"Not known whether {label} was confirmed: the saved facts could not be read back.")
+            return
+        entry = after.get(fact)
+        if entry is not None and entry.is_confirmed:
+            # The store raised while reading its state back, after the row had already been committed.
+            if already:
+                self.status.set(
+                    f"{label} was already confirmed by you; nothing changed, including the time.")
+            else:
+                self.status.set(
+                    f"Confirmed: you checked {label}. Its value and where it came from are unchanged.")
+            return
+        messagebox.showerror(
+            "Nothing was confirmed",
+            f"{label} is not confirmed in the saved profile, so nothing was confirmed: no value and no "
+            "origin was changed. Try again once the saved facts can be read.\n\n" + detail,
+            parent=self.root)
+        self.status.set(f"Nothing was confirmed for {label}; your saved profile is unchanged.")
 
     # ---------------------------------------------------------------- the missing-information setup
 
@@ -3519,22 +3574,43 @@ class CareerAgentApp:
                 before = next(
                     (entry for entry in self.store.get_profile_fact_provenance() if entry.fact == fact), None)
                 self.store.confirm_profile_fact(fact)
-            except StoredRecordError as exc:
-                self._report_unreadable_record(exc)
-                return
-            except (ValueError, sqlite3.Error) as exc:
+            except ValueError as exc:
+                if isinstance(exc, StoredRecordError):
+                    # This loop runs *after* the profile has been written and read back, and the store's
+                    # confirmation call reads the state again. So the shared read-failure sentence - "nothing
+                    # was changed" - would be false here: the answers are saved and some checks may already
+                    # be recorded. Reported as what it is instead.
+                    self._setup_saved_but_unchecked(confirmed, already_confirmed, fact, str(exc),
+                                                    answers_saved=bool(answers))
+                    return
+                # The store's own refusal - a fact the profile does not state, a file held at an older
+                # schema - is decided before anything is written, so this fact is simply not confirmed and
+                # the value it names is still saved.
                 failed.append((fact, str(exc)))
                 continue
+            except sqlite3.Error as exc:
+                # Not distinguishable from a refusal here either: the failure may have come from the read
+                # that follows a committed row. Nearly always a dead connection, so the loop stops rather
+                # than reporting a list of failures that might each be untrue.
+                self._setup_saved_but_unchecked(confirmed, already_confirmed, fact, str(exc),
+                                                answers_saved=bool(answers))
+                return
             (already_confirmed if before is not None and before.is_confirmed else confirmed).append(fact)
+        state_read_failed = False
         try:
             current = self.store.get_profile()
         except (StoredRecordError, sqlite3.Error) as exc:
+            # The answers were written and read back, but the state *after* the checks could not be read.
+            # Nothing is inferred from a failed read: what is still missing is not known here, and saying
+            # "all six are missing" because the profile came back as ``None`` would be a claim about a
+            # database this handler could not read.
             current = None
+            state_read_failed = True
             self._report(str(exc))
         if current is not None:
             for key, value in profile_form_values(current).items():
                 self.profile_vars[key].set(value)
-        still_missing = missing_required_profile_facts(current)
+        still_missing = () if state_read_failed else missing_required_profile_facts(current)
         self._refresh_fact_review()
 
         note_parts = []
@@ -3548,7 +3624,11 @@ class CareerAgentApp:
             note_parts.append("Could not be confirmed (the local database refused the write): "
                               + ", ".join(fact_label(fact) for fact, _reason in failed)
                               + ". Their values are saved; confirm them again from the table above.")
-        if still_missing:
+        if state_read_failed:
+            note_parts.append(
+                "One read of your saved facts failed after this save, so what is below was read from the "
+                "database again.")
+        elif still_missing:
             note_parts.append(
                 "Still not stated: " + ", ".join(fact_label(fact) for fact in still_missing)
                 + ". Answer them above, or leave them unknown — a listing that requires one cannot be "
@@ -3559,12 +3639,61 @@ class CareerAgentApp:
         if not rendered:
             # The rebuild could not read the database, so what it holds is the read failure; the result of
             # the save is still reported where a person can see it.
-            self.status.set("Profile setup: saved, but the profile could not be read back for display.")
+            self.status.set(
+                f"Profile setup: saved {len(answers)} answer(s) and confirmed {len(confirmed)} fact(s), but "
+                "the profile could not be read back for display.")
+            return
+        if state_read_failed:
+            self.status.set(
+                f"Profile setup: saved {len(answers)} answer(s) and confirmed {len(confirmed)} fact(s); the "
+                "saved facts had to be read again to say what is still missing.")
             return
         self.status.set(
             f"Profile setup: saved {len(answers)} answer(s) and confirmed {len(confirmed)} fact(s); "
             + (f"{len(still_missing)} required fact(s) still not stated." if still_missing
                else "every fact a listing can require is stated."))
+
+    def _setup_saved_but_unchecked(self, confirmed, already_confirmed, fact: str, detail: str,
+                                  *, answers_saved: bool) -> None:
+        """Report a setup save whose checks could not be finished, without claiming nothing happened.
+
+        By the time this is reached the answers have been written to the database **and** read back, so the
+        save is a fact; what failed is the read that decides whether the remaining checks can be recorded.
+        The person is told what was recorded, that the rest is unknown, and where to look - and the window
+        is filled again from storage, which is truthful whenever the database answers this time.
+        """
+        setup = self.profile_setup
+        done = []
+        if confirmed:
+            done.append("recorded as confirmed by you: "
+                        + ", ".join(fact_label(item) for item in confirmed))
+        if already_confirmed:
+            done.append("already confirmed, so unchanged: "
+                        + ", ".join(fact_label(item) for item in already_confirmed))
+        messagebox.showerror(
+            "Saved, but the rest could not be checked",
+            ("Your answers were written to the local database and read back, so they are saved. "
+             if answers_saved else "No answer was typed, so this press changed no value in your profile. ")
+            + ("; ".join(done) + ". " if done else "")
+            + f"The saved facts could not be read again while recording the check for {fact_label(fact)}, so "
+            "it is not known whether that check was recorded, and this window cannot say which facts are "
+            "still missing. Open the profile tab and press \"Refresh the saved facts\" to see what the "
+            f"database holds before relying on it.\n\n{detail}",
+            parent=setup.dialog if setup is not None else self.root)
+        self._refresh_fact_review()
+        re_rendered = self._render_profile_setup(note=(
+            "The last save was written and read back; the checks after it could not all be recorded, so "
+            "what is below was read from the database again." if answers_saved else
+            "The checks below could not all be recorded, so what is below was read from the database "
+            "again."))
+        if not re_rendered:
+            self.status.set("Profile setup: saved, but the rest could not be checked." if answers_saved
+                            else "Profile setup: nothing was typed, and the rest could not be checked.")
+            return
+        self.status.set("Profile setup: saved; the checks after it could not all be recorded."
+                        if answers_saved else
+                        "Profile setup: no answer was saved; the checks could not all be recorded.")
+
 
     def _setup_written_but_unverified(self, detail: str) -> None:
         """Report a setup save that reached the database but could not be read back to verify.
