@@ -1,6 +1,6 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 105 steps. Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 111 steps. Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -66,6 +66,21 @@ and the seven steps' automated halves ran on the five display-backed CI legs of 
 workflow, so it declares **94** checks and the suite is at **1857 tests**. D35 - the check that pressed an arrow
 key Tk navigates nowhere without until a row has been clicked - was found by the run before that one and is
 recorded in the cross-platform evidence register.
+
+**Update, 2026-10-16 (the HR contacts tab gains its second numbered section):** the verdicts are now
+**22 PASS, 89 BLOCKED, 0 FAIL** — six steps (**106-111**) are new and all six are BLOCKED — and **no box has
+been ticked**. They cover the one destructive action on the **HR contacts** tab: deleting a stored contact
+together with the disagreements recorded about it. The behaviour, the store-side transaction and the honest
+limits are [written up in their own note](hr-contact-per-contact-deletion-2026-10-16.md); the six steps ask a
+person for what no harness can judge — whether a greyed-out destructive button *looks* greyed out, whether the
+confirmation's wording is clear when read on a real screen (its text names a row position, the file the record
+came from and how many disagreements go with it, and never the address, name, company, stored reason or
+conflict value), whether the keyboard and the mouse reach it, whether a screen reader reads it sensibly, and
+whether the sentence about a backup written earlier is understood as the limit it is. The harness gained
+**three** checks inside workflow L (L13-L15) rather than a thirteenth workflow, so it declares **97** checks and
+the suite is at **1881 tests**; run `38875397574` at `c1b2ab1` is green on the whole matrix (**13/13 jobs**),
+and all five display-backed legs drove L13-L15 through the real window, each reporting `RESULT: PASS — 97
+checks passed`.
 
 **Date created:** 2026-10-14
 
@@ -646,6 +661,77 @@ log file.
     page to them from this build. Nothing may be dropped silently.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the cap and its sentence were asserted at the handler level.**
     → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_list_longer_than_the_panel_shows_says_so` (45 stored disagreements, 40 rows listed, the paging sentence asserted word for word). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. Paging itself does not exist, and the note says so rather than pretending.**"
+
+## HR contacts: deleting one stored contact and the disagreements recorded about it (added 2026-10-16)
+
+These steps need a disposable `CAREER_AGENT_HOME`, two stored contacts and at least one recorded disagreement.
+The shortest way to that state is the workflow the harness runs: import three synthetic rows (two addresses on
+reserved `.invalid` domains, one of them listed twice), then a second file that disagrees with the stored
+contact for one address and with itself for the other, and then mark **the contact you are going to delete**
+with a reason typed in the box beside the buttons. One contact has a mark and one does not, which is what step
+106 needs; step 109 gives the contact you are keeping a mark of its own before the deletion, so that an
+unrelated mark has something to survive. Nothing on this tab may print an address into a dialog, a status line
+or the log file, and nothing here sends anything to anybody.
+
+106. [ ] Open the **HR contacts** tab on a database holding two stored contacts, one of them marked
+    do-not-contact with a reason and one without. With no row selected, **Delete selected contact** must be
+    greyed out and unusable, and the line above it must say that no stored contact is selected and name the
+    actions a row offers, deleting among them. Then select each row in turn: the button must become usable for
+    **both** - a row carrying a mark must not be protected from deletion - and go grey again when you click
+    empty space and clear the selection. Judge by eye what a person sees: whether the greyed state is
+    distinguishable, and whether the sentence under the button (stored in `app.contact_delete_note`) reads
+    clearly on this platform with this font. Write both down.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the disabled/enabled states and the sentence's words were asserted through the real window on the Linux display leg.**
+    → **Automated coverage (2026-10-16): L13 (nothing selected -> `instate(["disabled"])`, a marked row and an unmarked row both enable it, the sentence carrying "no undo", "disagreement", "backup" and "Nothing is sent to anybody", and the state line naming deleting among the actions) and `tests/test_desktop_handlers.py::ContactDeletionControlTests::test_the_control_is_off_until_a_stored_row_is_selected`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. Whether the greyed button *looks* greyed out and whether the wording is clear are not covered by any of it.**"
+107. [ ] Select a stored row and press **Delete selected contact**. Read the confirmation in full and check it
+    against what you know by hand: the row's position in the stored list, the file the record came from, and the
+    exact number of disagreements that go with it. It must say that the disagreements are deleted with the
+    contact, that no other contact, mark or disagreement is touched, that **there is no undo in this
+    application**, that a backup written before still holds the record and that restoring that copy would bring
+    it back, and that nothing is sent to anybody. The address, the name, the company, the reason stored with a
+    mark and every disagreement value must be **absent** from the dialog - check each one by looking, not by
+    trusting the wording - and the dialog must be answerable with the keyboard alone. Then answer **No**.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the same wording was asserted through the real window on the Linux display leg and at the handler level. Whether the text is readable on this screen, and how it feels to answer, is a person's judgement.**
+    → **Automated coverage (2026-10-16): L14's first half (the question names `row <n> of 2 in the stored list`, the source file, `2 recorded disagreement(s)`, "no undo" and the sentence about nothing being sent, with the contact's own address, name and company, the other contact's mark reason and the disagreements' values all asserted absent) and `ContactDeletionControlTests::test_the_confirmation_names_a_position_and_a_file_and_no_contact_value`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+108. [ ] After answering **No**, the contact must still be listed and still be openable, its disagreements must
+    still be in the panel below, and its do-not-contact mark - with the reason you typed beside it - must be
+    exactly as it was. The status line must say that nothing was deleted, and the activity log for that
+    database must have gained no line about a deletion. Then repeat with the selection cleared
+    (**Delete selected contact** greyed out): nothing may happen at all, and the line above must tell you to
+    select a row.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; both refusals were asserted against the database's change counter through the real window and at the handler level.**
+    → **Automated coverage (2026-10-16): L14's second half (`total_changes` unchanged, the contact and its disagreements still stored, both marks and the reason intact, the status line saying nothing was deleted, and no `contacts.deleted` line in the log) plus `ContactDeletionControlTests::test_a_declined_confirmation_deletes_nothing_and_says_so` and `::test_deleting_with_nothing_selected_asks_for_a_selection_and_writes_nothing`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+109. [ ] First give the contact you are **keeping** a mark of its own: select it, type a different reason and
+    press **Mark do not contact**. Then select the contact you are deleting (the one already carrying a mark) and
+    answer **Yes**. Watch both views: the row must leave the stored list,
+    the disagreements recorded about it must leave the panel and its count, the selection must clear and the
+    button must go grey again, and the status line must report what went ("1 stored contact deleted, with N
+    recorded disagreement(s). Nothing was contacted."). The deleted contact's own mark must have gone with it,
+    and the contact you kept must still carry **its** mark with the reason you typed for it. Then compare that
+    contact, by hand, against the two files: its name, company, address and its own disagreement must all be
+    exactly as they were, and the summary must count one contact, one mark and one disagreement. Select the
+    deleted contact's old row if the list still shows one: it must not be there, and the selection must have
+    cleared itself.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; every one of those comparisons was made against the store through the real window and at the handler level. Reading the screen after a destructive action is a person's check, not a harness's.**
+    → **Automated coverage (2026-10-16): L15 (three rows changed - the contact and its two disagreements - the deleted record gone from the store, the other contact's mark and reason intact, one row left in the list, one in the panel, the summary counting one and one, the selection cleared, the button greyed out, the status line's counts, "Nothing was contacted", and a dialog/log privacy sweep) and `ContactDeletionControlTests::test_a_confirmed_deletion_removes_the_contact_and_its_evidence_and_leaves_the_rest`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`.**"
+110. [ ] Keyboard and mouse, at the window's own minimum size: tab to the button and press **Space** and
+    **Enter** - a focused destructive control must look focused before it is pressed - and note whether the
+    button is reachable at all at 900x600, scrolling the tab if it is not, with the mouse wheel and the
+    scrollbar. Note anything that surprises you: a control that has to be scrolled to, a confirmation that opens
+    behind the window, a dialog that cannot be answered without the mouse. Write down what you saw, including
+    anything you would call a defect.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; this is where a real keyboard, a real mouse and a person's expectations are required.**
+    → **Automated coverage (2026-10-16): L13 checks the control's state through the real widgets on the Linux display leg, and workflow K measures every tab at the window's declared minimum, at its opening size and larger - what is on screen, what sits outside the box it is drawn in and what was given less room than its text asked for. Whether a *person* can reach and comfortably use the button at that size, and what a focused destructive button looks like, is not measured by any of it.**"
+111. [ ] On a machine with a screen reader or the platform's accessibility tools: open the confirmation and
+    have it read aloud. Nothing about the contact must be announced (the question is about a row, not a person),
+    the words "no undo" must be audible before the answer is given, and the buttons must have the labels the
+    dialog draws. Then delete a contact, open the activity log file in a text editor and read the new line: it
+    must carry the event name and the counts and nothing else - no address, no name, no company, no reason, not
+    even the file the record came from. Finally, restore the backup you took before the deletion and confirm by
+    hand that the contact and its disagreements come back: that is the limit the sentence promises, and the one
+    thing this application cannot undo.
+    → **BLOCKED — no display with a screen reader, no Tkinter and no accessibility tooling in the acceptance environment; the log line and the restore were asserted against the database and the file at the handler and store levels.**
+    → **Automated coverage (2026-10-16): L14/L15's log assertions (`event=contacts.deleted`, `detail=contacts=1 conflicts=2`, and none of the fixture values nor either file name present) and `tests/test_contacts_store.py::ContactDeletionTests::test_a_backup_written_before_the_deletion_still_holds_the_record`. Five display-backed CI legs, 97 checks per leg, run `38875397574` at `c1b2ab1`. What a screen reader actually announces is not tested anywhere, and no automated run can judge it.**"
 
 ## Record results
 

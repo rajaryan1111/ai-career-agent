@@ -8,14 +8,19 @@ file says how to get to a state where those steps can be executed, which steps c
 evidence to capture, and where to write the result.
 
 **Status of every window step today: BLOCKED, and nothing here changes that.** No human has opened this
-window. 22 of the 105 steps passed on a headless machine (the ones needing no window), 83 are blocked for the
+window. 22 of the 111 steps passed on a headless machine (the ones needing no window), 89 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
-**The HR contacts tab now has numbered steps of its own (99-105), and this handoff's advice to treat it as
-untested by hand still stands.** They cover the read-only panel that lists the disagreements the application
-already records: its empty state, the rows and their provenance, the selected row's two sides, the keyboard
-(including Tk's own focus-item behaviour, which the steps ask a tester to observe and write down), a long value,
-the refresh when the tab is shown again, and the 40-disagreement cap. Workflow L still exercises the tab's
+**The HR contacts tab now has numbered steps of its own (99-111), and this handoff's advice to treat it as
+untested by hand still stands.** Steps 99-105 cover the read-only panel that lists the disagreements the
+application already records: its empty state, the rows and their provenance, the selected row's two sides, the
+keyboard (including Tk's own focus-item behaviour, which the steps ask a tester to observe and write down), a
+long value, the refresh when the tab is shown again, and the 40-disagreement cap. Steps 106-111 cover the one
+destructive action on the tab: what a greyed-out **Delete selected contact** looks like and whether it can be
+reached at the window's minimum size, whether the confirmation's wording is clear when read on a real screen
+(it names the row's position, the file the record came from and how many disagreements go with it, and never a
+contact value), what the keyboard and the mouse do with it, what a screen reader announces, and whether the
+sentence about a backup written before the deletion is understood as the limit it is. Workflow L still exercises the tab's
 read/refuse/decline/confirm/mark/review paths automatically and the tab is inside every layout and focus
 measurement, but a person still has to read its wording, try its chooser, judge whether the confirmation reads
 well and whether the two new panels fit the tab - so see the named gaps in
@@ -24,12 +29,13 @@ well and whether the two new panels fit the tab - so see the named gaps in
 acceptance of it.
 
 **What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **94
-checks** in the current source, and 94 on the last fully green matrix - run `38864632201` at `4b4e752`,
-thirteen of thirteen jobs, `RESULT: PASS - 94 checks passed` and `Ran 1857 tests ... OK` on every leg (91 on the
+checks** in the current source, and 97 on the matrix below - run `38875397574` at `c1b2ab1`,
+thirteen of thirteen jobs, `RESULT: PASS - 97 checks passed` and `Ran 1881 tests ... OK` on every leg (91 on the
 matrix before it, run `38855211961` at `2d237bc`; 87 on the one before that, run `38828908041` at `02962f6`;
 eleven and 82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and one
 check was added to workflow I on 2026-10-16, five to workflow L with the contact list, four more when the
-do-not-contact controls were added, and three more for the recorded-disagreement panel). The twelfth
+do-not-contact controls were added, three more for the recorded-disagreement panel, and three more for deleting
+one stored contact and its recorded disagreements). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
@@ -80,7 +86,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 94 checks: twelve workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 97 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -287,6 +293,39 @@ visible. No automated check can judge it.
   size, how the two new widgets look on this platform's theme, whether the tab now feels crowded, and what the
   keyboard actually does in the list — including Tk's own behaviour that arrow keys move from the row last
   clicked and a freshly focused list does not move at all. None of that is established by a machine.
+
+### O. HR contacts: deleting one contact and its recorded disagreements — steps 106–111
+
+- **Setup:** a disposable `CAREER_AGENT_HOME` with the two synthetic contact files the workflow above uses
+  imported (two stored contacts and three recorded disagreements), and **the contact you are going to delete**
+  marked do-not-contact with a reason typed in the box beside it - so the row carrying a mark is the row the
+  tab must still let you delete, and step 109 can check that its mark went with it. Step 109 gives the contact
+  you are keeping a mark of its own before the deletion, which is the one that must survive. Nothing here
+  contacts anybody, and every address stays on a reserved `.invalid` domain.
+- **Do:** open the tab with nothing selected and read the button and the sentence under it (106); select a row,
+  press **Delete selected contact** and read the confirmation in full before answering **No** (107); check that
+  nothing changed, then repeat with nothing selected (108); select the unmarked contact, answer **Yes** and read
+  both views afterwards (109); do the same with the keyboard and the mouse at the window's own minimum size
+  (110); and finally read the confirmation through a screen reader, read the new line in the activity log file
+  in a text editor, and restore the backup you took before the deletion (111).
+- **Expected:** the button is unusable with nothing selected and usable for a marked row as much as an unmarked
+  one; the question names the row's position in the list, the file the record came from and the number of
+  disagreements that go with it, says there is no undo and what a backup still holds, and contains no address,
+  name, company, stored reason or disagreement value. Answering no changes nothing at all — not the contact, not
+  its disagreements, not either mark. Answering yes removes the contact **and** the disagreements recorded about
+  it, leaves every other contact, disagreement and mark exactly as it was, re-reads both views (so the deleted
+  row leaves the list, its evidence leaves the panel and the selection clears), and reports counts. The activity
+  log gains one line naming the event and the counts and nothing else.
+- **Evidence to capture:** the button's state with nothing selected and with each of the two rows selected; the
+  confirmation's full text (a screenshot and the text) for a row with disagreements; the stored list, the panel's
+  count and the status line before and after; `sqlite3` counts of `hr_contact` and `hr_contact_conflict` before
+  and after, which must move by exactly one and its own disagreements; the activity log's new line; and the
+  restored backup, which must contain the record and its disagreements again.
+- **Human-only judgement:** whether the greyed button is distinguishable from the enabled one, whether the
+  sentence under it reads clearly and does not read as marketing, whether the confirmation is clear enough to
+  answer without hesitating, what a focused destructive button looks like on this platform, whether the control
+  is reachable and comfortable at 900x600, what a screen reader announces, and whether "a backup written before
+  this still holds the record" is understood as the limit it is rather than as an oversight.
 
 ### M. Operating-system specifics
 

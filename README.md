@@ -344,7 +344,32 @@ a contact that is no longer marked is not left carrying an explanation that no l
 marked again later. Because nothing in this build contacts anybody, a mark records your decision; it is what
 a later feature will have to respect.
 
-**What is deliberately not here yet.** Row-by-row accept/reject while the file is being read, exporting the
+**Deleting one stored contact, and the evidence that goes with it.** Select a row and press **Delete
+selected contact** - greyed out until a stored row is selected, usable for a marked row as much as an unmarked
+one, because a mark is a reason to be careful about contacting somebody and never a reason to keep their record.
+The sentence beside the button says what the action costs before you press it, and the confirmation names the
+*row* rather than the person: its position in the stored list, the file the record came from, and exactly how
+many disagreements go with it. The address, the name, the company, the reason stored with a mark and every
+disagreement value stay out of the dialog and out of the status line and the activity log.
+
+Answering no, closing the dialog, having nothing selected, selecting a row another window has already deleted
+and a storage failure all delete nothing and say so. Confirming removes the record **and the disagreements
+recorded about it in one transaction** in the database layer - not from the screen - so a failure in the middle
+leaves the contact and its evidence exactly as they were rather than half-deleted: the two `DELETE` statements
+run inside one `BEGIN IMMEDIATE`, and the explicit delete of the conflict rows means the outcome does not depend
+on a connection having foreign keys switched on (the schema's own `ON DELETE CASCADE` stays as the second line
+of defence, and both are asserted). Every other contact, every other disagreement and every other mark is
+untouched, and both views - the stored list and the disagreement panel - are re-read from the database
+afterwards, which is what clears the selection. What is written to the log is a count and nothing else:
+`contacts.deleted` with `contacts=1 conflicts=N`.
+
+There is **no undo** in this application, and the window says so rather than implying otherwise: a backup you
+wrote earlier still holds the record, and restoring that copy brings it back, because a restore replaces the
+database with the copy you choose. `--forget-local-data` remains the whole-database erasure, and the difference
+between the two is stated where each is offered.
+
+**What is deliberately not here yet.** Deleting several contacts at once, deleting from anywhere except the
+selected row, exporting the list, row-by-row accept/reject while the file is being read, exporting the
 rows that were refused, resolving or dismissing recorded disagreements from the window, keeping several
 reasons or a history of marks per contact (the record keeps the current mark, its date and its one reason),
 matching contacts to listings, drafts, and anything that sends, submits or contacts anybody. The planning document
@@ -1053,7 +1078,7 @@ line or event, and no address is ever contacted; a recorded disagreement between
 both sides, the provenance the schema holds, and a description that calls neither side right, listed and read
 without a single write; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 94 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 97 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
 the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by

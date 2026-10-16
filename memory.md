@@ -3314,3 +3314,57 @@ still empty. Written up in `research/hr-contact-conflict-review-panel-2026-10-16
 cross-platform evidence register, `phases.md` row 1 and `design.md`'s workflow list carry the new check count,
 `README.md` describes the panel, and `task.md` records the increment and names per-contact deletion and a
 contact-list export as the next candidates.
+**2026-10-16, this session — per-contact deletion: one transaction, a row reference instead of a name, and the limit a backup is.**
+The HR contacts tab could import, mark and review, but a record could never be removed: the only erasure this
+application offered was `--forget-local-data`, which takes the whole database. Per-contact deletion is now a
+store operation — `CareerStore.delete_contact(email_key)` opens `BEGIN IMMEDIATE`, reads the row, deletes the
+`hr_contact_conflict` rows carrying that key **by name** and then the `hr_contact` row, commits, and returns
+`ContactDeletionOutcome(deleted, conflicts)` with `describe()` for the status line. That object deliberately
+does not carry the address: an outcome is what a dialog and a log line are built from, and neither may carry a
+contact value. The explicit conflict delete is what makes the outcome independent of a pragma — `ON DELETE
+CASCADE` is declared on the only foreign key that references either table and `PRAGMA foreign_keys = ON` is set
+when the connection opens, and that cascade stays as a second line of defence, but a deletion that quietly
+stopped removing rows would leave orphans while reporting a success, so both are asserted (one test deletes
+with foreign keys off and still requires the evidence to be gone; another asserts the cascade really is declared
+and enabled). Any exception rolls both statements back and the database stays usable, which is the half-deletion
+this increment had to make impossible. A key the store does not hold is not an error: for a delete, "already
+gone" is the requested end state, and the caller is *told* (`deleted=False`, no write, no event) rather than
+handed an exception — deliberately unlike `set_contact_suppression`, where a mark that silently did not happen
+would be a false claim about state meant to persist. The event is `contacts.deleted` with
+`detail=contacts=1 conflicts=N`, written only after the commit.
+
+The window asks in references, not identities: `row N of M in the stored list`, the file the record came from,
+and the exact number of disagreements that go with it — the same style the mark confirmations already use — then
+"there is no undo in this application" and what a backup written earlier still holds. The address, name, company,
+the reason a mark carries and every disagreement value stay out of the dialog, the status line, the state line,
+the summary and the log. The button is built disabled, on its own row under its own sentence (a `StringVar`, so
+its words are read back by a test rather than only drawn), and enabled for **any** selected stored contact,
+marked or not — a mark is a reason to be careful about contacting somebody, never a reason to keep their record,
+and this window does not decide which records a person may remove from their own database. Every refusal path —
+no selection, a stale row, a declined confirmation, a row that vanishes *while the question is being answered*,
+a `StoredRecordError`, an `sqlite3.Error` — writes nothing and says so, and the report afterwards is built from
+the store's own outcome rather than the count the question used, because the two are read at different moments.
+One `_refresh_contacts()` re-reads both views after a successful deletion, which is what clears the selection and
+greys the button again. Evidence: twelve tests in `tests/test_contacts_store.py::ContactDeletionTests` (exactly
+two rows go, measured against `total_changes`; both contacts carry a disagreement of their own in the fixture so
+a deletion that removed *every* conflict row could not pass; marks, reasons, timestamps, `integrity_check`,
+`foreign_key_check` and `user_version = 7` all asserted; a restart and a backup-afterwards agree; **a backup
+taken before the deletion still holds the record after a restore**, which is the honest limit asserted rather
+than papered over), eleven tests in `tests/test_desktop_handlers.py::ContactDeletionControlTests`, acceptance
+checks **L13-L15** (97 declared checks now), and `Ran 1881 tests ... OK (skipped=13)` locally. Four temporary
+mutations were made and reverted to prove the tests bite: removing the explicit conflict delete (2 failures),
+removing the rollback (1 failure, 1 error), ignoring the confirmation's answer (1 failure) and dropping the
+post-deletion refresh (2 failures). No schema change was needed, so **schema 7 stands** and the JSON export
+still does not carry the contact tables. The green matrix is run `38875397574` at `c1b2ab1`: **13/13 jobs**, the
+Linux display job `116889109924` reporting `RESULT: PASS — 97 checks passed` with L13-L15 `[ ok ]` beside L1-L12
+and the macOS/Windows legs running `Ran 1881 tests ... OK` with the same acceptance pass. What this does not do:
+no bulk deletion, no deletion from the command line, no export of the list, no tombstone anywhere, no change to
+`--forget-local-data` or to backup/restore semantics — and **no human has used it**, so the six new manual steps
+**106-111** are BLOCKED, the checklist's head count moves to 111 steps (22 PASS / 89 BLOCKED / 0 FAIL, no box
+ticked), and the greyed button's appearance, the dialog's wording, the keyboard feel, the screen reader's output
+and the native look stay unverified. `SOURCE_QUALITY_GATE_PASSED` is still `False`, `enabled_discovery_sources()`
+still `()`, and nothing in the increment opens a socket. Written up in
+`research/hr-contact-per-contact-deletion-2026-10-16.md`; `task.md` records the increment and names a
+contact-list export and row-by-row CSV decisions as the next candidates; `phases.md`, `design.md`, `README.md`
+and the handoff carry the new counts; and no new defect (D36) was found, so the cross-platform register is
+unchanged.
