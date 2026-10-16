@@ -79,10 +79,14 @@ back through the panel; and the privacy assertions - no fixture value or note in
 line, and the log holding `event=contacts.suppressed` with a flag and no file name.
 
 The acceptance workflow grew from five checks to nine (**L6-L9**): the controls are off until a row is
-selected and are reachable by the same keyboard walk workflow K measures; a declined removal leaves the mark
-and its date exactly as they were; a confirmed removal clears them and says so; and a mark made from the
-window with a reason typed into the real entry stores that reason, shows it in no dialog, no status line and
-no log line, and counts as one row changed.
+selected, and the keyboard's own walk - the one workflow K measures every tab with - reaches the control that
+can act, because Tk walks a control only while it can act and that is the same rule the two buttons keep by
+being greyed out when they have nothing to do; a declined removal leaves the mark and its date exactly as they
+were; a confirmed removal clears them and says so; and a mark made from the window with a reason typed into
+the real entry stores that reason, shows it in no dialog, no status line and no log line, and counts as one
+row changed. The first submission of this workflow failed its own keyboard check on the display-backed legs -
+it asked for all three controls to be in the walk while two of them were disabled and therefore not in it -
+which is the sort of assertion only a real window can settle; the check above is what replaced it.
 
 ## Decisions, and the ones that were rejected
 

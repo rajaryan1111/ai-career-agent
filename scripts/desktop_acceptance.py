@@ -49,10 +49,10 @@ the window says about it. Twelve workflows run, in the order a first-time user w
   stores nothing and is explained, that a chosen one is read and shown with still no row stored, that a
   declined confirmation stores nothing, and that a confirmed one stores each contact once (a repeat adds
   none) and shows the stored list - with a do-not-contact mark surviving a further import. Then the mark
-  itself: the two controls are reachable by the keyboard and are off until a stored row is selected, a
-  declined removal leaves the mark exactly as it was, a confirmed one clears it and says so, and a mark made
-  from the window with a reason typed beside it is stored with that reason - which must not reach a dialog, a
-  status line or the event log. No address is ever contacted, and every fixture address is on a reserved
+  itself: the two controls are off until a stored row is selected, the keyboard's own walk reaches the one
+  that can act, a declined removal leaves the mark exactly as it was, a confirmed one clears it and says so, and
+  a mark made from the window with a reason typed beside it is stored with that reason - which must not reach a
+  dialog, a status line or the event log. No address is ever contacted, and every fixture address is on a reserved
   ``.invalid`` domain.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
@@ -3689,7 +3689,7 @@ def workflow_l_contact_import(run: Run) -> None:
         require("Nothing here has been contacted" in app.contacts_summary.get(),
                 f"the summary does not say nothing was contacted: {app.contacts_summary.get()!r}")
 
-    with results.step("L6 the mark controls are reachable by the keyboard and off until a row is selected"):
+    with results.step("L6 the mark controls are off until a row is selected, and the keyboard reaches the one that can act"):
         # Nothing selected: both controls are off, so there is no button offering a change that would be
         # refused. Deselecting is what a person does by clicking empty space in the list.
         app.stored_contacts_tree.selection_remove(app.stored_contacts_tree.selection())
@@ -3698,6 +3698,8 @@ def workflow_l_contact_import(run: Run) -> None:
                 "the mark control is offered with no stored contact selected")
         require(app.clear_contact_button.instate(["disabled"]),
                 "the removal control is offered with no stored contact selected")
+        require(app.contact_note_entry.instate(["disabled"]),
+                "the reason box is open with no stored contact selected")
         require("No stored contact is selected" in app.contact_mark_state.get(),
                 f"the state line does not say what to do: {app.contact_mark_state.get()!r}")
         before = app.store._connection.total_changes
@@ -3708,13 +3710,16 @@ def workflow_l_contact_import(run: Run) -> None:
         require(not any(record.suppressed for record in app.store.list_contacts()
                         if record.email_key != SYNTHETIC_CONTACT_ROWS[0][0]),
                 "a contact other than the one already marked carries a mark")
-        # The keyboard's own order reaches the two controls and the reason box: the same walk workflow K
-        # measures every tab with, asked here about this tab's controls specifically.
+        # What "offered" means for somebody who never touches a mouse: select a contact that carries a
+        # mark, and the keyboard's own walk - the one workflow K measures every tab with - reaches the
+        # control that could take it off. Tk walks a control only while it can act, which is the same rule
+        # the two buttons keep by being greyed out when they have nothing to do.
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        app.stored_contacts_tree.selection_set(str(stored[SYNTHETIC_CONTACT_ROWS[0][0]].contact_id))
+        workspace.root.update()
         order = focus_order(host, app.stored_contacts_tree)
-        for control, name in ((app.mark_contact_button, "the mark control"),
-                              (app.clear_contact_button, "the removal control"),
-                              (app.contact_note_entry, "the reason box")):
-            require(control in order, f"the keyboard order never reaches {name}")
+        require(app.clear_contact_button in order,
+                "the keyboard order never reaches the removal control for a contact that carries a mark")
 
     with results.step("L7 declining the removal leaves the mark exactly as it was"):
         key = SYNTHETIC_CONTACT_ROWS[0][0]
@@ -3774,6 +3779,13 @@ def workflow_l_contact_import(run: Run) -> None:
         workspace.root.update()
         require("Not marked do not contact" in app.contact_mark_state.get(),
                 f"the state line does not report the cleared mark: {app.contact_mark_state.get()!r}")
+        # A contact that carries no mark offers both the button and the box a reason would be typed into,
+        # so both are in the keyboard's walk while that is true.
+        order = focus_order(host, app.stored_contacts_tree)
+        require(app.mark_contact_button in order,
+                "the keyboard order never reaches the mark control for a contact that carries no mark")
+        require(app.contact_note_entry in order,
+                "the keyboard order never reaches the reason box while a mark could be made")
         # Typed into the real entry the way a person types it, through the widget's own methods.
         app.contact_note_entry.delete(0, "end")
         app.contact_note_entry.insert(0, SYNTHETIC_MARK_REASON)
