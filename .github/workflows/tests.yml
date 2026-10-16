@@ -14,8 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # ``3.10`` is the floor ``pyproject.toml`` declares, and ``3.14`` is the newest interpreter the suite
+      # has been run on. The range is deliberately open-ended in the metadata but *closed* here: the tested
+      # claim stops at the last leg, and a version nobody has run is not described anywhere as supported.
+      # 3.14 was added after the release-readiness audit listed "no CI leg for Python 3.14" as a gap; a
+      # version the metadata accepts but no leg runs is a claim with nothing behind it.
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -23,9 +28,809 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        shell: bash
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in this file, so a failure can be published as an annotation."
       - name: Run standard-library tests
-        run: python -m unittest discover -s tests -v
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
       - name: Compile all Python modules
-        run: python -m compileall -q career_agent scripts tests
+        run: |
+          set -o pipefail
+          python -m compileall -q career_agent scripts tests | tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
       - name: Audit research CSV integrity
-        run: python scripts/audit_job_source_csv.py
+        run: |
+          set -euo pipefail
+          python scripts/audit_job_source_csv.py | tee "${RUNNER_TEMP:-$HOME}/csv-audit.json"
+          # The hash and the record count, on one line the summary can carry: a green run should say what
+          # the seed data was as well as what the suite did.
+          python - <<'PY' >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          import json, os
+          from pathlib import Path
+
+          runner = Path(os.environ.get("RUNNER_TEMP") or Path.home())
+          report = json.loads((runner / "csv-audit.json").read_text(encoding="utf-8"))
+          print(f"csv: {report['input_sha256']} over {report['record_count']} records")
+          PY
+
+  # The metadata and the wheel can only be trusted if a real build and install is exercised: this job
+  # builds the distribution, installs it into a clean environment (no editable install, no repository
+  # on sys.path), and runs the installed command from outside the checkout. Its assertions mirror the
+  # ones tests/test_packaging.py makes from the source tree, so the *behaviour* is proven once - but it
+  # runs twice, on the floor the metadata declares (3.10) and on the newest interpreter the suite is run
+  # on (3.14), because a build backend, a wheel or a console script that only works on the version used
+  # to build it is exactly the release defect installing from a checkout would hide.
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These steps turn what the steps above
+      # recorded into annotations, which the API does return - so a failing test stays readable from
+      # outside a browser. A green run publishes the numbers too, because "the job is green" is not
+      # evidence of what ran.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|csv: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
+  installed-package:
+    name: Installed package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        shell: bash
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in this file, so a failure can be published as an annotation."
+      - name: Build the wheel
+        run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet build
+          python -m build --wheel --outdir dist
+      - name: Check the wheel holds the application package and nothing else
+        run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          python - <<'PY'
+          import glob, sys, zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          assert len(wheels) == 1, wheels
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          modules = sorted(n for n in names if n.endswith(".py"))
+          assert modules, "the wheel contains no modules"
+          for name in modules:
+              assert name.startswith("career_agent/"), f"unexpected module in the wheel: {name}"
+          for unwanted in ("tests/", "scripts/"):
+              assert not any(n.startswith(unwanted) for n in names), f"the wheel ships {unwanted}"
+          print(f"{wheels[0]}: {len(modules)} modules, all under career_agent/")
+          PY
+      - name: Install the wheel into a clean environment
+        run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python -m pip install --quiet dist/*.whl
+      - name: Run the installed commands outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import career_agent
+
+          declared = metadata.version("ai-career-agent")
+          assert declared == career_agent.__version__, (declared, career_agent.__version__)
+
+          # Assert the properties, not the exact spelling: how a requirement is written into the
+          # metadata (``pypdf>=4.3; extra == "pdf"`` versus ``pypdf (>=4.3) ; extra == 'pdf'``)
+          # depends on the build backend's version and is not this project's to pin.
+          requirements = metadata.requires("ai-career-agent") or []
+          assert len(requirements) == 1, requirements
+          compact = requirements[0].replace(" ", "").replace("'", '"')
+          assert compact.startswith("pypdf"), requirements[0]
+          assert 'extra=="pdf"' in compact, f"the only requirement must stay optional: {requirements[0]}"
+          print(f"installed {declared}; its only declared requirement is optional: {requirements[0]}")
+          PY
+          career-agent --version
+          career-agent --help > /dev/null
+          # The doctor must work from an installed copy, find no database yet, and create nothing.
+          career-agent --doctor
+          python - <<'PY'
+          from career_agent import ApplicationTracker, Availability, JobListing
+          from career_agent.store import CareerStore
+
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j1", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/1", employer_name="Example",
+                  role_title="AI Intern", availability_status=Availability.OPEN,
+              ))
+              store.save_tracker(ApplicationTracker("j1"))
+          PY
+          career-agent --database alpha.sqlite3 --backup-to alpha-backup.sqlite3
+          career-agent --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes
+          # After the restore the doctor must actually read that database, not merely not crash.
+          career-agent --database alpha.sqlite3 --doctor | grep -q "^Database: readable"
+
+  # A window can only be verified on a machine that has one, and the runners are headless. This job
+  # gives Linux a real display (Xvfb) and a Tkinter the system interpreter can import, then runs the
+  # repeatable smoke test from ``scripts/``. Both runs are required and they check opposite things:
+  # with no display at all the smoke test must report BLOCKED rather than passing - that is what stops
+  # every other job from going green on a runner that can never show a window - and under the virtual
+  # display it must pass. Nothing here is manual acceptance: the checklist in ``research/`` stays
+  # BLOCKED for the steps a person has to perform, and a passing smoke run does not close any of them.
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These steps turn what the steps above
+      # recorded into annotations, which the API does return - so a failing test stays readable from
+      # outside a browser. A green run publishes the numbers too, because "the job is green" is not
+      # evidence of what ran.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^(Ran [0-9]+ tests|OK|FAILED|csv: )' "${RUNNER_TEMP:-$HOME}/ci-notes.txt" \
+            > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 8 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
+  desktop-smoke-linux:
+    name: Desktop smoke (Linux, display-backed)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install a virtual display and Tkinter for the system interpreter
+        run: |
+          sudo apt-get update -qq
+          # x11-apps brings xwd and netpbm brings xwdtopnm/pnmtopng: together they are the smallest way
+          # to turn the virtual display into a PNG a person can look at, which is what the screenshots
+          # below are for. They are not needed by any check - a run without them still runs everything.
+          sudo apt-get install -y --no-install-recommends xvfb python3-tk x11-apps netpbm
+      - name: Report the interpreter and the Tk that is now importable
+        run: |
+          set -euo pipefail
+          python3 -c "import sys; assert sys.version_info >= (3, 10), sys.version; print(sys.version)"
+          python3 -c "import tkinter; print('tkinter: Tk', tkinter.TkVersion, 'Tcl', tkinter.TclVersion)"
+      - name: Confirm the smoke test refuses to report success without a display
+        run: |
+          set +e
+          output="$(env -u DISPLAY python3 scripts/desktop_smoke_test.py 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -eq 2 || { echo "the smoke test must exit 2 (BLOCKED) with no display, not $status"; exit 1; }
+          grep -q "RESULT: BLOCKED" <<< "$output"
+          if grep -q "RESULT: PASS" <<< "$output"; then
+            echo "the smoke test reported success without a display"; exit 1
+          fi
+      - name: Run the desktop smoke test against the virtual display
+        run: |
+          set +e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_smoke_test.py \
+            > "${RUNNER_TEMP:-$HOME}/ci-notes.txt" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          test "$status" -eq 0 \
+            || { echo "the smoke test did not pass under a real display (exit $status)"; exit 1; }
+          grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+      - name: Confirm the acceptance workflows refuse to report success without a display
+        run: |
+          set +e
+          output="$(env -u DISPLAY python3 scripts/desktop_acceptance.py 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -eq 2 || { echo "the acceptance run must exit 2 (BLOCKED) with no display, not $status"; exit 1; }
+          grep -q "RESULT: BLOCKED" <<< "$output"
+          if grep -q "RESULT: PASS" <<< "$output"; then
+            echo "the acceptance run reported success without a display"; exit 1
+          fi
+      - name: Confirm the acceptance workflows cannot be run against stand-in widgets in CI
+        run: |
+          # The stand-in run exists for writing the workflows on a machine with no display. It must never
+          # report a pass or a failure, so a CI step that accidentally asked for it would still not be
+          # evidence - and this step fails if that stops being true.
+          set +e
+          output="$(python3 scripts/desktop_acceptance.py --stand-in-tk 2>&1)"
+          status=$?
+          set -e
+          echo "$output" | tail -3
+          test "$status" -eq 2 || { echo "a stand-in run must exit 2 (BLOCKED), not $status"; exit 1; }
+          if grep -qE "RESULT: (PASS|FAIL)" <<< "$output"; then
+            echo "a stand-in run printed a pass or failure line"; exit 1
+          fi
+          grep -q "DEVELOPMENT RUN" <<< "$output"
+      - name: Run the desktop acceptance workflows against the virtual display
+        run: |
+          set +e
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" python3 scripts/desktop_acceptance.py \
+            --screenshots "${RUNNER_TEMP:-$HOME}/career-agent-screenshots" \
+            > "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" 2>&1
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"
+          tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt" < "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" > /dev/null
+          test "$status" -eq 0 \
+            || { echo "the acceptance workflows did not pass under a real display (exit $status)"; exit 1; }
+          grep -q "RESULT: PASS" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"
+          # Every workflow ran, and none of its checks failed. The script compares the checks it performed
+          # against the number its own source declares, so a check that silently stopped running fails the
+          # run rather than shrinking it - there is no count to keep in step here.
+          for workflow in A B C D E F G H I J K L; do
+            grep -q -- "--- workflow $workflow" "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" \
+              || { echo "workflow $workflow did not run"; exit 1; }
+          done
+          # The measured numbers - widget counts, window sizes, focus stops, whether a screenshot was
+          # written - are what makes the layout evidence readable rather than only assertable.
+          grep -E '^measurement: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" | tail -40 || true
+          if grep -qE '^\[ *fail *\]|^FAILED: ' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt"; then
+            echo "a check failed but the run reported PASS"; exit 1
+          fi
+          test "$(grep -c '^\[ ok \]' "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt")" -ge 1 \
+            || { echo "the acceptance run reported no passing checks"; exit 1; }
+      - name: Confirm the smoke test left no window, database or temporary folder behind
+        run: |
+          set -euo pipefail
+          test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-desktop-smoke-*' -print -quit)" \
+            || { echo "a disposable folder survived the smoke run"; exit 1; }
+          test -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'career-agent-acceptance-*' -print -quit)" \
+            || { echo "a disposable folder survived the acceptance run"; exit 1; }
+          # Ask the application where it would keep its own files on this system rather than guessing
+          # the folder: the point of the check is that the run left nothing there, and resolving that
+          # path touches nothing.
+          person_database="$(python3 -c "from career_agent.config import resolve_settings; print(resolve_settings().database_path)")"
+          echo "the person's own database would be $person_database"
+          test ! -e "$person_database" \
+            || { echo "the smoke run created $person_database"; exit 1; }
+          test ! -e "$(dirname "$person_database")" \
+            || { echo "the smoke run created the per-user folder $(dirname "$person_database")"; exit 1; }
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These three steps turn what the steps above
+      # recorded into annotations, which the API does return - so the failing test or the failed smoke
+      # check stays readable from outside a browser. Two slices because a step may carry at most ten
+      # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
+      - name: Keep the screenshots this run took, for a person to review later
+        # A picture is for a person to look at, not evidence a program can judge: it is kept so that
+        # reviewing layout, clipping and wording does not require re-running a display-backed job. It
+        # never fails the build - a run with no capture tool available says so in its own notes.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-screenshots-${{ github.run_id }}
+          path: ${{ runner.temp }}/career-agent-screenshots
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Record what the acceptance workflows reported, step by step
+        if: always()
+        shell: bash
+        run: |
+          # One line per workflow and per check, plus the failures, so the acceptance evidence is
+          # readable through the API on a restricted network as well as in the log.
+          grep -E '^(--- workflow |\[ *fail *\]|\[ ok \]|FAILED: |RESULT: |DEVELOPMENT RESULT:|measurement: )' \
+            "${RUNNER_TEMP:-$HOME}/acceptance-notes.txt" > "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" || true
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/acceptance-summary.txt" --tail 24 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
+  # The optional extra is the difference between a résumé PDF being readable and not, and a "skipped"
+  # line is exactly the kind of green that hides a missing capability. This job proves both directions on
+  # one platform: without ``pypdf`` the PDF cases skip, and with the extra installed the same module has
+  # to finish with a bare ``OK`` - no skips at all.
+  pdf-extra:
+    name: Optional PDF extra
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Without the extra, the PDF cases must skip rather than pass
+        run: |
+          set -euo pipefail
+          python -m venv bare
+          output="$(bare/bin/python -m unittest discover -s tests -p "test_resume.py" 2>&1)"
+          printf '%s\n' "$output" >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "$output" | tail -3
+          grep -q "skipped=" <<< "$output" || { echo "without pypdf the PDF cases did not skip"; exit 1; }
+      - name: With the extra installed, nothing may skip
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet ".[pdf]"
+          python -c "import pypdf; print('pypdf', pypdf.__version__)"
+          output="$(python -m unittest discover -s tests -p "test_resume.py" -v 2>&1)"
+          printf '%s\n' "$output" >> "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "$output" | tail -6
+          grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a
+      # failed step as "Process completed with exit code 1". These three steps turn what the steps above
+      # recorded into annotations, which the API does return - so the failing test or the failed smoke
+      # check stays readable from outside a browser. Two slices because a step may carry at most ten
+      # error and ten warning annotations, and this script emits one of each per finding.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice
+
+  # The suite is the same everywhere; the operating system is not. These legs run the suite and the
+  # desktop smoke test on the two platforms the metadata claims besides Linux, and exercise the installed
+  # command surface there: version, the doctor against a missing database and against a file that is not
+  # one, schema creation and cross-process persistence, backup and restore that really replaces data,
+  # export and import into a second database, and the two invariants that keep discovery closed. The
+  # whole job runs under bash, which is the shell the checkout's own scripts are written for.
+  cross-platform:
+    name: Cross-platform (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.10", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Start the notes file this job annotates from
+        run: |
+          : > "${RUNNER_TEMP:-$HOME}/ci-notes.txt"
+          echo "Every step below records its output in the notes file, so a failure stays readable through"
+          echo "the annotations the last three steps publish."
+
+      - name: Report the interpreter, the platform and the Tk it ships
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          python -VV
+          # Reported rather than required: an interpreter without Tkinter can still run every command,
+          # and whether a window can be built on this runner is answered by the two steps further down,
+          # which report BLOCKED rather than passing when it cannot.
+          python - <<'PY'
+          import platform, sys
+          print("python:", sys.version.split()[0], sys.executable)
+          print("platform:", platform.platform())
+          try:
+              import tkinter
+          except Exception as exc:
+              print(f"tkinter: NOT AVAILABLE on this interpreter ({exc!r})")
+          else:
+              print("tkinter: Tk", tkinter.TkVersion, "Tcl", tkinter.TclVersion)
+          PY
+      - name: Provide the timezone database this platform may not ship
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          # The application refuses to schedule a task whose IANA zone it cannot load, and its message
+          # names this package as the fix (career_agent/tasks.py, pinned by tests/test_tasks.py). A
+          # Windows installation has no system timezone database, so installing it is what that message
+          # asks a person to do - and without it the scheduling tests describe the refusal instead of the
+          # behaviour they are about.
+          python -m pip install --quiet tzdata
+          python -c "import zoneinfo; zoneinfo.ZoneInfo('Asia/Kolkata'); print('the timezone database is installed')"
+
+      - name: Run the standard-library test suite on this platform
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set +e
+          python -m unittest discover -s tests -v
+          status=$?
+          set -e
+          exit "$status"
+      - name: Compile all Python modules
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python -m compileall -q career_agent scripts tests
+      - name: Audit research CSV integrity
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          python scripts/audit_job_source_csv.py
+      - name: Install the optional PDF extra and run the résumé tests without skips
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet ".[pdf]"
+          python -c "import pypdf; print('pypdf', pypdf.__version__)"
+          output="$(python -m unittest discover -s tests -p "test_resume.py" 2>&1)"
+          echo "$output" | tail -3
+          grep -q "^OK$" <<< "$output" || { echo "the résumé tests did not finish with a bare OK"; exit 1; }
+      - name: Build a wheel and install it into a virtual environment outside the checkout
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          python -m pip install --quiet build
+          work="$(mktemp -d)"
+          work="$(cd "$work" && { pwd -W 2>/dev/null || pwd; })"
+          python -m venv "$work/venv"
+          if [ -x "$work/venv/bin/python" ]; then venv_bin="$work/venv/bin"; else venv_bin="$work/venv/Scripts"; fi
+          "$venv_bin/python" -m pip install --quiet --upgrade pip
+          # Built outside the checkout and installed from a directory that is not the checkout: ``python -``
+          # puts the current directory on the import path, and the check below is that the *installed* copy
+          # is the one imported, so it has to run where the source tree cannot answer for it. The macOS legs
+          # failed this step for exactly that reason.
+          python -m build --wheel --outdir "$work/dist"
+          cd "$work"
+          wheel="$(ls -1 dist/*.whl)"
+          "$venv_bin/python" -m pip install --quiet "$wheel"
+          "$venv_bin/python" - <<'PY'
+          import importlib.metadata as metadata
+          import pathlib
+          import career_agent
+
+          location = pathlib.Path(career_agent.__file__).resolve()
+          assert "site-packages" in location.parts, f"the checkout was imported, not the wheel: {location}"
+          declared = metadata.version("ai-career-agent")
+          assert declared == career_agent.__version__, (declared, career_agent.__version__)
+          print(f"installed {declared} from {location}")
+          PY
+          {
+            echo "WORK=$work"
+            echo "VENV_BIN=$venv_bin"
+          } >> "$GITHUB_ENV"
+      - name: The installed commands answer on this platform
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/career-agent" --version
+          "$VENV_BIN/career-agent" --help > /dev/null
+          # A database that does not exist yet is a report, not a failure: nothing is there to check.
+          set +e
+          "$VENV_BIN/career-agent" --database absent.sqlite3 --doctor > absent.txt 2>&1
+          absent_status=$?
+          set -e
+          cat absent.txt
+          test "$absent_status" -eq 0 \
+            || { echo "the doctor must report a missing database, not fail ($absent_status)"; exit 1; }
+          grep -q "no file yet" absent.txt
+      - name: A file that is not a database is refused and left alone
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          cd "$WORK"
+          printf 'this is not a database\n' > damaged.sqlite3
+          before="$(cksum damaged.sqlite3)"
+          set +e
+          "$VENV_BIN/career-agent" --database damaged.sqlite3 --doctor > damaged-doctor.txt 2>&1
+          doctor_status=$?
+          "$VENV_BIN/career-agent" --database damaged.sqlite3 --analytics > damaged-report.txt 2>&1
+          report_status=$?
+          set -e
+          echo "doctor exit $doctor_status:"; tail -3 damaged-doctor.txt
+          echo "report exit $report_status:"; cat damaged-report.txt
+          test "$doctor_status" -eq 1 \
+            || { echo "the doctor must report a problem with exit 1, got $doctor_status"; exit 1; }
+          test "$report_status" -eq 2 \
+            || { echo "a read-only report must refuse with exit 2, got $report_status"; exit 1; }
+          grep -q "REFUSED" damaged-report.txt
+          test "$before" = "$(cksum damaged.sqlite3)" || { echo "the damaged file was modified"; exit 1; }
+      - name: Schema creation, cross-process persistence, backup and restore, export and import
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/python" - <<'PY'
+          import sqlite3
+
+          from career_agent import ApplicationTracker, Availability, JobListing
+          from career_agent.store import SCHEMA_TABLES, SCHEMA_VERSION, CareerStore
+
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j1", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/1", employer_name="Example",
+                  role_title="AI Intern", availability_status=Availability.OPEN,
+              ))
+              store.save_tracker(ApplicationTracker("j1"))
+
+          connection = sqlite3.connect("alpha.sqlite3")
+          try:
+              version = connection.execute("PRAGMA user_version").fetchone()[0]
+              tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+          finally:
+              connection.close()
+          assert version == SCHEMA_VERSION, (version, SCHEMA_VERSION)
+          missing = sorted(set(SCHEMA_TABLES) - tables)
+          assert not missing, missing
+          print(f"schema version {version} with all {len(SCHEMA_TABLES)} tables")
+          PY
+          # A second process must read back what the first one wrote.
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --doctor | grep -q "^Database: readable"
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --backup-to alpha-backup.sqlite3
+          "$VENV_BIN/python" - <<'PY'
+          from career_agent import Availability, JobListing
+          from career_agent.store import CareerStore
+
+          # Written after the backup: restoring must remove it again, or the restore did nothing.
+          with CareerStore("alpha.sqlite3") as store:
+              store.save_job(JobListing(
+                  listing_id="j2", source_id="manual", source_name="Manual entry",
+                  source_listing_url="https://example.com/jobs/2", employer_name="Example",
+                  role_title="Second role", availability_status=Availability.OPEN,
+              ))
+          PY
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --restore-from alpha-backup.sqlite3 --yes
+          "$VENV_BIN/python" - <<'PY'
+          import sqlite3
+
+          connection = sqlite3.connect("alpha.sqlite3")
+          try:
+              jobs = sorted(row[0] for row in connection.execute("SELECT listing_id FROM job_listings"))
+          finally:
+              connection.close()
+          assert jobs == ["j1"], f"the restore did not replace the data it restored over: {jobs}"
+          print("the restore replaced the data: only the backed-up job is left")
+          PY
+          "$VENV_BIN/career-agent" --database alpha.sqlite3 --export-to alpha-export.json
+          # Importing refuses to create the target database: opening an import is not the moment to
+          # decide where a person's data lives. Create it, then import into it.
+          "$VENV_BIN/python" -c "from career_agent.store import CareerStore; CareerStore('copy.sqlite3').close()"
+          "$VENV_BIN/career-agent" --database copy.sqlite3 --import-from alpha-export.json --yes
+          "$VENV_BIN/python" - <<'PY'
+          import json
+          import sqlite3
+
+          exported = json.loads(open("alpha-export.json", encoding="utf-8").read())
+          connection = sqlite3.connect("copy.sqlite3")
+          try:
+              copied = sorted(row[0] for row in connection.execute("SELECT listing_id FROM job_listings"))
+          finally:
+              connection.close()
+          assert copied == ["j1"], f"the import did not carry the job over: {copied}"
+          print(f"exported {len(exported.get('job_listings', []))} job(s) and imported them into a second database")
+          PY
+      - name: The two invariants that keep discovery closed still hold on this platform
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set -euo pipefail
+          cd "$WORK"
+          "$VENV_BIN/python" - <<'PY'
+          from career_agent.sources import SOURCE_QUALITY_GATE_PASSED, enabled_discovery_sources
+
+          assert SOURCE_QUALITY_GATE_PASSED is False, "the source-quality gate must stay closed"
+          assert enabled_discovery_sources() == (), "no discovery source may be enabled"
+          print("the source-quality gate is not passed and no discovery source is enabled")
+          PY
+          "$VENV_BIN/career-agent" --sources | grep -q "Source-quality gate: NOT passed"
+          "$VENV_BIN/career-agent" --integration-status | grep -q "Integration state: nothing is enabled."
+      - name: Tkinter availability and a minimal Tk widget lifecycle on this platform
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set +e
+          # Written to its own file as well as tee'd, so a BLOCKED day's reason can go into the warning
+          # itself: a warning that says only "could not run" is what left this step's verdict unreadable
+          # beside a desktop smoke test that had just built and driven the window on the same runner.
+          # A heredoc with a redirect - not a heredoc inside a command substitution, which the bash 3.2
+          # macOS ships does not parse.
+          report="${RUNNER_TEMP:-$HOME}/tk-lifecycle.txt"
+          python - <<'PY' > "$report" 2>&1
+          # The classification is the smoke script's, so a platform that cannot open a display is BLOCKED
+          # while a platform whose widget graph is wrong is a failure - same phrases, one list. A second
+          # copy of the list here is how the two steps would drift apart.
+          from scripts.desktop_smoke_test import looks_like_no_display
+
+          # tkinter does not import its ttk submodule on demand: on the Windows and macOS runners this
+          # step's only ever real runs failed at the first ``tkinter.ttk`` use with AttributeError, which
+          # the step used to publish as "could not run on this runner (BLOCKED)" while the desktop smoke
+          # test one step later built and drove the same window successfully.
+          import tkinter
+          import tkinter.ttk
+
+          try:
+              root = tkinter.Tk()
+          except Exception as exc:
+              if looks_like_no_display(str(exc)):
+                  print(f"BLOCKED: a Tk root cannot be created here: {exc}")
+                  raise SystemExit(2)
+              print(f"FAILED: creating a Tk root raised {exc!r}, which is not a missing display")
+              raise SystemExit(1)
+
+          try:
+              root.withdraw()
+              frame = tkinter.ttk.Frame(root)
+              frame.pack()
+              label = tkinter.ttk.Label(frame, text="career-agent smoke")
+              label.pack()
+              root.update_idletasks()
+              assert label.winfo_exists()
+              assert frame.winfo_children()
+              assert str(label.cget("text")) == "career-agent smoke"
+          except Exception as exc:
+              print(f"FAILED: a Tk root was created, but its widget lifecycle is broken: {exc!r}")
+              raise SystemExit(1)
+          finally:
+              root.destroy()
+
+          print(f"PASS: Tk {tkinter.TkVersion} built a root, a frame and a label and updated them")
+          PY
+          status=$?
+          set -e
+          cat "$report"
+          if [ "$status" -eq 2 ]; then
+            reason="$(grep -m1 '^BLOCKED: ' "$report" || true)"
+            echo "::warning::the Tk widget lifecycle could not run on this runner (exit 2, BLOCKED): ${reason:-no reason was printed}"
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      - name: Desktop acceptance workflows (the real window, or an honest BLOCKED)
+        run: |
+          # The same workflows the display-backed Linux job runs, on this platform's own Tk. A runner with
+          # no display session reports BLOCKED rather than passing, which is a real answer about this
+          # platform and is recorded as a warning; a failure here is a failure.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set +e
+          python scripts/desktop_acceptance.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "the acceptance workflows passed on this runner"
+          elif [ "$status" -eq 2 ]; then
+            echo "::warning::the acceptance workflows reported BLOCKED on ${{ matrix.os }} (no display session)"
+          else
+            echo "the acceptance workflows failed on this runner"
+            exit "$status"
+          fi
+      - name: Desktop smoke test (the real window, or an honest BLOCKED)
+        run: |
+          # Everything this step prints goes into the notes file as well, so the annotations below
+          # can report the step that failed rather than only the first one that failed.
+          exec > >(tee -a "${RUNNER_TEMP:-$HOME}/ci-notes.txt") 2>&1
+          set +e
+          python scripts/desktop_smoke_test.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "the desktop smoke test passed on this runner"
+          elif [ "$status" -eq 2 ]; then
+            # A runner with no display session is a real answer, not a failure of the project: the
+            # display-backed Linux job above is where the window itself is required to pass. Recorded as
+            # a warning so the run's own log says which legs have a window and which do not.
+            echo "::warning::the desktop smoke test reported BLOCKED on ${{ matrix.os }} (no display session)"
+          else
+            echo "the desktop smoke test failed on this runner"
+            exit "$status"
+          fi
+
+      # The run's log is served from a host a restricted network cannot reach, and the API reports a failed
+      # step as "Process completed with exit code 1". These three steps turn what the steps above recorded
+      # into annotations, which the API does return, so a red leg on a platform this checkout cannot run
+      # locally still says which test failed and why.
+      - name: Record what this platform's run reported, readable without the log
+        if: always()
+        shell: bash
+        run: |
+          # A green run is worth reading too: the suite's counts and the window check's result are what
+          # say which platform did what, and a notice is returned by the API when the job passes as well.
+          grep -E '^(python:|platform:|tkinter:|display:|Ran [0-9]+ tests|OK|FAILED|RESULT: |PASS: |BLOCKED: )' \
+            "${RUNNER_TEMP:-$HOME}/ci-notes.txt" > "${RUNNER_TEMP:-$HOME}/ci-summary.txt" || true
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-summary.txt" --tail 14 --level notice
+      - name: Annotate the first failures so they are readable outside the run
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --start 0 --count 10
+      - name: Annotate every failing test by name, so the annotation budget hides none of them
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --names 200 --level warning
+      - name: Annotate the last thing the step said
+        if: failure()
+        shell: bash
+        run: |
+          python scripts/ci_annotate.py "${RUNNER_TEMP:-$HOME}/ci-notes.txt" --tail 5 --level notice

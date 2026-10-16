@@ -1,0 +1,56 @@
+[build-system]
+# ``setuptools`` is the only build requirement, and the floor is the first release that understands
+# the PEP 621 ``[project]`` table below, so a plain ``pip install .`` works without extra tooling.
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-career-agent"
+description = "Local-first career workspace: profile, job eligibility, and application tracking on your own machine."
+readme = "README.md"
+# The two versions the test suite is run against in CI; 3.10 is also the oldest interpreter the
+# standard library APIs this project uses are available in (``tomllib`` is the one exception, and it
+# is used by tests only, guarded).
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["career", "job-search", "local-first", "privacy", "desktop"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+]
+# No required third-party dependency: the application, its tests, and its command-line tools run on
+# the standard library alone (Tkinter ships with CPython). PDF résumé reading is the one optional
+# capability, declared as the ``pdf`` extra below, and it is imported lazily so everything else works
+# without it.
+dependencies = []
+
+[project.optional-dependencies]
+# The floor is the oldest release the PDF tests were actually executed against (4.3.1); the suite is
+# exercised against 4.3.1, 5.9.0 and 6.20.1. ``pip install "ai-career-agent[pdf]"`` enables PDF import.
+pdf = ["pypdf>=4.3"]
+
+[project.scripts]
+# The same command-line front end as ``python -m career_agent``: one implementation, two ways in.
+career-agent = "career_agent.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/rajaryan1111/ai-career-agent"
+
+[tool.setuptools]
+# Only the application package is installed. ``scripts/`` (maintenance tooling) and ``tests/`` stay in
+# the source checkout, so an installed environment cannot accidentally import either.
+packages = ["career_agent"]
+
+[tool.setuptools.dynamic]
+# Single source of truth: ``career_agent.__version__``. Setuptools reads the literal from the source
+# without importing the package, so the packaged metadata cannot drift from what
+# ``python -m career_agent --version`` reports.
+version = { attr = "career_agent.__version__" }
