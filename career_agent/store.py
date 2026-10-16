@@ -1197,6 +1197,28 @@ class ContactImportOutcome:
         return sentence
 
 
+@dataclass(frozen=True)
+class ContactDeletionOutcome:
+    """What one confirmed deletion removed: counts, and deliberately not the address it removed.
+
+    The store is the only place that knows how many disagreement rows went with a contact, so the count is
+    reported from here rather than counted up by a caller from a list it read earlier. The address is *not*
+    part of this object on purpose: an outcome is what a screen and a log line are built from, and neither
+    may carry a contact value. A caller that needs to say which contact it acted on already holds it.
+    """
+
+    deleted: bool
+    conflicts: int
+
+    def describe(self) -> str:
+        """One sentence for the status line and the dialog: counts only, and true when nothing was there."""
+        if not self.deleted:
+            return "no stored contact was deleted"
+        if self.conflicts == 0:
+            return "1 stored contact deleted; it had no recorded disagreement"
+        return f"1 stored contact deleted, with {self.conflicts} recorded disagreement(s)"
+
+
 def _first_text(values: Iterable[str]) -> str:
     """The first non-blank value in the order given, stripped: the answer a file leads with."""
     for value in values:
@@ -3143,6 +3165,58 @@ class CareerStore:
             f"skipped={outcome.skipped_without_key} suppressed_untouched={outcome.suppressed}",
         )
         return outcome
+
+    def delete_contact(self, email_key: str) -> ContactDeletionOutcome:
+        """Delete one stored contact **and** every disagreement recorded about it, in one transaction.
+
+        This is the only method that removes a contact, and it is deliberately the narrowest one that can: it
+        takes one address, and no statement here deletes a list, a file's worth of rows or a table. What goes
+        with the contact is exactly what the schema makes depend on it - ``hr_contact_conflict`` rows carrying
+        the same ``email_key`` - so a person who asked for one record to go does not leave the evidence about
+        it on disk, which is the half-deletion this application must neither perform nor report.
+
+        The conflicts are deleted by name rather than left to the ``ON DELETE CASCADE`` the schema declares.
+        That cascade is real - the column references ``hr_contact(email_key)`` with ``ON DELETE CASCADE`` and
+        this connection turns foreign keys on - and it stays as a second line of defence for anything that
+        removes a row another way. But a deletion that quietly stopped removing rows because a pragma changed,
+        or because a connection was opened without it, would leave orphans behind while reporting a success,
+        and whether a person's data actually went must not depend on a setting.
+
+        All or nothing: both deletes run inside one ``BEGIN IMMEDIATE`` transaction, so a failure between them
+        leaves the contact and every one of its disagreements exactly as they were. A key this store does not
+        hold is not an error and deletes nothing: for a delete, "it is already not there" is the requested end
+        state, and the caller is *told* rather than handed an exception. (:meth:`set_contact_suppression`
+        raises in the same situation because a mark that silently did not happen would be a false claim about
+        state that is meant to persist; a deletion that found nothing has nothing to claim.)
+
+        What is *not* touched: every other contact, every other contact's disagreements, and every
+        do-not-contact mark except the deleted record's own - which goes with the record, because the record
+        does. The schema is unchanged, and the JSON export does not carry the contact tables at all.
+        """
+        key = normalise_email_key(str(email_key))
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._connection.execute(
+                "SELECT contact_id FROM hr_contact WHERE email_key = ?", (key,)).fetchone()
+            if row is None:
+                self._connection.execute("ROLLBACK")
+                return ContactDeletionOutcome(deleted=False, conflicts=0)
+            conflicts = int(self._connection.execute(
+                "SELECT COUNT(*) FROM hr_contact_conflict WHERE email_key = ?", (key,)).fetchone()[0])
+            self._connection.execute("DELETE FROM hr_contact_conflict WHERE email_key = ?", (key,))
+            self._connection.execute("DELETE FROM hr_contact WHERE email_key = ?", (key,))
+            self._connection.execute("COMMIT")
+        except BaseException:
+            # Everything written above goes back with the failure: a contact whose row was removed while its
+            # disagreements were not - or the other way round - would leave the person reading evidence about
+            # somebody this database no longer holds, which is worse than either half on its own.
+            self._roll_back_quietly()
+            raise
+        # Counts only, and only after the commit: this line never claims a deletion the database did not
+        # keep, and it carries no address, no name, no company, no note and not even the name of the file
+        # the contact came from - it exists to be shareable.
+        self._record("contacts.deleted", f"contacts=1 conflicts={conflicts}")
+        return ContactDeletionOutcome(deleted=True, conflicts=conflicts)
 
     def list_contacts(self, *, suppressed: bool | None = None) -> tuple[ContactRecord, ...]:
         """Every stored contact, in the order the first import that saw each one listed it.

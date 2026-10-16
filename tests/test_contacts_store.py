@@ -738,5 +738,238 @@ class ContactSchemaTests(ContactStoreTestCase):
         self.assertEqual(copied.contact_record_counts()["contacts"], 1)
 
 
+class ContactDeletionTests(ContactStoreTestCase):
+    """Deleting one contact: what goes with it, what never does, and what a failure leaves behind.
+
+    The increment adds the first operation that removes a contact's own row, so the properties that matter
+    are the ones a destructive action has to earn: exactly one record goes, the evidence the schema ties to
+    it goes too, nothing else moves, a refusal or a failure changes nothing at all, and the one line this
+    application writes about it is a count. Two facts are documented here rather than claimed away: the
+    deletion is a change to *this* database (a backup written earlier still holds the record and restoring
+    it brings the contact back), and the conflicts are removed by an explicit statement rather than only by
+    the declared cascade.
+    """
+
+    def _with_evidence_and_a_neighbour(self) -> None:
+        """Two contacts that each disagree with the file that supplied them: what these tests delete from.
+
+        Both have one disagreement of their own, so a test can require that deleting one takes *its*
+        evidence and leaves the other's - which a fixture where only the deleted contact had evidence could
+        not distinguish from a deletion that removed every conflict row in the table. A real parse of a
+        synthetic file, for the same reason the other classes use one: what a re-import records is the
+        parser's grouping plus the store's comparison, and a hand-built object would test neither.
+        """
+        self.store.import_contacts(self.parsed(
+            f"{SAMPLE_EMAILS[0]},{SAMPLE_NAMES[0]},{SAMPLE_COMPANIES[0]},1,\r\n"
+            f"{SAMPLE_EMAILS[0]},{SAMPLE_NAMES[1]},{SAMPLE_COMPANIES[0]},2,\r\n"
+            f"{SAMPLE_EMAILS[1]},{SAMPLE_NAMES[1]},{SAMPLE_COMPANIES[1]},3,\r\n"
+            f"{SAMPLE_EMAILS[1]},{SAMPLE_NAMES[1]},{SAMPLE_COMPANIES[0]},4,\r\n"))
+
+    def test_deleting_one_contact_removes_it_and_only_its_evidence(self):
+        self._with_evidence_and_a_neighbour()
+        self.store.set_contact_suppression(SAMPLE_EMAILS[1], note="second contact's own note")
+        second_before = self.store.get_contact(SAMPLE_EMAILS[1])
+        conflicts_before = self.store.list_contact_conflicts()
+        self.assertEqual([conflict.email_key for conflict in conflicts_before],
+                         [SAMPLE_EMAILS[0].strip().casefold(), SAMPLE_EMAILS[1].strip().casefold()],
+                         "each contact has one disagreement of its own, so the deletion has something to "
+                         "leave behind as well as something to remove")
+        before = self.changes()
+
+        outcome = self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        self.assertTrue(outcome.deleted)
+        self.assertEqual(outcome.conflicts, 1, "the count is what the confirmation and the log are built from")
+        # One row per statement: the conflict and the contact, and nothing else.
+        self.assertEqual(self.changes() - before, 2,
+                         "the deletion must touch exactly the contact row and its disagreement rows")
+        self.assertIsNone(self.store.get_contact(SAMPLE_EMAILS[0]))
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [SAMPLE_EMAILS[1].strip().casefold()],
+                         "the other contact's disagreement is not the one being deleted")
+        # The contact that was not chosen is untouched, mark, note and all.
+        self.assertEqual(self.store.get_contact(SAMPLE_EMAILS[1]), second_before)
+        self.assertEqual(self.store.contact_record_counts()["contacts"], 1)
+
+    def test_the_other_contacts_mark_survives_and_the_deleted_one_goes_with_its_record(self):
+        self._with_evidence_and_a_neighbour()
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], note="delete me")
+        self.store.set_contact_suppression(SAMPLE_EMAILS[1], note="keep me")
+
+        self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        kept = self.store.get_contact(SAMPLE_EMAILS[1])
+        assert kept is not None
+        self.assertTrue(kept.suppressed, "an unrelated do-not-contact mark is not this deletion's business")
+        self.assertEqual(kept.suppressed_note, "keep me")
+        self.assertIsNotNone(kept.suppressed_at)
+        self.assertIsNone(self.store.get_contact(SAMPLE_EMAILS[0]),
+                          "the deleted record's own mark goes with the record; it holds a suppressed flag")
+        self.assertEqual(self.store.contact_record_counts()["do_not_contact"], 1)
+
+    def test_deleting_an_address_the_store_does_not_hold_deletes_nothing(self):
+        self._with_evidence_and_a_neighbour()
+        before = self.changes()
+
+        outcome = self.store.delete_contact(SAMPLE_EMAILS[2])
+
+        self.assertFalse(outcome.deleted, "a delete that found nothing does not claim to have deleted")
+        self.assertEqual(outcome.conflicts, 0)
+        self.assertEqual(self.changes(), before, "and it writes nothing at all")
+        self.assertEqual(len(self.store.list_contacts()), 2)
+        self.assertEqual(len(self.store.list_contact_conflicts()), 2, "both disagreements are still there")
+        self.assertNotIn("contacts.deleted", log_path(self.database).read_text(encoding="utf-8"),
+                         "nothing was deleted, so there is no deletion to report")
+
+    def test_the_address_is_normalised_the_way_every_other_contact_lookup_is(self):
+        self._with_evidence_and_a_neighbour()
+
+        outcome = self.store.delete_contact("  FIRST.Contact@Example.Invalid  ")
+
+        self.assertTrue(outcome.deleted, "the key is trimmed and case-folded here as everywhere else")
+        self.assertIsNone(self.store.get_contact(SAMPLE_EMAILS[0]))
+
+    def test_a_failure_while_deleting_the_evidence_leaves_the_contact_and_the_evidence(self):
+        self._with_evidence_and_a_neighbour()
+        before = self.changes()
+        failing = _FailingConnection(self.store._connection, fail_on="DELETE FROM hr_contact_conflict")
+
+        with mock.patch.object(self.store, "_connection", failing):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        self.assertEqual(self.changes(), before, "a failed deletion changes no row, not even the one it read")
+        self.assertIsNotNone(self.store.get_contact(SAMPLE_EMAILS[0]))
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [SAMPLE_EMAILS[0].strip().casefold(), SAMPLE_EMAILS[1].strip().casefold()],
+                         "both contacts keep their evidence when neither was deleted")
+        # And the database is left usable: the rollback is not a half-open transaction.
+        self.assertTrue(self.store.delete_contact(SAMPLE_EMAILS[0]).deleted)
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [SAMPLE_EMAILS[1].strip().casefold()])
+
+    def test_a_failure_while_deleting_the_contact_leaves_its_evidence_where_it_was(self):
+        """The second statement failing is the case an explicit cascade delete exists to keep whole."""
+        self._with_evidence_and_a_neighbour()
+        failing = _FailingConnection(self.store._connection, fail_on="DELETE FROM hr_contact WHERE")
+
+        with mock.patch.object(self.store, "_connection", failing):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        self.assertIsNotNone(self.store.get_contact(SAMPLE_EMAILS[0]))
+        self.assertIn(SAMPLE_EMAILS[0].strip().casefold(),
+                      [conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                      "a contact that is still here keeps the disagreements recorded about it")
+        self.assertEqual(len(self.store.list_contact_conflicts()), 2)
+
+    def test_the_evidence_is_deleted_by_name_and_not_only_by_the_declared_cascade(self):
+        """The cascade is a second line of defence, not the thing this method relies on.
+
+        Foreign keys are switched off for this test, which is the situation a future change - a pragma moved,
+        a connection opened without it - would silently create. The conflicts still go, because the deletion
+        removes them itself; relying on the cascade would leave orphans behind here while reporting success.
+        """
+        self._with_evidence_and_a_neighbour()
+        self.store._connection.execute("PRAGMA foreign_keys = OFF")
+        self.addCleanup(self.store._connection.execute, "PRAGMA foreign_keys = ON")
+
+        outcome = self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        self.assertTrue(outcome.deleted)
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [SAMPLE_EMAILS[1].strip().casefold()],
+                         "with the cascade off, an explicit delete is the only thing that removes the "
+                         "deleted contact's evidence - and it removes nothing else")
+
+    def test_the_declared_cascade_is_really_enabled_on_a_connection_that_writes(self):
+        """The safety net is asserted where it lives, so the test above cannot pass for the wrong reason."""
+        self.assertEqual(self.store._connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        declared = self.store._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='hr_contact_conflict'").fetchone()[0]
+        self.assertIn("ON DELETE CASCADE", declared)
+        self.assertIn("REFERENCES hr_contact(email_key)", declared)
+
+    def test_a_deletion_leaves_no_orphan_evidence_and_a_sound_database(self):
+        self._with_evidence_and_a_neighbour()
+
+        self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        orphans = self.store._connection.execute(
+            "SELECT COUNT(*) FROM hr_contact_conflict WHERE email_key NOT IN (SELECT email_key FROM hr_contact)"
+        ).fetchone()[0]
+        self.assertEqual(orphans, 0)
+        self.assertEqual(list(self.store._connection.execute("PRAGMA foreign_key_check").fetchall()), [],
+                         "the foreign-key check must find nothing to complain about")
+        self.assertEqual(self.store._connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        self.assertEqual(self.store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION,
+                         "deleting a record is not a schema change")
+
+    def test_a_deletion_is_still_a_deletion_after_a_restart_and_a_backup_taken_afterwards(self):
+        self._with_evidence_and_a_neighbour()
+        self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        reopened = self.reopen()
+
+        self.assertIsNone(reopened.get_contact(SAMPLE_EMAILS[0]), "a restart brings no record back")
+        self.assertEqual([conflict.email_key for conflict in reopened.list_contact_conflicts()],
+                         [SAMPLE_EMAILS[1].strip().casefold()],
+                         "the deleted contact's evidence is gone and the other contact's is not")
+        self.assertEqual([record.email_key for record in reopened.list_contacts()],
+                         [SAMPLE_EMAILS[1].strip().casefold()])
+        chosen = self.folder / "after-deletion.sqlite3"
+        reopened.close()
+        info = create_backup(self.database, chosen)
+        self.addCleanup(lambda: CareerStore(str(chosen)).close())
+        copy = CareerStore(str(chosen))
+        try:
+            self.assertEqual(info.schema_version, SCHEMA_VERSION)
+            self.assertIsNone(copy.get_contact(SAMPLE_EMAILS[0]),
+                              "a backup taken after the deletion does not hold the deleted record")
+            self.assertEqual(copy.contact_record_counts()["conflicts"], 1,
+                             "the backup holds the deletion as this database holds it: one contact and one "
+                             "disagreement, and neither of them the deleted one")
+        finally:
+            copy.close()
+        self.reopen()
+
+    def test_a_backup_written_before_the_deletion_still_holds_the_record(self):
+        """The honest limit of a per-record delete, asserted rather than left to a sentence.
+
+        A restore replaces this database with the copy the person chose, so a copy made *before* the deletion
+        brings the contact back. Deleting a record is not a claim about backups and exports at paths this
+        application never knew, and the window says so before it asks.
+        """
+        self._with_evidence_and_a_neighbour()
+        chosen = self.folder / "before-deletion.sqlite3"
+        create_backup(self.database, chosen)
+
+        self.store.delete_contact(SAMPLE_EMAILS[0])
+        self.store.close()
+        restore_backup(chosen, self.database)
+        self.reopen()
+
+        restored = self.store.get_contact(SAMPLE_EMAILS[0])
+        self.assertIsNotNone(restored, "a restore replaces the database with the copy, deletions included")
+        self.assertEqual(len(self.store.list_contact_conflicts()), 2,
+                         "and the evidence recorded about it comes back with it")
+        self.assertEqual(validate_app_database(self.database).schema_version, SCHEMA_VERSION)
+
+    def test_the_event_carries_counts_and_no_contact_value(self):
+        self._with_evidence_and_a_neighbour()
+
+        self.store.delete_contact(SAMPLE_EMAILS[0])
+
+        written = log_path(self.database).read_text(encoding="utf-8")
+        self.assertIn("event=contacts.deleted", written)
+        self.assertIn("detail=contacts=1 conflicts=1", written)
+        for value in ALL_SAMPLE_VALUES:
+            self.assertNotIn(value, written, f"{value!r} reached the activity log")
+        for value in ("contacts.csv", SAMPLE_NAMES[0], SAMPLE_NAMES[1]):
+            self.assertNotIn(value, written, f"{value!r} reached the activity log")
+        # The vocabulary is one list, and this is the check that the new name is part of it.
+        self.assertIn("contacts.deleted", EVENTS)
+
+
 if __name__ == "__main__":  # pragma: no cover - convenience for a single-module run
     unittest.main()

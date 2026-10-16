@@ -1134,6 +1134,9 @@ class HandlerTestCase(unittest.TestCase):
         app.contact_note_entry = Entry(textvariable=app.contact_note, state="disabled")
         app.mark_contact_button = Button(text="Mark do not contact", state="disabled")
         app.clear_contact_button = Button(text="Remove do-not-contact mark", state="disabled")
+        # The destructive control, built the way the real tab builds it: disabled until the list has a
+        # selected row, so a test that presses it with nothing selected is pressing a greyed-out button.
+        app.delete_contact_button = Button(text="Delete selected contact", state="disabled")
         # The recorded-disagreement panel, built the way the real tab builds it: read-only, with a list, a
         # count line and a detail box that is disabled to typing from the moment it exists.
         app.contact_conflict_selected_id = None
@@ -1310,6 +1313,21 @@ class TabLayoutPolicyTests(unittest.TestCase):
                 self.assertEqual(bound.__func__, handler.__func__,
                                  f"{tree} is not bound to the handler its selection change posts")
 
+    def test_the_delete_control_says_what_it_costs_and_where_it_sits(self):
+        """The one action on the contacts tab that cannot be undone, read from the tab that really builds it.
+
+        The sentence is asserted here rather than on the handler double, because a copy of the window's prose
+        in a fixture would only prove that the fixture and the window still agree with each other.
+        """
+        with self.open_window("delete-note.sqlite3") as app:
+            note = app.contact_delete_note.get()
+            self.assertIn("no undo", note, "the window never says that a deletion cannot be undone")
+            self.assertIn("disagreement", note, "the sentence never says what goes with the contact")
+            self.assertIn("backup", note, "the sentence never says what a backup still holds")
+            self.assertIn("Nothing is sent", note, "the sentence never says that nothing is sent")
+            self.assertTrue(app.delete_contact_button.instate(["disabled"]),
+                            "the destructive control is offered before any row is selected")
+
     def test_the_window_wraps_its_tab_text_at_the_width_those_tabs_have(self):
         self.assertLessEqual(desktop._TAB_TEXT_WRAP, self.NARROWEST_TAB_TEXT_WIDTH)
 
@@ -1355,7 +1373,8 @@ class TabLayoutPolicyTests(unittest.TestCase):
                                 f"{widget.winfo_class()} {widget} is not inside an area that scrolls")
             # The controls that write the do-not-contact mark are in the same body, so they scroll with the
             # list they act on rather than being pinned below content that can grow past the page.
-            for widget in (app.mark_contact_button, app.clear_contact_button, app.contact_note_entry):
+            for widget in (app.mark_contact_button, app.clear_contact_button, app.contact_note_entry,
+                           app.delete_contact_button):
                 container = acceptance.layout_container(widget, contacts_page)
                 self.assertIsNot(container, contacts_page,
                                  f"{widget.winfo_class()} {widget} is judged against its tab")
@@ -6638,6 +6657,278 @@ class ContactMarkControlTests(ContactTabTestCase):
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
+
+class ContactDeletionControlTests(ContactTabTestCase):
+    """The destructive control on the HR contacts tab: what it asks, what it refuses, what it deletes.
+
+    Deleting is the one action on this tab that removes a record rather than annotating it, so these tests
+    drive its real handler against a real store in a disposable folder and read the result back: the
+    contact's row and its disagreements are asserted gone, every other row is asserted unchanged - including
+    the marks and the reasons other contacts carry - and "nothing was written" is the connection's change
+    counter rather than a message. The confirmation is checked for what it must *not* contain as carefully as
+    for what it says, because a dialog is the part of this program somebody other than the owner may end up
+    reading over a shoulder, and the same rule applies to the status line and the activity log.
+    """
+
+    def test_the_control_is_off_until_a_stored_row_is_selected(self):
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+
+        self.select(app, None)
+        self.assertTrue(app.delete_contact_button.instate(["disabled"]),
+                        "a destructive control is offered with nothing selected")
+
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        self.assertFalse(app.delete_contact_button.instate(["disabled"]))
+        # And the line under the controls says that deleting is one of the things a selected row offers,
+        # so a person meets the destructive action before they go looking for it.
+        self.select(app, None)
+        self.assertIn("delete it", app.contact_mark_state.get(),
+                      "the state line never mentions deleting among the actions a row offers")
+
+        # A row that is no longer in the database leaves the control off again, which is the state a
+        # refresh after another window's deletion puts the screen in.
+        app.stored_contacts_tree.delete(str(ids[CONTACT_EMAILS[0]]))
+        self.store.delete_contact(CONTACT_EMAILS[0])
+        app._sync_contact_actions()
+        self.assertTrue(app.delete_contact_button.instate(["disabled"]))
+
+    def test_the_confirmation_names_a_position_and_a_file_and_no_contact_value(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        self.assertEqual(MESSAGES.titles("askyesno"), ["Delete this stored contact"])
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("row 1 of 2 in the stored list", asked,
+                      "the question must say which row, by the reference the other confirmations use")
+        self.assertIn("'later-list.csv'", asked, "the file the record came from is the other reference")
+        self.assertIn("2 recorded disagreement(s)", asked,
+                      "the question must say how much evidence goes with the contact")
+        self.assertIn("There is no undo in this application", asked,
+                      "a destructive action that cannot be undone must say so before it asks")
+        for value in (*CONTACT_EMAILS, *CONTACT_NAMES, *CONTACT_COMPANIES, *CONFLICT_NAMES,
+                      *CONFLICT_COMPANIES):
+            self.assertNotIn(value, asked, f"{value!r} reached the confirmation dialog")
+
+    def test_a_declined_confirmation_deletes_nothing_and_says_so(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        before = self.changes()
+        CONFIG["Delete this stored contact"] = False
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        CONFIG.clear()
+        self.assertEqual(self.changes(), before, "a declined deletion wrote to the database")
+        self.assertIsNotNone(self.store.get_contact(CONTACT_EMAILS[0]))
+        self.assertEqual(len(self.store.list_contact_conflicts()), 3,
+                         "a declined deletion removed evidence")
+        self.assertEqual(MESSAGES.titles("showinfo"), [],
+                         "a declined deletion is not reported as one that happened")
+        self.assertEqual(app.status.get(), "Cancelled; nothing was deleted.")
+        self.assertNotIn("contacts.deleted", self.log_text())
+
+    def test_deleting_with_nothing_selected_asks_for_a_selection_and_writes_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.select(app, None)
+        before = self.changes()
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        self.assertEqual(self.changes(), before)
+        self.assertEqual(MESSAGES.titles("askyesno"), [], "there is no question to ask about no row")
+        self.assertEqual(MESSAGES.titles("showinfo"), ["Select a contact first"])
+        self.assertIn("nothing was deleted", app.status.get())
+        self.assertEqual(len(self.store.list_contacts()), 2)
+
+    def test_a_stale_selection_is_reported_and_never_deleted_from_the_row(self):
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        # The row goes behind the window's back - another window, or a restore that replaced the database.
+        self.store.delete_contact(CONTACT_EMAILS[0])
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        self.assertEqual(MESSAGES.titles("showinfo"), ["That contact is no longer stored"])
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "a row the database does not hold is not something to confirm deleting")
+        self.assertIn("nothing was deleted", app.status.get())
+        self.assertEqual([record.email_key for record in app.store.list_contacts()],
+                         [CONTACT_EMAILS[1]],
+                         "nothing beyond the deletion that already happened was removed")
+
+    def test_a_contact_that_vanishes_while_the_question_is_being_answered_is_not_deleted_twice(self):
+        """The window reads the row, asks, and *then* deletes - and the row can go in between."""
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        MESSAGES.reset()
+        before = self.changes()
+
+        asked = []
+
+        def vanish_then_answer(title, message, **kwargs):
+            # The person is looking at the confirmation while another window deletes the same contact:
+            # the window that is asking must not report a deletion it did not perform.
+            asked.append(title)
+            self.store.delete_contact(CONTACT_EMAILS[0])
+            return True
+
+        with mock.patch.object(desktop.messagebox, "askyesno", side_effect=vanish_then_answer):
+            app._delete_selected_contact()
+
+        self.assertEqual(MESSAGES.titles("showinfo"), ["That contact is no longer stored"],
+                         "the step that deleted nothing must not announce a deletion")
+        self.assertIn("already not stored", app.status.get())
+        self.assertIn("nothing was deleted", app.status.get())
+        self.assertIsNone(self.store.get_contact(CONTACT_EMAILS[0]))
+        self.assertEqual(asked, ["Delete this stored contact"],
+                         "the person was asked once, about a row that was there when they were asked")
+        self.assertEqual(self.changes() - before, 1,
+                         "the only row removed here is the one the other deletion removed: the step that "
+                         "found the row already gone deleted nothing of its own")
+
+    def test_a_confirmed_deletion_removes_the_contact_and_its_evidence_and_leaves_the_rest(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[1]])
+        app.contact_note.set("keep this contact's reason")
+        app._mark_selected_contact()
+        app.stored_contacts_tree.selection_set(str(ids[CONTACT_EMAILS[1]]))
+        app._sync_contact_actions()
+        kept = self.store.get_contact(CONTACT_EMAILS[1])
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        positions_before = [record.email_key for record in app.store.list_contacts()]
+        before = self.changes()
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        self.assertEqual(self.changes() - before, 3,
+                         "one contact row and its two disagreement rows, and nothing else")
+        self.assertEqual(MESSAGES.titles("showinfo"), ["Contact deleted"])
+        self.assertIsNone(self.store.get_contact(CONTACT_EMAILS[0]),
+                          "the selected contact is gone")
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [CONTACT_EMAILS[1]],
+                         "the disagreements kept about the other contact are untouched")
+        self.assertEqual(self.store.get_contact(CONTACT_EMAILS[1]), kept,
+                         "the other contact, its mark and its reason are exactly as they were")
+        self.assertEqual(positions_before[1], CONTACT_EMAILS[1])
+        # Both views were re-read: the deleted row is gone from the list and from the panel's count.
+        self.assertEqual([record.email_key for record in app.store.list_contacts()], [CONTACT_EMAILS[1]])
+        self.assertIn("1 disagreement(s) recorded", app.contact_conflict_note.get())
+        self.assertEqual([str(row[1]) for row in self.conflict_rows(app)], [CONTACT_EMAILS[1]],
+                         "the panel still lists one disagreement, and it belongs to the other contact")
+        self.assertEqual(app.status.get(),
+                         "1 stored contact deleted, with 2 recorded disagreement(s). Nothing was contacted.")
+
+    def test_the_report_of_a_deletion_carries_the_stores_own_count_not_the_screens_earlier_one(self):
+        """The question and the deletion read the evidence at different moments; the report says what went.
+
+        The screen's own read is made to answer "nothing is recorded about this contact" while the store
+        still deletes the two rows it holds, which is the shape a second window writing between the question
+        and the answer would have. What the person is told afterwards must be the store's count.
+        """
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        MESSAGES.reset()
+
+        with mock.patch.object(self.store, "list_contact_conflicts", return_value=()):
+            app._delete_selected_contact()
+
+        self.assertIn("no disagreement is recorded about this contact",
+                      MESSAGES.text("askyesno"),
+                      "the question was not built from the screen's read, so this test proves nothing")
+        self.assertIn("2 recorded disagreement(s)", MESSAGES.text("showinfo"),
+                      "the report does not carry what the store actually deleted")
+        self.assertEqual([conflict.email_key for conflict in self.store.list_contact_conflicts()],
+                         [CONTACT_EMAILS[1]],
+                         "the deletion removed the two disagreements and left the other contact's")
+
+    def test_the_row_the_person_selected_is_not_left_selected_afterwards(self):
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+
+        app._delete_selected_contact()
+
+        self.assertEqual(app.stored_contacts_tree.selection(), (),
+                         "the deleted row cannot still be selected")
+        self.assertTrue(app.delete_contact_button.instate(["disabled"]))
+
+    def test_a_readable_record_of_the_deletion_carries_counts_and_no_contact_value(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        MESSAGES.reset()
+
+        app._delete_selected_contact()
+
+        written = self.log_text()
+        self.assertIn("event=contacts.deleted", written)
+        self.assertIn("detail=contacts=1 conflicts=2", written)
+        said = "\n".join([MESSAGES.text(), app.status.get(), app.contact_mark_state.get(),
+                          app.contacts_summary.get(), app.contact_conflict_note.get()])
+        for value in (*CONTACT_EMAILS, *CONTACT_NAMES, *CONTACT_COMPANIES, *CONFLICT_NAMES,
+                      *CONFLICT_COMPANIES, "later-list.csv", "contacts.csv"):
+            self.assertNotIn(value, written, f"{value!r} reached the activity log")
+        # What the person is shown: counts, the position of the row and the file it came from. No address,
+        # name, company or disagreement value is among it - the file name is not a contact value, it is the
+        # reference every other confirmation on this tab uses, and it is what makes the question answerable.
+        for value in (*CONTACT_EMAILS, *CONTACT_NAMES, *CONTACT_COMPANIES, *CONFLICT_NAMES,
+                      *CONFLICT_COMPANIES):
+            self.assertNotIn(value, said, f"{value!r} reached something the person is shown")
+        self.assertIn("'later-list.csv'", said, "the reference the question is answerable by is missing")
+        for claim in ("undone", "recoverable", "erased from your backups"):
+            self.assertNotIn(claim, MESSAGES.text().lower(),
+                             f"the dialog claims {claim!r}, which this action cannot promise")
+
+    def test_a_storage_failure_deletes_nothing_and_claims_no_success(self):
+        app = self.make_app()
+        self.import_two(app)
+        ids = self.ids_of(app)
+        self.select(app, ids[CONTACT_EMAILS[0]])
+        before = self.changes()
+        MESSAGES.reset()
+
+        with mock.patch.object(self.store, "delete_contact",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            app._delete_selected_contact()
+
+        self.assertEqual(self.changes(), before)
+        self.assertNotIn("Contact deleted", MESSAGES.titles("showinfo"),
+                         "a failed deletion must never be reported as one that happened")
+        self.assertEqual(MESSAGES.titles("showerror"), ["Local database unavailable"])
+        self.assertIn("nothing was changed", app.status.get())
+        self.assertIsNotNone(self.store.get_contact(CONTACT_EMAILS[0]))
+        self.assertEqual(len(self.store.list_contact_conflicts()), 0)
+        self.assertEqual(len(self.store.list_contacts()), 2, "both contacts are still stored")
 
 class ContactConflictPanelTests(ContactTabTestCase):
     """The recorded-disagreement panel: both sides, honestly labelled, and nothing written.

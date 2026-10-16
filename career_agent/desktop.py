@@ -644,6 +644,30 @@ class CareerAgentApp:
                 "already recorded with it."
             ),
         ).grid(row=13, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        # The one destructive action on this tab, on its own row and under its own sentence. It is not
+        # beside the mark controls for two reasons: erasing a record is not another way of annotating one,
+        # and a row holding these three labels plus this button is wider than the narrowest page this tab
+        # can be given - Tk clips a row rather than wrapping it.
+        delete_row = ttk.Frame(body)
+        delete_row.grid(row=14, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        # Built disabled and enabled only while a stored row is selected, like the two mark controls: a
+        # destructive button that cannot act is better off greyed out than offering something it will refuse.
+        self.delete_contact_button = ttk.Button(
+            delete_row, text="Delete selected contact", state="disabled",
+            command=self._delete_selected_contact)
+        self.delete_contact_button.pack(side="left")
+        # The sentence sits in a text variable rather than in a literal, so what the window says about the
+        # one action that cannot be undone is read back by a test rather than only drawn.
+        self.contact_delete_note = tk.StringVar(value=(
+            "Deleting removes one stored contact — the row you select above — and every "
+            "disagreement recorded about it, in a single step. No other contact, mark or disagreement is "
+            "touched. There is no undo in this application: nothing here can bring the record back. A "
+            "backup you wrote earlier still holds it, and restoring that copy would bring it back, because "
+            "a restore replaces this database with the copy you choose. Nothing is sent to anybody either "
+            "way, and the delete key in this window never removes a contact file."
+        ))
+        ttk.Label(body, textvariable=self.contact_delete_note, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=15, column=0, columnspan=2, sticky=W, pady=(4, 0))
         ttk.Label(
             body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=(
@@ -653,9 +677,9 @@ class CareerAgentApp:
                 "where the file says, or whether this list may be used for outreach at all. A stored "
                 "contact is never written to, and no send button exists in this build."
             ),
-        ).grid(row=14, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        ).grid(row=16, column=0, columnspan=2, sticky=W, pady=(10, 0))
         ttk.Label(body, text="Recorded disagreements (nothing here is merged or changed)").grid(
-            row=15, column=0, columnspan=2, sticky=W, pady=(12, 2))
+            row=17, column=0, columnspan=2, sticky=W, pady=(12, 2))
         # One disagreement per row, oldest first, in the store's own order. The columns carry the compact
         # facts and the panel below carries the two values in full: a list cell is one line and Tk clips it,
         # and a name that disagrees with another name is exactly the thing that must not be clipped.
@@ -669,13 +693,13 @@ class CareerAgentApp:
                 ("recorded_at", "Recorded at", 150)):
             self.contact_conflicts_tree.heading(column, text=heading)
             self.contact_conflicts_tree.column(column, width=width, anchor=W)
-        self.contact_conflicts_tree.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        self.contact_conflicts_tree.grid(row=18, column=0, columnspan=2, sticky="nsew")
         self.contact_conflicts_tree.bind("<<TreeviewSelect>>", self._on_conflict_selection)
         self.contact_conflict_note = tk.StringVar(value="Reading the recorded disagreements...")
         ttk.Label(body, textvariable=self.contact_conflict_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=17, column=0, columnspan=2, sticky=W, pady=(6, 0))
+                  justify=LEFT).grid(row=19, column=0, columnspan=2, sticky=W, pady=(6, 0))
         self.contact_conflict_text = tk.Text(body, height=8, wrap="word", state="disabled")
-        self.contact_conflict_text.grid(row=18, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.contact_conflict_text.grid(row=20, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         # The sentence this panel exists to make unnecessary to guess at: what it does, what it refuses to
         # do, and why the database is the thing that decides which value it keeps.
         ttk.Label(
@@ -688,7 +712,7 @@ class CareerAgentApp:
                 "shows them, changes nothing, and cannot dismiss a disagreement. Select a row above to read "
                 "both sides in full."
             ),
-        ).grid(row=19, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ).grid(row=21, column=0, columnspan=2, sticky=W, pady=(6, 0))
         body.columnconfigure(0, weight=1)
 
     def _choose_contact_csv(self):
@@ -892,14 +916,19 @@ class CareerAgentApp:
             self.mark_contact_button.state(["disabled"])
             self.clear_contact_button.state(["disabled"])
             self.contact_note_entry.state(["disabled"])
+            self.delete_contact_button.state(["disabled"])
             self.contact_mark_state.set(
-                "No stored contact is selected. Select a row in the list above to mark it, or to clear "
-                "the mark it already carries."
+                "No stored contact is selected. Select a row in the list above to mark it, to clear the "
+                "mark it already carries, or to delete it and the disagreements recorded about it."
             )
             return
         self.mark_contact_button.state(["disabled"] if chosen.suppressed else ["!disabled"])
         self.clear_contact_button.state(["!disabled"] if chosen.suppressed else ["disabled"])
         self.contact_note_entry.state(["disabled"] if chosen.suppressed else ["!disabled"])
+        # Deleting applies to any selected record, marked or not: the mark is a reason to be careful about
+        # contacting somebody, never a reason to keep their record, and this window does not decide which
+        # records a person is allowed to remove from their own database.
+        self.delete_contact_button.state(["!disabled"])
         position = [record.contact_id for record in records].index(chosen.contact_id) + 1
         if chosen.suppressed:
             reason = "a reason is recorded with it" if chosen.suppressed_note else "no reason is recorded with it"
@@ -1020,6 +1049,120 @@ class CareerAgentApp:
             + ("A later feature must respect this mark; nothing in this build contacts anybody."
                if stored.suppressed else
                "The contact stays in the list, with no reason recorded against it."),
+            parent=self.root,
+        )
+
+    def _delete_selected_contact(self):
+        """Delete the selected stored contact and its recorded disagreements, after one confirmation.
+
+        The person is told which *row* they are acting on - its position in the list and the file it came
+        from, the two references the mark confirmations already use - and how many disagreements go with it,
+        counted from the same query the store's own deletion uses. The address, the name, the company, the
+        reason a mark carries and every disagreement value stay out of the dialog: this is a question about a
+        row the person is looking at, and the answer does not depend on seeing who it names.
+
+        Every refusal path - nothing selected, a row this database no longer holds, a declined confirmation
+        and a storage error - leaves the database exactly as it was and says so. The deletion itself is one
+        store call, because a screen that issued the two deletes itself could leave the contact gone and its
+        disagreements behind; the store owns the transaction and this handler owns only the question.
+        """
+        try:
+            records = self.store.list_contacts()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected_id = self._selected_contact_id()
+        chosen = next((record for record in records if record.contact_id == selected_id), None)
+        if chosen is None:
+            if selected_id is None:
+                messagebox.showinfo(
+                    "Select a contact first",
+                    "Select the stored contact you want to delete in the list above, then press the button "
+                    "again; nothing was deleted.",
+                    parent=self.root,
+                )
+                self.status.set("Select a stored contact in the list first; nothing was deleted.")
+            else:
+                # A row another window deleted, or a database a restore replaced: the screen is showing a
+                # contact the database no longer holds, and it is not deleted again from a stale row.
+                messagebox.showinfo(
+                    "That contact is no longer stored",
+                    "The selected contact is no longer in this database, so nothing was deleted. The list "
+                    "has been refreshed; select a stored contact and try again.",
+                    parent=self.root,
+                )
+                self.status.set("That contact is no longer stored; nothing was deleted.")
+                self._refresh_contacts()
+            return
+        position = [record.contact_id for record in records].index(chosen.contact_id) + 1
+        where = f"row {position} of {len(records)} in the stored list"
+        origin = f"from {chosen.source_file!r}" if chosen.source_file else "whose source file is not recorded"
+        try:
+            conflicts = len(self.store.list_contact_conflicts(email_key=chosen.email_key))
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if conflicts:
+            goes_with = (f"{conflicts} recorded disagreement(s) about this contact - the two sides of each, "
+                         "as shown below - are deleted with it")
+        else:
+            goes_with = "no disagreement is recorded about this contact, so nothing else goes with it"
+        question = (
+            f"Delete {where} - the contact {origin}?\n\n"
+            f"The stored record is removed from this database, and {goes_with}. No other contact, mark or "
+            "disagreement is touched.\n\n"
+            "There is no undo in this application. A backup written before this still holds the record: "
+            "restoring that copy would bring it back, because a restore replaces this database with the "
+            "copy you choose. Nothing is sent to anybody either way."
+        )
+        if not messagebox.askyesno("Delete this stored contact",
+                                   question + "\n\nDelete it now?", parent=self.root):
+            self.status.set("Cancelled; nothing was deleted.")
+            return
+        try:
+            outcome = self.store.delete_contact(chosen.email_key)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if not outcome.deleted:
+            # The row went between the read above and the store's own check - another window, or a restore
+            # that replaced this database. Nothing was deleted by this call, and that is what is reported.
+            messagebox.showinfo(
+                "That contact is no longer stored",
+                "The selected contact was already not in this database, so nothing was deleted by this "
+                "step. The list has been refreshed.",
+                parent=self.root,
+            )
+            self.status.set("That contact was already not stored; nothing was deleted.")
+            self._refresh_contacts()
+            return
+        # Both views read the database again here, in one call: the deleted contact's row goes, the
+        # disagreements recorded about it go from the panel, and every other row stays where it was. The
+        # rebuilt list holds no selection, which is the honest state after the row the person had chosen
+        # stopped existing.
+        self._refresh_contacts()
+        self.status.set(f"{outcome.describe()}. Nothing was contacted.")
+        # The report is built from the store's own outcome rather than from the count the question used: the
+        # two are read at different moments, and what the person is told afterwards has to be what happened.
+        if outcome.conflicts:
+            removed = (f"{outcome.conflicts} recorded disagreement(s) about this contact - the two sides of "
+                       "each, as shown below - were deleted with it")
+        else:
+            removed = "no disagreement is recorded about this contact, so nothing else went with it"
+        messagebox.showinfo(
+            "Contact deleted",
+            f"Row {position} of the stored list is no longer in this database, and {removed}.\n\n"
+            "Nothing was sent to anybody, and no other contact was touched. A backup written before this "
+            "still holds the record; restoring that copy would bring it back.",
             parent=self.root,
         )
 

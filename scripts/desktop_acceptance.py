@@ -3630,6 +3630,9 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
 #: The reason this run types beside a mark. A person's own words about somebody, and the text that must
 #: never reach a dialog, a status line or an event: the run checks exactly that after storing it.
 SYNTHETIC_MARK_REASON = "synthetic note typed by the acceptance run"
+#: A second reason, typed beside the mark on the *other* contact, so that deleting one record can be shown
+#: to leave the other contact's mark - and the words written beside it - exactly where they were.
+SYNTHETIC_OTHER_MARK_REASON = "synthetic note about the contact the run does not delete"
 
 
 def workflow_l_contact_import(run: Run) -> None:
@@ -3990,6 +3993,156 @@ def workflow_l_contact_import(run: Run) -> None:
                       SYNTHETIC_MARK_REASON):
             require(value not in said, f"{value!r} reached a dialog while reviewing disagreements")
         written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+    with results.step("L13 the delete control is off until a stored row is selected, and says what it costs"):
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        key, other_key = SYNTHETIC_CONTACT_ROWS[0][0], SYNTHETIC_CONTACT_ROWS[1][0]
+        require(set(stored) == {key, other_key},
+                f"this check needs two stored contacts and has {sorted(stored)!r}")
+        # The other contact carries a mark of its own from here on: deleting one record has to leave the
+        # other contact's mark and its reason alone, and there has to be a mark for that to mean anything.
+        app.stored_contacts_tree.selection_set(str(stored[other_key].contact_id))
+        workspace.root.update()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_OTHER_MARK_REASON)
+        workspace.root.update()
+        policy.reset()
+        press(app.contacts_tab, "Mark do not contact", workspace.root)
+        require(app.store.get_contact(other_key).suppressed_note == SYNTHETIC_OTHER_MARK_REASON,
+                "the mark this check is meant to leave behind was not stored")
+        # Nothing selected: the control is drawn, greyed out, and the line under it says where a person
+        # starts. Reading the state back is how a person sees it; a disabled control cannot be pressed.
+        app.stored_contacts_tree.selection_remove(*app.stored_contacts_tree.selection())
+        workspace.root.update()
+        require(not app.stored_contacts_tree.selection(), "the stored list still has a selected row")
+        require(app.delete_contact_button.instate(["disabled"]),
+                "the delete control is offered with nothing selected")
+        require("No stored contact is selected" in app.contact_mark_state.get(),
+                f"the line under the controls says {app.contact_mark_state.get()!r}")
+        require("delete it" in app.contact_mark_state.get(),
+                "the line under the controls never mentions deleting among the actions a row offers")
+        note = app.contact_delete_note.get()
+        for claim in ("no undo", "disagreement", "backup", "Nothing is sent to anybody"):
+            require(claim in note, f"the sentence beside the control never says {claim!r}: {note!r}")
+        # A selected stored row is what enables it - a marked row as much as an unmarked one, because a
+        # mark is a reason to be careful about contacting somebody, never a reason to keep their record.
+        app.stored_contacts_tree.selection_set(str(stored[other_key].contact_id))
+        workspace.root.update()
+        require(not app.delete_contact_button.instate(["disabled"]),
+                "a marked stored contact cannot be chosen for deletion")
+        app.stored_contacts_tree.selection_set(str(stored[key].contact_id))
+        workspace.root.update()
+        require(not app.delete_contact_button.instate(["disabled"]),
+                "an unmarked stored contact cannot be chosen for deletion")
+
+    with results.step("L14 a declined deletion leaves the contact, its evidence and both marks as they were"):
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        key, other_key = SYNTHETIC_CONTACT_ROWS[0][0], SYNTHETIC_CONTACT_ROWS[1][0]
+        chosen = stored[key]
+        conflicts_before = [conflict.email_key for conflict in app.store.list_contact_conflicts()]
+        app.stored_contacts_tree.selection_set(str(chosen.contact_id))
+        workspace.root.update()
+        policy.reset()
+        policy.answers["Delete this stored contact"] = False
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Delete selected contact", workspace.root)
+        require("Delete this stored contact" in policy.titles("askyesno"),
+                f"the deletion was not confirmed before it ran; dialogs: {policy.titles()!r}")
+        asked = policy.said("Delete this stored contact")
+        # Which row it is about, said the way the other confirmations on this tab say it: a position in the
+        # list and the file the record came from, plus how much evidence goes with it.
+        position = [record.contact_id for record in app.store.list_contacts()].index(chosen.contact_id) + 1
+        require(f"row {position} of 2 in the stored list" in asked,
+                f"the question does not say which row it is about: {asked!r}")
+        require(f"{chosen.source_file!r}" in asked,
+                f"the question does not say which file the record came from: {asked!r}")
+        require("2 recorded disagreement(s)" in asked,
+                f"the question does not say how many disagreements go with it: {asked!r}")
+        require("no undo" in asked, f"the question does not say it cannot be undone: {asked!r}")
+        require("Nothing is sent to anybody" in asked,
+                f"the question does not say what does not happen: {asked!r}")
+        stated = [value for value in (chosen.email, chosen.name, chosen.company, SYNTHETIC_MARK_REASON)
+                  if value]
+        for value in (*stated, SYNTHETIC_OTHER_MARK_REASON, *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3]):
+            require(value not in asked, f"{value!r} reached the confirmation dialog")
+        require(app.store._connection.total_changes == before,
+                "a declined deletion wrote to the database")
+        require(app.store.get_contact(key) is not None, "a declined deletion removed the contact")
+        require([conflict.email_key for conflict in app.store.list_contact_conflicts()] == conflicts_before,
+                "a declined deletion removed recorded disagreements")
+        still_marked = app.store.get_contact(key)
+        require(still_marked.suppressed and still_marked.suppressed_note == SYNTHETIC_MARK_REASON,
+                "a declined deletion changed the mark on the contact it was about")
+        require(app.store.get_contact(other_key).suppressed_note == SYNTHETIC_OTHER_MARK_REASON,
+                "a declined deletion changed the other contact's mark")
+        require("nothing was deleted" in app.status.get(), f"the status line says {app.status.get()!r}")
+        require("event=contacts.deleted" not in event_log_log_path(app.db_path).read_text(encoding="utf-8"),
+                "a declined deletion wrote a deletion to the activity log")
+        policy.answers.pop("Delete this stored contact", None)
+
+    with results.step("L15 a confirmed deletion removes that contact and its evidence, and nothing else"):
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        key, other_key = SYNTHETIC_CONTACT_ROWS[0][0], SYNTHETIC_CONTACT_ROWS[1][0]
+        chosen = stored[key]
+        app.stored_contacts_tree.selection_set(str(chosen.contact_id))
+        workspace.root.update()
+        policy.reset()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Delete selected contact", workspace.root)
+        require("Contact deleted" in policy.titles("showinfo"),
+                f"the deletion was not reported; dialogs: {policy.titles()!r}")
+        changed = app.store._connection.total_changes - before
+        require(changed == 3,
+                f"the deletion changed {changed} row(s), not three: the contact and its two disagreements")
+        require(app.store.get_contact(key) is None, "the contact that was deleted is still stored")
+        remaining = app.store.list_contacts()
+        require([record.email_key for record in remaining] == [other_key],
+                f"the stored list holds {[record.email_key for record in remaining]!r}")
+        require(remaining[0].suppressed and remaining[0].suppressed_note == SYNTHETIC_OTHER_MARK_REASON,
+                "the deletion took the other contact's mark or its reason with it")
+        conflicts = app.store.list_contact_conflicts()
+        require([conflict.email_key for conflict in conflicts] == [other_key],
+                f"the disagreements left are {[conflict.email_key for conflict in conflicts]!r}")
+        # Both views were re-read from the database rather than edited on screen.
+        rows = app.stored_contacts_tree.get_children()
+        require(len(rows) == 1, f"the stored list shows {len(rows)} row(s), not one")
+        require("1 contact(s)" in app.contacts_summary.get(),
+                f"the summary does not count the remaining contact: {app.contacts_summary.get()!r}")
+        require("1 marked do-not-contact" in app.contacts_summary.get(),
+                f"the summary does not count the other mark: {app.contacts_summary.get()!r}")
+        require("1 disagreement(s) recorded" in app.contact_conflict_note.get(),
+                f"the panel does not count what is left: {app.contact_conflict_note.get()!r}")
+        listed = app.contact_conflicts_tree.get_children()
+        require(len(listed) == 1, f"the panel lists {len(listed)} disagreement(s), not one")
+        require(str(app.contact_conflicts_tree.item(listed[0], "values")[1]) == other_key,
+                "the disagreement left in the panel is not the remaining contact's")
+        require(not app.stored_contacts_tree.selection(),
+                f"the deleted row is still selected: {app.stored_contacts_tree.selection()!r}")
+        require(app.delete_contact_button.instate(["disabled"]),
+                "the delete control is still offered after the row it was about stopped existing")
+        require("1 stored contact deleted, with 2 recorded disagreement(s)" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+        require("Nothing was contacted" in app.status.get(),
+                f"the status line does not say nothing was sent: {app.status.get()!r}")
+        # The privacy line this feature turns on, the same one the mark carries: the question, the report
+        # and the event hold references and counts, and no contact value at all.
+        said = policy.said("Delete this stored contact") + "\n" + policy.said("Contact deleted")
+        # The fixtures' *text* values: their last column is a row number from the file, and a digit that
+        # also appears in a count says nothing about whether a value was shown.
+        for value in (*stated, SYNTHETIC_MARK_REASON, SYNTHETIC_OTHER_MARK_REASON,
+                      *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3], *SYNTHETIC_CONTACT_ROWS[1][1:3],
+                      *SYNTHETIC_CONTACT_CONTRADICTIONS[2][1:3]):
+            require(value not in said, f"{value!r} reached a dialog about the deletion")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        require("event=contacts.deleted" in written,
+                "the deletion wrote no line to the activity log")
+        require("detail=contacts=1 conflicts=2" in written,
+                "the log line does not say how much was deleted")
+        for value in (*stated, SYNTHETIC_MARK_REASON, SYNTHETIC_OTHER_MARK_REASON,
+                      *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3], *SYNTHETIC_CONTACT_ROWS[1][1:3],
+                      *SYNTHETIC_CONTACT_CONTRADICTIONS[2][1:3], "contradicting-contacts.csv",
+                      "synthetic-contacts.csv"):
+            require(value not in written, f"{value!r} reached the activity log")
+
         for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3],
                       SYNTHETIC_MARK_REASON, "contradicting-contacts.csv"):
             require(value not in written, f"{value!r} reached the activity log")
