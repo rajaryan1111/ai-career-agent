@@ -3,10 +3,16 @@
 Date: 2026-10-16 · Task: `planning/arena-task-phase-a-verified-candidate-profile-provenance-2026-10-16.md` ·
 Branch: `arena/351e052d-ai-career-agent` · Scope: local, offline, one additive schema table, no external action.
 
-**Status:** Implemented and tested locally; **not yet pushed and not yet verified on CI**. What is proven today,
-with output: the full suite `Ran 2004 tests … OK (skipped=13)`, `compileall` clean, the stand-in acceptance run
-`102 checks passed, 0 failed` (which reports **BLOCKED**, by design — no stand-in is a desktop), and fourteen
-mutation checks on a disposable copy, **14 of 14 detected** — `exit 0`, the log is
+**Status:** Implemented, tested, and **green on the whole CI matrix**: run **`38903585396`** at `4321458`,
+**13/13 jobs**, with every leg reporting `Ran 2004 tests … OK` and the five display-backed legs reporting
+`RESULT: PASS — 102 checks passed` (the Linux leg also carries the smoke script's 14 checks and workflow L's
+`L16`–`L20` `[ ok ]` lines). The first run of the feature commit, `38901274611`, **failed the four
+cross-platform legs** — one wrong assertion, section 7 defect 5 — and its green successors are the ones this
+note reports.
+
+What is proven locally, with output: the full suite `Ran 2004 tests … OK (skipped=13)`, `compileall` clean, the
+stand-in acceptance run `102 checks passed, 0 failed` (which reports **BLOCKED**, by design — no stand-in is a
+desktop), and fourteen mutation checks on a disposable copy, **14 of 14 detected** — `exit 0`, the log is
 `/home/user/scratch/mutation_checks_provenance.log`. The human half is **not** done: no new manual step was
 added and none existing was ticked, because this increment adds no widget; the checklist still stands at
 **117 steps, 22 PASS / 95 BLOCKED / 0 FAIL**.
@@ -141,6 +147,8 @@ right, and it does not conflate the two.
 | Compile check | clean | `python3 -m compileall -q career_agent scripts tests` |
 | Display-backed acceptance | `DEVELOPMENT RESULT: 102 checks passed, 0 failed` — `RESULT: BLOCKED` (no tkinter on this machine) | `python3 scripts/desktop_acceptance.py --stand-in-tk` |
 | Mutation checks | **`14 of 14 detected`** (13 by the test named for the mutation, 1 by three other tests) — `exit 0` | `python3 /home/user/scratch/mutation_checks_provenance.py` |
+| CI matrix | **run `38903585396` @ `4321458`: 13/13 jobs green** — unit legs 3.10–3.14 `Ran 2004 tests … OK` (skips 13/20 by platform), four cross-platform legs `Ran 2004 … OK` (skips 13–52), five display-backed acceptance legs `RESULT: PASS — 102 checks passed`, both installed-package legs, and the optional-PDF leg | `gh run view 38903585396` |
+| The run that found defect 5 | run `38901274611` @ `9581f81`: **11/13**, the four cross-platform legs failing the same assertion | `gh api …/check-runs/<id>/annotations` |
 
 The suite stood at 1950 before this increment; the new coverage is the 49 tests of
 `tests/test_profile_provenance.py`, two schema-8 migration tests in `tests/test_store.py`, two regression tests in
@@ -159,7 +167,7 @@ it, which is why the log reports 14 of 14 detected and 13 by the named test.
 
 ## 7. What verification found, and why the tests did not
 
-Four defects, all found by running code rather than by reading it:
+Five defects, all found by running code rather than by reading it — four locally, and the fifth by the CI matrix:
 
 1. **A damaged record was reported as invalid input.** `StoredRecordError` subclasses `ValueError`, so the new
    `except ValueError` on the résumé save path — written for form validation — caught a stored record this build
@@ -182,6 +190,16 @@ Four defects, all found by running code rather than by reading it:
    store's own `StoredRecordError`. Found by hand-editing a row while reviewing the decoder, which is exactly
    how such a row arrives in the field. Now reported as the damaged record it is, with a test
    (`test_a_row_whose_fields_contradict_each_other_is_reported_as_damaged`) and a mutation check of its own.
+5. **A test asserted a guarantee SQLite never made.** `test_deleting_the_profile_deletes_every_origin_with_it`
+   read the database file and required the deleted document name's bytes to be gone. That held on Linux and
+   failed on **all four cross-platform legs** of run `38901274611` (macOS 3.10/3.13, Windows 3.10/3.13), because
+   SQLite keeps the content of a deleted row in the pages it frees — which this repository had already decided
+   not to pretend about: `research/threat-model-2026-10-16.md` states that deleting a record does not scrub its
+   pages and that `VACUUM` is not run for that reason. The assertion was replaced by the guarantee the
+   application does make (the origin table is empty, the profile is gone), the mutation that leaves origin rows
+   behind is still caught by it, and the fixed test is green on all four legs of run `38903585396`. The lesson is
+   the same one defect 3 taught from the other side: a test can be wrong in the direction of asserting *more*
+   than the code promises, and only a platform that behaves differently will say so.
 
 ## 8. What a person sees today, and the gap that is stated rather than papered over
 

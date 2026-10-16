@@ -38,7 +38,10 @@ from a file is stored and reported as unconfirmed, a write records an origin onl
 changed, and a profile stored before this existed reads as *unknown* rather than as the person's own
 words. The control that confirms a single fact in the window, and the setup flow that asks for the
 required facts a profile does not state, are the remaining piece; the JSON export keeps its version-2
-shape and does not carry the origins.
+shape and does not carry the origins. Verified on the whole matrix: run `38903585396` at `4321458`, 13/13 jobs,
+`Ran 2004 tests ... OK` per leg and `RESULT: PASS - 102 checks passed` on the five display-backed legs; the run
+that found the one wrong assertion in the four cross-platform legs is `38901274611`, and the defect is written up
+in `research/candidate-profile-provenance-2026-10-16.md`.
 
 Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 

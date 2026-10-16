@@ -3494,6 +3494,13 @@ export is still `format_version: 2` and is asserted to carry none of the new voc
 local bookkeeping, travel with a backup and a restore, and are deliberately **absent** from the portable file.
 `SOURCE_QUALITY_GATE_PASSED` is still `False` and `enabled_discovery_sources()` still `()`.
 
+**A fifth defect was the CI matrix's,** and it was a test rather than the code: the delete-with-its-orphans test
+read the database file and required the deleted document name's bytes to be gone, which holds on Linux and fails
+on all four cross-platform legs (run `38901274611` at `9581f81`) — SQLite keeps a deleted row's content in the
+pages it frees, and the threat model already says so. The assertion now checks the rows the application actually
+deletes. Run **`38903585396`** at `4321458` is green **13/13**: `Ran 2004 tests ... OK` on every leg, the five
+display-backed legs reporting `RESULT: PASS — 102 checks passed`.
+
 **What is deliberately not done.** No widget was added, so no manual step was ticked: the checklist stays
 **117 steps, 22 PASS / 95 BLOCKED / 0 FAIL**. A fact can be confirmed through `store.confirm_profile_fact`
 (tested end to end) but there is **no control in the window** for it yet — the confirmation belongs with the
