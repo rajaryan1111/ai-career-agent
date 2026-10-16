@@ -50,6 +50,13 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Mark uncertain, missing, or conflicting extracted fields for review before they affect eligibility or generated material.
 - Allow manual correction and multiple resume versions. Resume parsing is not claimed as implemented in the current alpha.
 - Never fabricate experience, skills, qualifications, or work authorization.
+- Record where each stored profile fact came from and whether the person confirmed it, so an extracted,
+  imported, or older value is never presented as the person's own statement: a value read out of a document
+  or imported from a file is stored and shown as unconfirmed, only an explicit confirmation by the person
+  confirms a fact, and a write changes the origin of the facts it changed and no others. A document is
+  remembered by name, never by folder; a fact stored before origins were recorded reads as unknown; and
+  which required facts a profile does not state stays answerable without a display, so a setup flow can ask
+  for exactly those. The origins are local bookkeeping and do not enter the version-2 JSON export.
 - Report progress from the records the user actually wrote, and never beyond them: a count is always
   traceable to stored rows; every rate names the denominator it was computed over; a rate is withheld with
   its reason below a floor of five recorded applications; a metric the schema cannot observe (an offer, an

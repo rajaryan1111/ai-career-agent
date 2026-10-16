@@ -150,6 +150,225 @@ class CandidateProfile:
     preferred_role_types: frozenset[str] = field(default_factory=frozenset)
 
 
+# ------------------------------------------------------------------ where a profile fact came from
+#
+# The product promise above ``CandidateProfile`` is that a fact is only there because somebody supplied
+# it. This section is the other half of that promise: *who* supplied it, and whether the person has
+# since said it is right.
+#
+# The vocabulary is the **profile form's own keys** - ``country``, ``degree``, ``study_status``,
+# ``graduation_year``, ``experience``, ``work_authorization``, ``skills``, ``locations``,
+# ``work_modes``, ``role_types`` - because that is the vocabulary the résumé reviewer already proposes
+# values in (``career_agent.resume.FieldProposal.key``) and the one the form reads and writes
+# (``profile_form_values``). A second vocabulary for the same ten facts would be a second place for
+# them to drift apart, so there is one list, defined here, and a drift test binds it to both other
+# uses.
+#
+# Two rules hold the whole section together:
+#
+# * **A fact that a machine produced is never verified by the fact that it was written.** Extraction
+#   and import record :attr:`FactSource.EXTRACTED_FROM_DOCUMENT` or
+#   :attr:`FactSource.IMPORTED_FROM_FILE` with :attr:`FactVerification.UNVERIFIED`. Only a person
+#   confirming a stored value moves it to :attr:`FactVerification.USER_CONFIRMED`, and a save that
+#   does not change a fact never re-attributes it.
+# * **A stored fact is never described as coming from somewhere it did not.** A profile written
+#   before this build recorded origins reads as :attr:`FactSource.UNKNOWN` - not as the person's own
+#   words - and the reading API says so rather than guessing.
+
+#: The ten facts a stored profile holds, in the form's own key vocabulary and in the form's order. The
+#: order is what the reading API sorts by, so two runs over one database report the same sequence.
+PROFILE_FACTS: tuple[str, ...] = (
+    "country",
+    "degree",
+    "study_status",
+    "graduation_year",
+    "experience",
+    "work_authorization",
+    "skills",
+    "locations",
+    "work_modes",
+    "role_types",
+)
+
+#: The facts :func:`evaluate_eligibility` can only judge when the profile states them, so a setup flow
+#: that wants to ask targeted questions asks these first (``prd.md``: "ask only to confirm uncertain or
+#: supply required missing facts"). These are facts a *listing* may require - country of residence,
+#: degree and discipline, study status, graduation year, experience and work authorization - and the
+#: four preference facts are deliberately absent because they are choices, not facts a document or a
+#: person can be right or wrong about. This list is what is worth supplying, never a gate: a listing
+#: that states none of these is unaffected by a profile that answers none of them.
+REQUIRED_PROFILE_FACTS: tuple[str, ...] = (
+    "country",
+    "degree",
+    "study_status",
+    "graduation_year",
+    "experience",
+    "work_authorization",
+)
+
+
+class FactSource(str, Enum):
+    """Where a stored profile fact came from.
+
+    ``UNKNOWN`` exists for a fact stored before this build recorded origins - it is the honest answer
+    for an old row, and it is deliberately *not* the person's own words. ``USER_ENTERED`` means the
+    person typed or chose the value in the application itself.
+    """
+
+    UNKNOWN = "unknown"
+    USER_ENTERED = "user_entered"
+    EXTRACTED_FROM_DOCUMENT = "extracted_from_document"
+    IMPORTED_FROM_FILE = "imported_from_file"
+
+
+class FactVerification(str, Enum):
+    """Whether a person has said a stored fact is right.
+
+    Nothing writes :attr:`USER_CONFIRMED` as a side effect of storing a value: extraction and import
+    leave a fact :attr:`UNVERIFIED`, and only an explicit confirmation moves it.
+    """
+
+    UNVERIFIED = "unverified"
+    USER_CONFIRMED = "user_confirmed"
+
+
+@dataclass(frozen=True)
+class ProfileFactProvenance:
+    """Where one stored profile fact came from, and whether a person has confirmed it.
+
+    ``document_name`` is the *name* of the file a fact was read out of, never its path: a folder
+    written into a database that gets backed up and handed to somebody else is somebody's home
+    directory. It is ``None`` for a fact the person typed, and for a fact stored before origins were
+    recorded. ``recorded_at`` is when this application wrote the origin down and ``confirmed_at`` when
+    a person confirmed the value, so the two are never confused with each other.
+    """
+
+    fact: str
+    source: FactSource
+    verification: FactVerification = FactVerification.UNVERIFIED
+    document_name: str | None = None
+    recorded_at: str | None = None
+    confirmed_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.fact not in PROFILE_FACTS:
+            raise ValueError(f"{self.fact!r} is not one of the profile's facts ({', '.join(PROFILE_FACTS)})")
+        if not isinstance(self.source, FactSource):
+            object.__setattr__(self, "source", FactSource(self.source))
+        if not isinstance(self.verification, FactVerification):
+            object.__setattr__(self, "verification", FactVerification(self.verification))
+        if self.source is FactSource.USER_ENTERED and self.document_name is not None:
+            # A value the person typed came out of no file, so naming one would be a fiction. The two
+            # sources that do read a file - a document on this device, and an export another machine
+            # wrote - may name it, and neither is required to.
+            raise ValueError("a fact the person typed names no document")
+
+    @property
+    def is_confirmed(self) -> bool:
+        """Whether a person has said this stored value is right."""
+        return self.verification is FactVerification.USER_CONFIRMED
+
+
+#: Longest document name this application records as provenance. A file name is a label, not content:
+#: a longer one is refused rather than truncated, because half a name identifies nothing.
+MAX_DOCUMENT_NAME_CHARACTERS = 200
+
+
+def document_name_only(name: str | None) -> str | None:
+    """The *name* of the file a fact came from, never its path, or ``None`` when there is no name.
+
+    Both separators are treated as separators on every platform: a Windows path handed to this function
+    on Linux (or the reverse) must not be stored whole, because the point of the rule is that no
+    directory ever reaches the database. A value that names no file at all - empty, a single separator,
+    or a path ending in one, which names a folder - is ``None`` rather than the folder's name: guessing
+    that somebody meant the folder's last segment would be inventing a document nobody read.
+    """
+    if name is None:
+        return None
+    cleaned = str(name).strip().replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > MAX_DOCUMENT_NAME_CHARACTERS:
+        raise ValueError(
+            f"the document name is longer than the {MAX_DOCUMENT_NAME_CHARACTERS} characters this "
+            "application records as provenance"
+        )
+    return cleaned
+
+
+#: How a form key maps to the field a stored profile keeps it in. One mapping, used by the renderer
+#: below, so the form vocabulary and the stored shape cannot drift apart.
+_FACT_FIELDS: dict[str, str] = {
+    "country": "candidate_country",
+    "degree": "degree_discipline",
+    "study_status": "study_status",
+    "graduation_year": "graduation_year",
+    "experience": "experience_years",
+    "work_authorization": "work_authorization",
+    "skills": "skills",
+    "locations": "preferred_locations",
+    "work_modes": "preferred_work_modes",
+    "role_types": "preferred_role_types",
+}
+
+#: Facts a person enters as a free-text list of values rather than as one value.
+MULTI_VALUE_FACTS = ("skills", "locations", "work_modes", "role_types")
+
+
+def profile_fact_values(profile: CandidateProfile) -> dict[str, str]:
+    """One stored profile rendered as its ten facts, in the form's own keys.
+
+    This is the single renderer for both directions: the profile form reads it, the store compares a
+    stored profile with an incoming one through it, and a fact is *missing* exactly when its rendered
+    value here is empty. Values are rendered the way the form shows them - a list as its sorted items
+    joined with ", ", a number as its own text - so comparing two rendered maps compares the values
+    rather than their spelling: two orderings of the same skills are the same fact, and a textual
+    comparison would report a difference that does not exist.
+    """
+    return {
+        fact: (", ".join(sorted(getattr(profile, _FACT_FIELDS[fact])))
+               if fact in MULTI_VALUE_FACTS
+               else ("" if getattr(profile, _FACT_FIELDS[fact]) is None
+                     else str(getattr(profile, _FACT_FIELDS[fact]))))
+        for fact in PROFILE_FACTS
+    }
+
+
+def missing_profile_facts(profile: CandidateProfile) -> tuple[str, ...]:
+    """Which of the profile's ten facts the stored profile does not state, in the profile's own order."""
+    rendered = profile_fact_values(profile)
+    return tuple(fact for fact in PROFILE_FACTS if not rendered[fact])
+
+
+def missing_required_profile_facts(profile: CandidateProfile | None) -> tuple[str, ...]:
+    """The facts a future setup flow should ask for: required ones this profile does not state.
+
+    A missing profile is missing every required fact, which is the truthful answer rather than an
+    empty list. ``None`` is accepted because that is what ``CareerStore.get_profile`` returns for a
+    person who has not saved one yet, which is exactly the case a setup flow has to handle.
+    """
+    if profile is None:
+        return REQUIRED_PROFILE_FACTS
+    rendered = profile_fact_values(profile)
+    return tuple(fact for fact in REQUIRED_PROFILE_FACTS if not rendered[fact])
+
+
+def changed_profile_facts(stored: CandidateProfile | None, incoming: CandidateProfile) -> tuple[str, ...]:
+    """Which facts a write actually changes, comparing what is stored with what is being written.
+
+    This is what keeps a save from re-attributing facts the person did not touch: a résumé is reviewed
+    and merged into the form, then saved, and every fact the person did not change keeps whatever
+    origin it already had. A fact that is newly stated, or stated differently, counts as changed - and
+    a fact the incoming profile no longer states counts as changed too, because the stored value is
+    going away with its origin.
+    """
+    if stored is None:
+        return tuple(fact for fact in PROFILE_FACTS if profile_fact_values(incoming)[fact])
+    before = profile_fact_values(stored)
+    after = profile_fact_values(incoming)
+    return tuple(fact for fact in PROFILE_FACTS if before[fact] != after[fact])
+
+
 @dataclass(frozen=True)
 class JobListing:
     """Normalized listing with source provenance and explicit uncertainty."""

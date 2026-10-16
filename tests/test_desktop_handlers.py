@@ -27,7 +27,8 @@ from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
-from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
+from career_agent.core import (ActivityKind, ApplicationActivity, FactSource, FactVerification,
+                            InterviewOutcome, PreparationKind)
 from career_agent import backup as backup_module
 from career_agent import contact_export
 from career_agent import contacts
@@ -4491,6 +4492,34 @@ class ResumeImportHandlerTests(HandlerTestCase):
             "only a value the parser is confident about may start selected",
         )
 
+    def test_accepted_values_are_recorded_as_read_out_of_that_document_and_unconfirmed(self):
+        """The whole point of the review screen: it saves values, it does not speak for the person.
+
+        Accepting a proposal is a decision to store the value; it is not the claim "this is right about
+        me". So the facts this save changed are recorded as read out of that document - by name - and as
+        unconfirmed, and a fact the person did not touch keeps whatever origin it already had.
+        """
+        self.store.save_profile(PROFILE)
+        before = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+        CONFIG["Save these values?"] = True
+        self.selection("skills").set(False)
+        self.selection("graduation_year").set(True)
+
+        BUTTONS.by_text["Save selected values"]()
+
+        origins = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+        self.assertEqual(origins["graduation_year"].source, FactSource.EXTRACTED_FROM_DOCUMENT)
+        self.assertEqual(origins["graduation_year"].document_name, "ada-resume.docx",
+                         "the document is remembered by name")
+        self.assertEqual(origins["graduation_year"].verification, FactVerification.UNVERIFIED,
+                         "accepting a value is not confirming it")
+        self.assertIsNone(origins["graduation_year"].confirmed_at)
+        self.assertEqual(origins["skills"].source, before["skills"].source,
+                         "the value the person left unselected keeps its original origin")
+        self.assertNotIn("/", origins["graduation_year"].document_name)
+
     def test_an_uncertain_value_is_not_saved_unless_it_is_selected(self):
         self.store.save_profile(PROFILE)
         app, dialog = self.import_resume(self.write_docx())
@@ -4569,7 +4598,8 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.store.save_profile(PROFILE)
         app = self.make_app()
 
-        saved, message = app._apply_accepted_profile_values({"experience": "lots"})
+        saved, message = app._apply_accepted_profile_values({"experience": "lots"},
+                                                            document_name="review.docx")
 
         self.assertFalse(saved)
         self.assertIn("Nothing was saved", message)
@@ -5086,8 +5116,12 @@ class UnreadableStoredRecordTests(HandlerTestCase):
         app = self.make_app()
         error = StoredRecordError("candidate profile", "it holds field(s) this version cannot use")
 
-        with mock.patch.object(self.store, "get_profile", side_effect=error):
-            saved, message = app._apply_accepted_profile_values({"experience": "1"})
+        # The write reads the stored profile to decide which facts it changes and reads it again to
+        # verify the result; this test is about the *second* read failing, after the row is written.
+        # The name is what the review dialog passes: a value read out of a document records which one.
+        with mock.patch.object(self.store, "get_profile", side_effect=[PROFILE, error]):
+            saved, message = app._apply_accepted_profile_values({"experience": "1"},
+                                                                document_name="review.docx")
 
         self.assertFalse(saved)
         self.assertNotIn("Verified in the local database", message)

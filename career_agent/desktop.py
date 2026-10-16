@@ -19,9 +19,9 @@ from .backup import (
 )
 from .core import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
-    Decision, EducationEntry, EmploymentType, InterviewMode, InterviewOutcome, InterviewStage,
-    PreparationKind, WorkHistoryEntry, evaluate_eligibility, months_covered_by, score_relevance,
-    selectable_tracker_statuses,
+    Decision, EducationEntry, EmploymentType, FactSource, InterviewMode, InterviewOutcome,
+    InterviewStage, PreparationKind, WorkHistoryEntry, evaluate_eligibility, months_covered_by,
+    score_relevance, selectable_tracker_statuses,
 )
 from . import __version__
 from . import analytics
@@ -3011,6 +3011,12 @@ class CareerAgentApp:
     def _save_profile(self):
         try:
             self.store.save_profile(build_candidate_profile(form_values(self.profile_vars)))
+        except StoredRecordError as exc:
+            # The profile cannot even be read back to compare against, so there is nothing this write can
+            # honestly record an origin for. Reported as the unreadable record it is, like every other
+            # read path on this tab, rather than as an invalid form.
+            self._report_unreadable_record(exc)
+            return
         except ValueError as exc:
             messagebox.showerror("Invalid profile", str(exc), parent=self.root)
             return
@@ -3242,7 +3248,8 @@ class CareerAgentApp:
                 parent=dialog,
             ):
                 return
-            saved, message = self._apply_accepted_profile_values(accepted)
+            saved, message = self._apply_accepted_profile_values(
+                accepted, document_name=result.file_name)
             if not saved:
                 messagebox.showerror("Profile not saved", message, parent=dialog)
                 self.status.set("Resume import: nothing was saved.")
@@ -3270,7 +3277,7 @@ class CareerAgentApp:
         ttk.Button(footer, text="Save selected values", command=apply_selected).pack(side="right")
         ttk.Button(footer, text="Cancel", command=cancel).pack(side="right", padx=(0, 8))
 
-    def _apply_accepted_profile_values(self, accepted):
+    def _apply_accepted_profile_values(self, accepted, document_name: str | None = None):
         """Validate and save reviewed resume values, and confirm what the database actually holds.
 
         The accepted values go through the same ``build_candidate_profile`` pathway as the Save
@@ -3279,6 +3286,11 @@ class CareerAgentApp:
         reported after the stored profile has been read back and compared field by field. A failure
         to verify after the write is reported as unconfirmed rather than as "nothing was saved",
         because by then the row has been written.
+
+        The facts this save changes are recorded as coming **from that document and unverified** -
+        accepting a proposal is not the same claim as confirming a fact, and this application is not
+        entitled to assume the person read every value before clicking. The message says which of the
+        two happened, in those words, rather than letting "saved" read as "confirmed".
         """
         merged = form_values(self.profile_vars)
         merged.update(accepted)
@@ -3287,7 +3299,17 @@ class CareerAgentApp:
         except ValueError as exc:
             return False, f"{exc} Nothing was saved."
         try:
-            self.store.save_profile(profile)
+            self.store.save_profile(
+                profile, source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name=document_name,
+            )
+        except StoredRecordError as exc:
+            # Raised while reading the stored profile the write compares against: nothing has been
+            # written at that point, and the record that could not be read is what to report.
+            return False, f"{exc} Nothing was saved."
+        except ValueError as exc:
+            # A refusal from the storage boundary itself - an unusable document name, for example - is
+            # reported like any other failure to save, and nothing is written.
+            return False, f"{exc} Nothing was saved."
         except sqlite3.Error as exc:
             return False, (
                 "The profile could not be written to the local database. Nothing was saved; your "
@@ -3326,7 +3348,13 @@ class CareerAgentApp:
         for key, value in profile_form_values(stored).items():
             self.profile_vars[key].set(value)
         saved_labels = ", ".join(label for key, label in resume.PROFILE_FIELD_LABELS if key in accepted)
-        return True, f"Saved {len(accepted)} profile value(s): {saved_labels}. Verified in the local database."
+        origin = f" {document_name}" if document_name else " the document"
+        return True, (
+            f"Saved {len(accepted)} profile value(s): {saved_labels}. They were written to the local "
+            f"database and read back to check them. The app recorded them as values read out of{origin}, "
+            "and as not confirmed by you: a sentence in a document is not your own statement about "
+            "yourself, and this app does not treat it as one."
+        )
 
     def _job_from_form(self):
         """Map the current form to the listing to save and the explicit save plan.
@@ -4073,7 +4101,9 @@ class CareerAgentApp:
             self.status.set("Import cancelled; nothing was written.")
             return
         try:
-            outcome = import_export.apply_import(self.store, document, source=chosen)
+            outcome = import_export.apply_import(
+                self.store, document, source=chosen, document_name=Path(chosen).name,
+            )
         except StoredRecordError as exc:
             self._report_unreadable_record(exc)
             return

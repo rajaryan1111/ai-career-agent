@@ -47,7 +47,8 @@ from typing import Any, Iterable, Mapping
 
 from .core import (
     ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability,
-    CandidateProfile, EducationEntry, EmploymentType, JobListing, WorkHistoryEntry, duplicate_key,
+    CandidateProfile, EducationEntry, EmploymentType, FactSource, JobListing, WorkHistoryEntry,
+    duplicate_key,
 )
 from .store import CareerStore, PrivateWriteError, StoredRecordError, write_private_text_file
 
@@ -512,13 +513,19 @@ def _plan_application_record(store: CareerStore, plan: ImportPlan, record: Mappi
     return plan
 
 
-def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str = "the chosen file"
-                 ) -> ImportOutcome:
+def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str = "the chosen file",
+                 document_name: str | None = None) -> ImportOutcome:
     """Apply an import, writing only what the plan describes.
 
     The plan is recomputed here rather than trusted from the caller, so the writes and the promise cannot
     diverge: whatever the window showed, this function decides again and writes that. Every write goes
     through the store's own methods, so the storage boundary still enforces every rule.
+
+    A profile this import writes is recorded as **imported from a file and unverified**: the file is not
+    evidence that the candidate's facts are right, it is evidence of where they came from, and only the
+    person can say the rest. ``document_name`` is the name of the file the values came out of - the store
+    keeps the name and drops any directory it is handed. ``source`` stays what it always was: the
+    description the person is shown, which is sometimes a path and sometimes not.
     """
     plan = plan_import(store, document, source=source)
     added_jobs = 0
@@ -529,7 +536,7 @@ def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str
     activity = 0
     added_profile = False
     for profile in plan.new_profiles:
-        store.save_profile(profile)
+        store.save_profile(profile, source=FactSource.IMPORTED_FROM_FILE, document_name=document_name)
         added_profile = True
     # History first: it is the smallest set of writes and the one a person would notice most if it were
     # half-applied, and the plan already decided everything about it before this function was called.

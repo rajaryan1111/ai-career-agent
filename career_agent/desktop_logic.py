@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .core import (
-    ActivityKind, ApplicationActivity, Availability, CandidateProfile, JobListing,
+    ActivityKind, ApplicationActivity, Availability, CandidateProfile, JobListing, profile_fact_values,
 )
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
@@ -428,16 +428,11 @@ def _compared(parse, wanted: str, stored: str) -> bool:
 
 
 def profile_form_values(profile: CandidateProfile) -> dict[str, str]:
-    """Render a saved candidate profile back into the profile form's string fields."""
-    return {
-        "country": profile.candidate_country or "",
-        "degree": profile.degree_discipline or "",
-        "study_status": profile.study_status or "",
-        "graduation_year": str(profile.graduation_year or ""),
-        "experience": "" if profile.experience_years is None else str(profile.experience_years),
-        "work_authorization": profile.work_authorization or "",
-        "skills": ", ".join(sorted(profile.skills)),
-        "locations": ", ".join(sorted(profile.preferred_locations)),
-        "work_modes": ", ".join(sorted(profile.preferred_work_modes)),
-        "role_types": ", ".join(sorted(profile.preferred_role_types)),
-    }
+    """Render a saved candidate profile back into the profile form's string fields.
+
+    The rendering itself lives in :func:`career_agent.core.profile_fact_values`, beside the profile it
+    describes, because the store compares a stored profile with an incoming one through the same
+    function when it decides which facts a save actually changed. One renderer, so a fact cannot be
+    "the same value" here and a different one there.
+    """
+    return profile_fact_values(profile)

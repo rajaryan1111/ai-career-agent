@@ -64,8 +64,13 @@ EVENTS: tuple[str, ...] = (
     "database.migrated",
     "database.migration_failed",
     "database.upgrade_snapshot",
+    # The profile, and where its facts came from. ``profile.saved`` carries a count and the origin of the
+    # facts the write recorded - a field name, never a value - and ``profile.fact_confirmed`` carries the
+    # fact's own name, which is what a person confirmed: the value they were looking at never reaches the
+    # log.
     "profile.saved",
     "profile.deleted",
+    "profile.fact_confirmed",
     "job.saved",
     "job.deleted",
     "tracker.saved",

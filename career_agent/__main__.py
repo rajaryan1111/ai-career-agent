@@ -867,7 +867,8 @@ def run_import(args: argparse.Namespace) -> int:
             print("")
             print("Nothing was written. Run the same command with --yes to apply this plan.")
             return EXIT_OK
-        outcome = importer.apply_import(store, document, source=str(source))
+        outcome = importer.apply_import(store, document, source=str(source),
+                                       document_name=source.name)
     print("")
     print(f"Import complete: {outcome.describe()}.")
     print("Nothing was replaced: a listing or profile already stored wins over the file's copy. "

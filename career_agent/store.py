@@ -23,6 +23,8 @@ from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
     ApplicationTracker, Availability, CandidateProfile, EducationEntry, EmploymentType, InterviewMode,
+    FactSource, FactVerification, PROFILE_FACTS, ProfileFactProvenance, changed_profile_facts,
+    document_name_only, profile_fact_values,
     InterviewOutcome, InterviewRound, InterviewStage, JobListing, PreparationItem, PreparationKind,
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
@@ -32,7 +34,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -55,6 +57,10 @@ SCHEMA_TABLES_BY_VERSION = {
     7: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
         "interview_round", "job_listings", "scheduled_task", "task_run", "worker_lease"),
+    8: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+        "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+        "interview_round", "job_listings", "profile_fact_provenance", "scheduled_task", "task_run",
+        "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1032,6 +1038,34 @@ def _migration_to_v7(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v8(connection: sqlite3.Connection) -> None:
+    """Schema 8: where each stored profile fact came from, and whether a person confirmed it.
+
+    One new table, additive and empty, keyed by the fact's own name - the profile form's key, the same
+    vocabulary ``core.PROFILE_FACTS`` defines and the résumé reviewer already proposes values in. One
+    row per fact the stored profile states, holding the origin (typed here, read out of a document,
+    imported from a file), the verification state, the *name* of the document a fact was read from
+    (never its path, for the reason ``hr_contact.source_file`` gives: a folder written into a database
+    that gets backed up elsewhere is somebody's home directory), when the origin was recorded, and when
+    a person confirmed the value.
+
+    Nothing here can verify anything by itself. A profile written before this step has no rows and is
+    read as :attr:`~career_agent.core.FactSource.UNKNOWN`, which is the truthful answer: that build did
+    not record origins, so this one cannot claim the person typed those values. ``IF NOT EXISTS`` keeps
+    the step re-runnable, like every other step.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS profile_fact_provenance (
+               fact TEXT PRIMARY KEY,
+               source TEXT NOT NULL,
+               verification TEXT NOT NULL,
+               document_name TEXT,
+               recorded_at TEXT NOT NULL,
+               confirmed_at TEXT
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1044,6 +1078,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (5, "add the preparation checklist and the interview rounds", _migration_to_v5),
     (6, "add the candidate's own employment history and education", _migration_to_v6),
     (7, "add the imported HR contact list and the disagreements found in it", _migration_to_v7),
+    (8, "add where each stored profile fact came from, and whether it was confirmed", _migration_to_v8),
 )
 
 
@@ -1514,17 +1549,83 @@ class CareerStore:
         except sqlite3.Error:
             return None
 
-    def save_profile(self, profile: CandidateProfile) -> None:
+    def save_profile(self, profile: CandidateProfile, *, source: FactSource = FactSource.USER_ENTERED,
+                     document_name: str | None = None) -> tuple[str, ...]:
+        """Store the profile, and record where any fact this write *changed* came from.
+
+        ``source`` says who supplied the values in this write; the default is the person typing in the
+        form, and the other two are the paths that do not have a person in front of them - a value read
+        out of a document the person chose, and a value out of an imported JSON file. Either way the
+        bookkeeping follows one rule: **a fact is only re-attributed when this write changes it**. A
+        save that merges reviewed résumé values into a form the person did not otherwise touch leaves
+        every untouched fact's origin exactly as it was, which is what stops a save from quietly
+        turning "read out of your CV" into "you typed this".
+
+        The profile row and the origin rows are written in **one transaction**: there is no state in
+        which a value is stored with the origin of the value it replaced, or with none at all.
+
+        Returns the facts this write recorded an origin for (empty when nothing changed), in the
+        profile's own order. The person's values never reach the log: the event carries a count and the
+        origin's name, which is a field name and a handful of characters, not candidate data.
+
+        A database held at a schema older than 8 is the one case where the profile is written and no
+        origin is recorded, and ``()`` says so rather than reporting facts that were not recorded.
+        """
+        if source is FactSource.UNKNOWN:
+            raise ValueError(
+                "a write records where its values came from: 'unknown' is only ever the answer for a "
+                "profile stored before this application recorded origins"
+            )
+        name = document_name_only(document_name)
+        if source is FactSource.EXTRACTED_FROM_DOCUMENT and name is None:
+            # Reading a document is the one origin whose whole point is naming it: a run that cannot say
+            # which file a value came from cannot say where it came from at all.
+            raise ValueError("a fact read out of a document records the document's name")
+        if source is FactSource.USER_ENTERED and name is not None:
+            raise ValueError("a fact the person typed names no document")
+
+        stored = self.get_profile()
+        changed = changed_profile_facts(stored, profile)
+        # A database held at a schema older than 8 has nowhere to put an origin (see
+        # ``_schema_records_fact_provenance``). The profile itself is still written - that is what the
+        # caller asked for - but nothing is claimed to have been recorded, because nothing was.
+        records_origins = self._schema_records_fact_provenance()
+        recorded = changed if records_origins else ()
         payload = json.dumps(asdict(profile), sort_keys=True, default=_json_default)
+        now = _now()
         with self._connection:
             self._connection.execute(
                 """INSERT INTO candidate_profile(profile_id, payload, updated_at) VALUES (1, ?, ?)
                    ON CONFLICT(profile_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
-                (payload, _now()),
+                (payload, now),
             )
-        # No detail: what the profile says is candidate data and stays out of a log meant to be safe to
-        # share. The timestamp is the answer to "when was this last saved?".
-        self._record("profile.saved")
+            # A fact the write no longer states has no origin to keep: the value it described is gone,
+            # and an origin for a value that is not there is a claim about nothing.
+            rendered = profile_fact_values(profile)
+            for fact in recorded:
+                if not rendered[fact]:
+                    self._connection.execute(
+                        "DELETE FROM profile_fact_provenance WHERE fact=?", (fact,))
+                    continue
+                self._connection.execute(
+                    """INSERT INTO profile_fact_provenance
+                           (fact, source, verification, document_name, recorded_at, confirmed_at)
+                       VALUES (?, ?, ?, ?, ?, NULL)
+                       ON CONFLICT(fact) DO UPDATE SET
+                           source=excluded.source, verification=excluded.verification,
+                           document_name=excluded.document_name, recorded_at=excluded.recorded_at,
+                           confirmed_at=NULL""",
+                    (fact, source.value, FactVerification.UNVERIFIED.value, name, now),
+                )
+        # No detail beyond the count and the origin: what the profile *says* is candidate data and stays
+        # out of a log meant to be safe to share. A changed fact is always stored unverified, so the
+        # line says so rather than leaving a reader to assume the person confirmed it.
+        self._record(
+            "profile.saved",
+            f"facts={len(recorded)} origin={source.value}" if records_origins
+            else "facts=0 origin=not recorded (this file predates schema 8)",
+        )
+        return recorded
 
     def get_profile(self) -> CandidateProfile | None:
         row = self._connection.execute("SELECT payload FROM candidate_profile WHERE profile_id=1").fetchone()
@@ -1543,6 +1644,136 @@ class CareerStore:
             return CandidateProfile(**values)
         except TypeError as exc:
             raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc
+
+    def _schema_records_fact_provenance(self) -> bool:
+        """Whether the schema this database *records* has the origin table.
+
+        True for every file this build opens in normal use: a file that records an earlier version is
+        upgraded to the current one before anything reads or writes it, and schema 8 is where the table
+        arrives. It is false in exactly one situation - a database deliberately held at an older version,
+        which is what the migration tests build and what a tool inspecting an old file would open - and
+        there the honest answer is that this build has nowhere to put an origin *yet*: the file is
+        upgraded, and the origins recorded from then on, the next time the application opens it. The
+        check reads the recorded version rather than probing for the table, so a file that claims the
+        current version and is missing the table fails loudly instead of quietly recording nothing.
+        """
+        return int(self._connection.execute("PRAGMA user_version").fetchone()[0]) >= 8
+
+    def get_profile_fact_provenance(self) -> tuple[ProfileFactProvenance, ...]:
+        """Where each fact the stored profile states came from, in the profile's own order.
+
+        One entry per fact the stored profile **states**: a fact with no value has no origin, and
+        listing one would invite a reader to think something was recorded about it. A stated fact with
+        no stored row reads as :attr:`~career_agent.core.FactSource.UNKNOWN` - never as the person's own
+        words - because that is what a profile saved before this build recorded origins actually is.
+
+        An empty tuple means there is no stored profile. This is a read: nothing here writes a row, so
+        reading a profile can never make it look verified.
+        """
+        profile = self.get_profile()
+        if profile is None:
+            return ()
+        rendered = profile_fact_values(profile)
+        # Every stored row is decoded, not only the ones this profile states a value for: a row this build
+        # cannot interpret is reported as itself rather than passed over in silence, which is the rule the
+        # rest of the store's read paths follow.
+        stored_rows = {
+            entry.fact: entry
+            for entry in (
+                self._decode_fact_provenance(row["fact"], row["source"], row["verification"],
+                                             row["document_name"], row["recorded_at"], row["confirmed_at"])
+                for row in self._connection.execute(
+                    "SELECT fact, source, verification, document_name, recorded_at, confirmed_at "
+                    "FROM profile_fact_provenance"
+                ).fetchall()
+            )
+        }
+        entries: list[ProfileFactProvenance] = []
+        for fact in PROFILE_FACTS:
+            if not rendered[fact]:
+                continue
+            entries.append(stored_rows.get(fact)
+                           or ProfileFactProvenance(fact=fact, source=FactSource.UNKNOWN))
+        return tuple(entries)
+
+    @staticmethod
+    def _decode_fact_provenance(fact: object, source: object, verification: object,
+                                name: object, recorded_at: object, confirmed_at: object
+                                ) -> ProfileFactProvenance:
+        """One stored origin row as a record, refusing what this build cannot interpret.
+
+        Nothing a row holds is ever *quoted* in a refusal: a row is a row of a database somebody may have
+        hand-edited, and these messages are written to be readable in a report without carrying whatever
+        was in the row with them. A refusal names the field and what is wrong with it, never the value.
+        """
+        if fact not in PROFILE_FACTS:
+            # Not a value this build stores: an origin for a fact that does not exist describes nothing,
+            # and guessing which fact it meant would be inventing the answer.
+            raise StoredRecordError("profile fact origin",
+                                    "it names something that is not one of this profile's facts")
+        noun = f"origin of the {fact} fact"
+        if source not in {item.value for item in FactSource}:
+            raise StoredRecordError(noun, "its source is an origin this version does not know")
+        if verification not in {item.value for item in FactVerification}:
+            raise StoredRecordError(noun, "its verification is a state this version does not know")
+        try:
+            return ProfileFactProvenance(
+                fact=str(fact),
+                source=FactSource(source),
+                verification=FactVerification(verification),
+                document_name=_stored_text(name, noun, "document_name") if name is not None else None,
+                recorded_at=_stored_text(recorded_at, noun, "recorded_at") if recorded_at is not None else None,
+                confirmed_at=_stored_text(confirmed_at, noun, "confirmed_at") if confirmed_at is not None else None,
+            )
+        except ValueError as exc:
+            # Every field above is one this build knows, but they contradict each other - an origin that
+            # claims the person typed the value while naming a document is the one such row the record
+            # itself refuses. That is a damaged row like any other: reported as one, reusing the store's
+            # own sentence, rather than escaping a read path as a programming error.
+            raise StoredRecordError(noun, f"its fields contradict each other ({exc})") from exc
+
+    def confirm_profile_fact(self, fact: str) -> ProfileFactProvenance:
+        """Record that a person has said one stored fact is right, and return the stored state.
+
+        This is the **only** thing that moves a fact to
+        :attr:`~career_agent.core.FactVerification.USER_CONFIRMED`: extraction and import leave facts
+        unverified, and no read path writes anything. Confirming a fact this application has no stored
+        value for is refused rather than recorded, because confirming nothing would put a row in the
+        database describing a value that is not there. The origin is never changed by a confirmation -
+        a fact read out of a document stays a fact read out of a document, now confirmed by the person -
+        and confirming a fact twice changes nothing at all, including its timestamp.
+        """
+        if fact not in PROFILE_FACTS:
+            raise ValueError(f"{fact!r} is not one of the profile's facts ({', '.join(PROFILE_FACTS)})")
+        if not self._schema_records_fact_provenance():
+            raise ValueError(
+                "this file records a schema older than the one that keeps where facts came from, so "
+                "there is nothing to confirm yet. Open the application on this file to update it."
+            )
+        profile = self.get_profile()
+        if profile is None or not profile_fact_values(profile)[fact]:
+            raise ValueError(
+                f"the stored profile does not state {fact!r}, so there is no value to confirm"
+            )
+        current = next(
+            (entry for entry in self.get_profile_fact_provenance() if entry.fact == fact), None
+        )
+        if current is not None and current.is_confirmed:
+            return current
+        now = _now()
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO profile_fact_provenance
+                       (fact, source, verification, document_name, recorded_at, confirmed_at)
+                   VALUES (?, ?, ?, NULL, ?, ?)
+                   ON CONFLICT(fact) DO UPDATE SET
+                       verification=excluded.verification, confirmed_at=excluded.confirmed_at""",
+                (fact, FactSource.UNKNOWN.value, FactVerification.USER_CONFIRMED.value, now, now),
+            )
+        # The fact's *name* is a field name, not candidate data; the value the person confirmed never
+        # reaches the log.
+        self._record("profile.fact_confirmed", f"fact={fact}")
+        return next(entry for entry in self.get_profile_fact_provenance() if entry.fact == fact)
 
     def save_job(self, job: JobListing, *, observed_at: str | None = None) -> None:
         timestamp = observed_at or _now()
@@ -3080,6 +3311,10 @@ class CareerStore:
         with self._connection:
             self._connection.execute("DELETE FROM candidate_work_history")
             self._connection.execute("DELETE FROM candidate_education")
+            # The origins go with the profile they describe, in the same transaction: a row saying "this
+            # came out of CV.docx" is a statement about personal data, and "delete my profile" must not
+            # leave part of that behind.
+            self._connection.execute("DELETE FROM profile_fact_provenance")
             cursor = self._connection.execute("DELETE FROM candidate_profile WHERE profile_id=1")
         removed = cursor.rowcount > 0
         if removed or counts["work_history"] or counts["education"]:

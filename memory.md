@@ -3440,3 +3440,63 @@ ticked), and whether the paragraph reads clearly, whether the save dialog is rea
 spreadsheet does with the apostrophe and whether non-ASCII names look right in a person's own tools stay
 unverified. Written up in `research/hr-contact-export-2026-10-16.md`; D36 is recorded in section 26 of
 `research/cross-platform-desktop-ci-evidence-2026-10-15.md`.
+
+## 2026-10-16 — A profile fact now knows where it came from, and the app can no longer call a document's words the person's own
+
+**The gap.** The candidate profile was ten facts and a timestamp. A country typed into the form, a graduation
+year accepted out of a local DOCX, and a skills list imported from a JSON file exported by another machine all
+landed in `candidate_profile.payload` as the same bytes, and after a résumé import the window said "Verified in
+the local database" — where *verified* could only be read as a claim about the person, because the reader had no
+other way to take it. The word was true of the values (they were written and read back) and false about the
+facts, and there was nothing in the database to tell the difference.
+
+**The increment (schema 8).** One additive, initially-empty table, `profile_fact_provenance(fact PRIMARY KEY,
+source, verification, document_name, recorded_at, confirmed_at)`, and the rule that governs it: a **machine's
+fact is never a person's confirmation**. `FactSource` is unknown / user_entered / extracted_from_document /
+imported_from_file, `FactVerification` is unverified / user_confirmed, and the vocabulary is the profile form's
+own ten keys (`PROFILE_FACTS`) rather than a second spelling of them. `REQUIRED_PROFILE_FACTS` is the six
+`evaluate_eligibility` can be blocked on, so a future setup flow can ask for exactly what the profile does not
+state; a test reads `evaluate_eligibility`'s source to fail if the list drifts.
+
+`save_profile(profile, *, source=…, document_name=…)` writes the profile row and one origin row per **changed**
+stated fact in one transaction and returns the facts whose origin it recorded; a fact the write no longer states
+loses its row with the value it described. `get_profile_fact_provenance()` decodes every stored row (an
+unreadable one is refused, never passed over) and reports a stated fact with no row as **unknown** — not as the
+person's own. `confirm_profile_fact(fact)` is the only path to `user_confirmed`: it refuses a fact the profile
+does not state, is idempotent, and never rewrites the source. A document is remembered by its **name**, never its
+folder, on both separators. `delete_profile` deletes the origins in the same transaction, so "delete my profile"
+cannot leave a row saying *this came out of CV.docx* behind; `erasure.py` needed no change because it removes
+files, and the origins live inside the database file.
+
+**What a person is told.** The résumé-import completion message no longer says "Verified in the local database".
+It says the values were written to the local database and read back to check them, and that the app recorded
+them as **values read out of that document** and **as not confirmed by you**: "a sentence in a document is not
+your own statement about yourself, and this app does not treat it as one." An earlier draft of that message
+promised a "Confirm selected fact button"; no such control exists, and a message must not name a control the
+window does not have — the sentence was rewritten rather than the promise left standing.
+
+**Two defects, both found by running the code rather than reading it.** (1) `StoredRecordError` subclasses
+`ValueError`, so the new `except ValueError` on the résumé save path — written for form validation — swallowed a
+stored record this build cannot read and told the person their typed values were unusable; found by an existing
+read-back test going red in the full suite, fixed by catching `StoredRecordError` **first** in both handlers.
+(2) `save_profile` returned "recorded" on a file held at an older version, where there is no table to record
+into; now it returns `()` and logs that origins were not recorded. A third finding was not a defect in the code
+but in the tests: **nothing asserted the résumé review path's provenance at all**, so that call site could have
+dropped the origin with the whole suite green. A mutation harness on a disposable copy found it — the first pass
+ran 12 mutations, ten caught, that one **missed**; a test was added for it and the mutation is now caught, and
+`tests/test_desktop_handlers.py` holds 344 tests. A fourth, smaller defect came out of hand-editing a row while reviewing the decoder: an origin that contradicted itself (typed-then-names-a-document) escaped the read as a bare `ValueError` instead of the store's `StoredRecordError`; it is now reported as the damaged row it is, with its own test and mutation.
+
+**Evidence.** `Ran 2004 tests ... OK (skipped=13)` (the suite stood at 1950), `compileall` clean, the stand-in
+acceptance run `102 checks passed, 0 failed` — which reports **BLOCKED**, by design, because a stand-in Tk is not
+a desktop — and **14 of 14 mutation checks detected** on an isolated copy (13 by the test named for the mutation,
+1 by three other tests), log at `/home/user/scratch/mutation_checks_provenance.log`. Compatibility: the JSON
+export is still `format_version: 2` and is asserted to carry none of the new vocabulary — origins are this app's
+local bookkeeping, travel with a backup and a restore, and are deliberately **absent** from the portable file.
+`SOURCE_QUALITY_GATE_PASSED` is still `False` and `enabled_discovery_sources()` still `()`.
+
+**What is deliberately not done.** No widget was added, so no manual step was ticked: the checklist stays
+**117 steps, 22 PASS / 95 BLOCKED / 0 FAIL**. A fact can be confirmed through `store.confirm_profile_fact`
+(tested end to end) but there is **no control in the window** for it yet — the confirmation belongs with the
+setup flow that also asks for the required facts a profile does not state, where the value can be shown beside
+the control. Work-history and education records (schema 6) still have no per-record provenance. Written up in
+`research/candidate-profile-provenance-2026-10-16.md`.

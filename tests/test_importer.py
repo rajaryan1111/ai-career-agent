@@ -18,6 +18,7 @@ from pathlib import Path
 
 from career_agent import importer
 from career_agent.core import (
+    FactSource,
     ActivityKind, ApplicationActivity, ApplicationStatus, ApplicationTracker, Availability,
     CandidateProfile, JobListing,
 )
@@ -381,6 +382,52 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual([item.listing_id for item in plan.new_jobs], ["j1"])
             self.assertEqual(len(plan.new_profiles), 1)
             self.assertEqual(store.list_jobs(), (), "planning must write nothing")
+
+    def test_the_export_carries_no_trace_of_where_a_fact_came_from(self):
+        """Version 2 is a promise to files already on somebody's disk: the format does not change here.
+
+        Provenance is this application's bookkeeping about a fact, not part of the fact, and it lives in
+        its own table - so a profile that has origins recorded exports exactly like one that does not.
+        """
+        plain = CandidateProfile(candidate_country="India", skills=frozenset({"Python", "SQL"}))
+        with self.source_store() as store:
+            store.save_profile(plain)
+            _, without_origins = self.export_file(profile=False)
+            document = importer.export_document(store)
+            store.save_profile(plain, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                               document_name="CV final.docx")
+            _, with_origins = self.export_file(profile=False)
+            after = importer.export_document(store)
+
+        self.assertEqual(after["format_version"], 2)
+        self.assertEqual(sorted(after["profile"]), sorted(without_origins["profile"]),
+                         "recording an origin adds no field to the exported profile")
+        self.assertEqual(sorted(after), sorted(document))
+        blob = json.dumps(after)
+        # ``provenance_note`` is a listing's own long-standing field, so the check is for the provenance
+        # vocabulary this build added, not for the word.
+        for leaked in ("profile_fact_provenance", "extracted_from_document", "user_confirmed",
+                       "document_name", "CV final.docx"):
+            with self.subTest(leaked=leaked):
+                self.assertNotIn(leaked, blob)
+        self.assertEqual(after["profile"], with_origins["profile"])
+
+    def test_an_imported_profile_is_recorded_as_imported_and_unverified(self):
+        """A file another machine wrote is evidence of where facts came from, not that they are right."""
+        path, document = self.export_file()
+        with self.target_store() as store:
+            importer.apply_import(store, document, source=str(path), document_name=path.name)
+
+            origins = {entry.fact: entry for entry in store.get_profile_fact_provenance()}
+
+        self.assertEqual(list(origins), ["country", "experience", "work_authorization", "skills"],
+                         "one entry per fact the imported profile states, in the profile's own order")
+        self.assertTrue(all(entry.source is FactSource.IMPORTED_FROM_FILE
+                            for entry in origins.values()))
+        self.assertTrue(all(not entry.is_confirmed for entry in origins.values()),
+                        "importing a file confirms nothing")
+        self.assertTrue(all(entry.document_name == path.name for entry in origins.values()),
+                        "the file is remembered by name")
 
     def test_a_stored_profile_is_kept_and_the_plan_says_why(self):
         path, document = self.export_file()

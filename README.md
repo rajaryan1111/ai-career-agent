@@ -43,7 +43,7 @@ The dependency-free Python domain core in `career_agent/` provides:
   [Import a résumé](#import-a-résumé-pdf-or-docx) for the limits and the optional PDF library.
 - No network access, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Progress reporting adds up the records that already exist (`--analytics`, and the **Progress report** on the Application tracker tab): counts, rates that name their denominator and are withheld below five applications, and an explicit list of what this application cannot measure — an offer, or anything an employer did without telling you — so an unavailable metric is never printed as a zero. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved. Email and calendar integrations have the same shape: a typed draft and event contract with a preview of exactly what would happen, an operation id that makes a repeat recognisable, and execution that is disabled by default and refuses with a reason — the only thing that can perform anything is an explicitly named local mock that contacts nothing (see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar)).
+The local alpha supports manual candidate-profile entry, your own employment and education records (the **Work history & study** tab: employer, job title, employment type, start and end dates, an explicit current-role flag, optional notes, and institution, qualification, discipline, start and completion dates with an ongoing-study flag, validated so an impossible period or a current role with an end date is refused rather than stored), manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine (the dialog offers only the statuses the selected record may actually move to, and a record in a final state such as `withdrawn` is told so instead of being offered a change it cannot take), a dated activity history for each application (written by you, never by the app, and never treated as evidence), local JSON export and import (a file is read, planned and confirmed before anything is written; an existing listing is linked rather than replaced and a stored profile is kept), and explicit delete controls. Lists show the app's own record times (labelled "this app, UTC"); the detail pane states that the source's publication or update date is not provided, because the database stores none and import time is never presented as a source date. Job entry has an explicit mode: **New job** always creates a separate record, while selecting a saved listing switches to **Edit**, keeps that listing's identity, and asks for confirmation when an eligibility-relevant field changes. Local database write failures are reported with an actionable message and never reported as success; a status change that does not actually change the status is not reported as an update. The candidate profile can be filled in by hand or proposed from a résumé you import locally (see [Import a résumé](#import-a-résumé-pdf-or-docx)): the document is read on this device, every proposed value is shown with the text it came from before anything is written, you accept or reject each value, and the unselected and missing values keep what your profile already had. **Each saved fact carries where it came from** - typed by you, read out of the document, or imported from a file - and whether you have confirmed it; a value the app read somewhere is never shown or treated as one you confirmed, and an edit changes the origin of the fact you edited rather than of the ones around it (see [Import a résumé](#import-a-résumé-pdf-or-docx)). One rule decides the database file for the window, the backup/restore commands and the `--doctor` report, so all three always name the same file (see [Where the app keeps its data](#where-the-app-keeps-its-data)); `--doctor` reports the version, the paths, and whether the database is readable, without a display and without changing anything. Progress reporting adds up the records that already exist (`--analytics`, and the **Progress report** on the Application tracker tab): counts, rates that name their denominator and are withheld below five applications, and an explicit list of what this application cannot measure — an offer, or anything an employer did without telling you — so an unavailable metric is never printed as a zero. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved. Email and calendar integrations have the same shape: a typed draft and event contract with a preview of exactly what would happen, an operation id that makes a repeat recognisable, and execution that is disabled by default and refuses with a reason — the only thing that can perform anything is an explicitly named local mock that contacts nothing (see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar)).
 
 ## Run the desktop app
 
@@ -212,6 +212,12 @@ silently truncated:
   neither can reach the window as a raw error. The document is treated as untrusted input: this is text
   extraction, **not** a malware scanner, and no parsing is risk-free.
 - The file you selected is read in place; no copy of it is kept anywhere.
+- **A value you accept from a résumé is stored as coming from that document, and as unconfirmed by you.**
+  The app records which facts each save changed and where those facts came from: the ones you typed are
+  recorded as yours, the ones read out of the document as read out of the document - remembered by
+  **name**, never by folder - and neither is treated as confirmed about you until you confirm it. The
+  completion message says exactly that. Nothing in the app presents a value it read from a file as
+  something you said about yourself.
 - **An HR contact CSV is read offline, reviewed and - only when you confirm - stored locally.**
   `--preview-contact-csv PATH` reads one HR contact CSV that you name and reports row/key/flag counts and
   the lines that need review, printing no email address, name or company label and writing nothing
@@ -312,8 +318,9 @@ address exactly as your file wrote it, the name and company label your file gave
 its folder, so a backup you hand to somebody else does not carry your home directory), when an import first
 and last saw the key, how many imports have seen it, the parser's review flags, any review note your file
 carried, and the do-not-contact mark. The two tables live in the schema (version 7 added `hr_contact` and
-`hr_contact_conflict`), so they travel with your database, your backups and your restores, and the JSON
-export does not carry them.
+`hr_contact_conflict`; version 8 added `profile_fact_provenance`, which records where each stored
+profile fact came from), so they travel with your database, your backups and your restores, and the
+JSON export does not carry them.
 
 **A repeat import adds no second record.** One key is one record, however many rows mention it: a file
 listing the same address three times produces one contact whose row says it saw three rows, and importing
@@ -403,8 +410,10 @@ enabled and nothing in this build performs an external action.
 
 ## Back up and restore your data
 
-The database holds the candidate profile, every saved listing and the whole application history. The app
-can write a verified backup of it and restore from one, entirely on the local machine.
+The database holds the candidate profile, every saved listing and the whole application history. The
+profile's own bookkeeping travels with it - which fact came from where, and whether you confirmed it -
+so a restore brings the profile back knowing what you typed and what a document said. The app can
+write a verified backup of it and restore from one, entirely on the local machine.
 
 In the app, open the **Data safety** tab: *Back up database* writes a timestamped file to a location you
 choose, and *Restore from backup* validates the file you pick, copies the current database aside,
@@ -566,6 +575,11 @@ writes anything. The import of a file this app did not write is refused: the for
 and a missing or different version is an error, not a guess. A file larger than 64 MB is refused before
 it is read at all — this app's exports are kilobytes, so a file that big is not one of them, and reading
 a mistyped path whole is how a command runs out of memory instead of saying no.
+
+A profile that an import writes is recorded as **imported from that file and unconfirmed**: the file
+says where the facts came from, and only you can say they are right. The export format itself is
+unchanged (still version 2) - where a fact came from is this app's own bookkeeping, kept beside the
+profile in the database rather than added to a file other builds read.
 
 Without the window:
 
