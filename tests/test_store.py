@@ -19,7 +19,8 @@ from career_agent.backup import BackupError, validate_app_database
 from career_agent.store import (
     SCHEMA_TABLES_BY_VERSION, SCHEMA_VERSION, CareerStore, PrivateWriteError, SchemaMigrationError,
     SchemaTooNewError, SchemaUpgradeRefused, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
-    UnrecognisedDatabaseError, create_private_file, require_owner_only, write_private_text_file,
+    UnrecognisedDatabaseError, create_private_file, require_owner_only, write_private_bytes_file,
+    write_private_text_file,
 )
 
 #: A fixed, clearly local timestamp so a test never depends on the clock.
@@ -2360,6 +2361,81 @@ class PrivateFileWriteTests(unittest.TestCase):
             with CareerStore(database) as reopened:
                 self.assertEqual(reopened.list_jobs(), ())
 
+
+
+class PrivateBytesWriteTests(unittest.TestCase):
+    """The byte-for-byte writer: a documented format may not depend on the platform that wrote it.
+
+    ``write_private_bytes_file`` exists for the HR contact export, whose contract pins its own line
+    endings. It carries the same guarantees as the text writer it sits beside, and this class checks the
+    one property it adds - the bytes on disk are the bytes it was given, on every platform - plus the
+    refusals it shares, because a second file-creating path is a second place for an export to escape.
+    """
+
+    data = b"Email,Name\r\nfirst.contact@example.invalid,Sample Person\nSecond line\r\n"
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.directory = Path(self._directory.name)
+
+    def mode_of(self, path) -> int:
+        return Path(path).stat().st_mode & 0o777
+
+    def test_the_file_holds_exactly_the_bytes_it_was_given(self):
+        """A text write would translate the bare ``\\n`` above on Windows; this one must not."""
+        target = self.directory / "export.csv"
+
+        write_private_bytes_file(target, self.data)
+
+        self.assertEqual(target.read_bytes(), self.data)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_a_new_file_is_owner_only_and_an_existing_one_is_tightened(self):
+        fresh = self.directory / "fresh.csv"
+        existing = self.directory / "existing.csv"
+        existing.write_bytes(b"an older export")
+        os.chmod(existing, 0o644)
+
+        write_private_bytes_file(fresh, self.data)
+        write_private_bytes_file(existing, self.data)
+
+        self.assertEqual(self.mode_of(fresh), 0o600)
+        self.assertEqual(self.mode_of(existing), 0o600)
+        self.assertEqual(existing.read_bytes(), self.data)
+
+    def test_a_symbolic_link_destination_is_refused_and_its_target_is_untouched(self):
+        victim = self.directory / "victim.txt"
+        victim.write_bytes(b"ORIGINAL CONTENT THAT MUST SURVIVE")
+        link = self.directory / "link.csv"
+        try:
+            os.symlink(victim, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symbolic links are unavailable here: {exc}")
+
+        with self.assertRaises(PrivateWriteError) as caught:
+            write_private_bytes_file(link, self.data)
+
+        self.assertIn("symbolic link", str(caught.exception))
+        self.assertEqual(victim.read_bytes(), b"ORIGINAL CONTENT THAT MUST SURVIVE")
+
+    @unittest.skipUnless(os.name == "posix", "a filesystem refusing the file mode is a POSIX scenario")
+    def test_a_failure_to_apply_the_mode_leaves_no_export_behind(self):
+        target = self.directory / "blocked.csv"
+        with mock.patch("career_agent.store.os.fchmod", side_effect=OSError("operation not permitted")):
+            with self.assertRaises(PrivateWriteError) as caught:
+                write_private_bytes_file(target, self.data)
+
+        self.assertIn("nothing was written", str(caught.exception))
+        if target.exists():
+            # As with the text writer, a destination that already existed is tightened rather than
+            # replaced, so a refused attempt may leave the empty file behind - and no data in it.
+            self.assertEqual(target.read_bytes(), b"", "a refused write left its data on disk")
+
+    def test_a_missing_parent_directory_reports_a_useful_error(self):
+        with self.assertRaises(PrivateWriteError) as caught:
+            write_private_bytes_file(self.directory / "absent" / "export.csv", self.data)
+        self.assertIn("could not be opened for writing", str(caught.exception))
 
 
 class PrivateFileCreationTests(unittest.TestCase):

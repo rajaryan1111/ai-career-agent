@@ -9,6 +9,7 @@ handling. They do not verify rendering, theming, layout, or macOS behaviour; the
 manual smoke-test checklist in research/ is still required before GUI acceptance.
 """
 import contextlib
+import csv
 import io
 import json
 import os
@@ -28,6 +29,7 @@ from career_agent import (
 )
 from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
 from career_agent import backup as backup_module
+from career_agent import contact_export
 from career_agent import contacts
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import analytics as career_agent_analytics
@@ -1313,6 +1315,29 @@ class TabLayoutPolicyTests(unittest.TestCase):
                 self.assertEqual(bound.__func__, handler.__func__,
                                  f"{tree} is not bound to the handler its selection change posts")
 
+    def test_the_export_control_says_what_the_file_is_and_what_it_cannot_do(self):
+        """The sentence beside the export button, read from the real window that builds it.
+
+        The claim about the do-not-contact column is asserted as the *module's own* sentence rather than as
+        a copy of it: the window and the command line have to say the same thing about a safety-critical
+        column, and a test that spelled the words out again would only prove the test agrees with itself.
+        """
+        with self.open_window("export-note.sqlite3") as app:
+            note = app.contact_export_note.get()
+            self.assertIn(contact_export.MARK_COLUMN_LIMITATION, note,
+                          "the window does not carry the format module's own sentence about the mark")
+            # Sharing the sentence proves the screens agree; these prove the sentence is worth sharing.
+            self.assertIn('"Do Not Contact"', note)
+            self.assertIn("cannot set or clear", note,
+                          "the sentence beside the export never says an import cannot apply the mark")
+            self.assertIn("read the column", note,
+                          "the sentence never says what to do with the mark column instead")
+            for claim in ("per stored contact", "not a backup", "replaced"):
+                self.assertIn(claim, note, f"the sentence beside the export never says {claim!r}: {note!r}")
+            self.assertIn("Nothing is sent anywhere", note)
+            self.assertFalse(app.export_contacts_button.instate(["disabled"]),
+                             "the export control is offered greyed out with no reason to refuse")
+
     def test_the_delete_control_says_what_it_costs_and_where_it_sits(self):
         """The one action on the contacts tab that cannot be undone, read from the tab that really builds it.
 
@@ -1374,7 +1399,7 @@ class TabLayoutPolicyTests(unittest.TestCase):
             # The controls that write the do-not-contact mark are in the same body, so they scroll with the
             # list they act on rather than being pinned below content that can grow past the page.
             for widget in (app.mark_contact_button, app.clear_contact_button, app.contact_note_entry,
-                           app.delete_contact_button):
+                           app.delete_contact_button, app.export_contacts_button):
                 container = acceptance.layout_container(widget, contacts_page)
                 self.assertIsNot(container, contacts_page,
                                  f"{widget.winfo_class()} {widget} is judged against its tab")
@@ -6929,6 +6954,224 @@ class ContactDeletionControlTests(ContactTabTestCase):
         self.assertIsNotNone(self.store.get_contact(CONTACT_EMAILS[0]))
         self.assertEqual(len(self.store.list_contact_conflicts()), 0)
         self.assertEqual(len(self.store.list_contacts()), 2, "both contacts are still stored")
+
+class ContactsExportHandlerTests(ContactTabTestCase):
+    """The export control: what it writes, what it refuses, and what it never claims.
+
+    The export is the one control on this tab that writes outside the database, so these tests drive its
+    real handler with the stubbed file dialog and read the file back: the documented columns, the mark
+    column as the database holds it, the counts in the status line and the event, and no contact value or
+    chosen path anywhere in the activity log. "Read-only" is the connection's change counter, and every
+    refusal - a closed dialog, a declined overwrite, an unwritable folder, a list over the format's own
+    limit - is required to leave the database and the folder exactly as they were and to claim nothing.
+    """
+
+    def destination(self, name: str = "contacts-export.csv") -> Path:
+        return Path(self._directory.name) / name
+
+    def stored_rows(self, path: Path) -> list:
+        return list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+
+    def test_the_control_writes_the_documented_file_and_reports_what_it_held(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.store.set_contact_suppression(CONTACT_EMAILS[0], note=CONTACT_NOTE)
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+        before = self.changes()
+
+        app._export_contacts()
+
+        self.assertTrue(target.is_file())
+        rows = self.stored_rows(target)
+        self.assertEqual(rows[0], ["Email", "Name", "Company", "Do Not Contact", "Export Format"])
+        self.assertEqual([row[0] for row in rows[1:]], [CONTACT_EMAILS[0], CONTACT_EMAILS[1]])
+        self.assertEqual([row[1] for row in rows[1:]], [CONTACT_NAMES[0], CONTACT_NAMES[1]])
+        self.assertEqual([row[3] for row in rows[1:]], ["yes", "no"],
+                         "the mark column does not say what the database holds")
+        self.assertTrue(target.read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertIn("Contact list exported", MESSAGES.titles("showinfo"))
+        self.assertIn("Exported 2 contact(s)", app.status.get())
+        self.assertIn("Nothing was contacted", app.status.get())
+        # Read-only: no contact, mark or disagreement row was touched by writing a file.
+        self.assertEqual(self.changes(), before, "the export wrote to the database")
+        record = self.store.get_contact(CONTACT_EMAILS[0])
+        self.assertTrue(record.suppressed)
+        self.assertEqual(record.suppressed_note, CONTACT_NOTE)
+        # Counts in the log, and nothing else: no address, no name, no company, no note, no path.
+        logged = self.log_text()
+        self.assertIn("event=contacts.exported", logged)
+        self.assertIn("detail=contacts=2 marked=1", logged)
+        for value in (*ALL_CONTACT_FIXTURE_VALUES, CONTACT_NOTE, str(target)):
+            self.assertNotIn(value, logged, f"{value!r} reached the activity log")
+
+    def test_the_completion_report_carries_the_counts_and_the_marks_limitation(self):
+        app = self.make_app()
+        self.import_two(app)
+        FILEDIALOG.path = str(self.destination())
+        MESSAGES.reset()
+
+        app._export_contacts()
+
+        said = MESSAGES.text("showinfo")
+        self.assertIn("2 contact(s)", said)
+        self.assertIn("0 marked do not contact", said)
+        self.assertNotIn(str(self.destination()), said,
+                         "the completion report names the folder the file went into")
+        self.assertIn(contact_export.MARK_COLUMN_LIMITATION, said,
+                      "the report must repeat what the file can and cannot do with a mark")
+        for value in (*ALL_CONTACT_FIXTURE_VALUES, CONTACT_NOTE):
+            self.assertNotIn(value, said, f"{value!r} reached the completion report")
+
+    def test_an_empty_list_still_writes_the_documented_file_and_says_it_is_empty(self):
+        app = self.make_app()
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+
+        app._export_contacts()
+
+        self.assertEqual(self.stored_rows(target), [["Email", "Name", "Company", "Do Not Contact",
+                                                     "Export Format"]])
+        self.assertIn("holds no rows", app.status.get())
+        self.assertIn("0 contact(s)", MESSAGES.text("showinfo"))
+        self.assertEqual(self.changes(), 0, "exporting an empty list wrote to the database")
+
+    def test_a_closed_dialog_writes_nothing_and_says_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        FILEDIALOG.path = ""
+        MESSAGES.reset()
+        listing_before = sorted(path.name for path in Path(self._directory.name).iterdir())
+
+        app._export_contacts()
+
+        self.assertEqual(sorted(path.name for path in Path(self._directory.name).iterdir()),
+                         listing_before, "a closed dialog left a file behind")
+        self.assertEqual(MESSAGES.titles(), [], "a closed dialog is neither a failure nor a success")
+        self.assertNotIn("Exported", app.status.get())
+        self.assertNotIn("contacts.exported", self.log_text())
+
+    def test_an_existing_file_is_replaced_only_after_the_question_is_answered(self):
+        app = self.make_app()
+        self.import_two(app)
+        target = self.destination()
+        target.write_bytes(b"a person's own file\r\n")
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+
+        # Declined: nothing is written, the file is untouched, and nothing claims an export happened.
+        CONFIG["Replace the existing file?"] = False
+        try:
+            app._export_contacts()
+        finally:
+            CONFIG.clear()
+
+        self.assertEqual(target.read_bytes(), b"a person's own file\r\n")
+        self.assertIn("Replace the existing file?", MESSAGES.titles("askyesno"))
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("no undo", asked, "replacing a file the person chose must say it cannot be undone")
+        self.assertNotIn("Contact list exported", MESSAGES.titles("showinfo"))
+        self.assertIn("cancelled", app.status.get())
+        self.assertNotIn("contacts.exported", self.log_text())
+
+        # Confirmed: the file the person agreed to replace is the file the export is written to.
+        app._export_contacts()
+
+        self.assertEqual([row[0] for row in self.stored_rows(target)[1:]],
+                         [CONTACT_EMAILS[0], CONTACT_EMAILS[1]])
+        self.assertIn("Contact list exported", MESSAGES.titles("showinfo"))
+
+    def test_a_folder_that_cannot_be_written_is_reported_without_claiming_success(self):
+        app = self.make_app()
+        self.import_two(app)
+        FILEDIALOG.path = str(Path(self._directory.name) / "absent" / "contacts-export.csv")
+        MESSAGES.reset()
+        before = self.changes()
+
+        app._export_contacts()
+
+        self.assertEqual(MESSAGES.titles("showerror"), ["Export not saved"])
+        self.assertNotIn("Contact list exported", MESSAGES.titles("showinfo"))
+        self.assertIn("Export not saved", app.status.get())
+        self.assertNotIn("Exported 2", app.status.get())
+        self.assertEqual(self.changes(), before, "a failed export wrote to the database")
+        self.assertIn("event=contacts.export.failed", self.log_text())
+        self.assertNotIn("contacts.exported", self.log_text())
+        for value in (*ALL_CONTACT_FIXTURE_VALUES, CONTACT_NOTE):
+            self.assertNotIn(value, self.log_text(), f"{value!r} reached the activity log")
+
+    def test_a_list_over_the_formats_own_limit_is_refused_and_writes_no_file(self):
+        """The real refusal path: the format's own reader limit is what decides, not a handler's guess."""
+        app = self.make_app()
+        self.import_two(app)
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+
+        original = contacts.MAX_CONTACT_CSV_BYTES
+        try:
+            contacts.MAX_CONTACT_CSV_BYTES = 100
+            app._export_contacts()
+        finally:
+            contacts.MAX_CONTACT_CSV_BYTES = original
+
+        self.assertEqual(MESSAGES.titles("showerror"), ["Nothing was exported"])
+        self.assertIn("100 bytes", MESSAGES.text("showerror"))
+        self.assertIn("Data safety", MESSAGES.text("showerror"),
+                      "the refusal must say where a copy that does hold everything lives")
+        self.assertFalse(target.exists())
+        self.assertIn("larger than the format", app.status.get())
+        self.assertIn("event=contacts.export.failed", self.log_text())
+        self.assertNotIn("contacts.exported", self.log_text())
+
+    def test_a_storage_failure_while_reading_the_list_claims_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+
+        with mock.patch.object(self.store, "list_contacts",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            app._export_contacts()
+
+        self.assertFalse(target.exists())
+        self.assertEqual(MESSAGES.titles("showerror"), ["Local database unavailable"])
+        self.assertEqual(app.status.get(), "The local database could not be read; nothing was changed.")
+        self.assertNotIn("contacts.exported", self.log_text())
+
+    def test_a_stored_record_this_build_cannot_read_is_reported_and_nothing_is_written(self):
+        app = self.make_app()
+        self.import_two(app)
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+        MESSAGES.reset()
+        self.store._connection.execute("UPDATE hr_contact SET email_key = '' WHERE contact_id = 1")
+        self.store._connection.commit()
+
+        app._export_contacts()
+
+        self.assertFalse(target.exists(), "a refused export left a file holding the records it could read")
+        self.assertEqual(MESSAGES.titles("showerror"), ["Saved record could not be read"],
+                         "an unreadable record is reported by the shared explanation, not a new one")
+        self.assertEqual(app.status.get(), "Contact export not written (a stored record could not be read).")
+        self.assertNotIn("Contact list exported", MESSAGES.titles("showinfo"))
+        self.assertNotIn("contacts.exported", self.log_text(),
+                         "a refused export must not be recorded as one that happened")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits are not meaningful on this platform")
+    def test_the_written_file_is_owner_only(self):
+        app = self.make_app()
+        self.import_two(app)
+        target = self.destination()
+        FILEDIALOG.path = str(target)
+
+        app._export_contacts()
+
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
 
 class ContactConflictPanelTests(ContactTabTestCase):
     """The recorded-disagreement panel: both sides, honestly labelled, and nothing written.

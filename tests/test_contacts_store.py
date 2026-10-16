@@ -29,7 +29,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from career_agent import contacts as contacts_module
+from career_agent import contact_export, contacts as contacts_module
 from career_agent.backup import create_backup, restore_backup, validate_app_database
 from career_agent.contacts import ContactCsvMalformed, ContactSchemaError
 from career_agent.event_log import EVENTS, log_path
@@ -969,6 +969,73 @@ class ContactDeletionTests(ContactStoreTestCase):
             self.assertNotIn(value, written, f"{value!r} reached the activity log")
         # The vocabulary is one list, and this is the check that the new name is part of it.
         self.assertIn("contacts.deleted", EVENTS)
+
+
+class ContactExportReadBackTests(ContactStoreTestCase):
+    """The export read back through the store: what an import of it does, and what it cannot do.
+
+    ``tests/test_contact_export.py`` holds the format's own contract. What belongs here is the part that
+    needs a database on both sides: that the file this application writes is a file this application can
+    import, that importing it into a second database carries the list and nothing else, and that the
+    do-not-contact column in it is text - a mark the person made is never applied, and never cleared, by
+    any file. The last of those is the documented limitation of this format, asserted where it would fail
+    if the import ever grew a statement for that column.
+    """
+
+    def _marked_list(self) -> Path:
+        """Two contacts, one of them marked, exported to a file beside this test's database."""
+        self.store.import_contacts(self.parsed(
+            f"{SAMPLE_EMAILS[0]},{SAMPLE_NAMES[0]},{SAMPLE_COMPANIES[0]},1,\r\n"
+            f"{SAMPLE_EMAILS[1]},{SAMPLE_NAMES[1]},{SAMPLE_COMPANIES[1]},2,\r\n"))
+        self.store.set_contact_suppression(SAMPLE_EMAILS[0], note="synthetic note beside the mark")
+        return contact_export.write_export(self.store, self.folder / "export.csv").path
+
+    def test_importing_the_export_into_another_database_carries_the_list(self):
+        exported = self._marked_list()
+        second = self.folder / "second.sqlite3"
+
+        with CareerStore(str(second)) as other:
+            outcome = other.import_contacts(contacts_module.read_contact_csv(exported))
+            stored = {record.email_key: record for record in other.list_contacts()}
+
+        self.assertEqual((outcome.added, outcome.updated, outcome.conflicts), (2, 0, 0))
+        self.assertEqual(sorted(stored), sorted(
+            [email.strip().casefold() for email in SAMPLE_EMAILS[:2]]))
+        self.assertEqual(stored[SAMPLE_EMAILS[0].casefold()].name, SAMPLE_NAMES[0])
+        self.assertEqual(stored[SAMPLE_EMAILS[1].casefold()].company, SAMPLE_COMPANIES[1])
+
+    def test_the_marked_column_in_the_file_cannot_mark_or_unmark_anything(self):
+        exported = self._marked_list()
+        # The file says yes for the marked contact and no for the other, and a file cannot write either.
+        text = exported.read_text(encoding="utf-8")
+        self.assertIn(",yes,hr-contact-export/1", text)
+        self.assertIn(",no,hr-contact-export/1", text)
+
+        self.store.import_contacts(contacts_module.read_contact_csv(exported))
+
+        marked = self.store.get_contact(SAMPLE_EMAILS[0])
+        unmarked = self.store.get_contact(SAMPLE_EMAILS[1])
+        assert marked is not None and unmarked is not None
+        self.assertTrue(marked.suppressed, "a re-import cleared a mark the person made")
+        self.assertEqual(marked.suppressed_note, "synthetic note beside the mark")
+        self.assertFalse(unmarked.suppressed,
+                         "a file set a do-not-contact mark: that column belongs to the person alone")
+        self.assertEqual(self.store.contact_record_counts()["do_not_contact"], 1)
+
+    def test_an_export_writes_no_line_about_itself_and_changes_no_row(self):
+        """The module is read-only; whether an export is *reported* is the window's and the CLI's call."""
+        self.store.import_contacts(self.parsed(f"{SAMPLE_EMAILS[0]},{SAMPLE_NAMES[0]},{SAMPLE_COMPANIES[0]},1,\r\n"))
+        before = self.changes()
+        logged = log_path(self.database).read_text(encoding="utf-8")
+
+        contact_export.write_export(self.store, self.folder / "export.csv")
+
+        self.assertEqual(self.changes(), before, "an export wrote to the database")
+        self.assertEqual(log_path(self.database).read_text(encoding="utf-8"), logged,
+                         "the export module wrote a line to the activity log")
+        for value in ALL_SAMPLE_VALUES:
+            self.assertNotIn(value, log_path(self.database).read_text(encoding="utf-8"),
+                             f"{value!r} reached the activity log")
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience for a single-module run

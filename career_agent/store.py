@@ -495,6 +495,42 @@ def write_private_text_file(path: str | Path, text: str, *, encoding: str = "utf
     return target
 
 
+def write_private_bytes_file(path: str | Path, data: bytes) -> Path:
+    """Write ``data`` to ``path`` byte for byte, owner-only from the first byte.
+
+    The same guarantees as :func:`write_private_text_file` - created through :func:`create_private_file`,
+    never through a symbolic link, and removed where possible when the mode cannot be applied or cannot
+    be verified. The one difference is the reason this exists: the bytes are written in binary mode, so
+    the file holds exactly ``data`` on every platform. A text write translates each ``\\n`` to the
+    platform's own line separator, and a *documented* file format that is one thing on Linux and another
+    on Windows is not a format - a person comparing two exports, or a test asserting the bytes of a
+    comma-separated file, would be reading a machine's convention rather than the file's.
+
+    Raises :class:`PrivateWriteError` (an ``OSError``) with a user-facing message. POSIX mode guarantees
+    apply on POSIX systems; other platforms get the same write path without the permission guarantee,
+    which is not claimed there.
+    """
+    target = Path(path)
+    descriptor = create_private_file(target)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None  # the file object owns the descriptor from here
+            handle.write(data)
+    except OSError as exc:
+        raise PrivateWriteError(
+            f"{target} could not be written: {exc.strerror or exc}. The export was not completed."
+        ) from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    require_owner_only(target, noun="export")
+    return target
+
+
 def append_private_text_file(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
     """Append ``text`` to ``path``, creating it owner-only and never following a symbolic link.
 

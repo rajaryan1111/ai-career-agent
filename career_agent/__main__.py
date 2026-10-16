@@ -40,6 +40,13 @@ screen and no import: it is the read-only preview, and the window's HR contacts 
 reviewed, confirmed and stored locally. The command says so rather than implying a workflow it does not
 have.
 
+``--export-contacts-to`` writes the stored HR contact list to a CSV file the person names and
+``--preview-contact-csv`` reads one back: the export is the list as a portable file (address, name,
+company label and the do-not-contact column), it refuses a path that already exists, it never writes a
+mark reason or a recorded disagreement, and the database is only read. It is not a backup of the
+database - the marks stay behind, and the file says so in its own last lines - which is what the
+whole-database ``--backup-to`` is for.
+
 ``--integration-status``, ``--preview-calendar-export``, ``--draft-follow-up`` and ``--record-follow-up``
 are the email and calendar side of the same promise: a draft is not a send, a preview is not an action, and
 no integration is enabled in this build. ``--draft-follow-up`` writes a message from an application's own
@@ -72,7 +79,7 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, contacts, erasure, importer, preparation
+from . import analytics, contact_export, contacts, erasure, importer, preparation
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -226,6 +233,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--export-to", metavar="PATH",
         help="Write this database's profile, listings and history to a JSON file at PATH.",
+    )
+    actions.add_argument(
+        "--export-contacts-to", metavar="PATH",
+        help="Write the stored HR contact list to a CSV file at PATH, refused if PATH exists "
+             "(read-only, and it never carries a do-not-contact reason).",
     )
     actions.add_argument(
         "--import-from", metavar="PATH",
@@ -765,6 +777,53 @@ def run_export(args: argparse.Namespace) -> int:
     print(f"Wrote {len(document['jobs'])} listing(s) and the profile to {written}")
     print("This file may hold personal information. It was written owner-only where the file system "
           "supports it, and nothing was sent anywhere.")
+    return EXIT_OK
+
+
+def run_export_contacts(args: argparse.Namespace) -> int:
+    """Write the stored HR contact list to the path the person named, and nothing else.
+
+    Read-only with respect to the database: the contacts are read through the store, no statement in the
+    export changes a row, and an existing path is refused rather than replaced, because there is no dialog
+    here to confirm an overwrite with. The format is the one ``career_agent.contact_export`` documents, and
+    the file says what it is; what it is *not* is a backup of the database, and the last lines printed here
+    are the part of that a person has to know before they rely on the file.
+    """
+    target = Path(args.export_contacts_to).expanduser()
+    database = _database_path(args)
+    heading = f"AI Career Agent {__version__} · export the stored HR contact list"
+    if not database.exists() or _empty_database_file(database):
+        print(heading)
+        print("No database yet, so there is no contact list to export. Nothing was written.")
+        _say_an_empty_file_was_left_alone(database)
+        return EXIT_REFUSED
+    if target.exists():
+        print(f"REFUSED: {target} already exists. Choose another name so the existing file is not "
+              "replaced.", file=sys.stderr)
+        return EXIT_REFUSED
+    with CareerStore(database) as store:
+        try:
+            outcome = contact_export.write_export(store, target)
+        except contact_export.ContactExportRefused as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        except PrivateWriteError as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        except (StoredRecordError, sqlite3.Error) as exc:
+            print(f"REFUSED: the contact list could not be read for export: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+    print(heading)
+    print(f"Wrote {outcome.contacts} contact(s) to {outcome.path} in format "
+          f"{contact_export.CONTACT_EXPORT_FORMAT}, {outcome.marked} of them marked do not contact "
+          f"({outcome.bytes_written:,} bytes). The file was read back and compared before this line.")
+    print("It holds the address, the name, the company label and the do-not-contact column of each "
+          "stored contact, and nothing else: no reason for a mark, no recorded disagreement and no "
+          "internal identifier.")
+    print("It is a list rather than a backup of this application: everything else stays in this database, "
+          "and the whole-database backup on the Data safety tab is what copies it.")
+    print(contact_export.MARK_COLUMN_LIMITATION)
+    print("Nothing was sent anywhere, and the database was not changed.")
     return EXIT_OK
 
 
@@ -1685,6 +1744,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_calendar_export(args)
         if args.export_to:
             return run_export(args)
+        if args.export_contacts_to:
+            return run_export_contacts(args)
         if args.import_from:
             return run_import(args)
         if args.worker:

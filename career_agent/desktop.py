@@ -47,7 +47,7 @@ from .desktop_logic import (
     format_stored_timestamp, form_values, job_form_values, plan_job_save,
     profile_fields_not_matching, profile_form_values,
 )
-from . import resume
+from . import contact_export, resume
 from .diagnostics import describe_startup_failure, record_startup_failure
 from .store import (
     SCHEMA_VERSION,
@@ -713,6 +713,29 @@ class CareerAgentApp:
                 "both sides in full."
             ),
         ).grid(row=21, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        # The export lives at the bottom of this tab, under its own heading and its own sentence, because
+        # it is the one control here that writes a file outside the database. The sentence is a variable
+        # rather than a literal so what the window claims about the file - including the part it cannot do
+        # - is read back by a test rather than only drawn, and the part about the mark comes from the
+        # format module, so the window and the command line cannot describe it differently.
+        ttk.Label(body, text="Take a copy of the stored list (a CSV file you choose)").grid(
+            row=22, column=0, columnspan=2, sticky=W, pady=(12, 2))
+        export_row = ttk.Frame(body)
+        export_row.grid(row=23, column=0, columnspan=2, sticky=W)
+        self.export_contacts_button = ttk.Button(export_row, text="Export the stored list...",
+                                                 command=self._export_contacts)
+        self.export_contacts_button.pack(side="left")
+        self.contact_export_note = tk.StringVar(value=(
+            "Exporting writes one CSV row per stored contact - the address, the name and the company "
+            "label as they are stored, plus whether each one is marked do not contact - to a file you "
+            "choose. It is a list to move between machines or read, not a backup of this application: "
+            "marks, their reasons and the recorded disagreements stay in this database, no disagreement "
+            "value is exported, and an existing file is only replaced if you confirm the overwrite in "
+            "the save dialog. " + contact_export.MARK_COLUMN_LIMITATION + " Nothing is sent anywhere, and "
+            "exporting changes nothing in this database."
+        ))
+        ttk.Label(body, textvariable=self.contact_export_note, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=24, column=0, columnspan=2, sticky=W, pady=(4, 0))
         body.columnconfigure(0, weight=1)
 
     def _choose_contact_csv(self):
@@ -1163,6 +1186,91 @@ class CareerAgentApp:
             f"Row {position} of the stored list is no longer in this database, and {removed}.\n\n"
             "Nothing was sent to anybody, and no other contact was touched. A backup written before this "
             "still holds the record; restoring that copy would bring it back.",
+            parent=self.root,
+        )
+
+    # ------------------------------------------------------------------ the export of the stored list
+    #
+    # The other direction from the import above, and it keeps the same rules: everything is read from the
+    # database, nothing is guessed, and the file is the person's own list rather than a backup. Three
+    # things are deliberate here.
+    #
+    # * **The database is only read.** The export calls one read method and one store method that writes
+    #   bytes to a file the person named; no statement of it changes a contact, a mark or a disagreement.
+    # * **Success is claimed only for a file that was read back.** The writer compares the file's bytes
+    #   with what it wrote before it returns, and every failure - a refused list, an unwritable folder, a
+    #   link in the way - claims nothing and leaves the database as it was.
+    # * **What the file is not is said where it is made.** The sentence beside the control says the mark
+    #   column cannot be applied by an import, in the format module's own words; a person who takes the
+    #   file to another machine has to know that before they rely on it, and a sentence buried in a
+    #   document is not where they will read it.
+
+    def _export_contacts(self):
+        """Write the stored contact list to a file the person names. Read-only, and never a false claim."""
+        destination = filedialog.asksaveasfilename(
+            parent=self.root, title="Export the stored contact list", defaultextension=".csv",
+            filetypes=[("Contact list (CSV)", "*.csv"), ("All files", "*.*")])
+        if not destination:
+            # A closed or cancelled dialog is not a failure and not a success: nothing was written and
+            # nothing is said, exactly as the JSON export behaves when its dialog is dismissed.
+            return
+        dest_path = Path(destination)
+        if dest_path.exists() and not messagebox.askyesno(
+            "Replace the existing file?",
+            f"{dest_path.name} already exists in the folder you chose.\n\n"
+            "Replacing it writes a new contact export over it: whatever that file holds now is gone, and "
+            "there is no undo in this application. Choose No and name another file to keep it.\n\n"
+            "Replace it?",
+            parent=self.root,
+        ):
+            self.status.set("Export cancelled; the existing file was left as it was.")
+            return
+        try:
+            outcome = contact_export.write_export(self.store, dest_path)
+        except contact_export.ContactExportRefused as exc:
+            # A list this application could not read back: the sentence says what to use instead, and the
+            # database - and the folder - are exactly as they were.
+            messagebox.showerror("Nothing was exported", str(exc), parent=self.root)
+            self.status.set("Contact export not written: the list is larger than the format reads back.")
+            self._record("contacts.export.failed", "reason=the list is larger than the format's own limit")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            self.status.set("Contact export not written (a stored record could not be read).")
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        except PrivateWriteError as exc:
+            # The writer's own refusal (the file could not be protected, or did not hold what was
+            # written) already says what was left behind; the second line is the promise this window keeps.
+            messagebox.showerror("Export not saved", f"{exc}\n\nNothing was saved; the database was not "
+                                                     "changed.", parent=self.root)
+            self.status.set("Export not saved (the file could not be written and kept).")
+            self._record("contacts.export.failed", "reason=the file could not be written and kept")
+            return
+        except OSError as exc:
+            messagebox.showerror("Export not saved", f"{exc}\n\nThe database was not changed.",
+                                 parent=self.root)
+            self.status.set("Export not saved (a local file error).")
+            self._record("contacts.export.failed", f"reason={type(exc).__name__}")
+            return
+        # Counts only, and only after the file was read back: an event never carries an address, a name, a
+        # company, a mark's reason or the name of the file the person chose.
+        self._record("contacts.exported", f"contacts={outcome.contacts} marked={outcome.marked}")
+        if outcome.contacts:
+            self.status.set(f"Exported {outcome.contacts} contact(s) to a file you chose. Nothing was "
+                            "contacted.")
+        else:
+            self.status.set("The contact export holds no rows: nothing is stored here yet.")
+        messagebox.showinfo(
+            "Contact list exported",
+            f"{outcome.describe()}\n\n"
+            "It holds the address, the name, the company label and the do-not-contact column of each "
+            "stored contact, and nothing else: no reason for a mark, no recorded disagreement and no "
+            "internal identifier.\n\n"
+            f"{contact_export.MARK_COLUMN_LIMITATION}\n\n"
+            "Nothing was sent to anybody, and the database was not changed.",
             parent=self.root,
         )
 

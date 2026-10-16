@@ -97,12 +97,14 @@ EVENTS: tuple[str, ...] = (
     "import.refused",
     "import.failed",
     # The imported HR contact list: one event per import that committed, one per change to a stored
-    # contact's do-not-contact mark, and one per contact the person deleted. Counts and a flag only - an
-    # event never carries an address, a name, a company, the note a person typed beside a mark, or the name
-    # of the file they came from.
+    # contact's do-not-contact mark, one per contact the person deleted, and one per export of the stored
+    # list and per export this build refused. Counts and a flag only - an event never carries an address,
+    # a name, a company, the note a person typed beside a mark, or the name of a file somebody chose.
     "contacts.imported",
     "contacts.suppressed",
     "contacts.deleted",
+    "contacts.exported",
+    "contacts.export.failed",
     "backup.written",
     "backup.refused",
     "restore.completed",

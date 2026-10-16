@@ -100,6 +100,8 @@ and must never be read as any. CI runs it once, in a step that requires exactly 
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import shlex
 import shutil
@@ -4146,6 +4148,142 @@ def workflow_l_contact_import(run: Run) -> None:
         for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3],
                       SYNTHETIC_MARK_REASON, "contradicting-contacts.csv"):
             require(value not in written, f"{value!r} reached the activity log")
+
+    # The export is the tab's other direction from the import above: the stored list written out to a file
+    # the person names. Everything the format claims is checked against a file a real display-backed window
+    # wrote through a real save dialog, including the two things a screenshot cannot show - that the
+    # database is only read, and that the mark column is text a person reads rather than state an import
+    # applies.
+    export_path = workspace.folder / "synthetic-contact-export.csv"
+    with results.step("L16 the export control is on the tab and carries the format's own sentence"):
+        from career_agent import contact_export  # noqa: PLC0415 - imported with the window, like the app
+        export_button = find_widget(app.contacts_tab, klass=BUTTON, text="Export the stored list...",
+                                    what="the export button on the HR contacts tab")
+        require(not export_button.instate(["disabled"]),
+                "the export control is drawn greyed out with nothing it has to refuse")
+        note = app.contact_export_note.get()
+        require(contact_export.MARK_COLUMN_LIMITATION in note,
+                f"the sentence beside the control is not the format module's own: {note!r}")
+        for claim in ("one CSV row per stored contact", "not a backup", "replaced",
+                      "Nothing is sent anywhere"):
+            require(claim in note, f"the sentence beside the export never says {claim!r}: {note!r}")
+
+    with results.step("L17 a closed save dialog writes nothing, says nothing and records nothing"):
+        # The list is imported again so the file this check is about holds both values of its mark column:
+        # the contact L15 left behind is still marked, and the one this restores is not.
+        policy.reset()
+        policy.files.append(str(list_path))
+        press(app.contacts_tab, "Choose a contact CSV...", workspace.root)
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        stored = {record.email_key: record for record in app.store.list_contacts()}
+        require(len(stored) == 2, f"this check needs two stored contacts and has {sorted(stored)!r}")
+        require(sum(1 for record in stored.values() if record.suppressed) == 1,
+                "this check needs exactly one of the two contacts marked")
+        policy.reset()
+        before = app.store._connection.total_changes
+        listing_before = sorted(path.name for path in workspace.folder.iterdir())
+        log_before = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+
+        policy.files.append("")  # a save dialog closed or cancelled without naming a file
+        press(app.contacts_tab, "Export the stored list...", workspace.root)
+
+        require(sorted(path.name for path in workspace.folder.iterdir()) == listing_before,
+                "a closed save dialog left a file behind")
+        require(policy.titles() == [], f"a cancelled export told the person something: {policy.titles()!r}")
+        require(app.store._connection.total_changes == before, "a cancelled export wrote to the database")
+        require("Exported" not in app.status.get(),
+                f"a cancelled export claimed one in the status line: {app.status.get()!r}")
+        require(event_log_log_path(app.db_path).read_text(encoding="utf-8") == log_before,
+                "a cancelled export wrote to the activity log")
+
+    with results.step("L18 a named destination gets the documented file, and the database is unchanged"):
+        from career_agent import contacts as contacts_module  # noqa: PLC0415 - with the window
+        stored_before = {record.email_key: record for record in app.store.list_contacts()}
+        conflicts_before = [conflict.conflict_id for conflict in app.store.list_contact_conflicts()]
+        before = app.store._connection.total_changes
+        policy.reset()
+        policy.files.append(str(export_path))
+
+        press(app.contacts_tab, "Export the stored list...", workspace.root)
+
+        require("Contact list exported" in policy.titles("showinfo"),
+                f"the completed export was not reported; dialogs: {policy.titles()!r}")
+        require(str(export_path) not in policy.said("Contact list exported"),
+                "the completion report names the folder the file went into")
+        require(export_path.is_file(), "the export wrote no file at the path it was given")
+        raw = export_path.read_bytes()
+        require(raw.startswith(b"\xef\xbb\xbf"),
+                "the file does not begin with the byte-order mark that says it is UTF-8")
+        require(b"\n" not in raw.replace(b"\r\n", b""),
+                "the file holds a line ending that is not the format's own CRLF")
+        rows = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"), newline="")))
+        require(rows[0] == ["Email", "Name", "Company", "Do Not Contact", "Export Format"],
+                f"the header row is {rows[0]!r}")
+        require(len(rows) == 3, f"the file holds {len(rows)} row(s) for two stored contacts")
+        # Read back through this application's own reader, which is what the file is written for.
+        read = contacts_module.read_contact_csv(export_path)
+        require(sorted(row.key for row in read.rows) == sorted(stored_before),
+                "the addresses in the file are not the addresses stored here")
+        marks = {row[0]: row[3] for row in rows[1:]}
+        for record in stored_before.values():
+            require(marks.get(record.email) == ("yes" if record.suppressed else "no"),
+                    "the do-not-contact column does not say what this database holds")
+        require([row[4] for row in rows[1:]] == ["hr-contact-export/1"] * 2,
+                "a row does not state the format it is written in")
+        # Read-only: writing a file outside the database changed nothing inside it.
+        require(app.store._connection.total_changes == before, "the export wrote to the database")
+        stored_after = {record.email_key: record for record in app.store.list_contacts()}
+        require(stored_after == stored_before, "the export changed a stored contact")
+        require([conflict.conflict_id for conflict in app.store.list_contact_conflicts()] == conflicts_before,
+                "the export changed a recorded disagreement")
+        require("Exported 2 contact(s)" in app.status.get(), f"the status line says {app.status.get()!r}")
+        require("Nothing was contacted" in app.status.get(),
+                f"the status line does not say nothing was sent: {app.status.get()!r}")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        require("event=contacts.exported" in written, "the export wrote no line to the activity log")
+        require("detail=contacts=2 marked=1" in written,
+                "the log line does not count what the export holds")
+
+    with results.step("L19 the file and the report carry only the columns and counts approved"):
+        require(export_path.is_file(), "the check above wrote no file for this one to read")
+        written_file = export_path.read_text(encoding="utf-8")
+        require(SYNTHETIC_OTHER_MARK_REASON not in written_file,
+                "the reason beside the mark reached the exported file")
+        require(SYNTHETIC_CONTACT_CONTRADICTIONS[2][2] not in written_file,
+                "the other side of a recorded disagreement reached the exported file")
+        require("contradicting-contacts.csv" not in written_file,
+                "the name of the file a contact came from reached the exported file")
+        for column in ("Source Rows", "Review Reason", "contact_id", "seen_count", "suppressed_note"):
+            require(column not in written_file, f"the column {column!r} reached the exported file")
+        require(len(rows[0]) == 5, f"the file holds {len(rows[0])} columns, not the documented five")
+        said = policy.said("Contact list exported")
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_ROWS[1][:3],
+                      SYNTHETIC_OTHER_MARK_REASON):
+            require(value not in said, f"{value!r} reached the completion report")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_ROWS[1][:3],
+                      SYNTHETIC_OTHER_MARK_REASON, export_path.name):
+            require(value not in written, f"{value!r} reached the activity log")
+
+    with results.step("L20 a destination that cannot be written claims nothing and changes nothing"):
+        missing = workspace.folder / "no-such-folder" / "synthetic-contact-export.csv"
+        before = app.store._connection.total_changes
+        policy.reset()
+        policy.files.append(str(missing))
+
+        press(app.contacts_tab, "Export the stored list...", workspace.root)
+
+        require("Export not saved" in policy.titles("showerror"),
+                f"the failure was not reported; dialogs: {policy.titles()!r}")
+        require("Contact list exported" not in policy.titles("showinfo"),
+                "an export that failed was reported as one that happened")
+        require(not missing.exists() and not missing.parent.exists(),
+                "a failed export created something in the folder it could not write to")
+        require("not saved" in app.status.get(), f"the status line says {app.status.get()!r}")
+        require(app.store._connection.total_changes == before, "a failed export wrote to the database")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        require("event=contacts.export.failed" in written, "the failure was not recorded")
+        require("no-such-folder" not in written, "the path the person chose reached the activity log")
 
     workspace.close_window(host, app)
 
