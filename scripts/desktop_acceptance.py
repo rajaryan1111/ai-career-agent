@@ -109,8 +109,11 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import zipfile
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -146,6 +149,26 @@ CHECKBUTTON = "TCheckbutton"
 TREEVIEW = "Treeview"
 TEXT = "Text"
 TOPLEVEL = "Toplevel"
+
+#: The buttons and dialog titles on the profile tab, spelled once: a workflow reads what a person sees
+#: ("the button that confirms a fact") rather than repeating a string in six places.
+PROFILE_SETUP_TITLE = "Required facts your profile does not state"
+PROFILE_SETUP_BUTTON = "Set up missing required facts..."
+CONFIRM_FACT_BUTTON = "This is correct — confirm it"
+RESUME_REVIEW_TITLE = "Review resume import (nothing saved yet)"
+RESUME_IMPORT_BUTTON = "Import resume (PDF/DOCX)"
+
+#: A synthetic résumé, written into the run's own folder as a minimal DOCX. It names a skills line the
+#: parser proposes confidently and an education line it proposes as well, so the review screen has real
+#: proposals to accept - all fixture text, and the address is on a reserved ``.invalid`` domain.
+SYNTHETIC_RESUME_PARAGRAPHS = (
+    "Synthetic Candidate",
+    "synthetic.candidate@example.invalid | +00 00000 00000",
+    "Skills",
+    "Python, SQL, Machine Learning",
+    "Education",
+    "B.Tech in Electronics and Communication Engineering, Example Institute of Technology, 2028",
+)
 
 #: A synthetic candidate profile, typed into the profile form field by field. Every value is a fixture:
 #: there is no real candidate in this file, and the locations and employers are invented.
@@ -506,6 +529,80 @@ def close_open_dialogs(host) -> list:
     return titles
 
 
+def write_synthetic_docx(path: Path, paragraphs) -> Path:
+    """Write a minimal but structurally real DOCX: standard library only, fixture text only.
+
+    The reader looks in exactly one part (``word/document.xml``), so this is a real zip with a real
+    document part and nothing else - the same shape ``tests/test_resume.py`` builds, written here so the
+    acceptance run has a résumé of its own without importing the test suite.
+    """
+    body = "".join(
+        f"<w:p><w:r><w:t>{escape(text)}</w:t></w:r></w:p>" for text in paragraphs)
+    document = (
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", document)
+    return path
+
+
+def fact_rows(app) -> dict:
+    """The saved-facts table as it stands now: one entry per row, keyed by the fact's own name.
+
+    The row id *is* the fact's canonical name, which is what the window hands to the store when something
+    is confirmed, so reading the table this way reads the same identity the database is keyed by.
+    """
+    return {str(item): tuple(app.facts_tree.item(item, "values"))
+            for item in app.facts_tree.get_children()}
+
+
+def select_fact_row(app, fact: str, root, *, what: str = "the saved fact") -> None:
+    """Select one saved fact the way a click does, and check the window followed the selection."""
+    app.facts_tree.selection_set(fact)
+    root.update()
+    require(
+        list(app.facts_tree.selection())[:1] == [fact],
+        f"{what} {fact!r} is not selected after its row was selected",
+    )
+
+
+def provenance_by_fact(app) -> dict:
+    """What the database holds about each fact's origin and confirmation, keyed by the fact's name."""
+    return {entry.fact: entry for entry in app.store.get_profile_fact_provenance()}
+
+
+def open_profile_setup(app, host, policy: DialogPolicy, root):
+    """Press the setup button and return the dialog it opened, with its controls recorded.
+
+    What is *recorded* is the variables the window created while building the dialog, which is how the run
+    reaches the real entries and checkbuttons the dialog drew rather than counting widgets.
+    """
+    record_dialog_controls(
+        policy, PROFILE_SETUP_TITLE,
+        lambda: press(app.profile_tab, PROFILE_SETUP_BUTTON, root),
+    )
+    return open_dialog(host, PROFILE_SETUP_TITLE)
+
+
+def stored_profile_state(app) -> tuple:
+    """Everything this database holds about the profile: the values, and every fact's origin row.
+
+    Used to prove that a path which promises to write nothing did write nothing - compared before and
+    after, rather than trusting a status line.
+    """
+    profile = app.store.get_profile()
+    provenance = tuple(
+        (entry.fact, entry.source.value, entry.verification.value, entry.document_name,
+         entry.recorded_at, entry.confirmed_at)
+        for entry in app.store.get_profile_fact_provenance()
+    )
+    return (None if profile is None else json.dumps(asdict(profile), sort_keys=True, default=list),
+            provenance)
+
+
 def select_listing(app, listing_id: str, root) -> None:
     """Select a listing on the jobs tab, which is what Evaluate, Shortlist and the actions act on.
 
@@ -707,6 +804,9 @@ class Workspace:
         #: A fifth database for backup and restore. Restoring replaces a file, so this one is never the
         #: database any other workflow reads: a mistake here could destroy the run's own results.
         self.data_safety_database = self.folder / "synthetic-data-safety.sqlite3"
+        #: A sixth database, for the résumé check alone. A value a document proposed must not change the
+        #: profile the eligibility workflow reads, and that workflow reads the primary database.
+        self.profile_trust_database = self.folder / "synthetic-profile-trust.sqlite3"
         self.root = None
         self.windows: list[tuple[object, object]] = []
         #: Recorded before anything opens: the application's own database location must come out of this
@@ -784,7 +884,7 @@ class Run:
 # Workflow A - the candidate profile, saved and read back through a second window
 # --------------------------------------------------------------------------------------------------
 def workflow_a_profile(run: Run) -> None:
-    workspace, results = run.workspace, run.results
+    workspace, results, policy = run.workspace, run.results, run.dialogs
     host, app = workspace.open_window()
 
     with results.step("A1 a synthetic profile is typed into the profile form's own Entry widgets"):
@@ -874,6 +974,226 @@ def workflow_a_profile(run: Run) -> None:
             f"the qualification that was added is not listed: {study}",
         )
         workspace.close_window(host2, app2)
+
+    # -- the saved facts, their origins, and the two controls that act on them (A7-A17) ------------------
+    # Everything below drives the real widgets on the real database this workflow has already written to.
+    # The résumé check at the end deliberately opens a window on a database of its own: a value a document
+    # proposed must never change the profile another workflow's eligibility check reads.
+    host3, app3 = workspace.open_window()
+    # The application's own vocabulary, imported here for the same reason the window is: this file has to
+    # be importable, and report BLOCKED, on a machine that cannot run the application at all.
+    from career_agent.core import (  # noqa: PLC0415
+        FactSource, FactVerification, REQUIRED_PROFILE_FACTS, missing_required_profile_facts,
+    )
+    from career_agent.desktop_logic import fact_label  # noqa: PLC0415
+
+    with results.step("A7 the saved-facts table shows every stored fact's value, origin and state"):
+        show_tab(app3, app3.profile_tab)
+        rows = fact_rows(app3)
+        require(set(rows) == set(SYNTHETIC_PROFILE),
+                f"the table lists {sorted(rows)} instead of every stored fact")
+        country = rows["country"]
+        require(country[0] == "Country", f"the fact column reads {country[0]!r}")
+        require(country[1] == SYNTHETIC_PROFILE["country"], f"the value column reads {country[1]!r}")
+        require(country[2] == "You typed it in this app", f"the origin column reads {country[2]!r}")
+        require(country[3].startswith("Not confirmed yet"),
+                f"a fact nobody has confirmed is described as {country[3]!r}")
+        require("0 confirmed by you" in app3.facts_summary.get(),
+                f"the summary line reads {app3.facts_summary.get()!r}")
+        require("every fact a listing can require is stated" in app3.facts_summary.get(),
+                f"the summary line reads {app3.facts_summary.get()!r}")
+
+    with results.step("A8 one stored fact can be selected, and only then is the confirm control usable"):
+        require(app3.confirm_fact_button.instate(["disabled"]),
+                "the confirm control offers an action before any fact is selected")
+        select_fact_row(app3, "country", workspace.root)
+        require(not app3.confirm_fact_button.instate(["disabled"]),
+                "the confirm control stayed greyed after its row was selected")
+        app3.facts_tree.selection_remove("country")
+        workspace.root.update()
+        require(app3.confirm_fact_button.instate(["disabled"]),
+                "the confirm control is usable with no fact selected")
+        require(all(not entry.is_confirmed for entry in provenance_by_fact(app3).values()),
+                "moving the selection confirmed something")
+
+    with results.step("A9 confirming a fact records the person's own check and changes nothing else"):
+        policy.reset()
+        before = provenance_by_fact(app3)["country"]
+        value_before = fact_rows(app3)["country"][1]
+        select_fact_row(app3, "country", workspace.root)
+        press(app3.profile_tab, CONFIRM_FACT_BUTTON, workspace.root)
+        after = provenance_by_fact(app3)["country"]
+        require(after.is_confirmed, "the confirmed fact is not recorded as confirmed by the person")
+        require(after.source is before.source and after.document_name == before.document_name,
+                "confirming a fact rewrote where it came from")
+        require(fact_rows(app3)["country"][1] == value_before,
+                "confirming a fact changed its value")
+        require(after.confirmed_at, "no time was recorded for the confirmation")
+        require(fact_rows(app3)["country"][3].startswith("Confirmed by you"),
+                f"the table still reads {fact_rows(app3)['country'][3]!r}")
+        require("Confirmed: you checked Country" in app3.status.get(),
+                f"the status line reads {app3.status.get()!r}")
+        counted = sum(1 for entry in provenance_by_fact(app3).values() if entry.is_confirmed)
+        require(counted == 1, f"confirming one fact confirmed {counted} of them")
+        log = event_log_log_path(workspace.database).read_text(encoding="utf-8")
+        require("event=profile.fact_confirmed detail=fact=country" in log,
+                "the confirmation was not recorded in the activity log")
+        require(SYNTHETIC_PROFILE["country"] not in log,
+                "a candidate value reached the activity log")
+
+    with results.step("A10 confirming the same fact again changes nothing, including the recorded time"):
+        first = provenance_by_fact(app3)["country"].confirmed_at
+        require(list(app3.facts_tree.selection())[:1] == ["country"],
+                "the row the person just used is no longer selected after the redraw")
+        press(app3.profile_tab, CONFIRM_FACT_BUTTON, workspace.root)
+        again = provenance_by_fact(app3)["country"]
+        require(again.confirmed_at == first,
+                f"a repeated confirmation recorded a new time ({first!r} then {again.confirmed_at!r})")
+        require("already confirmed" in app3.status.get(), f"the status line reads {app3.status.get()!r}")
+        counted = sum(1 for entry in provenance_by_fact(app3).values() if entry.is_confirmed)
+        require(counted == 1, f"repeating a confirmation confirmed {counted} facts")
+
+    with results.step("A11 the setup flow asks for no required fact the profile already states"):
+        policy.reset()
+        setup_window = open_profile_setup(app3, host3, policy, workspace.root)
+        setup = app3.profile_setup
+        require(setup is not None, "the setup button opened no window the application knows about")
+        require(not setup.questions,
+                f"the setup flow asks for facts the profile states: "
+                f"{[question.fact for question in setup.questions]}")
+        require(not setup.answer_vars, "the flow drew an answer box for a fact it does not need")
+        require(sorted(setup.confirm_vars) == sorted(set(REQUIRED_PROFILE_FACTS) - {"country"}),
+                f"the facts offered for a check are {sorted(setup.confirm_vars)}")
+        expected = [fact_label(fact) for fact in REQUIRED_PROFILE_FACTS if fact != "country"]
+        require([row.label for row in setup.awaiting] == expected,
+                f"the window lists {[row.label for row in setup.awaiting]} beside their saved values")
+        require(all(row.value for row in setup.awaiting),
+                "a fact is offered for a check without its stored value")
+        require("states every fact a listing can require" in setup.summary.get(),
+                f"the window says {setup.summary.get()!r}")
+        require(not policy.titles("askyesno"), f"opening the flow asked a question: {policy.titles()!r}")
+
+    with results.step("A12 closing the setup window writes nothing and leaves no window behind"):
+        state_before = stored_profile_state(app3)
+        press(setup_window, "Cancel", workspace.root)
+        require(app3.profile_setup is None, "the application still believes a setup window is open")
+        require(PROFILE_SETUP_TITLE not in [str(dialog.title()) for dialog in dialogs_under(host3)],
+                "the setup window was not closed")
+        require(stored_profile_state(app3) == state_before,
+                "closing the setup window changed the stored profile")
+        require("nothing was saved" in app3.status.get(), f"the status line reads {app3.status.get()!r}")
+
+    with results.step("A13 clearing a required fact makes the setup ask for exactly that fact"):
+        set_field(app3.profile_tab, app3.profile_vars["work_authorization"], "",
+                  what="the work authorization field")
+        press(app3.profile_tab, "Save profile locally", workspace.root)
+        require(app3.store.get_profile().work_authorization is None,
+                "the cleared field is still stored")
+        require("work_authorization" not in fact_rows(app3),
+                "the table still lists a fact the stored profile does not state")
+        policy.reset()
+        setup_window = open_profile_setup(app3, host3, policy, workspace.root)
+        setup = app3.profile_setup
+        require([question.fact for question in setup.questions] == ["work_authorization"],
+                f"the flow asks for {[question.fact for question in setup.questions]}")
+        require("1 required fact(s) are not in your saved profile" in setup.summary.get(),
+                f"the window says {setup.summary.get()!r}")
+        require(set(setup.confirm_vars) == set(REQUIRED_PROFILE_FACTS) - {"country", "work_authorization"},
+                f"the facts offered for a check are {sorted(setup.confirm_vars)}")
+
+    with results.step("A14 saving with nothing typed and nothing ticked writes nothing at all"):
+        state_before = stored_profile_state(app3)
+        policy.reset()
+        press(setup_window, "Save and confirm these answers", workspace.root)
+        require("Nothing to save" in policy.titles("showinfo"),
+                f"the empty save was not explained; dialogs: {policy.titles()!r}")
+        require(stored_profile_state(app3) == state_before,
+                "a save with nothing to save wrote something")
+        require(not policy.titles("askyesno"), "an empty save asked to confirm a write it would not make")
+        require(app3.profile_setup is not None, "the setup window closed itself")
+
+    with results.step("A15 an answer typed in the setup window is stored as the person's own and confirmed"):
+        policy.reset()
+        policy.answers["Save and confirm these answers?"] = True
+        answer_variable = app3.profile_setup.answer_vars["work_authorization"]
+        typed = type_into(setup_window, answer_variable, "Synthetic Permit Class B",
+                          what="the work authorization answer")
+        require(typed == "Synthetic Permit Class B", f"the answer box holds {typed!r}")
+        press(setup_window, "Save and confirm these answers", workspace.root)
+        require("Save and confirm these answers?" in policy.titles("askyesno"),
+                f"the person was not asked before anything was written: {policy.titles()!r}")
+        asked = policy.said("Save and confirm these answers?")
+        require("Work authorization" in asked, f"the confirmation does not name the answer: {asked!r}")
+        require("confirmed by you" in asked,
+                f"the confirmation does not say how the answer is recorded: {asked!r}")
+        entry = provenance_by_fact(app3)["work_authorization"]
+        require(entry.is_confirmed and entry.source is FactSource.USER_ENTERED,
+                f"the answered fact is stored as {(entry.source, entry.verification)!r}")
+        require(app3.store.get_profile().work_authorization == "Synthetic Permit Class B",
+                "the typed answer is not what the database holds")
+        require(fact_rows(app3)["work_authorization"][3].startswith("Confirmed by you"),
+                f"the table reads {fact_rows(app3)['work_authorization'][3]!r}")
+        require(not policy.titles("showerror"), f"the save reported a failure: {policy.titles()!r}")
+
+    with results.step("A16 the flow re-reads what is missing instead of claiming completion"):
+        setup = app3.profile_setup
+        require(not setup.questions, f"the flow still asks for {[q.fact for q in setup.questions]}")
+        require("Saved and confirmed by you: Work authorization" in setup.summary.get(),
+                f"the window says {setup.summary.get()!r}")
+        require("now states every fact a listing can require" in setup.summary.get(),
+                f"the window says {setup.summary.get()!r}")
+        require([row.fact for row in setup.awaiting] ==
+                [fact for fact in REQUIRED_PROFILE_FACTS if fact not in {"country", "work_authorization"}],
+                f"the facts still offered for a check are {[row.fact for row in setup.awaiting]}")
+        counted = {fact for fact, entry in provenance_by_fact(app3).items() if entry.is_confirmed}
+        require(counted == {"country", "work_authorization"},
+                f"the facts confirmed by the whole flow are {sorted(counted)}")
+        require(app3.store.get_profile().work_authorization == "Synthetic Permit Class B",
+                "the answered value was overwritten by the rebuild")
+        require(missing_required_profile_facts(app3.store.get_profile()) == (),
+                "the profile still does not state every fact a listing can require")
+        press(setup_window, "Cancel", workspace.root)
+        require(app3.profile_setup is None, "the setup window is still open")
+
+    with results.step("A17 a document's value is shown as read out of that document and stays unconfirmed"):
+        trust_host, trust_app = workspace.open_window(database=workspace.profile_trust_database)
+        show_tab(trust_app, trust_app.profile_tab)
+        resume_path = write_synthetic_docx(
+            workspace.folder / "synthetic-resume.docx", SYNTHETIC_RESUME_PARAGRAPHS)
+        policy.reset()
+        policy.files.append(str(resume_path))
+        record_dialog_controls(
+            policy, RESUME_REVIEW_TITLE,
+            lambda: press(trust_app.profile_tab, RESUME_IMPORT_BUTTON, workspace.root),
+        )
+        review = open_dialog(trust_host, RESUME_REVIEW_TITLE)
+        require(trust_app.store.get_profile() is None,
+                "opening the review screen stored a profile before anything was accepted")
+        # The review screen offers the values it is confident about already selected, and this fixture's
+        # skills line is one of them; the checkbox is required to exist so that a parser change which stops
+        # proposing it fails here rather than passing quietly on an empty selection.
+        find_widget(review, klass=CHECKBUTTON, text="Skills",
+                    what="the review screen's Skills checkbox")
+        press(review, "Save selected values", workspace.root)
+        stored = trust_app.store.get_profile()
+        require(stored is not None and stored.skills, "the accepted value was not stored")
+        rows = fact_rows(trust_app)
+        require("synthetic-resume.docx" in rows["skills"][2],
+                f"the origin column reads {rows['skills'][2]!r} instead of naming the document")
+        require(workspace.folder.name not in rows["skills"][2],
+                "the folder the file was read from reached the saved-facts table")
+        require(rows["skills"][3].startswith("Not confirmed yet"),
+                f"a value read out of a document is described as {rows['skills'][3]!r}")
+        entry = provenance_by_fact(trust_app)["skills"]
+        require(entry.source is FactSource.EXTRACTED_FROM_DOCUMENT
+                and entry.verification is FactVerification.UNVERIFIED,
+                f"the document's value is recorded as {(entry.source, entry.verification)!r}")
+        said = policy.said("Resume import result")
+        require("not confirmed by you" in said,
+                f"the completion message reads {said!r}")
+        require(str(workspace.folder) not in said, "the completion message named a folder on disk")
+        workspace.close_window(trust_host, trust_app)
+        workspace.close_window(host3, app3)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -2525,8 +2845,14 @@ def workflow_h_follow_ups_and_actions(run: Run) -> None:
         names = recorded_events(workspace.third_database)
         require("preparation.added" in names and "preparation.completed" in names,
                 f"the preparation events are missing from the log: {sorted(names)}")
-        require(not any("confirm" in name for name in names),
-                f"a confirmation event was recorded by this workflow: {sorted(names)}")
+        # The log file is shared by every database this run creates inside one folder, so it also holds
+        # what the other workflows recorded - including a person confirming one of their own stored profile
+        # facts, which is a fact about their own data and not an employer's decision about an application.
+        # What this step is about is the application tracker, and the two checks above are the evidence for
+        # it; the log line is read for a *tracker* event claiming a confirmation.
+        tracker_events = {name for name in names if name.startswith("tracker.")}
+        require(not any("confirm" in name for name in tracker_events),
+                f"a tracker event claims a confirmation: {sorted(names)}")
 
     workspace.close_window(host, app)
 

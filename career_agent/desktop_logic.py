@@ -16,11 +16,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .core import (
-    ActivityKind, ApplicationActivity, Availability, CandidateProfile, JobListing, profile_fact_values,
+    ActivityKind, ApplicationActivity, Availability, CandidateProfile, FactSource, JobListing,
+    PROFILE_FACTS, ProfileFactProvenance, REQUIRED_PROFILE_FACTS, missing_required_profile_facts,
+    profile_fact_values,
 )
+# The résumé reviewer owns the profile vocabulary's user-facing names and the study-status choices, and
+# this module reads them from there rather than keeping a second copy: one label list, so the form, the
+# review screen and the confirmation table cannot call the same fact three different things.
+from .resume import PROFILE_FIELD_LABELS, study_status_choices
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
 
@@ -436,3 +442,233 @@ def profile_form_values(profile: CandidateProfile) -> dict[str, str]:
     "the same value" here and a different one there.
     """
     return profile_fact_values(profile)
+
+
+# ------------------------------------------------------------------ the saved profile, fact by fact
+#
+# The profile has always been a list of ten facts; what was missing was a way for the person who owns them
+# to see, one line each, what is stored, **where it came from** and **whether they have confirmed it**. This
+# section is that read, and the questions for the facts a listing may require that the profile does not
+# state. Both are Tk-free on purpose: the window draws them, the tests read them, and neither decides
+# anything about the facts themselves - the vocabulary, what is missing and what a confirmation means all
+# live in ``core.py`` and ``store.py``.
+#
+# Three rules hold this section together.
+#
+# * **Nothing here invents a fact.** The value shown is the value the store renders, a fact with no stored
+#   value gets no line at all, and an origin the database does not hold is described as *not recorded* -
+#   never as the person's own words.
+# * **Nothing here is a second vocabulary.** The labels are the résumé reviewer's own (``PROFILE_FIELD_LABELS``),
+#   the questions are keyed by the canonical fact names, and what counts as missing is
+#   ``core.missing_required_profile_facts``; a drift test binds all three to the one list.
+# * **A preference is not a requirement.** Only the six facts ``evaluate_eligibility`` can be blocked on are
+#   ever asked for; skills, locations, work modes and role types are shown and can be confirmed, and are
+#   never asked as if a listing required them.
+
+#: The plain-language name of each profile fact, in the form's own key vocabulary. Taken from the résumé
+#: reviewer's list rather than written a second time, so "Study status" cannot become "study status" here.
+FACT_LABELS: dict[str, str] = dict(PROFILE_FIELD_LABELS)
+
+#: What each origin means, in the words a candidate reads rather than the ones the database stores. The
+#: internal enum values (``extracted_from_document`` and friends) are deliberately never shown: they are
+#: field names, not explanations.
+ORIGIN_NOT_RECORDED = "Not recorded — this profile was saved before the app kept track"
+ORIGIN_TYPED = "You typed it in this app"
+ORIGIN_FROM_DOCUMENT = "Read out of a document you chose"
+ORIGIN_FROM_IMPORT = "Imported from a file you chose"
+
+#: What an unconfirmed fact says. It is a statement about the record, not about the value: nothing here
+#: suggests the value is wrong, only that nobody has said it is right.
+CONFIRMATION_PENDING = "Not confirmed yet — you have not checked this value"
+
+
+def fact_label(fact: str) -> str:
+    """The plain-language name of one profile fact, for a table cell or a question.
+
+    A name this build does not have a label for is rendered from the key itself rather than raising: a
+    screen must never fail because a vocabulary grew, and a cell reading ``pronouns`` is at least honest
+    about what it is showing.
+    """
+    label = FACT_LABELS.get(fact)
+    return label if label is not None else fact.replace("_", " ")
+
+
+def fact_origin_text(entry: ProfileFactProvenance) -> str:
+    """Where one stored fact came from, in a sentence a candidate reads.
+
+    A document or an imported file is named by its **name** - the store records no folder, and this
+    function has none to show even if it wanted one. An origin the store reports as unknown is described
+    as not recorded, because that is what it is: a profile written before origins were kept.
+    """
+    if entry.source is FactSource.USER_ENTERED:
+        return ORIGIN_TYPED
+    if entry.source is FactSource.EXTRACTED_FROM_DOCUMENT:
+        return (f"{ORIGIN_FROM_DOCUMENT} ({entry.document_name})" if entry.document_name
+                else f"{ORIGIN_FROM_DOCUMENT} (its name was not recorded)")
+    if entry.source is FactSource.IMPORTED_FROM_FILE:
+        return (f"{ORIGIN_FROM_IMPORT} ({entry.document_name})" if entry.document_name
+                else f"{ORIGIN_FROM_IMPORT} (its name was not recorded)")
+    return ORIGIN_NOT_RECORDED
+
+
+def fact_confirmation_text(entry: ProfileFactProvenance) -> str:
+    """Whether a person has confirmed one stored fact, and when, in a sentence a candidate reads.
+
+    The time is the one the database holds, rendered by the same helper the rest of the window uses: a
+    confirmation with no readable time says so rather than showing an invented one.
+    """
+    if not entry.is_confirmed:
+        return CONFIRMATION_PENDING
+    return f"Confirmed by you ({format_stored_timestamp(entry.confirmed_at)})"
+
+
+@dataclass(frozen=True)
+class FactReview:
+    """One stored fact as the confirmation table shows it: the value, its origin, and its state."""
+
+    fact: str
+    label: str
+    value: str
+    origin: str
+    confirmation: str
+    confirmed: bool
+
+
+def profile_fact_review(profile: CandidateProfile | None,
+                        provenance: Iterable[ProfileFactProvenance]) -> tuple[FactReview, ...]:
+    """One row per fact the stored profile **states**, in the profile's own order.
+
+    A fact with no value has no row: there is nothing stored to show and nothing anybody could confirm.
+    A stated fact the given origins say nothing about is described as not recorded rather than assumed to
+    be the person's own - the same answer the store gives for a profile written before it kept origins.
+    """
+    if profile is None:
+        return ()
+    rendered = profile_fact_values(profile)
+    entries = {entry.fact: entry for entry in provenance}
+    rows = []
+    for fact in PROFILE_FACTS:
+        if not rendered[fact]:
+            continue
+        entry = entries.get(fact) or ProfileFactProvenance(fact=fact, source=FactSource.UNKNOWN)
+        rows.append(FactReview(
+            fact=fact,
+            label=fact_label(fact),
+            value=rendered[fact],
+            origin=fact_origin_text(entry),
+            confirmation=fact_confirmation_text(entry),
+            confirmed=entry.is_confirmed,
+        ))
+    return tuple(rows)
+
+
+def fact_review_summary(profile: CandidateProfile | None,
+                        provenance: Iterable[ProfileFactProvenance]) -> str:
+    """One sentence about the whole table: how many facts are stored, confirmed, and still not stated.
+
+    The missing half names the six facts a listing can require, because "not stated" on its own leaves a
+    person to guess which answer is worth supplying. It never says a profile is complete: what is complete
+    is the set of required facts, which is a fact about those six and about nothing else.
+    """
+    if profile is None:
+        return ("No profile is saved on this device yet. Fill in the form above and save it, or answer "
+                "the facts a listing can require with \"Set up missing required facts...\".")
+    rows = profile_fact_review(profile, provenance)
+    confirmed = sum(1 for row in rows if row.confirmed)
+    missing = missing_required_profile_facts(profile)
+    parts = [f"{len(rows)} fact(s) stored · {confirmed} confirmed by you · "
+             f"{len(rows) - confirmed} not confirmed"]
+    parts.append(
+        "required facts not stated yet: " + ", ".join(fact_label(fact) for fact in missing)
+        if missing else "every fact a listing can require is stated"
+    )
+    return " · ".join(parts) + "."
+
+
+@dataclass(frozen=True)
+class SetupQuestion:
+    """One question in the missing-information setup: which fact, what is asked, and how to answer it."""
+
+    fact: str
+    label: str
+    question: str
+    hint: str
+    choices: tuple[str, ...] = ()
+
+
+#: One question per fact a listing can require, keyed by the canonical fact name. The wording is plain and
+#: each hint says what the answer is used for and that a blank is an honest answer; the choices are only
+#: where the profile's own field offers them. ``study_status_choices`` is the profile form's list rather
+#: than a second one, so an answer this dialog accepts is an answer the form can hold.
+_FACT_QUESTIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "country": (
+        "Which country do you live in?",
+        "Write the country you actually live in. A listing that requires a country cannot be checked "
+        "without it, and nothing here guesses one from anything else you have entered.",
+        (),
+    ),
+    "degree": (
+        "What degree or discipline are you studying, or have you completed?",
+        "For example: B.Tech Computer Science, or MSc Data Science. Write what your own record says, not "
+        "what a listing asks for.",
+        (),
+    ),
+    "study_status": (
+        "Where are you in your studies?",
+        "Used to check listings that state a study status. Choose the one that describes you now.",
+        study_status_choices(),
+    ),
+    "graduation_year": (
+        "What year do you expect to graduate, or did you graduate?",
+        "A four-digit year, for example 2027. Leave it blank if you are not sure what your record says.",
+        (),
+    ),
+    "experience": (
+        "How many years of experience do you have?",
+        "A number, for example 0 or 1.5. Count only what you can support with a record you could show "
+        "somebody.",
+        (),
+    ),
+    "work_authorization": (
+        "What work authorization do you hold where you want to work?",
+        "Write it exactly as your own document states it: a listing's requirement is compared with this "
+        "text word for word, and this app never decides it for you.",
+        (),
+    ),
+}
+
+
+def setup_question(fact: str) -> SetupQuestion:
+    """The one question for a required fact, or a ``KeyError`` if a required fact has no question.
+
+    A required fact with no question would be a fact the setup flow could never ask for, and silently
+    skipping it would make the flow look complete while it is not, so this refuses instead of returning a
+    placeholder. ``TheSetupQuestionsTests`` binds the mapping to ``REQUIRED_PROFILE_FACTS`` so the refusal
+    is reachable only for a name no caller should be passing.
+    """
+    question, hint, choices = _FACT_QUESTIONS[fact]
+    return SetupQuestion(fact=fact, label=fact_label(fact), question=question, hint=hint, choices=choices)
+
+
+def required_fact_questions(profile: CandidateProfile | None) -> tuple[SetupQuestion, ...]:
+    """The questions to ask: one per required fact the stored profile does not state.
+
+    This is the whole of "ask only for what is genuinely missing". It delegates to
+    :func:`career_agent.core.missing_required_profile_facts`, so a fact that is stored - whatever its
+    origin, whatever its confirmation state - is not asked for again. A missing profile is asked for all
+    six, which is what a first run is.
+    """
+    return tuple(setup_question(fact) for fact in missing_required_profile_facts(profile))
+
+
+def required_facts_to_confirm(profile: CandidateProfile | None,
+                              provenance: Iterable[ProfileFactProvenance]) -> tuple[FactReview, ...]:
+    """Rows for the required facts that are stored but not yet confirmed, in the profile's own order.
+
+    These are the facts the setup flow must **not** ask for again and must still put in front of the person:
+    the value is already there, so the only open question is whether it is right. Optional preferences are
+    excluded - they are choices, and a listing cannot be blocked on them.
+    """
+    required = set(REQUIRED_PROFILE_FACTS)
+    return tuple(row for row in profile_fact_review(profile, provenance)
+                 if row.fact in required and not row.confirmed)

@@ -81,6 +81,7 @@ EXPECTED_TREES = {
     "contact_rows_tree": ("line", "contact", "name", "company", "why"),
     "stored_contacts_tree": ("contact", "name", "company", "source", "seen", "marked"),
     "contact_conflicts_tree": ("ref", "contact", "field", "origins", "recorded_from", "recorded_at"),
+    "facts_tree": ("fact", "value", "origin", "confirmation"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
@@ -92,6 +93,7 @@ EXPECTED_SUMMARY_VARIABLES = (
     "follow_up_summary",
     "scheduler_summary",
     "contacts_summary",
+    "facts_summary",
 )
 
 #: The tabs whose whole point is a read-only refresh, and therefore the buttons this script presses. The

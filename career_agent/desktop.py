@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 import tkinter as tk
@@ -20,8 +21,9 @@ from .backup import (
 from .core import (
     INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability,
     Decision, EducationEntry, EmploymentType, FactSource, InterviewMode, InterviewOutcome,
-    InterviewStage, PreparationKind, WorkHistoryEntry, evaluate_eligibility, months_covered_by,
-    score_relevance, selectable_tracker_statuses,
+    InterviewStage, PreparationKind, PROFILE_FACTS, WorkHistoryEntry, evaluate_eligibility,
+    missing_required_profile_facts, months_covered_by, profile_fact_values, score_relevance,
+    selectable_tracker_statuses,
 )
 from . import __version__
 from . import analytics
@@ -44,8 +46,9 @@ from .worker import worker_status
 from .desktop_logic import (
     ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity,
     build_candidate_profile,
-    format_stored_timestamp, form_values, job_form_values, plan_job_save,
-    profile_fields_not_matching, profile_form_values,
+    fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
+    plan_job_save, profile_fact_review, profile_fields_not_matching, profile_form_values,
+    required_fact_questions, required_facts_to_confirm,
 )
 from . import contact_export, resume
 from .diagnostics import describe_startup_failure, record_startup_failure
@@ -190,6 +193,29 @@ def _conflict_cell(value: str) -> str:
     return _shorten(value, _CONFLICT_CELL_CHARACTERS)
 
 
+@dataclass
+class ProfileSetupWindow:
+    """One open setup window: its widgets, the questions it is asking, and the answers it is holding.
+
+    Kept as a small record rather than as loose attributes so that a rebuild is obviously a rebuild:
+    ``_render_profile_setup`` empties ``body`` and fills it from storage again, which is what makes the
+    questions after a save the facts the database still does not state. ``answer_vars`` and
+    ``confirm_vars`` are recreated by that rebuild, so neither can outlive the state it was drawn from.
+    """
+
+    dialog: object
+    body: object
+    summary: object
+    save_button: object
+    questions: tuple = ()
+    #: The required facts that are stored but not yet checked by the person, in the profile's own order.
+    #: They are shown beside their stored values instead of being asked for again; this is the record of
+    #: what is on screen, so what the window offers can be read without scraping the widgets.
+    awaiting: tuple = ()
+    answer_vars: dict = field(default_factory=dict)
+    confirm_vars: dict = field(default_factory=dict)
+
+
 class CareerAgentApp:
     """Small local UI over the tested domain logic and SQLite store."""
     def __init__(self, root: tk.Tk, database_path: str | Path | None = None):
@@ -208,6 +234,9 @@ class CareerAgentApp:
         self.selected_job_id = None
         self.job_save_mode = JobSaveMode.NEW
         self.job_edit_baseline = None
+        #: The one open setup window, or ``None``. One at a time: a second window would hold answers the
+        #: first one has already changed, and nothing it holds is written anywhere until it is saved.
+        self.profile_setup = None
         #: The contact file currently being reviewed, as the parser returned it, or ``None``. Held in
         #: memory only: a preview that is never confirmed is written nowhere and copied nowhere.
         self.contacts_preview = None
@@ -283,26 +312,33 @@ class CareerAgentApp:
         return widget
 
     def _build_profile(self):
+        """The candidate profile: the form, the import, and what is stored behind each fact.
+
+        Inside a scrolling body, like the Work history and the HR contacts tabs: the facts table and the
+        sentences that explain it make this tab taller than the smallest page it can be given, and content
+        below the fold cannot be reached at all unless something scrolls it.
+        """
+        body = self._scrollable_body(self.profile_tab)
         for col in (1, 3):
-            self.profile_tab.columnconfigure(col, weight=1)
-        ttk.Label(self.profile_tab, text="Only enter verifiable facts. Blank fields remain unknown.").grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+            body.columnconfigure(col, weight=1)
+        ttk.Label(body, text="Only enter verifiable facts. Blank fields remain unknown.", wraplength=_TAB_TEXT_WRAP).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
         fields = [
             ("Country", "country", 1, 0, None), ("Degree / discipline", "degree", 1, 1, None),
-            ("Study status", "study_status", 2, 0, ["undergraduate", "graduate", "postgraduate", "doctoral", "graduated", "other"]),
+            ("Study status", "study_status", 2, 0, list(resume.study_status_choices())),
             ("Graduation year", "graduation_year", 2, 1, None), ("Experience years", "experience", 3, 0, None),
             ("Work authorization value (exact when required)", "work_authorization", 3, 1, None), ("Skills (comma-separated)", "skills", 4, 0, None),
             ("Preferred locations", "locations", 4, 1, None), ("Preferred work modes", "work_modes", 5, 0, None),
             ("Preferred role types", "role_types", 5, 1, None),
         ]
         for label, key, row, col, choices in fields:
-            self._entry(self.profile_tab, label, key, row, col, self.profile_vars, choices=choices)
-        actions = ttk.Frame(self.profile_tab)
+            self._entry(body, label, key, row, col, self.profile_vars, choices=choices)
+        actions = ttk.Frame(body)
         actions.grid(row=6, column=0, columnspan=4, sticky=W, pady=12)
         ttk.Button(actions, text="Save profile locally", command=self._save_profile).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Import resume (PDF/DOCX)", command=self._import_resume).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Delete saved profile", command=self._delete_profile).pack(side="left")
         ttk.Label(
-            self.profile_tab,
+            body,
             text=(
                 "Resume import reads the chosen file on this device and proposes values for you to "
                 "review: nothing is uploaded, nothing is saved until you confirm, and the extracted "
@@ -312,13 +348,85 @@ class CareerAgentApp:
             wraplength=_TAB_TEXT_WRAP,
         ).grid(row=7, column=0, columnspan=4, sticky=W, pady=8)
         ttk.Label(
-            self.profile_tab,
+            body,
             text=(
                 "A resume is untrusted input: the import reads text only, never runs macros, and refuses "
                 "an encrypted or over-sized file. It is not a malware scanner."
             ),
             wraplength=_TAB_TEXT_WRAP,
         ).grid(row=8, column=0, columnspan=4, sticky=W)
+        self._build_profile_facts(body, row=9)
+        self._build_profile_setup_note(body, row=10)
+
+    def _build_profile_facts(self, body, *, row: int) -> None:
+        """What is stored, fact by fact: the value, where it came from, and whether the person confirmed it.
+
+        The table is the honest half of the promise the import makes. A value read out of a document says so
+        in its own row, a profile written before origins were recorded says *not recorded* rather than
+        claiming the person typed it, and neither can be turned into a confirmation by reading a screen: the
+        button below hands one selected fact to ``CareerStore.confirm_profile_fact``, which is the only path
+        in this application to a confirmed fact.
+
+        It is a tree rather than a set of labels because a fact is a row a person selects, and because the
+        harness's own measurement work reads label text: the values a candidate typed belong in a control a
+        person reads one line at a time, not in copy the window repeats about itself.
+        """
+        panel = ttk.LabelFrame(
+            body, padding=8,
+            text="Saved facts: the value, where it came from, and whether you confirmed it")
+        panel.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        panel.columnconfigure(0, weight=1)
+        ttk.Label(
+            panel, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "Every fact your saved profile states is listed here. \"Where it came from\" records who "
+                "supplied the value - you, a document you chose, or a file you imported - and it is a file "
+                "name, never a folder. Confirming a fact only says you have checked it: it changes no value "
+                "and rewrites no origin, it can be repeated without changing anything, and a fact with no "
+                "value cannot be confirmed at all because there is nothing to check. Nothing on this row "
+                "of controls sends anything anywhere."
+            ),
+        ).grid(row=0, column=0, sticky=W, pady=(0, 6))
+        self.facts_summary = tk.StringVar(value="Reading the saved profile...")
+        ttk.Label(panel, textvariable=self.facts_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, sticky=W)
+        self.facts_tree = ttk.Treeview(
+            panel, columns=("fact", "value", "origin", "confirmation"), show="headings", height=6)
+        for column, heading, width in (("fact", "Fact", 150), ("value", "Value stored", 260),
+                                       ("origin", "Where it came from", 290),
+                                       ("confirmation", "Confirmed by you", 210)):
+            self.facts_tree.heading(column, text=heading)
+            self.facts_tree.column(column, width=width, anchor=W)
+        self.facts_tree.grid(row=2, column=0, sticky="nsew", pady=(4, 0))
+        # A row id is the fact's own name (``country``, ``work_authorization``), which is what the store's
+        # confirmation call takes: the table cannot select something that is not a fact, and no value a
+        # person typed is ever read back to decide which fact to confirm.
+        self.facts_tree.bind("<<TreeviewSelect>>", self._on_fact_selection)
+        controls = ttk.Frame(panel)
+        controls.grid(row=3, column=0, sticky=W, pady=(6, 0))
+        # Built disabled and enabled only while exactly one stored fact is selected, like the contact tab's
+        # mark controls: a control that cannot do anything is better greyed out than offering something it
+        # would refuse, and a disabled Tk button does not run its command when it is invoked.
+        self.confirm_fact_button = ttk.Button(
+            controls, text="This is correct — confirm it", state="disabled",
+            command=self._confirm_selected_fact)
+        self.confirm_fact_button.pack(side="left")
+        ttk.Button(controls, text="Refresh the saved facts", command=self._refresh_fact_review).pack(
+            side="left", padx=8)
+        ttk.Button(controls, text="Set up missing required facts...", command=self._open_profile_setup).pack(
+            side="left")
+
+    def _build_profile_setup_note(self, body, *, row: int) -> None:
+        """The sentence under the table about what this app will and will not ask a person for."""
+        self.profile_setup_note = tk.StringVar(value=(
+            "The setup window asks only for the facts a listing can require - country, degree, study "
+            "status, graduation year, experience and work authorization - and only where your saved "
+            "profile states nothing for them. A preference such as a location, a work mode or a role type "
+            "is never asked as if a listing required it, and no answer is guessed from another: a fact you "
+            "leave blank stays unknown, and the eligibility checks keep treating it as unknown."
+        ))
+        ttk.Label(body, textvariable=self.profile_setup_note, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=row, column=0, columnspan=4, sticky=W, pady=(10, 0))
 
     def _build_jobs(self):
         for col in (1, 3, 5):
@@ -3003,10 +3111,476 @@ class CareerAgentApp:
         except sqlite3.Error as exc:
             self._report_database_unavailable(exc)
             return
-        if not profile:
+        if profile:
+            for key, value in profile_form_values(profile).items():
+                self.profile_vars[key].set(value)
+        # Read even when no profile is stored: the table's empty state is what tells a first-time person
+        # there is nothing saved yet, and a table left from an earlier read would say the opposite.
+        self._refresh_fact_review()
+
+    # ---------------------------------------------------------------- the saved facts and their origins
+    #
+    # The profile form above says what the person entered; this table says what the database holds, **who
+    # supplied each value** and whether the person has checked it. It exists because the application could
+    # otherwise show a value it read out of a document exactly as it shows a value somebody typed, and
+    # because a confirmation made anywhere else - by a save, an import, or a screen that merely opened -
+    # would be a claim about the person that the person never made. Three rules hold this section together:
+    #
+    # * **The table is read from storage, never from what a handler believed it wrote.** Every write path
+    #   ends in ``_refresh_fact_review``, and the confirmation below re-reads the row it acted on before it
+    #   says anything succeeded.
+    # * **A confirmation goes through the store's own call.** ``CareerStore.confirm_profile_fact`` is the
+    #   only writer of a verification state in the whole application, and this window passes it a fact name
+    #   and nothing else; no SQL is written here and no value is ever read back to decide what to confirm.
+    # * **A fact with no value cannot be confirmed.** The table lists only stated facts, and the store
+    #   refuses the rest, so there is no path to a confirmed fact that is not there.
+
+    def _empty_fact_review(self, summary: str) -> None:
+        """Leave the facts table empty and say why it is empty - a failed read is not an empty profile."""
+        self._clear_tree(self.facts_tree)
+        self.facts_summary.set(summary)
+        self._sync_fact_actions()
+
+    def _refresh_fact_review(self):
+        """Redraw the facts table from storage: value, origin and confirmation state, fact by fact."""
+        try:
+            profile = self.store.get_profile()
+            provenance = self.store.get_profile_fact_provenance()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            self._empty_fact_review("The saved profile could not be read, so it is not shown here.")
             return
-        for key, value in profile_form_values(profile).items():
-            self.profile_vars[key].set(value)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            self._empty_fact_review("The local database could not be read, so it is not shown here.")
+            return
+        previously_selected = self._selected_fact_key()
+        rows = profile_fact_review(profile, provenance)
+        self._clear_tree(self.facts_tree)
+        for row in rows:
+            # The row id is the fact's canonical name, which is what the store's confirmation call takes.
+            self.facts_tree.insert("", END, iid=row.fact,
+                                   values=(row.label, row.value, row.origin, row.confirmation))
+        self.facts_summary.set(fact_review_summary(profile, provenance))
+        if previously_selected is not None and any(row.fact == previously_selected for row in rows):
+            # The row the person had chosen stays chosen. Confirming a fact redraws this table, and a
+            # table that drops the row under the cursor the moment it is used makes the person click the
+            # same thing again to see what happened - the stored-contact list keeps its row selected for
+            # the same reason.
+            self.facts_tree.selection_set(previously_selected)
+        self._sync_fact_actions()
+
+    def _on_fact_selection(self, _event=None):
+        """The selection changed: what the confirm control may act on is decided again from the table."""
+        self._sync_fact_actions()
+
+    def _selected_fact_key(self) -> str | None:
+        """The one fact the selected row stands for, or ``None`` when the selection is not exactly one fact.
+
+        Read from the row's own item id, which is the fact's canonical name, and returned only when that
+        name is one of the profile's facts. A row id that is not a fact is never passed to the store: the
+        store would refuse it, and offering a refusal as if it were a confirmation is not what this window
+        is for.
+        """
+        selection = self.facts_tree.selection()
+        if len(selection) != 1:
+            return None
+        fact = str(selection[0])
+        return fact if fact in PROFILE_FACTS else None
+
+    def _sync_fact_actions(self):
+        """Enable the confirm control only while exactly one stored fact is selected. Writes nothing."""
+        self.confirm_fact_button.configure(state="normal" if self._selected_fact_key() else "disabled")
+
+    def _confirm_selected_fact(self):
+        """Record that the person has checked one saved fact; the only confirmation path in this window.
+
+        The control acts on the fact the selected row stands for and on nothing else. It hands the work to
+        the store, then reads the row back and compares what is stored with what it was: what the window
+        says afterwards is the database's answer, not the handler's intention, so a confirmation that did
+        not take effect - a damaged row, a full disk, a value that is no longer stated - is reported as
+        not recorded. Confirming a fact that is already confirmed says exactly that and changes nothing,
+        including the time of the first confirmation.
+        """
+        fact = self._selected_fact_key()
+        if fact is None:
+            messagebox.showinfo(
+                "No fact selected",
+                "Select the fact you have checked in the table first. Nothing was confirmed.",
+                parent=self.root)
+            self.status.set("No fact was selected, so nothing was confirmed.")
+            return
+        label = fact_label(fact)
+        try:
+            before = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+            profile = self.store.get_profile()
+            already = fact in before and before[fact].is_confirmed
+            value = "" if profile is None else profile_fact_values(profile)[fact]
+            self.store.confirm_profile_fact(fact)
+            after = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+            stored = self.store.get_profile()
+        except StoredRecordError as exc:
+            # Reading the stored provenance is what failed, so there is nothing to report about a
+            # confirmation: the read is refused and nothing was written.
+            self._report_unreadable_record(exc)
+            return
+        except ValueError as exc:
+            # The store's own refusal: a fact the profile does not state, or a file held at a schema older
+            # than the table that keeps confirmations. Reported as it stands, with nothing claimed.
+            messagebox.showerror(
+                "Nothing was confirmed",
+                f"{exc}\n\nNothing in your saved profile was changed.", parent=self.root)
+            self.status.set("Nothing was confirmed; your saved profile is unchanged.")
+            self._refresh_fact_review()
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Not confirmed",
+                "The confirmation could not be written to the local database, so nothing was recorded. "
+                f"Your saved profile is unchanged.\n\n{exc}", parent=self.root)
+            self.status.set("Nothing was confirmed (local database error).")
+            self._refresh_fact_review()
+            return
+        self._refresh_fact_review()
+        stored_value = "" if stored is None else profile_fact_values(stored)[fact]
+        entry = after.get(fact)
+        if entry is None or not entry.is_confirmed or stored_value != value:
+            # The write did not produce the state this window would otherwise be describing, so it is
+            # reported as what it is: not recorded.
+            messagebox.showerror(
+                "Confirmation not recorded",
+                f"The database does not report {label} as confirmed after the write, so this is reported as "
+                "not recorded rather than as done. Refresh the table and check what is stored before relying "
+                "on it.", parent=self.root)
+            self.status.set(f"The confirmation of {label} could not be confirmed; check the saved facts table.")
+            return
+        if already:
+            self.status.set(f"{label} was already confirmed by you; nothing changed, including the time.")
+        else:
+            self.status.set(
+                f"Confirmed: you checked {label}. Its value and where it came from are unchanged.")
+
+    # ---------------------------------------------------------------- the missing-information setup
+
+    def _open_profile_setup(self):
+        """Open the setup window: only the required facts the saved profile does not state.
+
+        The window is filled from storage every time it is opened and after every successful save, so it
+        asks for what the database does not state rather than for what the last handler believed. Nothing
+        is written until its save button is pressed and its one confirmation is answered; closing it,
+        pressing Cancel or pressing Escape writes nothing at all, which is why a partly answered window can
+        be closed and reopened without losing what is already stored.
+        """
+        if self.profile_setup is not None:
+            # One at a time: a second window would hold answers to questions the first one has already
+            # changed, and a person would have no way to tell which of the two the database followed.
+            self.profile_setup.dialog.lift()
+            self.status.set("The profile setup window is already open.")
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Required facts your profile does not state")
+        dialog.transient(self.root)
+        dialog.geometry("820x640")
+        dialog.minsize(560, 420)
+        dialog.grab_set()
+        footer = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        footer.pack(fill=X, side="bottom")
+        header = ttk.Frame(dialog, padding=(12, 12, 12, 6))
+        header.pack(fill=X)
+        ttk.Label(header, text="Fill in only what is missing — nothing is guessed",
+                  font=("TkDefaultFont", 11, "bold")).pack(anchor=W)
+        ttk.Label(
+            header, wraplength=760, justify=LEFT,
+            text=(
+                "This window asks for the facts a listing can require and your saved profile does not "
+                "state, and puts the required facts it already holds in front of you to check. Nothing is "
+                "guessed from your other answers, nothing is uploaded, and a blank stays unknown."
+            ),
+        ).pack(anchor=W, pady=(4, 0))
+        body = ttk.Frame(dialog)
+        body.pack(fill=BOTH, expand=True, padx=12, pady=(0, 4))
+        save_button = ttk.Button(footer, text="Save and confirm these answers",
+                                 command=self._save_profile_setup)
+        save_button.pack(side="right")
+        ttk.Button(footer, text="Cancel", command=self._cancel_profile_setup).pack(side="right", padx=(0, 8))
+        self.profile_setup = ProfileSetupWindow(
+            dialog=dialog, body=self._scrollable_body(body),
+            summary=tk.StringVar(value="Reading the saved profile..."), save_button=save_button)
+        # The window's own close button and Escape are the same path as Cancel: nothing written, and a
+        # status line that says so.
+        dialog.protocol("WM_DELETE_WINDOW", self._cancel_profile_setup)
+        dialog.bind("<Escape>", lambda _event: self._cancel_profile_setup())
+        self._render_profile_setup()
+        self.status.set("Profile setup opened: it asks only for required facts your profile does not state.")
+
+    def _render_profile_setup(self, note: str | None = None) -> bool:
+        """Fill the setup window from storage, and say whether it could be read.
+
+        Every rebuild re-reads the profile and its origins, so the questions after a save are the facts the
+        database still does not state. ``note`` is the sentence about what just happened, put in front of
+        the state so the person sees both the result and what is left to do.
+        """
+        setup = self.profile_setup
+        if setup is None:
+            return False
+        for child in setup.body.winfo_children():
+            child.destroy()
+        setup.questions = ()
+        setup.awaiting = ()
+        setup.answer_vars = {}
+        setup.confirm_vars = {}
+        try:
+            profile = self.store.get_profile()
+            provenance = self.store.get_profile_fact_provenance()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            self._empty_profile_setup("The saved profile could not be read, so nothing can be asked here.")
+            return False
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            self._empty_profile_setup("The local database could not be read, so nothing can be asked here.")
+            return False
+
+        questions = required_fact_questions(profile)
+        awaiting = required_facts_to_confirm(profile, provenance)
+        setup.questions = questions
+        setup.awaiting = awaiting
+        if questions:
+            asked = ", ".join(question.label for question in questions)
+            state = (f"{len(questions)} required fact(s) are not in your saved profile: {asked}. Answer what "
+                     "you know and press the button below; anything left blank stays unknown.")
+        elif awaiting:
+            state = ("Your saved profile states every fact a listing can require, so none of them is asked "
+                     "for again. The values below are saved but not confirmed yet.")
+        else:
+            state = ("There is nothing to fill in here: every fact a listing can require is stated and "
+                     "confirmed by you.")
+        setup.summary.set((note + " " if note else "") + state)
+        ttk.Label(setup.body, textvariable=setup.summary, wraplength=760,
+                  justify=LEFT).pack(anchor=W, pady=(0, 8))
+
+        for question in questions:
+            row = ttk.Frame(setup.body)
+            row.pack(fill=X, anchor=W, pady=(6, 0))
+            ttk.Label(row, text=question.question, wraplength=740, justify=LEFT).pack(anchor=W)
+            variable = tk.StringVar()
+            setup.answer_vars[question.fact] = variable
+            answer_row = ttk.Frame(row)
+            answer_row.pack(fill=X, anchor=W, padx=(16, 0))
+            chooser = (ttk.Combobox(answer_row, textvariable=variable, values=list(question.choices),
+                                    width=32, state="readonly") if question.choices
+                       else ttk.Entry(answer_row, textvariable=variable, width=34))
+            chooser.pack(side="left")
+            ttk.Label(row, text=question.hint, wraplength=740, justify=LEFT).pack(anchor=W, padx=(16, 0))
+
+        if awaiting:
+            ttk.Label(
+                setup.body, wraplength=760, justify=LEFT,
+                text=("Saved already, not confirmed yet. These are not asked for again — the value is "
+                      "there; tick the ones you have checked, or leave them and confirm them later on the "
+                      "profile tab:"),
+            ).pack(anchor=W, pady=(12, 2))
+        for review in awaiting:
+            holder = ttk.Frame(setup.body)
+            holder.pack(fill=X, anchor=W, pady=(2, 0))
+            variable = tk.BooleanVar(value=False)
+            setup.confirm_vars[review.fact] = variable
+            ttk.Checkbutton(holder, text=f"{review.label} — {review.value}",
+                            variable=variable).pack(anchor=W)
+            ttk.Label(holder, text=f"{review.origin} · {review.confirmation}", wraplength=740,
+                      justify=LEFT).pack(anchor=W, padx=(20, 0))
+
+        ttk.Label(
+            setup.body, wraplength=760, justify=LEFT,
+            text=("Nothing here leaves this device: the answers are stored in your local database, no file "
+                  "is uploaded and nothing is sent. An answer you type and save is recorded as your own "
+                  "words and as confirmed by you, because you typed it and pressed the button; no document "
+                  "and no import can do that."),
+        ).pack(anchor=W, pady=(12, 0))
+        # A window with nothing to save is greyed rather than offering a write it would refuse. The
+        # existing control is reconfigured instead of rebuilt, so nothing here can stack a second button.
+        setup.save_button.configure(state="normal" if (questions or awaiting) else "disabled")
+        return True
+
+    def _empty_profile_setup(self, summary: str) -> None:
+        """Say in the setup window that the database could not be read, and offer nothing to save."""
+        setup = self.profile_setup
+        if setup is None:
+            return
+        setup.summary.set(summary)
+        ttk.Label(setup.body, textvariable=setup.summary, wraplength=760,
+                  justify=LEFT).pack(anchor=W)
+        setup.save_button.configure(state="disabled")
+
+    def _cancel_profile_setup(self):
+        """Close the setup window. Nothing was written, so there is nothing to undo or report as saved."""
+        setup = self.profile_setup
+        self.profile_setup = None
+        if setup is not None:
+            setup.dialog.destroy()
+        self.status.set("Profile setup closed; nothing was saved.")
+
+    def _save_profile_setup(self):
+        """Save the answers typed here, confirm what the person checked, and re-read what is still missing.
+
+        The answers go through the same ``build_candidate_profile`` validation and the same
+        ``CareerStore.save_profile`` write as the form above, so there is no second, weaker route into the
+        stored profile. A save that fails changes nothing and says so; a save that succeeds is read back and
+        compared before anything is claimed, and only then is a confirmation recorded - one store call per
+        fact, which is idempotent, keeps each fact's original origin, and refuses a fact with no value. The
+        window is rebuilt from storage afterwards, so what it asks for next is what the database still does
+        not state, and a setup that is still incomplete says so instead of reporting completion.
+        """
+        setup = self.profile_setup
+        if setup is None:
+            return
+        answers = {
+            fact: variable.get().strip()
+            for fact, variable in setup.answer_vars.items() if variable.get().strip()
+        }
+        checked = [fact for fact, variable in setup.confirm_vars.items() if variable.get()]
+        if not answers and not checked:
+            messagebox.showinfo(
+                "Nothing to save",
+                "No answer was typed and no saved fact was ticked, so nothing was written.",
+                parent=setup.dialog)
+            return
+        merged = form_values(self.profile_vars)
+        merged.update(answers)
+        try:
+            profile = build_candidate_profile(merged)
+        except ValueError as exc:
+            # The field that cannot be read is named; the typed answers stay on screen so nothing the person
+            # wrote is lost by a refusal.
+            messagebox.showerror(
+                "Check these answers",
+                f"{exc}\n\nNothing was saved, and the answers on this screen are as you left them.",
+                parent=setup.dialog)
+            return
+        if answers:
+            detail = "\n".join(f"• {fact_label(fact)}: {value}" for fact, value in answers.items())
+            if not messagebox.askyesno(
+                    "Save and confirm these answers?",
+                    f"{detail}\n\nThese answers are saved as the facts they name and recorded as confirmed "
+                    "by you, because you typed them here and pressed this button - no document, no import "
+                    "and no other action in this app can confirm a fact. A question you leave blank stays "
+                    "unknown. Save now?", parent=setup.dialog):
+                self.status.set("Profile setup: nothing was saved.")
+                return
+        try:
+            self.store.save_profile(profile)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except ValueError as exc:
+            messagebox.showerror(
+                "Not saved", f"{exc}\n\nNothing was saved; your saved profile is unchanged.",
+                parent=setup.dialog)
+            self.status.set("Profile setup: nothing was saved.")
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror(
+                "Profile not saved",
+                "The answers could not be written to the local database. Nothing was saved; your previously "
+                f"saved profile is unchanged.\n\n{exc}", parent=setup.dialog)
+            self.status.set("Profile setup: nothing was saved (local database error).")
+            return
+        # Written, so it is read back before anything is confirmed: confirming a value that is not stored
+        # would be a confirmation of nothing, and a write that cannot be read is not a save.
+        try:
+            stored = self.store.get_profile()
+        except StoredRecordError as exc:
+            self._setup_written_but_unverified(str(exc))
+            return
+        except sqlite3.Error as exc:
+            self._setup_written_but_unverified(str(exc))
+            return
+        if stored is None:
+            messagebox.showerror(
+                "Saved, but not verified",
+                "The answers were written but the saved profile could not be read back, so this is reported "
+                "as unconfirmed rather than saved. Open the profile tab and check what is stored before "
+                "relying on it.", parent=setup.dialog)
+            self.status.set("Profile setup: written but not verified.")
+            return
+        mismatched = profile_fields_not_matching(stored, answers)
+        if mismatched:
+            labels = ", ".join(fact_label(fact) for fact in mismatched)
+            messagebox.showerror(
+                "Profile not saved",
+                f"The stored profile does not match the answer(s) you gave ({labels}), so this is reported "
+                "as failed rather than saved. Nothing was confirmed.", parent=setup.dialog)
+            self.status.set("Profile setup: the stored profile did not match the answers.")
+            self._refresh_fact_review()
+            return
+        confirmed, already_confirmed, failed = [], [], []
+        for fact in dict.fromkeys([*answers, *checked]):
+            try:
+                before = next(
+                    (entry for entry in self.store.get_profile_fact_provenance() if entry.fact == fact), None)
+                self.store.confirm_profile_fact(fact)
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except (ValueError, sqlite3.Error) as exc:
+                failed.append((fact, str(exc)))
+                continue
+            (already_confirmed if before is not None and before.is_confirmed else confirmed).append(fact)
+        try:
+            current = self.store.get_profile()
+        except (StoredRecordError, sqlite3.Error) as exc:
+            current = None
+            self._report(str(exc))
+        if current is not None:
+            for key, value in profile_form_values(current).items():
+                self.profile_vars[key].set(value)
+        still_missing = missing_required_profile_facts(current)
+        self._refresh_fact_review()
+
+        note_parts = []
+        if confirmed:
+            note_parts.append("Saved and confirmed by you: "
+                              + ", ".join(fact_label(fact) for fact in confirmed) + ".")
+        if already_confirmed:
+            note_parts.append("Already confirmed, so unchanged: "
+                              + ", ".join(fact_label(fact) for fact in already_confirmed) + ".")
+        if failed:
+            note_parts.append("Could not be confirmed (the local database refused the write): "
+                              + ", ".join(fact_label(fact) for fact, _reason in failed)
+                              + ". Their values are saved; confirm them again from the table above.")
+        if still_missing:
+            note_parts.append(
+                "Still not stated: " + ", ".join(fact_label(fact) for fact in still_missing)
+                + ". Answer them above, or leave them unknown — a listing that requires one cannot be "
+                "checked until you answer it.")
+        else:
+            note_parts.append("Your saved profile now states every fact a listing can require.")
+        rendered = self._render_profile_setup(note=" ".join(note_parts))
+        if not rendered:
+            # The rebuild could not read the database, so what it holds is the read failure; the result of
+            # the save is still reported where a person can see it.
+            self.status.set("Profile setup: saved, but the profile could not be read back for display.")
+            return
+        self.status.set(
+            f"Profile setup: saved {len(answers)} answer(s) and confirmed {len(confirmed)} fact(s); "
+            + (f"{len(still_missing)} required fact(s) still not stated." if still_missing
+               else "every fact a listing can require is stated."))
+
+    def _setup_written_but_unverified(self, detail: str) -> None:
+        """Report a setup save that reached the database but could not be read back to verify.
+
+        Deliberately not routed through ``_report_unreadable_record``, whose sentence is "nothing was
+        changed": by the time this is reached something *was* changed, and telling the person otherwise is
+        exactly the kind of claim this application does not make.
+        """
+        setup = self.profile_setup
+        messagebox.showerror(
+            "Saved, but not verified",
+            "The answers were written to the local database, but the saved profile could not be read back "
+            "to check them, so this is reported as unconfirmed rather than saved. Nothing was confirmed on "
+            f"this screen, and the facts you answered are recorded as unconfirmed.\n\n{detail}",
+            parent=setup.dialog if setup is not None else self.root)
+        self.status.set("Profile setup: written but not verified.")
 
     def _save_profile(self):
         try:
@@ -3029,6 +3603,10 @@ class CareerAgentApp:
             )
             self.status.set("Profile not saved (local database error).")
             return
+        # The table is redrawn from storage: the facts this save changed are recorded as the person's own
+        # words and **unverified**, and a screen that still showed them as they were would be the one thing
+        # this tab exists to prevent.
+        self._refresh_fact_review()
         self.status.set("Candidate profile saved locally.")
 
     def _delete_profile(self):
@@ -3065,6 +3643,9 @@ class CareerAgentApp:
         for variable in self.profile_vars.values():
             variable.set("")
         self._refresh_history()
+        # Deleting the profile deletes its origins in the same transaction, so the table must be redrawn:
+        # rows left behind would describe facts that no longer exist.
+        self._refresh_fact_review()
         self.status.set("Saved profile deleted, along with its employment and education records.")
 
     def _import_resume(self):
@@ -3347,13 +3928,19 @@ class CareerAgentApp:
             )
         for key, value in profile_form_values(stored).items():
             self.profile_vars[key].set(value)
+        # Redrawn from storage, so the values this import changed appear in the table as what they are:
+        # read out of that document, and not confirmed by anybody.
+        self._refresh_fact_review()
         saved_labels = ", ".join(label for key, label in resume.PROFILE_FIELD_LABELS if key in accepted)
         origin = f" {document_name}" if document_name else " the document"
         return True, (
             f"Saved {len(accepted)} profile value(s): {saved_labels}. They were written to the local "
             f"database and read back to check them. The app recorded them as values read out of{origin}, "
             "and as not confirmed by you: a sentence in a document is not your own statement about "
-            "yourself, and this app does not treat it as one."
+            "yourself, and this app does not treat it as one. The Profile tab's saved-facts table now "
+            "shows which facts are confirmed; \"This is correct — confirm it\" records your own check of "
+            "one of them, and \"Set up missing required facts...\" asks for what a listing can require "
+            "and your profile does not state."
         )
 
     def _job_from_form(self):
@@ -4143,6 +4730,9 @@ class CareerAgentApp:
 
     def close(self):
         self._record("app.stopped")
+        # An open setup window is destroyed with the root. It holds answers nobody saved - that is exactly
+        # what Cancel and Escape do - so there is nothing to undo and nothing to report as written.
+        self.profile_setup = None
         self.store.close()
         self.root.destroy()
 

@@ -28,7 +28,8 @@ from career_agent import (
     evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
 )
 from career_agent.core import (ActivityKind, ApplicationActivity, FactSource, FactVerification,
-                            InterviewOutcome, PreparationKind)
+                            InterviewOutcome, PreparationKind, PROFILE_FACTS, REQUIRED_PROFILE_FACTS,
+                            missing_required_profile_facts)
 from career_agent import backup as backup_module
 from career_agent import contact_export
 from career_agent import contacts
@@ -434,6 +435,10 @@ class Widget:
         return None
 
     def add(self, *args, **kwargs):
+        return None
+
+    def lift(self, *args, **kwargs):
+        """Real ``Tk.lift``: raise the window above its siblings. Nothing to model but the call itself."""
         return None
 
     def transient(self, *args, **kwargs):
@@ -1007,6 +1012,7 @@ from career_agent.tasks import build_task  # noqa: E402  (the product's own task
 DEFAULT_TASK_IDS = tuple(task.task_id for task in default_tasks())
 from career_agent.tasks import RunState  # noqa: E402  (same reason: after the stub)
 from career_agent.worker import missed_occurrences  # noqa: E402  (the same read the tab makes)
+from career_agent import desktop_logic  # noqa: E402  (after the stub, like the window)
 from career_agent.desktop_logic import job_form_values, profile_form_values  # noqa: E402
 
 
@@ -1119,6 +1125,15 @@ class HandlerTestCase(unittest.TestCase):
         app.work_current = BooleanVar()
         app.study_ongoing = BooleanVar()
         app.profile_tab = Widget()
+        # The saved-facts table and its controls, built the way the real tab builds them: a tree whose row
+        # ids are the facts' own names, a summary line, and a confirm button greyed out until exactly one
+        # stored fact is selected. No setup window is open to begin with.
+        app.profile_setup = None
+        app.facts_summary = StringVar(value="Reading the saved profile...")
+        app.facts_tree = Tree()
+        app.facts_tree.bind("<<TreeviewSelect>>", app._on_fact_selection)
+        app.confirm_fact_button = Button(text="This is correct — confirm it", state="disabled",
+                                         command=app._confirm_selected_fact)
         app.jobs_tab = Widget()
         app.tracker_tab = Widget()
         app.data_tab = Widget()
@@ -7431,3 +7446,609 @@ class ContactConflictPanelTests(ContactTabTestCase):
         app._show_selected_conflict()
         self.assertIn("no longer recorded in this database", self.conflict_detail(app))
         self.assertEqual(MESSAGES.titles(), [], "nothing here is worth a dialog")
+
+
+# --------------------------------------------------------------------------------------------------
+# The saved facts table, and the one control that can confirm a stored fact
+# --------------------------------------------------------------------------------------------------
+#: Two required facts of the six, so a test can have a profile that is genuinely incomplete. Every value
+#: here is a fixture; there is no real candidate in this file.
+PARTIAL_PROFILE = CandidateProfile(candidate_country="Syntheticland", degree_discipline="Synthetic Computing")
+
+
+class ProfileFactReviewTests(HandlerTestCase):
+    """What the profile tab shows about each stored fact, and what its confirm control may do.
+
+    The window half of the provenance increment: a value read out of a document, a value the person typed
+    and a value nobody has an origin for must be three different rows, and the only thing in the window that
+    can turn any of them into "confirmed by you" is one button acting on one selected fact through the
+    store's own call.
+    """
+
+    def empty_form(self, app):
+        """A window whose form holds nothing, which is what a first run's form holds.
+
+        ``make_app`` pre-fills the form fields from the suite's ``PROFILE`` fixture so most tests have
+        something to compare against; a test about what a person is *asked* needs the blank starting point
+        the application itself gives somebody who has never saved a profile.
+        """
+        for variable in app.profile_vars.values():
+            variable.set("")
+        return app
+
+    def rows(self, app) -> list[tuple]:
+        """The table as it stands now, one tuple per row, in the order it drew them."""
+        return [app.facts_tree.item(iid, "values") for iid in app.facts_tree.get_children()]
+
+    def row_for(self, app, fact: str) -> tuple:
+        return next(values for values in self.rows(app) if values[0] == desktop.fact_label(fact))
+
+    def select(self, app, fact: str) -> None:
+        """Select a row the way a display does: the selection runs the bound handler."""
+        app.facts_tree.selection_set(fact)
+
+    def test_the_table_lists_every_stored_fact_with_its_value_origin_and_state(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+
+        app._refresh_fact_review()
+
+        rendered = profile_form_values(PROFILE)
+        stated = [fact for fact in PROFILE_FACTS if rendered[fact]]
+        rows = self.rows(app)
+        self.assertEqual(len(rows), len(stated), "one row per fact the stored profile states")
+        self.assertEqual(self.row_for(app, "country"),
+                         ("Country", "India", desktop_logic.ORIGIN_TYPED,
+                          desktop_logic.CONFIRMATION_PENDING))
+        self.assertIn("0 confirmed by you", app.facts_summary.get())
+        self.assertIn("every fact a listing can require is stated", app.facts_summary.get())
+        self.assertEqual(app.confirm_fact_button.options["state"], "disabled",
+                         "nothing is selected, so the control cannot act")
+
+    def test_a_fact_read_out_of_a_document_says_so_and_names_no_folder(self):
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="/home/somebody/private/synthetic-cv.docx")
+        app = self.make_app()
+
+        app._refresh_fact_review()
+
+        origin = self.row_for(app, "country")[2]
+        self.assertIn("synthetic-cv.docx", origin)
+        self.assertIn("document you chose", origin)
+        self.assertNotIn("somebody", origin, "a folder never belongs in this table")
+        self.assertEqual(self.row_for(app, "country")[3], desktop_logic.CONFIRMATION_PENDING)
+
+    def test_a_fact_with_no_recorded_origin_is_not_shown_as_the_person_s_own(self):
+        self.store.save_profile(PROFILE)
+        with self.store._connection:
+            self.store._connection.execute("DELETE FROM profile_fact_provenance")
+        app = self.make_app()
+
+        app._refresh_fact_review()
+
+        self.assertEqual(self.row_for(app, "country")[2], desktop_logic.ORIGIN_NOT_RECORDED,
+                         "a profile written before origins were kept is not attributed to anybody")
+        self.assertNotIn("typed", app.facts_summary.get().casefold())
+
+    def test_a_stored_fact_can_be_confirmed_and_keeps_its_value_and_origin(self):
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="synthetic-cv.docx")
+        app = self.make_app()
+        app._refresh_fact_review()
+
+        self.select(app, "country")
+        self.assertEqual(app.confirm_fact_button.options["state"], "normal",
+                         "selecting a stored fact is what enables the control")
+        app._confirm_selected_fact()
+
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.USER_CONFIRMED)
+        self.assertIs(entry.source, FactSource.EXTRACTED_FROM_DOCUMENT,
+                      "confirming a value never rewrites where it came from")
+        self.assertEqual(entry.document_name, "synthetic-cv.docx")
+        self.assertEqual(profile_form_values(self.store.get_profile())["country"], "India",
+                         "the confirmed value is the stored value")
+        self.assertIn("Confirmed: you checked Country", app.status.get())
+        self.assertIn("Confirmed by you", self.row_for(app, "country")[3],
+                      "the table is redrawn from what the database now holds")
+        self.assertNotIn("Saved record could not be read", MESSAGES.titles())
+
+    def test_confirming_the_same_fact_twice_changes_nothing_including_its_time(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "degree")
+        app._confirm_selected_fact()
+        first = next(item for item in self.store.get_profile_fact_provenance()
+                     if item.fact == "degree").confirmed_at
+        MESSAGES.reset()
+
+        self.assertEqual(app.facts_tree.selection(), ("degree",),
+                         "the row stays selected across the redraw, so the control can be used again")
+        app.confirm_fact_button.invoke()
+
+        second = next(item for item in self.store.get_profile_fact_provenance()
+                      if item.fact == "degree").confirmed_at
+        self.assertEqual(first, second, "a repeated confirmation is not a second confirmation")
+        self.assertIn("already confirmed", app.status.get())
+        self.assertEqual(MESSAGES.titles(), [], "and nothing needs to be reported as a failure")
+
+    def test_the_control_cannot_act_with_nothing_selected_and_writes_nothing(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        app.facts_tree.selection_remove(app.facts_tree.selection())
+
+        app.confirm_fact_button.invoke()
+
+        self.assertIn("No fact selected", MESSAGES.titles("showinfo"))
+        self.assertIn("nothing was confirmed", app.status.get())
+        self.assertTrue(all(not item.is_confirmed
+                            for item in self.store.get_profile_fact_provenance()),
+                        "no fact was confirmed by a control that had nothing to act on")
+
+    def test_a_row_left_from_a_deleted_profile_is_refused_and_the_table_is_emptied(self):
+        """A stale selection is a refusal with a sentence, never a confirmation of nothing."""
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+        self.store.delete_profile()
+        MESSAGES.reset()
+
+        app._confirm_selected_fact()
+
+        self.assertIn("Nothing was confirmed", MESSAGES.titles("showerror"))
+        self.assertIn("does not state", MESSAGES.text("showerror"))
+        self.assertIn("unchanged", app.status.get())
+        self.assertEqual(self.rows(app), [], "the table was redrawn and the profile is not there")
+        self.assertIn("No profile is saved", app.facts_summary.get())
+
+    def test_a_write_that_fails_is_reported_and_leaves_every_fact_unconfirmed(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+
+        with mock.patch.object(self.store, "confirm_profile_fact",
+                               side_effect=sqlite3.OperationalError("database is locked")):
+            app._confirm_selected_fact()
+
+        self.assertIn("Not confirmed", MESSAGES.titles("showerror"))
+        self.assertNotIn("Confirmed: you checked", app.status.get())
+        self.assertIn("local database error", app.status.get())
+        self.assertTrue(all(not item.is_confirmed
+                            for item in self.store.get_profile_fact_provenance()))
+
+    def test_a_confirmation_that_the_database_does_not_report_is_not_called_a_success(self):
+        """The store call returns, but the stored row does not say what the window is about to claim."""
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.select(app, "country")
+        MESSAGES.reset()
+
+        # A store call that returns without recording anything is exactly the case this check exists for:
+        # every other read and write here is the real one.
+        with mock.patch.object(self.store, "confirm_profile_fact", return_value=None):
+            app._confirm_selected_fact()
+
+        self.assertIn("Confirmation not recorded", MESSAGES.titles("showerror"))
+        self.assertNotIn("Confirmed: you checked", app.status.get())
+
+    def test_an_unreadable_record_empties_the_table_and_says_why(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+
+        with mock.patch.object(self.store, "get_profile",
+                               side_effect=StoredRecordError("candidate profile", "it is damaged")):
+            app._refresh_fact_review()
+
+        self.assertEqual(self.rows(app), [], "a failed read is not an empty profile")
+        self.assertIn("could not be read", app.facts_summary.get())
+        self.assertIn("Saved record could not be read", MESSAGES.titles("showerror"))
+
+    def test_no_saved_profile_shows_an_empty_table_and_says_nothing_is_saved(self):
+        app = self.make_app()
+
+        app._refresh_fact_review()
+
+        self.assertEqual(self.rows(app), [])
+        self.assertIn("No profile is saved", app.facts_summary.get())
+
+    def test_the_table_is_bound_to_the_selection_it_follows(self):
+        app = self.make_app()
+
+        self.assertIn("<<TreeviewSelect>>", app.facts_tree.bindings,
+                      "the control follows the selection only if the table reports it")
+
+    def test_deleting_the_profile_empties_the_table_in_the_same_action(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+        self.assertTrue(self.rows(app))
+        CONFIG["Delete profile"] = True
+
+        app._delete_profile()
+
+        self.assertEqual(self.rows(app), [], "rows describing facts that no longer exist are not left behind")
+        self.assertIn("No profile is saved", app.facts_summary.get())
+
+    def test_a_saved_form_leaves_the_new_facts_unconfirmed_in_the_table(self):
+        """The save path itself never confirms anything - not even a fact the person just typed."""
+        app = self.make_app()
+        app.profile_vars["country"].set("Syntheticland")
+
+        app._save_profile()
+
+        self.assertEqual(app.confirm_fact_button.options["state"], "disabled")
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.UNVERIFIED)
+        self.assertIs(entry.source, FactSource.USER_ENTERED)
+        self.assertEqual(self.row_for(app, "country"),
+                         ("Country", "Syntheticland", desktop_logic.ORIGIN_TYPED,
+                          desktop_logic.CONFIRMATION_PENDING))
+
+    def test_accepted_resume_values_reach_the_table_as_read_out_of_that_document(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+        app._refresh_fact_review()
+
+        saved, message = app._apply_accepted_profile_values(
+            {"country": "Syntheticland"}, document_name="synthetic-cv.docx")
+
+        self.assertTrue(saved, message)
+        self.assertEqual(self.row_for(app, "country"),
+                         ("Country", "Syntheticland",
+                          f"{desktop_logic.ORIGIN_FROM_DOCUMENT} (synthetic-cv.docx)",
+                          desktop_logic.CONFIRMATION_PENDING))
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.UNVERIFIED,
+                      "accepting a proposal is not confirming a fact")
+
+
+class ProfileSetupTests(HandlerTestCase):
+    """The missing-information setup: what it asks, what it refuses to ask, and what it writes.
+
+    The dialog is a Tk window, so its widgets are the suite's stand-ins; the handlers, the validation, the
+    store and the SQLite file are the real ones. What a person types is set through the same variables the
+    real entries are bound to, and every check reads the stored profile and its origins back out of the
+    database rather than out of the window's own sentences.
+    """
+
+    def empty_form(self, app):
+        """A window whose form holds nothing: what a first run presents, and what a merge starts from."""
+        for variable in app.profile_vars.values():
+            variable.set("")
+        return app
+
+    def open_setup(self, app):
+        RecordingToplevel.created = []
+        MESSAGES.reset()
+        app._open_profile_setup()
+        setup = app.profile_setup
+        self.assertIsNotNone(setup, "the setup window must be open after the handler returns")
+        return setup
+
+    def answer(self, setup, **answers) -> None:
+        for fact, value in answers.items():
+            setup.answer_vars[fact].set(value)
+
+    def ask(self, app, **answers):
+        """Open the setup window, type the answers, and save them (the confirmation is answered yes)."""
+        setup = self.open_setup(app)
+        self.answer(setup, **answers)
+        app._save_profile_setup()
+        return setup
+
+    def test_a_first_run_asks_for_the_six_required_facts_and_nothing_else(self):
+        app = self.empty_form(self.make_app())
+
+        setup = self.open_setup(app)
+
+        self.assertEqual([question.fact for question in setup.questions],
+                         list(REQUIRED_PROFILE_FACTS))
+        self.assertEqual(set(setup.answer_vars), set(REQUIRED_PROFILE_FACTS))
+        self.assertFalse(set(setup.answer_vars) & {"skills", "locations", "work_modes", "role_types"},
+                         "a preference is never asked for as if a listing required it")
+        shown = "\n".join(label.text for label in RecordingLabel.created if label.text)
+        for fact in REQUIRED_PROFILE_FACTS:
+            self.assertIn(desktop_logic.setup_question(fact).question, shown,
+                          "the question a person is asked has to be on the screen")
+        self.assertIn("nothing is guessed", shown.casefold())
+        self.assertIn("6 required fact(s) are not in your saved profile", setup.summary.get())
+
+    def test_an_existing_profile_is_asked_only_for_the_facts_it_does_not_state(self):
+        self.store.save_profile(PARTIAL_PROFILE)
+        app = self.make_app()
+
+        setup = self.open_setup(app)
+
+        self.assertEqual([question.fact for question in setup.questions],
+                         ["study_status", "graduation_year", "experience", "work_authorization"])
+        self.assertIn("4 required fact(s)", setup.summary.get())
+
+    def test_a_stated_but_unconfirmed_fact_is_offered_for_confirmation_and_not_asked_again(self):
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="synthetic-cv.docx")
+        app = self.make_app()
+
+        setup = self.open_setup(app)
+
+        self.assertEqual(setup.questions, (), "a fact with a value is reviewed, not asked for again")
+        self.assertEqual(set(setup.confirm_vars), set(REQUIRED_PROFILE_FACTS))
+        self.assertFalse(set(setup.confirm_vars) & {"skills", "locations", "work_modes", "role_types"},
+                         "a preference is not a required fact")
+        offered = "\n".join(button.text for button in RecordingCheckbutton.created)
+        self.assertIn("Country — India", offered, "the value is on screen beside the control that confirms it")
+        shown = "\n".join(label.text for label in RecordingLabel.created if label.text)
+        self.assertIn("synthetic-cv.docx", shown)
+        self.assertIn(desktop_logic.CONFIRMATION_PENDING, shown)
+        self.assertIn("states every fact a listing can require", setup.summary.get())
+
+    def test_a_stated_fact_with_no_recorded_origin_is_not_asked_for_again_either(self):
+        self.store.save_profile(PARTIAL_PROFILE)
+        with self.store._connection:
+            self.store._connection.execute("DELETE FROM profile_fact_provenance")
+        app = self.make_app()
+
+        setup = self.open_setup(app)
+
+        self.assertNotIn("country", [question.fact for question in setup.questions],
+                         "an unknown origin is not a reason to ask a fact that is already stated")
+        self.assertIn("country", setup.confirm_vars)
+
+    def test_only_a_profile_that_states_nothing_is_asked_for_everything(self):
+        self.store.save_profile(CandidateProfile(skills=frozenset({"Python"}),
+                                                 preferred_locations=frozenset({"Remote"})))
+        app = self.empty_form(self.make_app())
+
+        setup = self.open_setup(app)
+
+        self.assertEqual([question.fact for question in setup.questions], list(REQUIRED_PROFILE_FACTS),
+                         "preferences are stored facts, not required ones")
+
+    def test_saved_answers_are_stored_as_the_person_s_own_and_confirmed(self):
+        app = self.empty_form(self.make_app())
+
+        setup = self.ask(app, country="Syntheticland", degree="Synthetic Computing",
+                         study_status="graduate", graduation_year="2027", experience="1.5",
+                         work_authorization="Synthetic Permit Class A")
+
+        stored = self.store.get_profile()
+        self.assertEqual(stored.candidate_country, "Syntheticland")
+        self.assertEqual(stored.graduation_year, 2027)
+        self.assertEqual(stored.experience_years, 1.5)
+        origins = {entry.fact: entry for entry in self.store.get_profile_fact_provenance()}
+        for fact in REQUIRED_PROFILE_FACTS:
+            self.assertIs(origins[fact].source, FactSource.USER_ENTERED)
+            self.assertIs(origins[fact].verification, FactVerification.USER_CONFIRMED,
+                          "the answer was typed here and saved, so it is recorded as the person's own check")
+        self.assertEqual(setup.questions, (), "the window was rebuilt and nothing is missing now")
+        self.assertIn("every fact a listing can require is stated", setup.summary.get())
+        self.assertIn("saved 6 answer(s) and confirmed 6 fact(s)", app.status.get())
+
+    def test_what_is_still_missing_is_recomputed_from_the_database_and_reported(self):
+        app = self.empty_form(self.make_app())
+
+        setup = self.ask(app, country="Syntheticland")
+
+        self.assertEqual([question.fact for question in setup.questions],
+                         ["degree", "study_status", "graduation_year", "experience", "work_authorization"])
+        self.assertIn("Still not stated: Degree / discipline", setup.summary.get())
+        self.assertIn("5 required fact(s) still not stated", app.status.get())
+        self.assertEqual(missing_required_profile_facts(self.store.get_profile()),
+                         ("degree", "study_status", "graduation_year", "experience",
+                          "work_authorization"))
+        self.assertNotIn("every fact a listing can require is stated", setup.summary.get())
+
+    def test_a_blank_answer_stays_unknown_and_is_never_guessed(self):
+        app = self.empty_form(self.make_app())
+
+        setup = self.ask(app, country="Syntheticland")
+
+        stored = self.store.get_profile()
+        self.assertIsNone(stored.degree_discipline)
+        self.assertIsNone(stored.work_authorization)
+        self.assertIn("degree", [question.fact for question in setup.questions])
+
+    def test_a_declined_confirmation_writes_nothing_at_all(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+        CONFIG["Save and confirm these answers?"] = False
+
+        app._save_profile_setup()
+
+        self.assertIsNone(self.store.get_profile(), "declining the confirmation stores nothing")
+        self.assertEqual(self.store.get_profile_fact_provenance(), ())
+        self.assertIn("nothing was saved", app.status.get())
+        self.assertIs(app.profile_setup, setup, "the window and the typed answer stay where they were")
+
+    def test_an_unreadable_answer_is_refused_and_the_typed_answers_stay_on_screen(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland", graduation_year="sometime next year")
+
+        app._save_profile_setup()
+
+        self.assertIn("Check these answers", MESSAGES.titles("showerror"))
+        self.assertIsNone(self.store.get_profile())
+        self.assertEqual(setup.answer_vars["country"].get(), "Syntheticland",
+                         "a refusal does not throw away what the person typed")
+        self.assertIs(app.profile_setup, setup)
+
+    def test_cancelling_writes_nothing_and_closes_the_window(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+
+        app._cancel_profile_setup()
+
+        self.assertIsNone(app.profile_setup)
+        self.assertIsNone(self.store.get_profile())
+        self.assertIn("nothing was saved", app.status.get())
+        self.assertEqual(MESSAGES.titles(), [], "closing a window is not worth a dialog")
+
+    def test_escape_is_the_same_path_as_cancel(self):
+        app = self.make_app()
+        setup = self.open_setup(app)
+
+        self.assertIn("<Escape>", setup.dialog.bindings)
+
+        setup.dialog.bindings["<Escape>"](None)
+
+        self.assertIsNone(app.profile_setup)
+        self.assertIsNone(self.store.get_profile())
+
+    def test_the_window_cannot_be_opened_twice_at_once(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+
+        app._open_profile_setup()
+
+        self.assertEqual(len(RecordingToplevel.created), 1,
+                         "a second window would hold answers the first one has already changed")
+        self.assertIs(app.profile_setup, setup)
+        self.assertIn("already open", app.status.get())
+
+    def test_a_failed_write_leaves_the_stored_profile_alone_and_says_so(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+
+        with mock.patch.object(self.store, "save_profile",
+                               side_effect=sqlite3.OperationalError("disk I/O error")):
+            app._save_profile_setup()
+
+        self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertIn("Nothing was saved", MESSAGES.text("showerror"))
+        self.assertIsNone(self.store.get_profile())
+        self.assertIn("nothing was saved", app.status.get())
+        self.assertIs(app.profile_setup, setup)
+
+    def test_a_write_that_cannot_be_read_back_is_not_reported_as_saved_or_confirmed(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+        self.answer(setup, country="Syntheticland")
+
+        real_read = self.store.get_profile
+        reads = []
+
+        def readable_for_the_save_only():
+            """The write's own comparison read works; the read that would verify it afterwards does not."""
+            reads.append(len(reads))
+            if not reads[1:]:
+                return real_read()
+            raise StoredRecordError("candidate profile", "it is damaged")
+
+        with mock.patch.object(self.store, "get_profile", side_effect=readable_for_the_save_only):
+            app._save_profile_setup()
+
+        self.assertIn("Saved, but not verified", MESSAGES.titles("showerror"))
+        self.assertIn("not verified", app.status.get())
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.UNVERIFIED,
+                      "an unverified save is never turned into a confirmation")
+
+    def test_confirming_an_already_saved_fact_keeps_where_it_came_from(self):
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="synthetic-cv.docx")
+        app = self.make_app()
+        setup = self.open_setup(app)
+
+        setup.confirm_vars["country"].set(True)
+        app._save_profile_setup()
+
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertIs(entry.verification, FactVerification.USER_CONFIRMED)
+        self.assertIs(entry.source, FactSource.EXTRACTED_FROM_DOCUMENT,
+                      "the fact the window confirmed keeps the document it was read out of")
+        self.assertEqual(entry.document_name, "synthetic-cv.docx")
+        self.assertIn("Saved and confirmed by you: Country", setup.summary.get())
+        self.assertNotIn("Country", [question.label for question in setup.questions])
+
+    def test_a_fact_confirmed_elsewhere_while_the_window_was_open_is_reported_as_unchanged(self):
+        """Two windows can be open on one database; the second one's save must not claim the first one's work.
+
+        The setup window offers a required fact it holds for confirmation, so between drawing that box and
+        pressing save the same fact can be confirmed somewhere else - another window, or another run of this
+        application, on a database SQLite allows both to hold. What this save records is therefore read from
+        the database at the moment of the write: a fact that is already confirmed is reported as already
+        confirmed and unchanged, never as something this press just did.
+        """
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="synthetic-cv.docx")
+        app = self.make_app()
+        setup = self.open_setup(app)
+        self.assertIn("country", setup.confirm_vars)
+        setup.confirm_vars["country"].set(True)
+
+        elsewhere = self.store.confirm_profile_fact("country")
+        self.assertTrue(elsewhere.is_confirmed)
+
+        app._save_profile_setup()
+
+        self.assertIn("Already confirmed, so unchanged: Country", setup.summary.get())
+        self.assertNotIn("Saved and confirmed by you: Country", setup.summary.get(),
+                         "a confirmation this press did not make is not reported as this press's work")
+        entry = next(item for item in self.store.get_profile_fact_provenance() if item.fact == "country")
+        self.assertEqual(entry.confirmed_at, elsewhere.confirmed_at,
+                         "the earlier confirmation's own time is the one that stands")
+
+    def test_saving_with_nothing_typed_or_ticked_says_so_and_writes_nothing(self):
+        app = self.empty_form(self.make_app())
+        setup = self.open_setup(app)
+
+        app._save_profile_setup()
+
+        self.assertIn("Nothing to save", MESSAGES.titles("showinfo"))
+        self.assertIsNone(self.store.get_profile())
+        self.assertIs(app.profile_setup, setup)
+
+    def test_the_setup_resumes_after_a_restart_without_asking_again(self):
+        app = self.empty_form(self.make_app())
+        self.ask(app, country="Syntheticland")
+
+        reopened = self.empty_form(self.make_app())
+        setup = self.open_setup(reopened)
+
+        self.assertNotIn("country", [question.fact for question in setup.questions],
+                         "a fact that is stored is not asked for again on the next run")
+        self.assertNotIn("country", setup.confirm_vars,
+                         "it was confirmed when it was answered, so there is nothing to check again")
+        self.assertNotIn("country", setup.answer_vars,
+                         "and its value is not silently re-entered into an answer box")
+        self.assertEqual(profile_form_values(self.store.get_profile())["country"], "Syntheticland")
+        self.assertEqual([question.fact for question in setup.questions],
+                         ["degree", "study_status", "graduation_year", "experience", "work_authorization"],
+                         "the rest of the required facts are still asked for")
+
+    def test_an_unreadable_record_offers_nothing_to_save(self):
+        self.store.save_profile(PROFILE)
+        app = self.make_app()
+
+        with mock.patch.object(self.store, "get_profile",
+                               side_effect=StoredRecordError("candidate profile", "it is damaged")):
+            setup = self.open_setup(app)
+
+        self.assertEqual(setup.answer_vars, {})
+        self.assertEqual(setup.confirm_vars, {})
+        self.assertEqual(setup.questions, ())
+        self.assertIn("could not be read", setup.summary.get())
+        self.assertEqual(setup.save_button.options["state"], "disabled",
+                         "a window that cannot read the profile offers no write")
+
+    def test_a_complete_and_confirmed_profile_is_asked_for_nothing(self):
+        app = self.empty_form(self.make_app())
+        self.ask(app, country="Syntheticland", degree="Synthetic Computing",
+                 study_status="graduate", graduation_year="2027", experience="0",
+                 work_authorization="Synthetic Permit Class A")
+
+        second = self.make_app()
+        setup = self.open_setup(second)
+
+        self.assertEqual(setup.questions, ())
+        self.assertEqual(setup.confirm_vars, {})
+        self.assertIn("nothing to fill in here", setup.summary.get().casefold())
+        self.assertEqual(setup.save_button.options["state"], "disabled")

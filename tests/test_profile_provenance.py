@@ -30,6 +30,8 @@ from career_agent.core import (
     changed_profile_facts, document_name_only, missing_profile_facts,
     missing_required_profile_facts, profile_fact_values,
 )
+from career_agent import desktop_logic
+from career_agent.core import ProfileFactProvenance
 from career_agent.store import CareerStore, StoredRecordError
 
 SYNTHETIC = CandidateProfile(
@@ -632,6 +634,236 @@ class ADatabaseHeldAtAnOlderSchemaTests(ProvenanceTestCase):
                          store_module.SCHEMA_VERSION)
         self.assertTrue(all(entry.source is FactSource.UNKNOWN
                             for entry in upgraded.get_profile_fact_provenance()))
+
+
+class TheFactLabelsTests(unittest.TestCase):
+    """A candidate reads these words, so they are bound to the one vocabulary rather than written again."""
+
+    def test_every_profile_fact_has_a_plain_language_label(self):
+        self.assertEqual(set(desktop_logic.FACT_LABELS), set(PROFILE_FACTS))
+
+    def test_the_labels_are_the_resume_reviewer_s_own(self):
+        from career_agent import resume  # noqa: PLC0415 - imported for the comparison only
+
+        self.assertEqual(desktop_logic.FACT_LABELS, dict(resume.PROFILE_FIELD_LABELS))
+        self.assertEqual(desktop_logic.fact_label("work_authorization"), "Work authorization")
+        self.assertEqual(desktop_logic.fact_label("work_modes"), "Preferred work modes")
+
+    def test_a_name_with_no_label_is_rendered_from_the_key_rather_than_refused(self):
+        """A vocabulary that grew must not blank a screen; the row says what it is showing instead."""
+        self.assertEqual(desktop_logic.fact_label("pronouns"), "pronouns")
+
+
+class TheFactOriginSentenceTests(ProvenanceTestCase):
+    """What the table is allowed to say about where a value came from, fact by fact."""
+
+    def origin_for(self, fact: str, **written):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC, **written)
+        return desktop_logic.fact_origin_text(
+            next(entry for entry in store.get_profile_fact_provenance() if entry.fact == fact))
+
+    def test_a_fact_the_person_typed_says_so(self):
+        self.assertEqual(self.origin_for("country"), desktop_logic.ORIGIN_TYPED)
+
+    def test_a_fact_read_out_of_a_document_names_the_document_and_never_its_folder(self):
+        store = self.open_store()
+        store.save_profile(
+            SYNTHETIC, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+            document_name="/home/somebody/private/resumes/synthetic-cv.docx")
+
+        origin = desktop_logic.fact_origin_text(
+            next(entry for entry in store.get_profile_fact_provenance() if entry.fact == "country"))
+
+        self.assertIn("synthetic-cv.docx", origin)
+        self.assertNotIn("somebody", origin)
+        self.assertNotIn("resumes", origin)
+
+    def test_a_fact_imported_from_a_file_says_imported_and_names_the_file(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC, source=FactSource.IMPORTED_FROM_FILE,
+                           document_name="synthetic-export.json")
+
+        origin = desktop_logic.fact_origin_text(
+            next(entry for entry in store.get_profile_fact_provenance() if entry.fact == "country"))
+
+        self.assertIn("Imported", origin)
+        self.assertIn("synthetic-export.json", origin)
+
+    def test_an_unrecorded_origin_is_never_described_as_the_person_s_own_words(self):
+        origin = desktop_logic.fact_origin_text(
+            ProfileFactProvenance(fact="country", source=FactSource.UNKNOWN))
+
+        self.assertEqual(origin, desktop_logic.ORIGIN_NOT_RECORDED)
+        self.assertNotIn("typed", origin.casefold())
+
+    def test_an_unconfirmed_fact_says_nobody_has_checked_it_and_never_that_it_is_wrong(self):
+        text = desktop_logic.fact_confirmation_text(
+            ProfileFactProvenance(fact="country", source=FactSource.USER_ENTERED))
+
+        self.assertEqual(text, desktop_logic.CONFIRMATION_PENDING)
+        self.assertNotIn("incorrect", text.casefold())
+        self.assertNotIn("wrong", text.casefold())
+
+    def test_a_confirmed_fact_carries_the_time_the_database_holds(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+        store.confirm_profile_fact("country")
+
+        entry = next(item for item in store.get_profile_fact_provenance() if item.fact == "country")
+        text = desktop_logic.fact_confirmation_text(entry)
+
+        self.assertIn("Confirmed by you", text)
+        self.assertIn(entry.confirmed_at[:10], text, "the stored day is the day shown")
+
+    def test_a_confirmed_fact_with_no_readable_time_says_so_rather_than_inventing_one(self):
+        text = desktop_logic.fact_confirmation_text(ProfileFactProvenance(
+            fact="country", source=FactSource.USER_ENTERED, verification=FactVerification.USER_CONFIRMED,
+            confirmed_at=None))
+
+        self.assertIn("not recorded", text)
+        self.assertNotIn("2026", text)
+
+
+class TheFactReviewTests(ProvenanceTestCase):
+    """The rows the table is drawn from: one per stated fact, with its value, origin and state."""
+
+    def test_one_row_per_stated_fact_in_the_profile_s_own_order(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+
+        rows = desktop_logic.profile_fact_review(store.get_profile(), store.get_profile_fact_provenance())
+
+        stated = [fact for fact in PROFILE_FACTS if profile_fact_values(SYNTHETIC)[fact]]
+        self.assertEqual([row.fact for row in rows], stated)
+        self.assertEqual(len(rows), 7, "the synthetic profile states seven of the ten facts")
+        country = rows[0]
+        self.assertEqual((country.label, country.value, country.origin, country.confirmed),
+                         ("Country", "India", desktop_logic.ORIGIN_TYPED, False))
+
+    def test_a_fact_with_no_value_has_no_row(self):
+        store = self.open_store()
+        store.save_profile(CandidateProfile(candidate_country="India"))
+
+        rows = desktop_logic.profile_fact_review(store.get_profile(), store.get_profile_fact_provenance())
+
+        self.assertEqual([row.fact for row in rows], ["country"],
+                         "a fact nobody stated has nothing to show and nothing to confirm")
+
+    def test_no_stored_profile_is_no_rows(self):
+        self.assertEqual(desktop_logic.profile_fact_review(None, ()), ())
+
+    def test_a_stated_fact_with_no_recorded_origin_reads_as_not_recorded(self):
+        """A profile written before origins were kept is not attributed to the person by this screen."""
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+        with store._connection:
+            store._connection.execute("DELETE FROM profile_fact_provenance")
+
+        rows = desktop_logic.profile_fact_review(store.get_profile(), store.get_profile_fact_provenance())
+
+        self.assertTrue(rows)
+        self.assertTrue(all(row.origin == desktop_logic.ORIGIN_NOT_RECORDED for row in rows))
+        self.assertTrue(all(not row.confirmed for row in rows))
+
+    def test_the_summary_never_calls_a_profile_complete_while_a_required_fact_is_missing(self):
+        store = self.open_store()
+        store.save_profile(CandidateProfile(candidate_country="India"))
+
+        summary = desktop_logic.fact_review_summary(store.get_profile(),
+                                                    store.get_profile_fact_provenance())
+
+        self.assertIn("required facts not stated yet", summary)
+        self.assertIn("Degree / discipline", summary)
+        self.assertNotIn("every fact a listing can require is stated", summary)
+
+    def test_the_summary_says_nothing_is_saved_when_there_is_no_profile(self):
+        summary = desktop_logic.fact_review_summary(None, ())
+
+        self.assertIn("No profile is saved", summary)
+        self.assertNotIn("fact(s) stored", summary)
+
+
+class TheSetupQuestionsTests(ProvenanceTestCase):
+    """The questions the setup flow asks, and - more importantly - the ones it does not."""
+
+    def test_there_is_exactly_one_question_per_required_fact(self):
+        from career_agent.desktop_logic import setup_question  # noqa: PLC0415 - the refusal path
+
+        asked = {setup_question(fact).fact for fact in REQUIRED_PROFILE_FACTS}
+
+        self.assertEqual(asked, set(REQUIRED_PROFILE_FACTS))
+        with self.assertRaises(KeyError):
+            setup_question("skills")
+
+    def test_a_missing_profile_is_asked_for_all_six_required_facts(self):
+        questions = desktop_logic.required_fact_questions(None)
+
+        self.assertEqual([question.fact for question in questions], list(REQUIRED_PROFILE_FACTS))
+
+    def test_only_the_required_facts_the_profile_does_not_state_are_asked_for(self):
+        profile = CandidateProfile(candidate_country="India", study_status="graduate")
+
+        questions = desktop_logic.required_fact_questions(profile)
+
+        self.assertEqual([question.fact for question in questions],
+                         ["degree", "graduation_year", "experience", "work_authorization"])
+
+    def test_a_stated_but_unconfirmed_fact_is_never_asked_for_again(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+
+        questions = desktop_logic.required_fact_questions(store.get_profile())
+        awaiting = desktop_logic.required_facts_to_confirm(store.get_profile(),
+                                                           store.get_profile_fact_provenance())
+
+        self.assertEqual(questions, (), "a fact with a value is reviewed, not asked for again")
+        self.assertEqual([row.fact for row in awaiting], list(REQUIRED_PROFILE_FACTS))
+        self.assertTrue(all(not row.confirmed for row in awaiting))
+
+    def test_a_fact_with_no_recorded_origin_is_still_not_asked_for_again(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+        with store._connection:
+            store._connection.execute("DELETE FROM profile_fact_provenance")
+
+        questions = desktop_logic.required_fact_questions(store.get_profile())
+
+        self.assertEqual(questions, (), "the value is there, whatever the origin says")
+
+    def test_a_preference_is_never_asked_for_as_if_a_listing_required_it(self):
+        asked = {question.fact for question in desktop_logic.required_fact_questions(None)}
+
+        self.assertFalse(asked & {"skills", "locations", "work_modes", "role_types"})
+        self.assertEqual(asked, set(REQUIRED_PROFILE_FACTS))
+
+    def test_the_study_status_question_offers_the_form_s_own_choices(self):
+        from career_agent import resume  # noqa: PLC0415 - the form's own list
+
+        question = desktop_logic.setup_question("study_status")
+
+        self.assertEqual(question.choices, resume.study_status_choices())
+        self.assertTrue(question.choices, "a closed question with no choices cannot be answered")
+
+    def test_every_question_carries_a_plain_question_and_a_hint_that_names_the_blank_option(self):
+        for fact in REQUIRED_PROFILE_FACTS:
+            question = desktop_logic.setup_question(fact)
+            self.assertTrue(question.question.endswith("?"), f"{fact} is not asked as a question")
+            self.assertTrue(question.hint, f"{fact} has no explanation of what the answer is used for")
+            self.assertNotIn("_", question.label, "the label is a fact key, not a name a person reads")
+
+    def test_the_facts_awaiting_confirmation_are_required_ones_and_only_those(self):
+        store = self.open_store()
+        store.save_profile(SYNTHETIC)
+        store.confirm_profile_fact("country")
+
+        awaiting = desktop_logic.required_facts_to_confirm(store.get_profile(),
+                                                           store.get_profile_fact_provenance())
+
+        self.assertNotIn("country", [row.fact for row in awaiting])
+        self.assertNotIn("skills", [row.fact for row in awaiting])
+        self.assertEqual([row.fact for row in awaiting],
+                         [fact for fact in REQUIRED_PROFILE_FACTS if fact != "country"])
 
 
 if __name__ == "__main__":  # pragma: no cover - the suite runs the module through discovery
