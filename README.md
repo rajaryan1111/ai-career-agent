@@ -330,13 +330,24 @@ an employer.
 
 **A "do not contact" mark is never cleared by an import.** The flag lives on the contact record: an import
 updates review metadata and never that column, so the mark survives re-imports, files that contradict what
-is stored, and a backup that is restored. The stored list shows it and the summary counts it. Setting the
-mark is not yet a control in the window: it is reachable through the store API this build is tested
-against (`CareerStore.set_contact_suppression`), and the screen for it is not built.
+is stored, and a backup that is restored. The stored list shows it and the summary counts it.
+
+**Marking a contact do not contact, and taking the mark off again.** Select a row in the stored list and the
+line under the controls says where it sits and whether it carries a mark; **Mark do not contact** and
+**Remove do-not-contact mark** are enabled only for the action that would change that. Either one asks first
+- naming the row's position and the file it came from, never the address, the name or the company - and
+writes once when you confirm. Declining, or changing your mind at any point, writes nothing, and the state
+line and the list are read back from the database afterwards rather than remembered from the screen. You can
+type a **reason** in the box under the controls before marking; it is stored on that record only, and it is never written to a dialog, a
+message, the status line or the activity log. Taking the mark off removes the reason and the date with it, so
+a contact that is no longer marked is not left carrying an explanation that no longer applies, and it can be
+marked again later. Because nothing in this build contacts anybody, a mark records your decision; it is what
+a later feature will have to respect.
 
 **What is deliberately not here yet.** Row-by-row accept/reject while the file is being read, exporting the
-rows that were refused, resolving or dismissing recorded disagreements from the window, matching contacts to
-listings, drafts, and anything that sends, submits or contacts anybody. The planning document
+rows that were refused, resolving or dismissing recorded disagreements from the window, keeping several
+reasons or a history of marks per contact (the record keeps the current mark, its date and its one reason),
+matching contacts to listings, drafts, and anything that sends, submits or contacts anybody. The planning document
 (`planning/hr-contact-outreach-and-application-tracking-2026-10-16.md`) describes those phases, and the
 gate that governs the external ones (`SOURCE_QUALITY_GATE_PASSED`) is still closed: no discovery source is
 enabled and nothing in this build performs an external action.
@@ -1035,9 +1046,12 @@ nothing was running, reported from the same status lines the tab already shows, 
 separately as the one a worker will still claim; the HR contact list, where a file that is not a contact list is
 refused with nothing stored, a chosen file is read and shown with the stored list still empty, a declined
 confirmation stores nothing, a confirmed import stores each contact once (with a repeat adding none and a
-do-not-contact mark surviving a further import), and no address is ever contacted; and cleanup that releases every
+do-not-contact mark surviving a further import), the mark controls are reached by the keyboard and are off until
+a stored row is selected, a declined removal leaves the mark exactly as it was, a confirmed one clears it, and a
+mark made from the window with a reason typed beside it is stored with that reason and shown in no dialog, status
+line or event, and no address is ever contacted; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 87 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 91 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
 the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by

@@ -18,9 +18,11 @@ whether the confirmation reads well - so treat that tab as **NOT TESTED by hand*
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md) rather than treating the
 automated checks as acceptance of it.
 
-**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **87
-checks** in the current source (eleven and 82 on the last fully green matrix, run `38823626117` at `3a88e6e`;
-76 when the per-leg table below was recorded, and one check was added to workflow I on 2026-10-16). The twelfth
+**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **91
+checks** in the current source (87 on the last fully green matrix, run `38828908041` at `02962f6`; eleven and
+82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and one check was
+added to workflow I on 2026-10-16, five to workflow L with the contact list, and four more when the
+do-not-contact controls were added). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
@@ -71,7 +73,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 87 checks: twelve workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 91 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -297,7 +299,7 @@ result this project has recorded for every window step so far.
 | [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 98 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
-| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls), per-leg platform/Tk/screen strings, and the defects only a real display could show |
 | [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab the checklist has no numbered steps for yet |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |
 

@@ -3208,3 +3208,44 @@ the repository rather than in a report: the commit message of `a868275` was pass
 expanded its backticked phrases as commands, so it arrived full of gaps. A pushed message is not rewritten;
 the sentence above names the run instead, and every commit message in this increment otherwise went through
 `git commit -F`.
+
+
+**2026-10-16, this session — the mark gets a control, and the control keeps its mouth shut.**
+The stored contact record could already represent a do-not-contact mark - the column, the date it was made,
+the reason, and exactly one method that writes all three - and the stored list already showed it, but nothing
+in the window could set it. That gap is now closed with no schema change at all: the record's own
+`suppressed_note` was read, found sufficient, and a new column would have moved the version for nothing. Two
+buttons sit under the stored list (row 10 and 11 of the tab's grid) with a reason box and one line of state
+beside them, and what they obey is the interesting part rather than the fact that they exist. Both are built
+disabled and are driven by one method that re-reads `list_contacts()` and enables exactly the action that
+would change the selected row - mark when it is unmarked, clear when it is marked, the reason box only while
+marking - so there is no state in which a person is offered a button whose only outcome is "nothing to
+change". The row's tree id is the stored `contact_id`, so the panel asks the widget which row is selected and
+then asks the store for that record rather than keeping a parallel copy of the list on screen; a selection
+that a restore has since removed is caught as a stale id, refreshes the list and writes nothing. Both
+confirmations describe the row by its **position in the list and the file it came from** and never by the
+address, the name, the company or the reason, because dialog text is what a screenshot or a bug report keeps,
+and the reason a person types is stored on that one record and reaches no dialog, no status line, no message
+and no event: the event is `contacts.suppressed` with `detail=suppressed=true|false` and nothing else.
+Clearing nulls the flag, the date and the reason together, so an unmarked contact is not left carrying an
+explanation that no longer applies. Zero-write is asserted the way the rest of this feature asserts it -
+against the connection's own `total_changes`, not against the message shown - for a declined confirmation, a
+stale selection and an injected `sqlite3.OperationalError` that leaves the mark and the typed reason exactly
+as they were and reports no success. Covered by 12 new tests in
+`tests/test_desktop_handlers.py::ContactMarkControlTests` (with the widget stand-in taught two things it was
+missing: `configure` must record the options it is given, and a selection change must run the
+`<<TreeviewSelect>>` handler the way a display does, because a tree that changes its selection silently would
+let a handler that only ever runs on a display look correct here), one new privacy test in
+`tests/test_contacts_store.py::ContactPrivacyTests` asserting the log holds a flag and no fixture value, and
+four new acceptance checks **L6-L9** - the controls off until a row is selected and reachable by the same
+keyboard walk workflow K measures, a declined removal leaving the mark and its date untouched, a confirmed
+one clearing both, and a mark made from the window through the real entry with its reason stored and shown in
+no dialog, status line or log line. The suite is `Ran 1845 tests ... OK (skipped=13)` locally and the harness
+now declares **91** checks. Written up in `research/hr-contact-do-not-contact-control-2026-10-16.md`; `task.md`
+ticks the control, `phases.md` row 1C and `design.md`'s contacts bullet describe it, and the README's contact
+section states the two controls, the reason rule and what is still absent. What this does not do: no human has
+used the control (the tab has no numbered manual steps at all, so nothing is even marked BLOCKED), the record
+keeps one current reason rather than a history of marks, a cleared mark is not a deleted record, the contact
+tables are still outside the JSON export, recorded disagreements still cannot be read in the window, and
+nothing acts on the mark because nothing contacts anybody - `SOURCE_QUALITY_GATE_PASSED` is still `False` and
+`enabled_discovery_sources()` still empty.
