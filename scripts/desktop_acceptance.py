@@ -3440,8 +3440,15 @@ def press_key(host, widget, keysym: str) -> None:
     For a tree, the key moves the tree's *focus item* rather than its selection, and Tk does nothing at all
     while no item holds that focus (``ttk::treeview::Keynav`` returns at its first line). A person sets it by
     clicking the row they mean, which is what a caller pressing an arrow key in a list has to do first.
+
+    The focus is **forced**, not merely set, and that is not a detail: Tk's own ``event`` manual says that
+    "certain events, such as key events, require that the window has focus to receive the event properly", and
+    ``focus_set`` is ignored while the application's window is not the active one - which is exactly the
+    situation of a process driving a window in CI on Windows. ``focus_force`` is the variant that puts the
+    focus on the widget regardless, so the key this function sends is a key Tk will deliver.
     """
-    widget.focus_set()
+    widget.focus_force()
+    host.update()
     widget.event_generate(f"<{keysym}>", when="now")
     host.update()
 
@@ -3937,7 +3944,9 @@ def workflow_l_contact_import(run: Run) -> None:
         described = app.contact_conflict_text.get("1.0", "end")
         press_key(host, app.contact_conflicts_tree, "Down")
         require(app.contact_conflicts_tree.selection() == (str(second),),
-                f"the down arrow did not move the selection: {app.contact_conflicts_tree.selection()!r}")
+                f"the down arrow did not move the selection: {app.contact_conflicts_tree.selection()!r}; the "
+                f"window's focus is {host.focus_get()!r} and the tree's focus item is "
+                f"{app.contact_conflicts_tree.focus()!r}")
         moved = app.contact_conflict_text.get("1.0", "end")
         require(moved != described and f"Disagreement {second}" in moved,
                 "moving the selection with the keyboard did not describe the newly selected disagreement")
