@@ -594,6 +594,21 @@ class Tree(ValidatedWidget):
         self.current = {}
         self.selected = ()
         self.children = ()
+        #: The item Tk draws its focus rectangle around. It is *not* the selection: a click sets both, and
+        #: Tk's own arrow-key navigation starts from this one and does nothing while it is empty.
+        self.focus_item = ""
+
+    def focus(self, item=None):
+        """Real Tk's treeview ``focus`` subcommand: get the focus item, or set it.
+
+        Tk keeps this item separately from the selection, and its ``ttk::treeview::Keynav`` procedure
+        returns without moving anything when no item holds it - so a workflow that presses an arrow key has
+        to say which row the person had clicked, or it is asking Tk to navigate from nowhere.
+        """
+        if item is None:
+            return self.focus_item
+        self.focus_item = str(item)
+        return None
 
     def selection(self):
         return self.selected
@@ -615,26 +630,32 @@ class Tree(ValidatedWidget):
         self._fire_select()
 
     def _class_binding(self, sequence) -> bool:
-        """Tk's own treeview navigation: an arrow key selects the next or previous row and posts the event.
+        """Tk's own treeview navigation, as ``ttk::treeview::Keynav`` implements it.
 
-        This is the *platform's* behaviour, not the application's, which is why the stub models it rather
-        than leaving it out: the workflow that presses it is asking whether the window's own handler follows
-        the selection Tk moves, and only a display can answer that for certain.
+        Read off Tk 8.6's ``library/ttk/treeview.tcl``: the arrow keys move the tree's *focus item* and
+        select it, and the procedure returns immediately when no item holds the focus - pressing Down in a
+        list nobody has clicked moves nothing. Modelled here because the workflow that presses the key is
+        asking whether the window's own handler follows the selection Tk moves, and a stand-in that invented
+        a different starting point would make that check mean something else.
         """
-        children = list(self.children)
-        if sequence not in ("<Down>", "<Up>") or not children:
+        if sequence not in ("<Down>", "<Up>"):
             return False
-        chosen = [str(item) for item in self.selected]
-        position = children.index(chosen[0]) if chosen and chosen[0] in children else None
-        if position is None:
-            following = children[0] if sequence == "<Down>" else children[-1]
-        else:
-            step = 1 if sequence == "<Down>" else -1
-            following = children[min(max(position + step, 0), len(children) - 1)]
+        children = list(self.children)
+        if not children or self.focus_item not in children:
+            # The binding is there and it does nothing, which is what pressing Down in a list no row has
+            # been clicked in does on a display. Answering "no binding" here would be a different claim.
+            return True
+        position = children.index(self.focus_item)
+        step = 1 if sequence == "<Down>" else -1
+        following = children[min(max(position + step, 0), len(children) - 1)]
+        self.focus(following)
         self.selection_set(str(following))
         return True
 
     def delete(self, item):
+        # The row Tk was drawing its focus rectangle around is gone with the row.
+        if self.focus_item == str(item):
+            self.focus_item = ""
         # A deleted row leaves the tree: it is no longer a child, can no longer be read, and is no longer
         # selected - real Tk drops a deleted item from the selection, and a list refresh rebuilds every
         # row, so a window that repopulates its list loses the row the person had chosen.
@@ -4862,6 +4883,39 @@ class TreeRowReadbackTests(unittest.TestCase):
 
         self.assertEqual(tree.selection(), (), "the rebuilt list must not claim a row is still selected")
         self.assertEqual(tree.item("j1", "values"), ("j1", "renamed"))
+
+    def test_the_arrow_keys_navigate_from_the_focus_item_the_way_tk_does(self):
+        """Tk 8.6's ``ttk::treeview::Keynav`` moves the tree's *focus item*, and does nothing without one.
+
+        This is the behaviour the display-backed workflow depends on when it presses a real Down key, and
+        the CI run at ``7323457`` is why it is modelled: on a real window the key did nothing, because the
+        check had selected a row without ever setting the item Tk navigates from - the thing a click sets.
+        """
+        tree = Tree()
+        for item in ("j1", "j2"):
+            tree.insert("", "end", iid=item, values=(item,))
+        followed = []
+        tree.bind("<<TreeviewSelect>>", lambda _event: followed.append(tree.selection()))
+
+        tree.event_generate("<Down>")
+        self.assertEqual(tree.selection(), (), "Tk navigates from nowhere when no item holds the focus")
+        self.assertEqual(followed, [], "nothing was selected, so nothing may claim a selection changed")
+
+        tree.focus("j1")
+        tree.event_generate("<Down>")
+
+        self.assertEqual(tree.selection(), ("j2",), "the arrow key must select the following row")
+        self.assertEqual(tree.focus(), "j2", "and the focus item moves with it, as Tk moves it")
+        self.assertEqual(followed, [("j2",)], "the selection change must run the bound handler once")
+
+    def test_a_deleted_row_is_no_longer_the_focus_item(self):
+        tree = Tree()
+        tree.insert("", "end", iid="j1", values=("a row",))
+        tree.focus("j1")
+
+        tree.delete("j1")
+
+        self.assertEqual(tree.focus(), "", "Tk drops the focus item when its row is deleted")
 
     def test_a_deleted_row_cannot_be_read_back(self):
         tree = Tree()

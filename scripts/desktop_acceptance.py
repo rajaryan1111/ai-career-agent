@@ -3436,6 +3436,10 @@ def press_key(host, widget, keysym: str) -> None:
     is the one Tk itself installed for that widget class - a tree's arrow keys are Tk's, not this
     application's, which is exactly why the check that uses this is about the panel *following* a selection
     rather than about the key itself.
+
+    For a tree, the key moves the tree's *focus item* rather than its selection, and Tk does nothing at all
+    while no item holds that focus (``ttk::treeview::Keynav`` returns at its first line). A person sets it by
+    clicking the row they mean, which is what a caller pressing an arrow key in a list has to do first.
     """
     widget.focus_set()
     widget.event_generate(f"<{keysym}>", when="now")
@@ -3924,6 +3928,11 @@ def workflow_l_contact_import(run: Run) -> None:
         order = focus_order(host, app.stored_contacts_tree)
         require(app.contact_conflicts_tree in order, "the keyboard order never reaches the disagreement list")
         app.contact_conflicts_tree.selection_set(first)
+        # What a click on that row does, and what Tk's own arrow-key navigation starts from: the tree's focus
+        # item. A person who tabbed into the list and pressed Down without clicking would see nothing move,
+        # which is Tk's behaviour for every list in this window - and is why this check clicks first, the way
+        # the list is meant to be used, and then presses the key.
+        app.contact_conflicts_tree.focus(str(first))
         workspace.root.update()
         described = app.contact_conflict_text.get("1.0", "end")
         press_key(host, app.contact_conflicts_tree, "Down")
