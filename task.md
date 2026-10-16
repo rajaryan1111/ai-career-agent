@@ -17,7 +17,7 @@ After resume upload and one-time setup, the agent should autonomously discover r
 - [x] Keep all private contact data out of the repository, tests, logs, screenshots and workflow artifacts. Every fixture address is on a reserved `.invalid` domain; the event carries counts only; the panel copies nothing and logs nothing; provenance is a file name, never a path; the JSON export does not carry the contact tables.
 - [x] Do not add matching-to-jobs, email drafts, sending, reply tracking, external calls or source enabling to this increment. Nothing in `168ac31` reaches a network, and `SOURCE_QUALITY_GATE_PASSED` is still `False` with `enabled_discovery_sources()` still `()` (asserted by the CI legs and by `tests/test_sources.py`).
 
-**Next Arena task:** [safe contact import persistence + review UI](planning/arena-task-phase-0-contact-import-persistence-review-ui-2026-10-16.md).
+**Next Arena task:** [local HR contact do-not-contact control](planning/arena-task-phase-0-contact-do-not-contact-control-2026-10-16.md).
 
 ## P1 — Resume intelligence and one-time onboarding
 - [ ] Inspect existing resume ingestion and reuse supported PDF/DOCX/text paths.
