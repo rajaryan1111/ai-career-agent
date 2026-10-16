@@ -223,12 +223,29 @@ The nine families the increment was specified to cover, and where each lives:
 | Malformed input: bad address, missing name, ambiguous columns, malformed CSV, caps, extra columns, BOM, UTF-16 | `tests/test_contacts.py` (the shipped parser's own 48 tests) plus the refusal paths through the tab |
 | Privacy: fixture values absent from logs and CLI output; no contact value in an event | `ContactPrivacyTests`, `tests/test_event_log.py`, the CLI tests in `tests/test_contacts.py` |
 | Display-backed GUI patterns: focus, scrolling, cancel, confirm | workflow **L** in `scripts/desktop_acceptance.py` (5 checks) on the five display-backed CI legs; `tests/test_desktop_handlers.py::TabLayoutPolicyTests` for what the tab asks for without a display |
-| Regression, compile/lint, existing backup/restore | the full suite above, `compileall`, `tests/test_backup.py`, `tests/test_erasure.py` |
+| Regression, compile/lint, existing backup/restore | the full suite above, `compileall`, `tests/test_backup.py`, `tests/test_cli_forget.py` (the erasure paths) and `tests/test_erasure`-style sidecar coverage inside it |
 
-**CI.** The run for the commit that carries this note is recorded in the session report and in `phases.md`
-(run id, conclusion, per-leg `RESULT:` lines). The last fully green matrix on this branch was run
-`38823626117` at `3a88e6e` (13/13 jobs, 82 checks per display-backed leg, 1778 tests per leg); this increment
-adds workflow L and 54 tests, so its own run is the evidence that matters, not that one.
+**CI.** Run [`38828908041`](https://github.com/rajaryan1111/ai-career-agent/actions/runs/38828908041) at
+`02962f6` - the documentation commit that carries this note, on top of the code commit `168ac31` - is **13/13
+jobs success**: the first matrix in this register that carries the contact list. Per leg:
+
+| Check-run | Result |
+| --- | --- |
+| `unit-tests` (3.10, 3.11, 3.12, 3.13, 3.14) | success; `Ran 1832 tests ... OK` (3.14: 50.7 s, `skipped=13`) |
+| `Desktop smoke (Linux, display-backed)` | `RESULT: PASS - 87 checks passed` and `RESULT: PASS - 14 checks passed`; workflow **L**'s L1-L5 all `[ ok ]`, K4 and K5 `[ ok ]`, and the focus walk reports `focus 'HR contacts' -> 6 stop(s) in the order, 6 of them in this window, 6/7 interactive control(s) reached` (the same shape as `Jobs & eligibility` at 26/27) |
+| `Cross-platform` - macOS 3.10 / 3.13 | `Ran 1832 tests ... OK (skipped=20 / 13)`; `RESULT: PASS - 87 checks passed` and `- 14 checks passed` on a 1024x768 display (Tk 8.6) |
+| `Cross-platform` - Windows 3.10 / 3.13 | `Ran 1832 tests ... OK (skipped=46 / 39)`; `RESULT: PASS - 87 checks passed` and `- 14 checks passed` on a 1024x768 display (Tk 8.6) |
+| `Installed package` (3.10, 3.14), `Optional PDF extra` | success |
+
+No `[ fail ]` line and no `FAILED` suite appears in any leg's annotations. The ninth tab is therefore inside
+every layout measurement on all five display-backed legs (Linux Xvfb, macOS 26 and Windows 2025 on 3.10 and
+3.13) without a single K1/K2/K3 failure, and workflow L ran on each of them rather than on Linux alone. The
+run before this increment was `38823626117` at `3a88e6e` (13/13, 82 checks, 1778 tests); nothing in this
+increment's result depends on it.
+
+Two earlier runs on this branch are green with the same suite (`38825791766` at `e0f8da4`, `38825772870` at
+`4798b16`, both documentation-only commits), and the run that carried the parser (`38821276817` at `062a88c`,
+before workflow K existed) is the historical failure the register already records.
 
 ## 8. Known gaps and the next smallest task
 

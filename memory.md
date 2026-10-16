@@ -3199,3 +3199,8 @@ the privacy boundaries and the named gaps; `phases.md`'s row 1C moves from "prev
 review → store increment, and `design.md`'s contact bullet describes the tab and what it refuses to do. The
 smoke entry point now checks **nine** tabs. Nothing here matches a contact to a listing, drafts a message or
 sends one, and `SOURCE_QUALITY_GATE_PASSED` is still `False` with `enabled_discovery_sources()` still empty.
+Verified where the window actually is: run `38828908041` at `02962f6` completed **13/13 jobs green**, every
+display-backed leg reporting `RESULT: PASS - 87 checks passed` (workflow L's L1-L5 `[ ok ]`, K4 and K5 `[ ok ]`,
+and the focus walk reaching `HR contacts` in the same shape as `Jobs & eligibility`) and `Ran 1832 tests ...
+OK` (skips 13/20/39/46 by platform), so the ninth tab is inside every layout measurement on Linux, macOS 26 and
+Windows 2025 without a K1/K2/K3 failure.
