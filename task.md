@@ -69,6 +69,10 @@ After resume upload and one-time setup, the agent should autonomously discover r
 - [ ] Run focused and full regression suites; report exact commands/results and limitations.
 - [ ] Document only verified capabilities and source coverage.
 
+## Next focused increment
+
+**Next Arena task:** [local HR contact conflict review panel](planning/arena-task-phase-0-contact-conflict-review-panel-2026-10-16.md). This is a proposed read-only view over conflicts already stored in schema 7; it must not resolve/merge values or change contact state. Manual GUI acceptance remains blocked until a human uses the real window on a display.
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.
