@@ -2,7 +2,7 @@
 
 **Status:** 123 steps — at this revision **22 PASS, 101 BLOCKED, 0 FAIL, no box ticked** (the six
 newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
-BLOCKED). Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 123 steps today, 101 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
