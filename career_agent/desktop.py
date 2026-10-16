@@ -52,6 +52,7 @@ from .diagnostics import describe_startup_failure, record_startup_failure
 from .store import (
     SCHEMA_VERSION,
     CareerStore,
+    ContactConflictOrigin,
     PrivateWriteError,
     StoredRecordError,
     TrackerStatusError,
@@ -93,6 +94,101 @@ def stored_status_text(row: dict | None) -> str:
 #: the row it shares, which is smaller than any tab.
 _TAB_TEXT_WRAP = 780
 
+#: How many recorded disagreements the review panel lists at once. The table behind it is bounded only by how
+#: many contradictory files a person imports, so the screen is not. The list keeps the store's own order
+#: (oldest first) rather than re-sorting what the record holds, and the label under it says how many
+#: disagreements are stored and that the ones past this cap are still there, which is what a rendering cap
+#: has to say to stay honest. A paging control is deliberately not part of this increment.
+_CONFLICT_ROWS_SHOWN = 40
+
+#: How much of one value a *list cell* carries. A cell is one line and Tk clips it, so a 20 MB field would be
+#: copied into a row for nothing. The detail panel below is where a value is read, and it is bounded by
+#: ``_CONFLICT_VALUE_CHARACTERS`` instead.
+_CONFLICT_CELL_CHARACTERS = 60
+
+#: How much of one value the detail panel shows. Unlike a cell, this is shortened with the reason stated: the
+#: person is told the value's real length and that only the beginning is shown, rather than being handed a
+#: sentence that looks complete. A contact CSV is capped at 20 MB, so a field can genuinely be larger than any
+#: screen, and "show it all" is not a policy this window can keep.
+_CONFLICT_VALUE_CHARACTERS = 400
+
+
+def _shorten(text: str, limit: int) -> str:
+    """``text`` with its whitespace flattened and clipped to ``limit``: one line, never a wall of text."""
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[:limit].rstrip() + "\u2026"
+
+
+def _conflict_origins(origin) -> str:
+    """Which two places disagree, in the words the person's own export makes sense in."""
+    return {
+        ContactConflictOrigin.FILE: "two rows of one file",
+        ContactConflictOrigin.STORED: "your records vs the file",
+    }[origin]
+
+
+def _conflict_list_note(total: int) -> str:
+    """What the list is showing, and what it is not: counts only, so the status line and the log agree."""
+    if total == 0:
+        return ("No disagreements are recorded: every import so far agreed with what this database holds "
+                "and with itself.")
+    shown = min(total, _CONFLICT_ROWS_SHOWN)
+    if shown < total:
+        return (f"{total} disagreement(s) recorded; the first {shown} are listed, oldest first, and the rest "
+                f"are still stored - this build has no way to page to them yet.")
+    return (f"{total} disagreement(s) recorded, oldest first. Nothing here is merged, and no disagreement "
+            f"can be dismissed from this screen.")
+
+
+def _describe_conflict(conflict) -> list[str]:
+    """The two sides of one disagreement, with the provenance the schema actually holds.
+
+    ``kept_value`` is described as what this database keeps and ``other_value`` as what the file said, in
+    that order, because that is what the record holds; neither is called correct, and where the record does
+    not say where a value came from, neither does this text.
+    """
+    if conflict.origin is ContactConflictOrigin.FILE:
+        kept_side = ("  Kept: the first answer in that file's own row order. The row is not recorded, so "
+                     "this screen does not claim which one it was.")
+        other_side = (f"  Not kept: a later row in {conflict.source_file!r} said something different about "
+                      f"the same address.")
+    else:
+        kept_side = ("  Kept: the value this database already held when the file was imported. The row is "
+                     "not recorded, so this screen does not claim which file supplied it.")
+        other_side = f"  Not kept: {conflict.source_file!r} said something different about the same address."
+    lines = [
+        f"Disagreement {conflict.conflict_id} about {conflict.email_key}",
+        f"Field: {conflict.field}",
+        "",
+        f"Kept in this database:  {_conflict_value(conflict.kept_value)}",
+        f"Recorded from the file: {_conflict_value(conflict.other_value)}",
+        "",
+        "Where each side comes from:",
+        kept_side,
+        other_side,
+        f"  Recorded {conflict.observed_at} (UTC, by the import that saw it).",
+        "",
+        "Not merged, not resolved, and not something this screen can change: editing your own file and "
+        "importing it again does not rewrite what your records state, and this build has no way to dismiss "
+        "a recorded disagreement.",
+    ]
+    return lines
+
+
+def _conflict_value(value: str) -> str:
+    """One value for the detail panel: bounds stated, never silently cut."""
+    text = str(value)
+    if len(text) <= _CONFLICT_VALUE_CHARACTERS:
+        return text
+    return (f"{text[:_CONFLICT_VALUE_CHARACTERS]}\u2026\n"
+            f"[this value is {len(text)} characters long; only the first {_CONFLICT_VALUE_CHARACTERS} are "
+            f"shown here]")
+
+
+def _conflict_cell(value: str) -> str:
+    """One value for a list cell: flattened, and short enough that copying it costs nothing."""
+    return _shorten(value, _CONFLICT_CELL_CHARACTERS)
+
 
 class CareerAgentApp:
     """Small local UI over the tested domain logic and SQLite store."""
@@ -119,6 +215,12 @@ class CareerAgentApp:
         #: rather than from what the list shows: the mark is written against the stored record, and a
         #: screen row is text a person reads, never a value this window writes with.
         self.contact_selected_key: str | None = None
+        #: The ``conflict_id`` the review panel is showing, or ``None``. Read-only: this identifier is never
+        #: written anywhere, it only says which stored row the panel is describing.
+        self.contact_conflict_selected_id: int | None = None
+        #: How many disagreement rows the panel last drew, so a refresh can tell whether the view still
+        #: matches the database before it decides the old selection is still on screen.
+        self.contact_conflicts_shown = 0
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         header = ttk.Frame(root, padding=12)
         header.pack(fill=X)
@@ -144,6 +246,11 @@ class CareerAgentApp:
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.tabs.add(self.contacts_tab, text="HR contacts")
+        # Whatever a person did in another tab, or a second window did to this database, the contacts tab
+        # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
+        # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
+        # never describes a database that has moved on. Read-only, like everything on this tab.
+        self.tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.profile_vars = {}
         self.job_vars = {}
         self._build_profile()
@@ -547,6 +654,41 @@ class CareerAgentApp:
                 "contact is never written to, and no send button exists in this build."
             ),
         ).grid(row=14, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        ttk.Label(body, text="Recorded disagreements (nothing here is merged or changed)").grid(
+            row=15, column=0, columnspan=2, sticky=W, pady=(12, 2))
+        # One disagreement per row, oldest first, in the store's own order. The columns carry the compact
+        # facts and the panel below carries the two values in full: a list cell is one line and Tk clips it,
+        # and a name that disagrees with another name is exactly the thing that must not be clipped.
+        self.contact_conflicts_tree = ttk.Treeview(
+            body,
+            columns=("ref", "contact", "field", "origins", "recorded_from", "recorded_at"),
+            show="headings", height=6)
+        for column, heading, width in (
+                ("ref", "#", 40), ("contact", "Contact", 200), ("field", "Field", 80),
+                ("origins", "Which two sides", 170), ("recorded_from", "Recorded from", 160),
+                ("recorded_at", "Recorded at", 150)):
+            self.contact_conflicts_tree.heading(column, text=heading)
+            self.contact_conflicts_tree.column(column, width=width, anchor=W)
+        self.contact_conflicts_tree.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        self.contact_conflicts_tree.bind("<<TreeviewSelect>>", self._on_conflict_selection)
+        self.contact_conflict_note = tk.StringVar(value="Reading the recorded disagreements...")
+        ttk.Label(body, textvariable=self.contact_conflict_note, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=17, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        self.contact_conflict_text = tk.Text(body, height=8, wrap="word", state="disabled")
+        self.contact_conflict_text.grid(row=18, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        # The sentence this panel exists to make unnecessary to guess at: what it does, what it refuses to
+        # do, and why the database is the thing that decides which value it keeps.
+        ttk.Label(
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "A disagreement is two non-empty answers to one question about one address - the file's "
+                "against your stored record, or one row of a file against another row of the same file. "
+                "Both answers are kept, and this database keeps the one it already had rather than picking a "
+                "winner: no import can rewrite the name or the company your records state. This screen only "
+                "shows them, changes nothing, and cannot dismiss a disagreement. Select a row above to read "
+                "both sides in full."
+            ),
+        ).grid(row=19, column=0, columnspan=2, sticky=W, pady=(6, 0))
         body.columnconfigure(0, weight=1)
 
     def _choose_contact_csv(self):
@@ -694,6 +836,9 @@ class CareerAgentApp:
             f"do-not-contact · {counts['with_review_flags']} carrying a review flag · "
             f"{counts['conflicts']} disagreement(s) kept for review. Nothing here has been contacted.")
         self._sync_contact_actions()
+        # The disagreements are part of the same read: a screen that showed a new conflict count beside a
+        # stale list of them would be the worse half of both.
+        self._refresh_contact_conflicts()
 
     # ------------------------------------------------------------------ the do-not-contact mark
     #
@@ -877,6 +1022,123 @@ class CareerAgentApp:
                "The contact stays in the list, with no reason recorded against it."),
             parent=self.root,
         )
+
+    # ------------------------------------------------------------------ recorded disagreements
+    #
+    # Disagreements are the evidence behind "nothing is merged silently", and until now only the count of
+    # them was visible. This panel reads what the store already recorded and shows both sides of each one:
+    #
+    # * **Nothing here chooses.** The record keeps the value it already had, and the panel says so in those
+    #   words rather than describing one side as right. There is no merge, no dismissal, no edit and no
+    #   per-contact change on this screen, and the three assertions that matter - zero database writes, an
+    #   unchanged do-not-contact mark, and no contact value in a log, a dialog or a status line - are what
+    #   the tests are built around.
+    # * **Provenance is shown where the schema has it, and nowhere else.** The conflict row records the
+    #   file the disagreeing value arrived in and when the disagreement was seen. For a disagreement between
+    #   two rows of one file that is the whole story. For a file against the stored record, the schema does
+    #   *not* record which file supplied the stored value, and the panel says that instead of inventing it:
+    #   the stored contact's own "first seen" file is a different fact and is not used as if it were this one.
+
+    def _on_tab_changed(self, _event=None) -> None:
+        """Re-read the contacts tab when it is shown. Read-only, and silent about every other tab.
+
+        A person who leaves the tab open while a script imports into the same database, or who restores a
+        backup from another tab, would otherwise be reading a screen that no longer describes their records.
+        This is the same read the tab's own **Refresh** button performs, and it never opens a dialog.
+        """
+        try:
+            shown = self.tabs.select()
+            is_contacts = (shown == self.contacts_tab
+                           or self.tabs.tab(shown, "text") == "HR contacts")
+        except Exception:  # noqa: BLE001 - a notebook that cannot answer is not a reason to fail a switch
+            return
+        if is_contacts:
+            self._refresh_contacts()
+
+    def _refresh_contact_conflicts(self) -> None:
+        """Re-read every recorded disagreement and redraw the panel. Read-only, and never a dialog."""
+        try:
+            conflicts = self.store.list_contact_conflicts()
+            # One read of the stored contacts, so a row names its address the way the stored list does -
+            # the text the person's own file wrote - instead of a second spelling of the same person.
+            stored = {record.email_key: record for record in self.store.list_contacts()}
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._clear_tree(self.contact_conflicts_tree)
+        for position, conflict in enumerate(conflicts[:_CONFLICT_ROWS_SHOWN], start=1):
+            record = stored.get(conflict.email_key)
+            reference = record.email if record is not None else conflict.email_key
+            self.contact_conflicts_tree.insert(
+                "", END, iid=str(conflict.conflict_id),
+                values=(position, reference, conflict.field,
+                        _conflict_origins(conflict.origin),
+                        _conflict_cell(conflict.source_file), _conflict_cell(conflict.observed_at)))
+        self.contact_conflicts_shown = min(len(conflicts), _CONFLICT_ROWS_SHOWN)
+        self.contact_conflict_note.set(_conflict_list_note(len(conflicts)))
+        # Everything the previous view was pointing at is gone from the list, so it is re-read rather than
+        # described with what the screen last held.
+        self.contact_conflict_selected_id = self._selected_conflict_id()
+        self._show_selected_conflict()
+
+    def _selected_conflict_id(self) -> int | None:
+        """The stored disagreement id behind the selected row, or ``None`` when nothing usable is selected.
+
+        Only an id that is still in the list counts: after a refresh the tree holds the rows that exist
+        now, and a selection Tk dropped is the same thing as no selection at all.
+        """
+        tree = getattr(self, "contact_conflicts_tree", None)
+        if tree is None:
+            return None
+        selection = tree.selection()
+        if not selection:
+            return None
+        try:
+            return int(selection[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _on_conflict_selection(self, _event=None) -> None:
+        """Describe the newly selected disagreement. Writes nothing and asks nothing."""
+        self.contact_conflict_selected_id = self._selected_conflict_id()
+        self._show_selected_conflict()
+
+    def _show_selected_conflict(self) -> None:
+        """Draw the selected disagreement's two sides, or say why there is nothing to draw."""
+        chosen_id = self.contact_conflict_selected_id
+        if chosen_id is None:
+            lines = [self._no_conflict_selected_text()]
+        else:
+            try:
+                conflict = next((item for item in self.store.list_contact_conflicts()
+                                 if item.conflict_id == chosen_id), None)
+            except StoredRecordError as exc:
+                self._report_unreadable_record(exc)
+                return
+            except sqlite3.Error as exc:
+                self._report_database_unavailable(exc)
+                return
+            if conflict is None:
+                lines = [
+                    "The disagreement this panel was showing is no longer recorded in this database, so "
+                    "there is nothing to compare. The list above was refreshed: select a row to read one.",
+                ]
+            else:
+                lines = _describe_conflict(conflict)
+        self.contact_conflict_text.configure(state="normal")
+        self.contact_conflict_text.delete("1.0", END)
+        self.contact_conflict_text.insert("1.0", "\n".join(lines))
+        self.contact_conflict_text.configure(state="disabled")
+        # Deliberately no status line: like every other selection handler in this window, reading a row is
+        # not an action and makes no claim. The status line is also this application's channel to the
+        # activity log, and which disagreement a person is reading is not something to write there.
+
+    def _no_conflict_selected_text(self) -> str:
+        return ("No disagreement is selected. Select a row in the list above to read both sides of it; "
+                "nothing on this screen changes what is stored.")
 
     @staticmethod
     def _clear_tree(tree) -> None:

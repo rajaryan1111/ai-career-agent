@@ -28,6 +28,7 @@ from career_agent import (
 )
 from career_agent.core import ActivityKind, ApplicationActivity, InterviewOutcome, PreparationKind
 from career_agent import backup as backup_module
+from career_agent import contacts
 from career_agent.backup import BackupError, create_backup, validate_app_database
 from career_agent import analytics as career_agent_analytics
 from career_agent import resume
@@ -262,6 +263,32 @@ class Widget:
     def update_idletasks(self, *args, **kwargs):
         return None
 
+    def focus_set(self, *args, **kwargs):
+        """Real ``focus_set``: remember where the keyboard would go, as the acceptance harness asks."""
+        self.focused = True
+        return None
+
+    def event_generate(self, sequence=None, **kwargs):
+        """Real ``event_generate``, as far as a stub without an event loop can honestly go.
+
+        The acceptance harness presses a key to check that the window follows a selection a *person* made,
+        and Tk's own class binding is what handles that key - not this application's code. So the stand-in
+        implements exactly the class behaviours the workflows press, refuses every other key loudly (a key
+        this stub had silently swallowed would make a workflow pass for the wrong reason), and is never
+        evidence about a display: the run that uses it reports itself as a development run.
+        """
+        handled = self._class_binding(sequence)
+        if handled:
+            return None
+        raise NotImplementedError(
+            f"the stand-in models no class binding for {sequence!r} from a {self.tk_class}, so a workflow "
+            "that presses it cannot be exercised here"
+        )
+
+    def _class_binding(self, sequence) -> bool:
+        """The key bindings Tk itself installs for this widget class, as far as the stand-in models them."""
+        return False
+
     def withdraw(self, *args, **kwargs):
         """Real ``wm withdraw``: the window exists but is not shown."""
         self.withdrawn = True
@@ -481,11 +508,23 @@ class Notebook(ValidatedWidget):
 
     # The three methods a notebook is read and driven through, as real ``ttk.Notebook`` implements them:
     # asking which tab is shown, choosing one, resolving a widget name, and reading a tab's label.
+    def _fire_tab_changed(self):
+        """Real Tk's ``<<NotebookTabChanged>>``: choosing a tab runs the handler bound to it.
+
+        The window re-reads the contacts tab when it is shown, and a stub that changed the shown tab
+        silently would let that lifecycle look correct here while never running on a display - which is
+        the one thing a stand-in must not do.
+        """
+        handler = getattr(self, "bindings", {}).get("<<NotebookTabChanged>>")
+        if handler is not None:
+            handler(None)
+
     def select(self, tab=None):
         """Choose a tab (or answer which one is chosen), as real ``ttk.Notebook.select`` does."""
         if tab is None:
             return self.selected_tab
         self.selected_tab = tab
+        self._fire_tab_changed()
         return None
 
     def index(self, tab):
@@ -574,6 +613,26 @@ class Tree(ValidatedWidget):
         # Real Tk accepts either one item id or a sequence; a bare string is one item.
         self.selected = (selection,) if isinstance(selection, str) else tuple(selection)
         self._fire_select()
+
+    def _class_binding(self, sequence) -> bool:
+        """Tk's own treeview navigation: an arrow key selects the next or previous row and posts the event.
+
+        This is the *platform's* behaviour, not the application's, which is why the stub models it rather
+        than leaving it out: the workflow that presses it is asking whether the window's own handler follows
+        the selection Tk moves, and only a display can answer that for certain.
+        """
+        children = list(self.children)
+        if sequence not in ("<Down>", "<Up>") or not children:
+            return False
+        chosen = [str(item) for item in self.selected]
+        position = children.index(chosen[0]) if chosen and chosen[0] in children else None
+        if position is None:
+            following = children[0] if sequence == "<Down>" else children[-1]
+        else:
+            step = 1 if sequence == "<Down>" else -1
+            following = children[min(max(position + step, 0), len(children) - 1)]
+        self.selection_set(str(following))
+        return True
 
     def delete(self, item):
         # A deleted row leaves the tree: it is no longer a child, can no longer be read, and is no longer
@@ -1054,6 +1113,13 @@ class HandlerTestCase(unittest.TestCase):
         app.contact_note_entry = Entry(textvariable=app.contact_note, state="disabled")
         app.mark_contact_button = Button(text="Mark do not contact", state="disabled")
         app.clear_contact_button = Button(text="Remove do-not-contact mark", state="disabled")
+        # The recorded-disagreement panel, built the way the real tab builds it: read-only, with a list, a
+        # count line and a detail box that is disabled to typing from the moment it exists.
+        app.contact_conflict_selected_id = None
+        app.contact_conflicts_shown = 0
+        app.contact_conflict_note = StringVar(value="Reading the recorded disagreements...")
+        app.contact_conflicts_tree = Tree()
+        app.contact_conflict_text = Text(state="disabled")
         selected_tabs = []
         app.tabs = types.SimpleNamespace(select=lambda tab: selected_tabs.append(tab), selected_tabs=selected_tabs)
         app._refresh_jobs = lambda: None
@@ -1207,6 +1273,22 @@ class TabLayoutPolicyTests(unittest.TestCase):
             # A walk that found nothing would pass this test while checking nothing at all.
             self.assertGreaterEqual(checked, 12, "no label drawn across a tab was found to check")
 
+    def test_the_notebook_rereads_the_contacts_tab_when_it_is_shown(self):
+        """The tab's own lifecycle event is registered, on the notebook the window builds."""
+        with self.open_window("tabs.sqlite3") as app:
+            self.assertIn("<<NotebookTabChanged>>", getattr(app.tabs, "bindings", {}),
+                          "nothing is bound to the event a tab change posts, so a person coming back to "
+                          "the contacts tab would read whatever it last drew")
+            self.assertEqual(app.tabs.bindings["<<NotebookTabChanged>>"], app._on_tab_changed)
+            # Bound methods are not the same object twice, so the function behind them is what is
+            # compared: this asks whether the tree would run the panel's handler on a selection change.
+            for tree, handler in ((app.stored_contacts_tree, app._on_contact_selection),
+                                  (app.contact_conflicts_tree, app._on_conflict_selection)):
+                bound = tree.bindings.get("<<TreeviewSelect>>")
+                self.assertIsNotNone(bound, f"{tree} is not bound to anything on a selection change")
+                self.assertEqual(bound.__func__, handler.__func__,
+                                 f"{tree} is not bound to the handler its selection change posts")
+
     def test_the_window_wraps_its_tab_text_at_the_width_those_tabs_have(self):
         self.assertLessEqual(desktop._TAB_TEXT_WRAP, self.NARROWEST_TAB_TEXT_WIDTH)
 
@@ -1237,6 +1319,19 @@ class TabLayoutPolicyTests(unittest.TestCase):
                 )
                 self.assertTrue(acceptance.is_scrolled_frame(container),
                                 f"{tree.winfo_class()} {tree} is not inside an area that scrolls")
+            # The disagreement panel is in that body too: its list grows with every contradictory import
+            # and its detail box holds two values that wrap, so both must scroll with the tab rather than
+            # being drawn outside it.
+            for widget in (app.contact_conflicts_tree, app.contact_conflict_text):
+                container = acceptance.layout_container(widget, contacts_page)
+                self.assertIsNot(
+                    container, contacts_page,
+                    f"{widget.winfo_class()} {widget} is judged against its tab: the recorded "
+                    "disagreements grow with the person's own imports and would be clipped without "
+                    "something to scroll them",
+                )
+                self.assertTrue(acceptance.is_scrolled_frame(container),
+                                f"{widget.winfo_class()} {widget} is not inside an area that scrolls")
             # The controls that write the do-not-contact mark are in the same body, so they scroll with the
             # list they act on rather than being pinned below content that can grow past the page.
             for widget in (app.mark_contact_button, app.clear_contact_button, app.contact_note_entry):
@@ -5923,6 +6018,45 @@ class ContactTabTestCase(HandlerTestCase):
         """
         return {record.email_key: record.contact_id for record in app.store.list_contacts()}
 
+    def contradicting_list(self, name: str = "later-list.csv") -> Path:
+        """A second file that disagrees with what is stored and with itself.
+
+        The first address is given a different name twice, so importing it records a disagreement between
+        two rows of one file *and* one between that file and the stored record; the second address keeps
+        its name and changes its company, which is a disagreement with the stored record only.
+        """
+        return self.write_csv(
+            f"{CONTACT_EMAILS[0]},{CONFLICT_NAMES[0]},{CONTACT_COMPANIES[0]},1,\r\n"
+            f"{CONTACT_EMAILS[0]},{CONFLICT_NAMES[1]},{CONTACT_COMPANIES[0]},2,\r\n"
+            f"{CONTACT_EMAILS[1]},{CONTACT_NAMES[1]},{CONFLICT_COMPANIES[0]},3,\r\n", name=name)
+
+    def import_list(self, app, path: Path) -> None:
+        """Read one file through the tab's own chooser and store it the way a person would."""
+        FILEDIALOG.path = str(path)
+        app._choose_contact_csv()
+        app._store_contact_preview()
+
+    @staticmethod
+    def conflict_rows(app):
+        """The rows the panel is showing now, in the order it drew them - not every row it ever drew."""
+        return [app.contact_conflicts_tree.item(iid, "values")
+                for iid in app.contact_conflicts_tree.get_children()]
+
+    @staticmethod
+    def conflict_detail(app) -> str:
+        return app.contact_conflict_text.get("1.0", "end")
+
+    def select_conflict(self, app, item) -> None:
+        """Select one disagreement the way a display does: the selection runs the bound handler.
+
+        The stand-in tree records a selection without posting Tk's virtual event - it has no event loop to
+        post it to - so the handler a real tree calls is called here by name, exactly as this suite's
+        stored-contact selection helper does. That the tree is *bound* to that handler is asserted
+        separately, and workflow L drives the real event through a real Tk.
+        """
+        app.contact_conflicts_tree.selection_set(item)
+        app._on_conflict_selection()
+
     def select(self, app, contact_id) -> None:
         """Select one row of the stored list the way the tab's own selection event would."""
         app.stored_contacts_tree.selected = (() if contact_id is None else (str(contact_id),))
@@ -5936,6 +6070,14 @@ class ContactTabTestCase(HandlerTestCase):
         """
         rows = [values for _iid, values in app.stored_contacts_tree.inserted]
         return rows[len(rows) - len(app.store.list_contacts()) + position]
+
+
+#: The second file's own values: it disagrees with the stored records *and* with itself, so one import
+#: produces both kinds of disagreement the store records. Every value is listed here so the privacy
+#: assertions can name them rather than a wording.
+CONFLICT_NAMES = ("Sample Person One (later file)", "Sample Person One (later still)")
+CONFLICT_COMPANIES = ("Sample Employer Three",)
+ALL_CONFLICT_FIXTURE_VALUES = CONFLICT_NAMES + CONFLICT_COMPANIES
 
 
 class ContactImportTabTests(ContactTabTestCase):
@@ -6441,3 +6583,229 @@ class ContactMarkControlTests(ContactTabTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ContactConflictPanelTests(ContactTabTestCase):
+    """The recorded-disagreement panel: both sides, honestly labelled, and nothing written.
+
+    The panel reads what an import already recorded - the schema stores one row per pair of disagreeing
+    non-empty values, with the field they disagree about, which value this database keeps, which one the
+    file carried, whether the two sides are two rows of one file or the file against the stored record,
+    the file it arrived in and when. These tests drive that screen through the tab's own handlers, so
+    "nothing was written" is the connection's change counter, "the mark is untouched" is the stored row,
+    and "no value leaked" is the log and the status line rather than a wording.
+    """
+
+    def test_each_recorded_disagreement_is_listed_with_its_own_provenance(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+
+        rows = self.conflict_rows(app)
+        stored_conflicts = app.store.list_contact_conflicts()
+
+        self.assertEqual(len(rows), 3, "one row per recorded disagreement")
+        self.assertEqual([str(iid) for iid in app.contact_conflicts_tree.get_children()],
+                         [str(conflict.conflict_id) for conflict in stored_conflicts],
+                         "the list is the store's own order, oldest first")
+        self.assertEqual([row[0] for row in rows], [1, 2, 3], "and it counts the rows for the person")
+        # The address is shown the way the stored list shows it - the text the person's own file wrote.
+        self.assertEqual([row[1] for row in rows],
+                         [CONTACT_EMAILS[0], CONTACT_EMAILS[0], CONTACT_EMAILS[1]])
+        self.assertEqual([row[2] for row in rows], ["name", "name", "company"])
+        self.assertEqual(rows[0][3], "two rows of one file")
+        self.assertEqual(rows[1][3], "your records vs the file")
+        self.assertEqual([row[4] for row in rows], ["later-list.csv"] * 3)
+        self.assertEqual([row[5] for row in rows], [str(c.observed_at) for c in stored_conflicts])
+        self.assertIn("3 disagreement(s) recorded", app.contact_conflict_note.get())
+        self.assertIn("no disagreement can be dismissed from this screen", app.contact_conflict_note.get())
+        # Looking at a disagreement is not a reason for the stored record to have moved.
+        self.assertEqual(app.store.get_contact(CONTACT_EMAILS[0]).name, CONTACT_NAMES[0])
+
+    def test_both_sides_are_labelled_and_neither_is_called_the_right_one(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        first, second, third = app.contact_conflicts_tree.get_children()
+
+        self.select_conflict(app, first)
+        detail = self.conflict_detail(app)
+        self.assertIn(f"Disagreement {first} about {CONTACT_EMAILS[0]}", detail)
+        self.assertIn("Field: name", detail)
+        self.assertIn(f"Kept in this database:  {CONFLICT_NAMES[0]}", detail)
+        self.assertIn(f"Recorded from the file: {CONFLICT_NAMES[1]}", detail)
+        self.assertIn("Kept: the first answer in that file's own row order.", detail)
+        self.assertIn("Not kept: a later row in 'later-list.csv' said something different", detail)
+        self.assertIn("Recorded ", detail)
+        self.assertIn("(UTC, by the import that saw it).", detail)
+
+        self.select_conflict(app, second)
+        detail = self.conflict_detail(app)
+        self.assertIn(f"Kept in this database:  {CONTACT_NAMES[0]}", detail)
+        self.assertIn(f"Recorded from the file: {CONFLICT_NAMES[0]}", detail)
+        self.assertIn("Kept: the value this database already held when the file was imported.", detail)
+        self.assertIn("so this screen does not claim which file supplied it.", detail)
+
+        self.select_conflict(app, third)
+        detail = self.conflict_detail(app)
+        self.assertIn("Field: company", detail)
+        self.assertIn(f"Kept in this database:  {CONTACT_COMPANIES[1]}", detail)
+        self.assertIn(f"Recorded from the file: {CONFLICT_COMPANIES[0]}", detail)
+
+        # Nothing anywhere in the panel says which value is the right one, and nothing offers to settle it.
+        for shown in (self.conflict_detail(app), app.contact_conflict_note.get()):
+            for claim in ("is correct", "is right", "should be", "was merged", "has been resolved"):
+                self.assertNotIn(claim, shown, f"the panel claims {claim!r} about a disagreement")
+
+    def test_a_list_with_no_disagreements_says_so_and_shows_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+
+        self.assertEqual(self.conflict_rows(app), [])
+        self.assertIn("No disagreements are recorded", app.contact_conflict_note.get())
+        self.assertIn("No disagreement is selected", self.conflict_detail(app))
+        self.assertEqual(app.store.contact_record_counts()["conflicts"], 0)
+
+    def test_the_list_is_bounded_and_says_how_many_more_are_held(self):
+        app = self.make_app()
+        self.import_two(app)
+        for index in range(45):
+            # Each file changes the company to a value no earlier file gave: one stored disagreement each.
+            self.import_list(app, self.write_csv(
+                f"{CONTACT_EMAILS[0]},{CONTACT_NAMES[0]},Sample Employer variant {index},1,\r\n",
+                name=f"variant-{index}.csv"))
+
+        total = len(app.store.list_contact_conflicts())
+        rows = self.conflict_rows(app)
+        self.assertEqual(total, 45)
+        self.assertEqual(len(rows), desktop._CONFLICT_ROWS_SHOWN, "the panel draws one page of them")
+        self.assertEqual([row[0] for row in rows], list(range(1, desktop._CONFLICT_ROWS_SHOWN + 1)))
+        note = app.contact_conflict_note.get()
+        self.assertIn("45 disagreement(s) recorded", note)
+        self.assertIn(f"the first {desktop._CONFLICT_ROWS_SHOWN} are listed, oldest first", note)
+        self.assertIn("the rest are still stored", note)
+        self.assertIn("no way to page to them yet", note)
+
+    def test_a_long_value_is_bounded_in_the_detail_and_a_long_file_name_is_clipped_in_the_list(self):
+        long_name = "Sample Person " + ("with a very long name " * 40)
+        tabbed_company = "Sample\tEmployer with tabs and\nan embedded newline"
+        long_file = ("a-contact-list-with-a-deliberately-long-file-name-to-be-clipped-"
+                     "in-the-list-cell.csv")
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.write_csv(
+            f'{CONTACT_EMAILS[0]},"{long_name}","{tabbed_company}",1,\r\n', name=long_file))
+
+        # The parser trims a field, so the value the database holds is the trimmed one - and that is the
+        # value the panel is describing.
+        stored_value = long_name.strip()
+        rows = self.conflict_rows(app)
+        cell = rows[0][4]
+        self.assertTrue(cell.startswith("a-contact-list-with-a-deliberately-long-file-name"),
+                        f"the cell holds the file's name: {cell!r}")
+        self.assertEqual(len(cell), desktop._CONFLICT_CELL_CHARACTERS + 1,
+                         "a cell longer than the limit is clipped with an ellipsis")
+        self.assertTrue(cell.endswith("\u2026"))
+        self.assertNotIn("\n", cell, "a cell is one line whatever the value held")
+
+        first, second = app.contact_conflicts_tree.get_children()
+        self.select_conflict(app, first)
+        detail = self.conflict_detail(app)
+        self.assertIn(f"Recorded from the file: {stored_value[:desktop._CONFLICT_VALUE_CHARACTERS]}", detail)
+        self.assertNotIn(stored_value, detail, "the whole value is not drawn into the panel")
+        self.assertIn(f"[this value is {len(stored_value)} characters long; only the first "
+                      f"{desktop._CONFLICT_VALUE_CHARACTERS} are shown here]", detail)
+        self.select_conflict(app, second)
+        self.assertIn(tabbed_company, self.conflict_detail(app),
+                      "a value is shown as the file wrote it, tabs and newlines included")
+
+    def test_reviewing_disagreements_writes_nothing_and_leaves_the_mark_alone(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        app.store.set_contact_suppression(CONTACT_EMAILS[0], note=CONTACT_NOTE)
+        app._refresh_contacts()
+        before = self.changes()
+        marked = app.store.get_contact(CONTACT_EMAILS[0])
+
+        app._refresh_contacts()
+        for item in app.contact_conflicts_tree.get_children():
+            self.select_conflict(app, item)
+        app._on_tab_changed()
+        app._show_selected_conflict()
+
+        self.assertEqual(self.changes(), before, "reading a disagreement must not write a row")
+        after = app.store.get_contact(CONTACT_EMAILS[0])
+        self.assertEqual((after.suppressed, after.suppressed_at, after.suppressed_note),
+                         (marked.suppressed, marked.suppressed_at, marked.suppressed_note),
+                         "reviewing a disagreement must not touch the do-not-contact mark")
+        self.assertEqual(app.contact_conflict_text.cget("state"), "disabled",
+                         "the detail box is read-only to typing, not only by convention")
+
+    def test_no_disagreement_value_reaches_a_log_a_dialog_or_the_status_line(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        app.status.set("Something the person was told before they looked at this tab.")
+        MESSAGES.reset()
+
+        app._refresh_contacts()
+        for item in app.contact_conflicts_tree.get_children():
+            self.select_conflict(app, item)
+
+        self.assertEqual(MESSAGES.titles(), [], "reading a disagreement neither asks nor announces anything")
+        self.assertEqual(app.status.get(), "Something the person was told before they looked at this tab.",
+                         "the panel leaves the status line as it found it")
+        written = self.log_text()
+        for value in ALL_CONTACT_FIXTURE_VALUES + ALL_CONFLICT_FIXTURE_VALUES + ("later-list.csv",):
+            self.assertNotIn(value, written, f"{value!r} must not reach the activity log")
+        self.assertIn("event=contacts.imported", written, "the imports themselves are still recorded")
+
+    def test_a_disagreement_recorded_while_the_tab_was_elsewhere_appears_when_it_is_shown(self):
+        app = desktop.CareerAgentApp(Widget(), database_path=Path(self._directory.name) / "panel.sqlite3")
+        try:
+            self.import_two(app)
+            app.tabs.select(app.profile_tab)
+            # A second connection, as a second window or a script would be, records a disagreement while
+            # nobody is looking at the contacts tab.
+            elsewhere = CareerStore(Path(self._directory.name) / "panel.sqlite3")
+            try:
+                elsewhere.import_contacts(contacts.read_contact_csv(self.contradicting_list()))
+            finally:
+                elsewhere.close()
+            self.assertEqual(self.conflict_rows(app), [], "the tab has not shown the new rows yet")
+
+            app.tabs.select(app.contacts_tab)
+
+            self.assertEqual(len(self.conflict_rows(app)), 3, "showing the tab re-reads the database")
+            self.assertIn("3 disagreement(s) recorded", app.contact_conflict_note.get())
+            app.tabs.select(app.profile_tab)
+            self.assertEqual(len(self.conflict_rows(app)), 3, "looking at another tab keeps the list as it was")
+        finally:
+            app.close()
+
+    def test_a_selection_that_is_no_longer_recorded_is_reported_rather_than_described(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.import_list(app, self.contradicting_list())
+        first = app.contact_conflicts_tree.get_children()[0]
+        self.select_conflict(app, first)
+        self.assertIn("Kept in this database", self.conflict_detail(app))
+        MESSAGES.reset()
+        # The row goes (another window, or a restore that replaced the database) and the view is refreshed.
+        app.store._connection.execute("DELETE FROM hr_contact_conflict WHERE conflict_id = ?", (int(first),))
+        app.store._connection.commit()
+
+        app._refresh_contacts()
+
+        self.assertEqual(len(self.conflict_rows(app)), 2, "the disagreements that are still recorded remain")
+        self.assertEqual([row[0] for row in self.conflict_rows(app)], [1, 2],
+                         "and the list counts from one again")
+        self.assertIn("No disagreement is selected", self.conflict_detail(app),
+                      "the row the panel was describing is gone, so nothing is selected")
+        # A stale identifier - a row the refresh dropped but a click had already chosen - is described as
+        # what it is rather than as a disagreement that exists.
+        app.contact_conflict_selected_id = 4242
+        app._show_selected_conflict()
+        self.assertIn("no longer recorded in this database", self.conflict_detail(app))
+        self.assertEqual(MESSAGES.titles(), [], "nothing here is worth a dialog")

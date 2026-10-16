@@ -52,7 +52,11 @@ the window says about it. Twelve workflows run, in the order a first-time user w
   itself: the two controls are off until a stored row is selected, the keyboard's own walk reaches the one
   that can act, a declined removal leaves the mark exactly as it was, a confirmed one clears it and says so, and
   a mark made from the window with a reason typed beside it is stored with that reason - which must not reach a
-  dialog, a status line or the event log. No address is ever contacted, and every fixture address is on a reserved
+  dialog, a status line or the event log. Then the recorded-disagreement panel: a list that agrees with itself
+  records nothing to review, a second list that contradicts it is listed with both sides and with the
+  provenance the schema actually holds, the row the person selects is described in full without either side
+  being called right, a real ``<Down>`` key moves the selection and the detail follows it, the panel follows the
+  database when the tab is shown again, and reviewing all of it writes nothing and leaves the mark alone. No address is ever contacted, and every fixture address is on a reserved
   ``.invalid`` domain.
 * **F - cleanup and lifecycle.** Every window closed, every connection released, the disposable folder gone,
   and the person's own database untouched - including after a forced failure.
@@ -172,6 +176,14 @@ SYNTHETIC_CONTACT_ROWS = (
     ("first.contact@example.invalid", "Sample Person One", "Sample Employer One", "3"),
 )
 SYNTHETIC_CONTACT_HEADER = "Email,Name,Company Label,Source Rows\r\n"
+#: A second synthetic list that disagrees with the first one *and* with itself: the first address is given
+#: two different names in one file, and the second address changes its company. Importing it is what records
+#: the two kinds of disagreement the review panel has to tell apart.
+SYNTHETIC_CONTACT_CONTRADICTIONS = (
+    ("first.contact@example.invalid", "Sample Person One (later file)", "Sample Employer One"),
+    ("first.contact@example.invalid", "Sample Person One (later still)", "Sample Employer One"),
+    ("second.contact@example.invalid", "Sample Person Two", "Sample Employer Three"),
+)
 SYNTHETIC_QUALIFICATION = {
     "institution": "Fixture Institute of Technology",
     "qualification": "BSc Fictional Computing",
@@ -3417,6 +3429,19 @@ def event_log_log_path(database) -> Path:
     return log_path(database)
 
 
+def press_key(host, widget, keysym: str) -> None:
+    """Send one real key event to a widget, as a keyboard would, and let Tk finish with it.
+
+    ``focus_set`` is what a person's tabbing does, and the event is generated *now* so the binding that runs
+    is the one Tk itself installed for that widget class - a tree's arrow keys are Tk's, not this
+    application's, which is exactly why the check that uses this is about the panel *following* a selection
+    rather than about the key itself.
+    """
+    widget.focus_set()
+    widget.event_generate(f"<{keysym}>", when="now")
+    host.update()
+
+
 def focus_order(host, start, limit: int = _FOCUS_WALK_LIMIT) -> list:
     """The widgets the keyboard reaches from ``start``, in order, up to the point it comes back."""
     order = []
@@ -3597,15 +3622,16 @@ SYNTHETIC_MARK_REASON = "synthetic note typed by the acceptance run"
 
 
 def workflow_l_contact_import(run: Run) -> None:
-    """The HR contact list: preview, refusal, cancel, confirm and the do-not-contact mark.
+    """The HR contact list: preview, refusal, cancel, confirm, the mark and the disagreement panel.
 
     Every file used here is synthetic and written into the run's own temporary folder, and every address is
     on a reserved ``.invalid`` domain. What this checks is the part a screenshot cannot show: that choosing a
     file reads and displays it without storing one row, that a refused file and a declined confirmation
-    leave the database exactly as it was, that a confirmed import writes each contact once, and that the
+    leave the database exactly as it was, that a confirmed import writes each contact once, that the
     do-not-contact controls write the mark once, keep it when the removal is declined, and carry no contact
-    value into anything the person is shown - read back from the database the window itself writes through,
-    not from the window's own list.
+    value into anything the person is shown, and that a disagreement between two files is reviewable without
+    being settled - read back from the database the window itself writes through, not from the window's own
+    list.
     """
     workspace, results, policy = run.workspace, run.results, run.dialogs
     host, app = workspace.open_window()
@@ -3816,6 +3842,138 @@ def workflow_l_contact_import(run: Run) -> None:
         require("suppressed=true" in written, "the log line does not say what the change was")
         for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], SYNTHETIC_MARK_REASON,
                       "synthetic-contacts.csv"):
+            require(value not in written, f"{value!r} reached the activity log")
+
+    contradicting_path = workspace.folder / "contradicting-contacts.csv"
+    contradicting_path.write_text(
+        SYNTHETIC_CONTACT_HEADER
+        + "".join(f"{row[0]},{row[1]},{row[2]},1\r\n" for row in SYNTHETIC_CONTACT_CONTRADICTIONS),
+        encoding="utf-8",
+    )
+
+    with results.step("L10 a list that agrees with itself has nothing to review, and a contradicting one does"):
+        # Everything imported so far agrees with what is stored - the same file, twice - so the panel has
+        # nothing to show and says so rather than looking empty for no reason.
+        require(app.stored_contacts_tree.get_children(), "the stored list is empty before this step")
+        require(len(app.contact_conflicts_tree.get_children()) == 0,
+                f"a list that agrees with itself recorded {len(app.contact_conflicts_tree.get_children())} "
+                "disagreement(s)")
+        require("No disagreements are recorded" in app.contact_conflict_note.get(),
+                f"the panel does not say it has nothing to show: {app.contact_conflict_note.get()!r}")
+        require("No disagreement is selected" in app.contact_conflict_text.get("1.0", "end"),
+                "the detail panel does not say nothing is selected")
+        policy.reset()
+        policy.files.append(str(contradicting_path))
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Choose a contact CSV...", workspace.root)
+        press(app.contacts_tab, "Import these contacts", workspace.root)
+        require(app.store._connection.total_changes > before, "the second import stored nothing at all")
+        require("Contact import complete" in policy.titles("showinfo"),
+                f"the second import was not reported; dialogs: {policy.titles()!r}")
+        rows = app.contact_conflicts_tree.get_children()
+        require(len(rows) == 3, f"the panel lists {len(rows)} disagreement(s), not three")
+        listed = [app.contact_conflicts_tree.item(item, "values") for item in rows]
+        require([str(row[0]) for row in listed] == ["1", "2", "3"],
+                f"the panel does not number its rows for the person: {listed!r}")
+        require([str(row[2]) for row in listed] == ["name", "name", "company"],
+                f"the panel names the fields wrongly: {listed!r}")
+        require([str(row[3]) for row in listed] == ["two rows of one file", "your records vs the file",
+                                                    "your records vs the file"],
+                f"the panel does not say which two sides disagree: {listed!r}")
+        require([str(row[4]) for row in listed] == ["contradicting-contacts.csv"] * 3,
+                f"the panel does not name the file the disagreement arrived in: {listed!r}")
+        require("3 disagreement(s) recorded" in app.contact_conflict_note.get(),
+                f"the panel does not count what it is holding: {app.contact_conflict_note.get()!r}")
+        # The import kept what was stored - that is the whole reason a disagreement exists to review - and
+        # the do-not-contact mark it did not touch is still there with its reason.
+        first_key = SYNTHETIC_CONTACT_ROWS[0][0]
+        record = app.store.get_contact(first_key)
+        require(record.name == SYNTHETIC_CONTACT_ROWS[0][1],
+                f"an import rewrote the stored name: {record.name!r}")
+        require(record.suppressed and record.suppressed_note == SYNTHETIC_MARK_REASON,
+                "a contradicting import changed the do-not-contact mark or its reason")
+
+    with results.step("L11 the selected disagreement is described in full and nothing is settled"):
+        first, second, third = app.contact_conflicts_tree.get_children()
+        app.contact_conflicts_tree.selection_set(first)
+        workspace.root.update()
+        detail = app.contact_conflict_text.get("1.0", "end")
+        require(f"Disagreement {first} about {SYNTHETIC_CONTACT_ROWS[0][0]}" in detail,
+                f"the detail panel does not name the disagreement: {detail[:120]!r}")
+        require(f"Kept in this database:  {SYNTHETIC_CONTACT_CONTRADICTIONS[0][1]}" in detail,
+                f"the detail panel does not show the side this database keeps: {detail[:200]!r}")
+        require(f"Recorded from the file: {SYNTHETIC_CONTACT_CONTRADICTIONS[1][1]}" in detail,
+                f"the detail panel does not show the side the file carried: {detail[:200]!r}")
+        require("the first answer in that file's own row order" in detail,
+                "the panel does not say where the kept side came from inside the file")
+        app.contact_conflicts_tree.selection_set(second)
+        workspace.root.update()
+        detail = app.contact_conflict_text.get("1.0", "end")
+        require(f"Kept in this database:  {SYNTHETIC_CONTACT_ROWS[0][1]}" in detail,
+                f"the detail panel does not show the stored side: {detail[:200]!r}")
+        require("does not claim which file supplied it" in detail,
+                "the panel claims a provenance the schema does not hold")
+        app.contact_conflicts_tree.selection_set(third)
+        workspace.root.update()
+        detail = app.contact_conflict_text.get("1.0", "end")
+        require("Field: company" in detail, f"the detail panel does not name the field: {detail[:120]!r}")
+        for claim in ("is correct", "is right", "should be", "has been resolved"):
+            require(claim not in detail, f"the panel claims {claim!r} about a disagreement")
+        # A person who types and uses only the keyboard reaches the list, and the arrow key they press moves
+        # the selection the panel is describing. This is the one check here that uses a real key event.
+        order = focus_order(host, app.stored_contacts_tree)
+        require(app.contact_conflicts_tree in order, "the keyboard order never reaches the disagreement list")
+        app.contact_conflicts_tree.selection_set(first)
+        workspace.root.update()
+        described = app.contact_conflict_text.get("1.0", "end")
+        press_key(host, app.contact_conflicts_tree, "Down")
+        require(app.contact_conflicts_tree.selection() == (str(second),),
+                f"the down arrow did not move the selection: {app.contact_conflicts_tree.selection()!r}")
+        moved = app.contact_conflict_text.get("1.0", "end")
+        require(moved != described and f"Disagreement {second}" in moved,
+                "moving the selection with the keyboard did not describe the newly selected disagreement")
+
+    with results.step("L12 the panel follows the database when the tab is shown again, and writes nothing"):
+        from career_agent import contacts as contact_parser  # noqa: PLC0415 - reading a file as a second
+        from career_agent.store import CareerStore  # noqa: PLC0415  connection would, not the window
+
+        show_tab(app, app.profile_tab)
+        elsewhere = CareerStore(app.db_path)
+        try:
+            # A second connection, as a second window or a script would be: the disagreement appears in the
+            # database while nobody is looking at the contacts tab.
+            elsewhere.import_contacts(contact_parser.read_contact_csv(contradicting_path))
+        finally:
+            elsewhere.close()
+        before = app.store._connection.total_changes
+        require(len(app.contact_conflicts_tree.get_children()) == 3,
+                "the panel changed while its tab was not shown, which nothing here asked it to do")
+        show_tab(app, app.contacts_tab)
+        shown = app.contact_conflicts_tree.get_children()
+        require(len(shown) == 3, f"showing the tab again lists {len(shown)} row(s), not three")
+        # The repeat import found the same disagreements already recorded, so there is nothing new to list -
+        # which is the store's own rule (a disagreement is recorded once) shown on screen.
+        require(app.store._connection.total_changes == before,
+                "showing the tab wrote to the database")
+        require("3 disagreement(s) recorded" in app.contact_conflict_note.get(),
+                f"the panel does not count what it holds: {app.contact_conflict_note.get()!r}")
+        for item in shown:
+            app.contact_conflicts_tree.selection_set(item)
+            workspace.root.update()
+        require(app.store._connection.total_changes == before,
+                "reading the listed disagreements wrote to the database")
+        record = app.store.get_contact(SYNTHETIC_CONTACT_ROWS[0][0])
+        require(record.suppressed and record.suppressed_note == SYNTHETIC_MARK_REASON,
+                "reviewing the disagreements touched the do-not-contact mark")
+        said = "\n".join(policy.said(title) for title in
+                          ("Mark this contact do not contact", "Do-not-contact mark updated",
+                           "Import these contacts?", "Contact import complete"))
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3],
+                      SYNTHETIC_MARK_REASON):
+            require(value not in said, f"{value!r} reached a dialog while reviewing disagreements")
+        written = event_log_log_path(app.db_path).read_text(encoding="utf-8")
+        for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], *SYNTHETIC_CONTACT_CONTRADICTIONS[0][:3],
+                      SYNTHETIC_MARK_REASON, "contradicting-contacts.csv"):
             require(value not in written, f"{value!r} reached the activity log")
 
     workspace.close_window(host, app)

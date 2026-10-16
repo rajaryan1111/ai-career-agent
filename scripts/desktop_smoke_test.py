@@ -80,6 +80,7 @@ EXPECTED_TREES = {
     "follow_up_tree": ("employer", "role", "status", "day", "when", "note"),
     "contact_rows_tree": ("line", "contact", "name", "company", "why"),
     "stored_contacts_tree": ("contact", "name", "company", "source", "seen", "marked"),
+    "contact_conflicts_tree": ("ref", "contact", "field", "origins", "recorded_from", "recorded_at"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
