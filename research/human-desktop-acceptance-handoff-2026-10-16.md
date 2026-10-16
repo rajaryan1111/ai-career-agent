@@ -8,22 +8,28 @@ file says how to get to a state where those steps can be executed, which steps c
 evidence to capture, and where to write the result.
 
 **Status of every window step today: BLOCKED, and nothing here changes that.** No human has opened this
-window. 22 of the 98 steps passed on a headless machine (the ones needing no window), 76 are blocked for the
+window. 22 of the 105 steps passed on a headless machine (the ones needing no window), 83 are blocked for the
 named missing capability, none failed, and no box has been ticked.
 
-**One tab has no numbered steps yet.** The **HR contacts** tab was added on 2026-10-16, after the 98 steps
-were written. Workflow L exercises its read/refuse/decline/confirm paths automatically, and the tab is inside
-every layout and focus measurement, but a person still has to read its wording, try its chooser, and judge
-whether the confirmation reads well - so treat that tab as **NOT TESTED by hand**, and see the named gaps in
-[the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md) rather than treating the
-automated checks as acceptance of it.
+**The HR contacts tab now has numbered steps of its own (99-105), and this handoff's advice to treat it as
+untested by hand still stands.** They cover the read-only panel that lists the disagreements the application
+already records: its empty state, the rows and their provenance, the selected row's two sides, the keyboard
+(including Tk's own focus-item behaviour, which the steps ask a tester to observe and write down), a long value,
+the refresh when the tab is shown again, and the 40-disagreement cap. Workflow L still exercises the tab's
+read/refuse/decline/confirm/mark/review paths automatically and the tab is inside every layout and focus
+measurement, but a person still has to read its wording, try its chooser, judge whether the confirmation reads
+well and whether the two new panels fit the tab - so see the named gaps in
+[the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md) and in
+[the panel's note](hr-contact-conflict-review-panel-2026-10-16.md) rather than treating the automated checks as
+acceptance of it.
 
-**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **91
-checks** in the current source, and 91 on the last fully green matrix - run `38855211961` at `2d237bc`,
-thirteen of thirteen jobs, `RESULT: PASS - 91 checks passed` and `Ran 1845 tests ... OK` on every leg (87 on the
-matrix before it, run `38828908041` at `02962f6`; eleven and 82 before that, run `38823626117` at `3a88e6e`; 76
-when the per-leg table below was recorded, and one check was added to workflow I on 2026-10-16, five to workflow
-L with the contact list, and four more when the do-not-contact controls were added). The twelfth
+**What automation already established, so a tester does not re-do it by hand.** Twelve workflows and **94
+checks** in the current source, and 94 on the last fully green matrix - run `38864632201` at `4b4e752`,
+thirteen of thirteen jobs, `RESULT: PASS - 94 checks passed` and `Ran 1857 tests ... OK` on every leg (91 on the
+matrix before it, run `38855211961` at `2d237bc`; 87 on the one before that, run `38828908041` at `02962f6`;
+eleven and 82 before that, run `38823626117` at `3a88e6e`; 76 when the per-leg table below was recorded, and one
+check was added to workflow I on 2026-10-16, five to workflow L with the contact list, four more when the
+do-not-contact controls were added, and three more for the recorded-disagreement panel). The twelfth
 - workflow **L**, the HR contact list - runs on the same five display-backed legs, because the CI step requires
 every workflow letter the run defines; its own run is cited in
 [the persistence note](hr-contact-import-persistence-and-review-ui-2026-10-16.md)
@@ -74,7 +80,7 @@ establishes human acceptance; they are how you avoid re-checking the machine's h
 
 ```bash
 python scripts/desktop_smoke_test.py      # 14 checks: the window is built, nine tabs, lists have their columns
-python scripts/desktop_acceptance.py      # 91 checks: twelve workflows on disposable synthetic databases
+python scripts/desktop_acceptance.py      # 94 checks: twelve workflows on disposable synthetic databases
 python scripts/desktop_acceptance.py --stand-in-tk   # development only: prints DEVELOPMENT RUN and exits 2
 ```
 
@@ -256,6 +262,32 @@ visible. No automated check can judge it.
 - **Evidence to capture:** anything you had to try twice, and the size the window was at when it happened.
 - **Human-only judgement:** all of it, including whether it "feels like" a native application on your platform.
 
+### N. HR contacts: the recorded-disagreement panel — steps 99–105
+
+- **Setup:** a disposable `CAREER_AGENT_HOME`, the first synthetic contact CSV imported (three `.invalid`
+  addresses), and a second file that disagrees with the stored contacts *and* with itself: two rows giving
+  different names for the same address, and a different company for another address. A throwaway copy of the
+  database with more than 40 recorded disagreements is needed for 105.
+- **Do:** open the tab (99); import the contradicting file and read the list (100); click a row and read the
+  detail in full (101); then do it again with the keyboard only - click a row once, then press the arrow keys -
+  and scroll the tab and the list (102); import a file carrying a several-hundred-character name with tabs and
+  a line break in it (103); leave the tab while another process imports into the same database and come back,
+  then press **Refresh** (104); and read the cap's sentence on the >40-row copy (105).
+- **Expected:** every claim on the tab is one the stored record supports. Both sides are shown and neither is
+  called correct; `two rows of one file` and `your records vs the file` are named as the two kinds; the file the
+  disagreeing value arrived in is named; the stored contacts and any do-not-contact mark are untouched; nothing
+  is written by looking; nothing about a person reaches a dialog, the status line or the log file; a clipped
+  value says how long it really is; and more than 40 disagreements are counted, not silently dropped.
+- **Evidence to capture:** the list and the detail text for one row of each kind (a screenshot and the text),
+  the note under the list before and after the import, the reason a mark still carries afterwards, and
+  `python -c` counts (or `sqlite3`) of `hr_contact_conflict` before and after the whole pass — the count must
+  not move because of the review, and must move by exactly the import's own rows because of the import.
+- **Human-only judgement:** whether the two labels read clearly, whether "Which two sides" is understandable
+  without the sentence below it, whether the detail text's wrapping is comfortable at the window's minimum
+  size, how the two new widgets look on this platform's theme, whether the tab now feels crowded, and what the
+  keyboard actually does in the list — including Tk's own behaviour that arrow keys move from the row last
+  clicked and a freshly focused list does not move at all. None of that is established by a machine.
+
 ### M. Operating-system specifics
 
 Run the checklist once per operating system you intend to claim support for, and record the environment facts
@@ -297,11 +329,12 @@ result this project has recorded for every window step so far.
 
 | Document | What it holds |
 | --- | --- |
-| [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 98 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
+| [local-alpha manual smoke-test checklist](local-alpha-manual-smoke-test-checklist-2026-10-14.md) | the 105 numbered steps, their expected behaviour, and the per-step result lines (the record of truth) |
 | [research index](README.md) | what every research artefact answers, and which are current guidance rather than dated evidence |
 | [local-alpha manual acceptance run](local-alpha-manual-acceptance-run-2026-10-15.md) | what a headless machine could execute (22 PASS, 76 BLOCKED, 0 FAIL), the four defects that run found, and how the window half was later driven automatically |
-| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls), per-leg platform/Tk/screen strings, and the defects only a real display could show |
-| [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab the checklist has no numbered steps for yet |
+| [cross-platform desktop CI evidence](cross-platform-desktop-ci-evidence-2026-10-15.md) | the workflows, their per-leg check counts (76 when the table was recorded, 77 after workflow I gained a check, 82 after workflow K was added, 87 with workflow L, 91 with the do-not-contact controls, 94 with the recorded-disagreement panel), per-leg platform/Tk/screen strings, and the defects only a real display could show |
+| [HR contact import: persistence and review UI](hr-contact-import-persistence-and-review-ui-2026-10-16.md) | schema 7, the migration and rollback evidence, the zero-write assertions, the privacy boundaries and the named gaps of the ninth tab |
+| [HR contact conflict review panel](hr-contact-conflict-review-panel-2026-10-16.md) | how a recorded disagreement is read without being settled: what the record holds and what it does not, the zero-write and privacy assertions, the two defects the display-backed legs found, and the manual steps that still have to be run |
 | [release-readiness audit](release-readiness-audit-2026-10-15.md) | what is implemented, tested, packaged and verified — and what is none of those |
 
 **The distinction this handoff keeps.** Implemented is not automated-tested; automated-tested is not

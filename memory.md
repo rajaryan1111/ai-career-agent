@@ -3263,3 +3263,54 @@ keeps one current reason rather than a history of marks, a cleared mark is not a
 tables are still outside the JSON export, recorded disagreements still cannot be read in the window, and
 nothing acts on the mark because nothing contacts anybody - `SOURCE_QUALITY_GATE_PASSED` is still `False` and
 `enabled_discovery_sources()` still empty.
+
+---
+
+**2026-10-16 — The recorded disagreements become readable: a read-only review panel, and D35 found by the
+display-backed legs.** The last increment closed the do-not-contact control but left its own named gap open:
+the application had been recording disagreements between a person's contact files and their stored contacts
+since schema 7, and the only thing a person could see about them was a count. The **HR contacts** tab now lists
+them - oldest first, numbered, each row naming the address the stored list already uses, the field, which two
+sides disagree (`two rows of one file` or `your records vs the file`) and the file the disagreeing value arrived
+in - and describes the selected one in full under `Kept in this database:` and `Recorded from the file:`, with
+the provenance the schema actually holds and a closing sentence that says nothing here is merged, resolved or
+dismissible. Neither side is called right, and the panel deliberately does *not* use the stored contact's own
+first-seen file as the provenance of the value the database keeps, because the record does not connect those two
+facts. Nothing new was needed to do it: the panel reads `list_contact_conflicts()` (the store's own order, no
+paging parameter added) and `list_contacts()`, the `hr_contact_conflict` row holds everything shown, and **no
+migration was added**. Read-only is measured rather than asserted in prose: `total_changes` is unchanged by
+opening the panel, listing it, selecting every row and re-reading it, the do-not-contact mark and its reason are
+untouched, no contact value reaches a dialog, the status line, the activity log or the count-only note under the
+list, and the detail widget is left `disabled`. Rendering is bounded where a screen needs it: 40 rows with the
+note saying how many are held when the cap bites, 60-character list cells, and a 400-character detail value that
+states the value's real length instead of looking complete. The tab also re-reads itself from
+`<<NotebookTabChanged>>` through the same `_refresh_contacts()` a Refresh click runs, so an import made by
+another connection shows up the moment the tab is looked at and no second read path exists. Evidence: nine tests
+in `tests/test_desktop_handlers.py::ContactConflictPanelTests`, one layout-policy test that the panel's widgets
+sit inside the tab's scrolled container and that both trees are bound to the handlers their selection events
+post, acceptance checks **L10-L12** (94 declared checks now, `declared_step_count()` reading the source), the
+smoke script's inventory of the window's lists, `Ran 1857 tests ... OK (skipped=13)` locally - and the tab's
+first numbered manual steps, **99-105**, all BLOCKED, which is why the handoff's "one tab has no numbered
+steps" gap is closed. **D35** is the defect of the increment and it was found by a display, not by anything
+runnable here: L11 pressed `<Down>` after setting the tree's *selection*, and Tk 8.6's
+`ttk::treeview::Keynav` moves the tree's **focus item** - the row a click draws its rectangle around - and
+returns at its first line when no item holds it, so on a real display the key moved nothing (`the down arrow did
+not move the selection: ('1',)` on the Linux display job `116844709877` and both macOS legs of run `38861539212`
+at `7323457`). The stand-in could not have caught it because it navigated from the selection; the check now
+sets the focus item the way a click does, and the stand-in models Tk's behaviour faithfully - a separate focus
+item, navigation from it, arrow bindings that exist and silently do nothing without one, and a deleted row
+losing the focus item - read off Tk 8.6's own `treeview.tcl`, with two `TreeRowReadbackTests` pinning that
+parity. What a person therefore meets in *every* list in this window is Tk's own behaviour - arrow keys move
+from the row that was last clicked - and the manual checklist asks a tester to observe it and write it down
+rather than pretending otherwise. The green matrix is run `38864632201` at `4b4e752`: **13/13 jobs**, every
+display-backed leg reporting `RESULT: PASS - 94 checks passed` (workflow L's L1-L12 `[ ok ]`, K4 and K5 `[ ok ]`,
+the focus walk reading `7/12 interactive control(s) reached` on the contacts tab) and `RESULT: PASS - 14 checks
+passed`, with `Ran 1857 tests ... OK` per leg. What this does not do: more than 40 disagreements are counted but
+not browsable, nothing can be dismissed, resolved or merged, the list cannot be exported, no contact can be
+edited or deleted from this screen, the do-not-contact mark still has one current reason rather than a history,
+and **no human has used the tab** - its wording, wrapping, keyboard feel and native look stay unverified, which
+is what steps 99-105 are for. `SOURCE_QUALITY_GATE_PASSED` is still `False` and `enabled_discovery_sources()`
+still empty. Written up in `research/hr-contact-conflict-review-panel-2026-10-16.md`; D35 is section 25 of the
+cross-platform evidence register, `phases.md` row 1 and `design.md`'s workflow list carry the new check count,
+`README.md` describes the panel, and `task.md` records the increment and names per-contact deletion and a
+contact-list export as the next candidates.

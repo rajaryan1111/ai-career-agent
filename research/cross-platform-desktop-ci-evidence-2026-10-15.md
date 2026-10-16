@@ -977,3 +977,54 @@ own `Ran 1778 tests ... OK (skipped=13/20/39/46, by platform)` on each leg. So t
 on the two tests this section is about. `SuiteConnectionLeakTests` is green on all five legs as a consequence -
 see the correction at the end of section 22, which is the part of this register that had to be revised rather
 than extended.
+
+---
+
+## 25. D35 — the check pressed an arrow key Tk navigates nowhere without (run 38861539212 at `7323457`, 2026-10-16)
+
+**How it was found.** The first run to carry the recorded-disagreement panel failed one check per
+display-backed leg, and only that one: workflow L's new L11, with
+`SmokeFailure: the down arrow did not move the selection: ('1',)` on the Linux display job `116844709877` and on
+both macOS legs (`116844709946` at 3.10, `116844709973` at 3.13). L10 and L12 passed on those legs, the unit,
+installed-package and PDF-extra jobs were green, and the layout and focus measurements were unchanged.
+
+**What it was.** Not the panel. Tk 8.6's own `library/ttk/treeview.tcl` binds the arrow keys to
+`ttk::treeview::Keynav`, whose first two lines are `set focus [$w focus]` and `if {$focus eq ""} { return }`:
+the keys move the tree's **focus item** - the row a click draws its rectangle around - and do nothing at all
+while no item holds it. The check had set the tree's *selection* (which the handler follows, and which the
+stand-in fires its virtual event from) and then pressed `<Down>`, so on a real display Tk did exactly what it
+does and moved nothing. No local run could have caught it: the stand-in navigated from the selection.
+
+**The fix.** The check sets the focus item first, which is what a click does, and presses the key afterwards;
+the stand-in now models Tk's behaviour faithfully - a separate focus item, navigation from it, arrow bindings
+that exist and silently do nothing without one, and a deleted row losing the focus item - read off Tk 8.6's own
+treeview.tcl, so a local stand-in run cannot be green on a starting point a display does not have.
+`TreeRowReadbackTests` pins that parity with two tests, one of them the silent case.
+
+**What a person will meet, and what the steps now say.** Arrow-key navigation in *any* list in this window
+starts from the row that was last clicked; tabbing into a fresh list and pressing Down moves nothing. That is
+Tk's behaviour rather than this application's, and rather than papering over it the manual checklist's step 102
+asks a tester to observe it and write down what they saw.
+
+**The fix's first run took it half the way: 38861941267 at `3778a39`.** That run's Linux display-backed job
+`116845978858` reported `RESULT: PASS — 94 checks passed` (L1-L12 `[ ok ]`, K4 and K5 `[ ok ]`) and
+`RESULT: PASS — 14 checks passed`, with the focus measurement reading `focus 'HR contacts' -> 7 stop(s) in the
+order, 7 of them in this window, 7/12 interactive control(s) reached`; both macOS legs (`116845978986` at 3.13,
+`116845979071` at 3.10) ran `Ran 1857 tests ... OK (skipped=13 / 20)` and reported `RESULT: PASS — 94 checks
+passed` on real Tk 8.6 displays. **Both Windows legs still failed the same check** (`116845979153` at 3.10,
+`116845979063` at 3.13, `Ran 1857 tests in 577 s / 1469 s`), with the identical message - so setting the
+treeview focus item was only half of what a generated key event needs.
+
+**Second half.** Tk's own `event` manual states it: "certain events, such as key events, require that the window
+has focus to receive the event properly". The harness called `focus_set`, which is ignored while the
+application's window is not the active one - exactly the situation of a subprocess driving a window in CI on
+Windows, where nobody has clicked anything. `focus_force` is the variant that puts the focus on the widget
+regardless, and the check now uses it (with the failure message naming both focuses - the window's focused
+widget and the tree's focus item - so a future failure says which concept was wrong instead of only that nothing
+moved). This is the part of D35 that no local run could find and no Linux or macOS leg could reveal.
+
+**Verified by run 38864632201 at `4b4e752`: 13/13 jobs green.** Linux display-backed job reported
+`RESULT: PASS — 94 checks passed` and `RESULT: PASS — 14 checks passed`; both macOS legs and both Windows legs
+ran `Ran 1857 tests ... OK` and the same `RESULT: PASS — 94 checks passed` for the acceptance workflow. D35 is
+therefore closed with evidence on all three platforms: the treeview focus item Tk's navigation starts from, and
+the widget focus Tk requires before it will deliver a generated key event at all.

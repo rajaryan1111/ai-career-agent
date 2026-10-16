@@ -1049,9 +1049,11 @@ confirmation stores nothing, a confirmed import stores each contact once (with a
 do-not-contact mark surviving a further import), the mark controls are reached by the keyboard and are off until
 a stored row is selected, a declined removal leaves the mark exactly as it was, a confirmed one clears it, and a
 mark made from the window with a reason typed beside it is stored with that reason and shown in no dialog, status
-line or event, and no address is ever contacted; and cleanup that releases every
+line or event, and no address is ever contacted; a recorded disagreement between two files listed with
+both sides, the provenance the schema holds, and a description that calls neither side right, listed and read
+without a single write; and cleanup that releases every
 window and connection, deletes its own folder and leaves the person's database byte-identical, including after
-a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 91 checks, and compares that
+a forced failure. It exits `0`, `1` or `2` for PASS, FAIL and BLOCKED, reports 94 checks, and compares that
 number against the checks its own source declares so a check that stops running fails the run. It also
 **measures the window** and prints the numbers - per tab: how many widgets are on screen, how many sit outside
 the box they are drawn in (the tab, or the frame a scrolling area scrolls, for content that is reached by

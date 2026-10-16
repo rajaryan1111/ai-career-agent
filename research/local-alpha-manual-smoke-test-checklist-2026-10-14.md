@@ -1,6 +1,6 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 76 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 105 steps. Executed on 2026-10-15 on a headless Linux machine: the 22 steps that need no window passed, 83 are blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -51,6 +51,21 @@ order) and `tests/test_desktop_handlers.py::NextActionsTabTests` (the exact row 
 Each of the five steps' coverage lines now names both levels rather than calling itself partial, and the one
 half that remains genuinely unasserted (whether some other control could connect an account, step 86) is stated
 as such.
+
+**Update, 2026-10-16 (the HR contacts tab gains its numbered steps):** the verdicts are now **22 PASS,
+83 BLOCKED, 0 FAIL** — seven steps (**99-105**) are new and all seven are BLOCKED — and **no box has been
+ticked**. They are the first numbered steps for the **HR contacts** tab, which
+[the human handoff](human-desktop-acceptance-handoff-2026-10-16.md) had recorded as the one tab without any.
+They cover the read-only panel that lists the disagreements this application already records: the empty state;
+the rows and their provenance after a contradicting import; the selected row's two sides and the absence of any
+claim that either is right; the keyboard, including Tk's own focus-item behaviour that step 102 asks a tester to
+observe; a long value and a long file name; the refresh when the tab is shown again with the mark untouched and
+no contact value in the log; and the 40-disagreement cap. The behaviour is [written up in its own note](hr-contact-conflict-review-panel-2026-10-16.md),
+and the seven steps' automated halves ran on the five display-backed CI legs of run `38864632201` at `4b4e752`
+(94 checks per leg). The harness gained **three** checks inside workflow L (L10-L12) rather than a thirteenth
+workflow, so it declares **94** checks and the suite is at **1857 tests**. D35 - the check that pressed an arrow
+key Tk navigates nowhere without until a row has been clicked - was found by the run before that one and is
+recorded in the cross-platform evidence register.
 
 **Date created:** 2026-10-14
 
@@ -573,6 +588,64 @@ file the app is using. Set one tracker row's `status` to a value no version of t
     file into a warning. Then run `--doctor` on a copy whose `PRAGMA user_version` is set to `5`: it must
     report version 5, say its records are not decoded here, exit `0`, and leave the recorded version at 5.
     → **PASS — the healthy file reports no problems and exits 0; the version-5 copy is reported by version, not decoded, and left at 5.**
+
+## HR contacts: the recorded-disagreement panel (added 2026-10-16)
+
+These steps need a disposable `CAREER_AGENT_HOME` and two synthetic contact files. The first is imported and
+stored (three addresses on reserved `.invalid` domains); the second disagrees with the stored contacts *and*
+with itself - two rows giving different names for the same address, and a different company for another
+address. Step 105 needs a throwaway copy of the database with more than 40 recorded disagreements, which a
+short script or `sqlite3` can add. Nothing on this tab may print an address into a dialog, a status line or the
+log file.
+
+99. [ ] Open the **HR contacts** tab on a database whose imports have never disagreed. The disagreement list
+    under the stored contacts must be empty, the line under it must say that no disagreements are recorded, and
+    the detail area must say that nothing is selected. No dialog may appear when the tab is opened or re-shown.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the empty state and the zero-row list were observed at the handler level.**
+    → **Automated coverage (2026-10-16): L10's first half — the workflow imports the same file twice, requires zero rows and the "No disagreements are recorded" sentence, and only then imports the contradicting file — and `tests/test_desktop_handlers.py::ContactConflictPanelTests::test_a_database_that_never_disagreed_lists_nothing`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**
+100. [ ] Import the contradicting file and read the list: one row per recorded disagreement, oldest first,
+    numbered from 1, each naming the affected address, the field (`name` or `company`), which two sides
+    disagree (`two rows of one file` or `your records vs the file`) and the file the disagreeing value arrived
+    in. The count in the line under the list must equal the number of rows unless the cap below bites. Nothing
+    on the tab may have changed the stored contacts: their names and companies must still be exactly what the
+    first import stored, and a do-not-contact mark must still be there with its reason.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the rows, their numbering, their fields, their origins and their file column were asserted against the stored data.**
+    → **Automated coverage (2026-10-16): L10's second half (three rows, rows numbered 1-3, fields `name`, `name`, `company`, origins `two rows of one file` and `your records vs the file`, the file name on each row, the count in the note, and the stored name and the mark read back through the store) and `ContactConflictPanelTests::test_each_recorded_disagreement_is_listed_with_its_own_provenance`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+101. [ ] Click the first row and read the detail area in full. It must show `Disagreement <n> about <address>`,
+    the field, `Kept in this database:` and `Recorded from the file:` with both values exactly as they are
+    stored (compare them against the two files by hand), a `Where each side comes from:` block with one line per
+    side, the time it was recorded, and the closing sentence saying that nothing is merged, resolved or
+    dismissible. Neither side may be called correct, right, newer or better, and the status line must not change
+    as rows are selected.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the same wording was asserted at the handler level.**
+    → **Automated coverage (2026-10-16): L11 (all three rows read in turn, both labels and the provenance lines asserted, and four phrases that would claim a winner asserted absent) and `ContactConflictPanelTests::test_both_sides_are_labelled_and_neither_is_called_the_right_one`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+102. [ ] Keyboard only: reach the list with **Tab**, then **click a row once** and press the up and down arrow
+    keys. The selection must move and the detail area must follow it - the address named in the detail text must
+    be the newly selected row's. Note what Tk itself does while you try this: the arrow keys move from the row
+    that was last clicked, and a list nobody has clicked does not move at all. Write down what you saw, because
+    that is the platform's behaviour in every list in this window and not something this screen adds. Then
+    scroll the tab and the list with the mouse wheel and the scrollbar.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; this is where a real keyboard is required.**
+    → **Automated coverage (2026-10-16): L11's keyboard half — a real `<Down>` is generated after the focus item is set the way a click sets it, and the check requires the selection to move and the detail text to name the newly selected row — plus K4, whose focus walk reaches the list. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. The mouse wheel, the scrollbar and the *feel* of the navigation are not covered by any of it.**"
+103. [ ] A long and unusual value: import a file whose answer for a stored address is several hundred characters
+    with tabs and a line break in it, and whose file name is unusually long. The list cell must stay one line
+    and be clipped; the detail area must show the beginning of the value followed by
+    `[this value is <n> characters long; only the first 400 are shown here]`, with `<n>` the real length. The
+    panel must not look as though it has printed the whole value.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the two bounds and the stated length were asserted at the handler level.**
+    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_long_value_is_bounded_in_the_detail_and_a_long_file_name_is_clipped_in_the_list` (a 893-character name, the 400-character cap with its real length, the 60-character cell, and that the whole value is not drawn into the panel). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+104. [ ] Refresh and revisit: with another process (or a second window) importing a file into the same database,
+    leave the tab and come back — the new disagreement must be listed without pressing **Refresh**. Then press
+    **Refresh** and confirm nothing is duplicated. While doing all of it, watch the folder holding the database:
+    no file may appear, the row count in `hr_contact_conflict` may not move because of the review, and the
+    do-not-contact mark and its reason must be exactly as they were.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the same refresh path ran against the database at the handler level.**
+    → **Automated coverage (2026-10-16): L12 (a second `CareerStore` connection imports while the tab is away, re-showing the tab lists what is recorded, `total_changes` is unchanged through the refresh, listing and selecting every row, and the mark and its reason are untouched) and `ContactConflictPanelTests::test_a_disagreement_recorded_while_the_tab_was_elsewhere_appears_when_it_is_shown` and `::test_reviewing_every_row_writes_nothing_and_leaves_the_mark_alone`. Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`.**"
+105. [ ] The cap: on the throwaway copy with more than 40 recorded disagreements, the list must hold the first
+    40 and the line under it must say how many are recorded and that the rest are still stored with no way to
+    page to them from this build. Nothing may be dropped silently.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the cap and its sentence were asserted at the handler level.**
+    → **Automated coverage (2026-10-16): `ContactConflictPanelTests::test_a_list_longer_than_the_panel_shows_says_so` (45 stored disagreements, 40 rows listed, the paging sentence asserted word for word). Five display-backed CI legs, 94 checks per leg, run `38864632201` at `4b4e752`. Paging itself does not exist, and the note says so rather than pretending.**"
 
 ## Record results
 
