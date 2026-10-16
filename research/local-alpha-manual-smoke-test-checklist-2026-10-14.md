@@ -112,14 +112,16 @@ mouse can reach every control without a pointer, what a screen reader announces 
 facts, whether the setup window's wording makes it clear that a blank stays unknown and that an answer typed
 there is recorded as confirmed *by the person*, and whether the confirmation a save is about to record is
 understood. The harness gained **eleven** checks inside workflow A (A7-A17) rather than a thirteenth workflow, so
-it declares **113** checks and the suite is at **2071 tests**; run `38925910370` at `2514b52` is green on the whole
-matrix (**13/13 jobs**), and all five display-backed legs drove A7-A17 through the real window, each reporting
-`RESULT: PASS — 113 checks passed` (the increment's first run, `38914820675` at `982e87c`, drove the same eleven
-checks before the second verification pass described at the end of this file). The panel's own vocabulary is
-asserted in `tests/test_profile_provenance.py` (74 tests in the file) and the handlers behind the widgets in
-`tests/test_desktop_handlers.py` (386 tests in the file); fourteen mutations of the new rules were all caught,
-one of them only after the miss exposed an untested reporting branch and three after the same question was
-asked of the paths around the write (section 7 of the note).
+it declares **113** checks and the suite is at **2073 tests**; run `38933027065` at `e57788e` (the code head
+after the third verification pass) is green on the whole matrix (**13/13 jobs**), and all five display-backed
+legs drove A7-A17 through the real window, each reporting `RESULT: PASS — 113 checks passed` (run `38925910370`
+at `2514b52` reported the same 113 checks before that pass, and the increment's first run, `38914820675` at
+`982e87c`, drove the same eleven checks before the second verification pass described at the end of this
+file). The panel's own vocabulary is asserted in `tests/test_profile_provenance.py` (74 tests in the file) and
+the handlers behind the widgets in `tests/test_desktop_handlers.py` (388 tests in the file); seventeen
+mutations of the new rules were all caught, one of them only after the miss exposed an untested reporting
+branch, three after the same question was asked of the paths around the write, and three after it was asked
+of the write the report was describing (section 7 of the note).
 
 **Date created:** 2026-10-14
 
@@ -924,17 +926,24 @@ and in one window it opens; nothing here leaves the machine.
     is still missing rather than reporting completion - and must report the remaining fact(s) by name. Then
     repeat with a blank answer and an already-checked saved fact: the blank must stay unknown (no value invented
     from the other answers) and the ticked fact must be confirmed with **its own saved value**, not a new one.
-    Then decline the confirmation once: nothing may be written at all.
+    Then decline the confirmation once: nothing may be written at all. Finally, type a value into one required
+    field of the form **without saving it**, open the setup window, answer a different fact and read the
+    confirmation again: it must say that the values already in the form are saved with the answers and left
+    unconfirmed, and after answering **Yes** the report and the table must name that field - a press that writes
+    the form as well must not describe itself as saving the answers alone.
     → **BLOCKED — no display and no Tkinter in the acceptance environment; the stored rows, the origins and the
     window's own sentences were asserted, but whether the confirmation's wording is understood as "this is now
     your own statement" is a person's judgement.**
     → **Automated coverage (2026-10-16): A14 (a save with nothing typed and nothing ticked writing nothing and
     saying so), A15 (the answer stored as the person's own and confirmed, the confirmation naming the field and
-    the value, the table reading "Confirmed by you"), A16 (the rebuild from storage, the facts still awaiting a
-    check, and the profile stating every required fact) and `ProfileSetupTests` (answers stored as the person's
-    own and confirmed, a blank never guessed, a declined confirmation, a confirmation keeping the document
-    origin, a repeated confirmation reported as unchanged, and a write whose read-back does not match never
-    reported as saved). Five display-backed CI legs, 113 checks per leg, run `38914820675` at `982e87c`.**
+    the value and saying which values the same press writes as well, the table reading "Confirmed by you"),
+    A16 (the rebuild from storage, the facts still awaiting a check, and the profile stating every required
+    fact) and `ProfileSetupTests` (answers stored as the person's own and confirmed, a blank never guessed, a
+    declined confirmation, a confirmation keeping the document origin, a repeated confirmation reported as
+    unchanged, a write whose read-back does not match never reported as saved, a value the form already held
+    stored, named and left unconfirmed, and a check that fails after such a write reported as what was
+    written). Five display-backed CI legs, 113 checks per leg, run `38933027065` at `e57788e` (the code head
+    after the third verification pass).**
 123. [ ] Import a résumé and accept one of its values, then read the table: that row must say the value was read
     out of the document **by name** and that it is **not** confirmed by you, and the completion message must say
     the same without naming the folder you chose. Confirm that row and read it again: the origin must still name
@@ -947,8 +956,9 @@ and in one window it opens; nothing here leaves the machine.
     accepted value stored as read out of that document and unverified, the row naming the file and never the
     folder, "Not confirmed yet", and the completion message saying "not confirmed by you") plus
     `ProfileFactReviewTests` (an import's origin shown as unverified, confirming a fact keeping its document
-    origin) and the fourteen mutation checks in the note's section 7. Five display-backed CI legs, 113 checks per
-    leg, run `38925910370` at `2514b52`.**
+    origin) and the seventeen mutation checks in the note's section 7. Five display-backed CI legs, 113 checks
+    per leg, run `38933027065` at `e57788e` (the code head after the third verification pass; run `38925910370`
+    at `2514b52` drove the same checks before it).**
 
 ## Record results
 
@@ -1262,9 +1272,10 @@ second verification pass, after the first run was already green.
 
 - **What the harness established on a real display (workflow A, checks A7–A17).** Eleven checks were added
   inside workflow **A** rather than as a new workflow letter, so the CI job's loop over workflow letters is
-  unchanged and `declared_step_count()` is **113** while the suite is at **2071 tests**. All eleven ran on all
-  five display-backed legs of run `38925910370` at `2514b52` and reported `RESULT: PASS — 113 checks passed` (they first
-  ran on run `38914820675` at `982e87c`, before the honesty fixes of the second verification pass). A17
+  unchanged and `declared_step_count()` is **113** while the suite is at **2073 tests**. All eleven ran on all
+  five display-backed legs of run `38933027065` at `e57788e` and reported `RESULT: PASS — 113 checks passed`, as
+  they had on run `38925910370` at `2514b52` before the third pass (they first ran on run `38914820675` at
+  `982e87c`, before the honesty fixes of the second verification pass). A17
   builds a synthetic DOCX inside the run's disposable folder and drives the real résumé review, the real save
   and the real table, so the claim "a document's value is shown as that document's and is not confirmed" is
   checked end to end rather than at the store alone; A9 asserts the log line and that **no candidate value

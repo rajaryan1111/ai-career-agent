@@ -3650,3 +3650,56 @@ and the six manual steps 118-123 stay **BLOCKED** with no box ticked.
 bought is the rule this project keeps re-learning: a green suite says the tested paths work, never that a
 sentence is true. Three sentences that would have been false about a write that had already happened are now
 either true or explicitly unknown.
+
+## 2026-10-16 (third pass) — The setup save writes the form too, and now says so
+
+The third verification pass over the profile-confirmation increment asked the second pass's own question of one
+more thing: not the sentences *around* a write, but what the write was asked to store. `_save_profile_setup`
+mirrors each answer into the same `StringVar` the profile tab's entries are bound to and then builds its save
+from those variables (`build_candidate_profile(self.profile_vars)`), so **one press stores the answers and any
+value already sitting in the form** - and three things spoke of the answers alone: the confirmation that asks
+permission, the report that follows the save, and the read-back comparison that verifies it.
+
+**Reproduced against the real store before anything was changed.** Probe: the form's `country` set to a value
+that was never saved, the setup window answered only for `work_authorization`, the confirmation answered yes.
+The database then held the form's country, recorded `FactSource.USER_ENTERED` / `FactVerification.UNVERIFIED`,
+while the dialog listed the single answer and the status line reported the save as done - a change to the stored
+profile that no sentence of the window had mentioned. The values are a person's own, so nothing here was a data
+loss; what was wrong was that a press wrote more than it said it would and reported less than it had.
+
+**Fixed in `e57788e` by making the press and its own account the same size.** The question names the form's
+values as saved with the answers and left unconfirmed - only an answer typed into that window is a
+confirmation, so saving a form value is not one. The report names the facts `save_profile`'s own return value
+says this write re-attributed, which *is* its scope: "Saved with them from the form on the profile tab, left
+unconfirmed: Country." The read-back comparison now runs against everything the press was about to store
+(`profile_fields_not_matching(stored, merged)`) rather than the answers alone, so a form-contributed value is
+verified rather than written under a "saved" that was only checked for the rest. And `_setup_saved_but_unchecked`
+- the sentence for a check that fails after the write - is told which values were written, because
+"No answer was typed, so this press changed no value in your profile" was false in exactly this case; it now has
+a sentence per case (the answers, the form's own values, or neither).
+
+**Tests and mutations.** Two new handler tests (``tests/test_desktop_handlers.py`` is at **388**), one per new
+sentence, each run against the **pre-fix window source first** - the first one fails there on the confirmation's
+text, which is how the defect and its fix are both pinned to behaviour rather than to wording. The acceptance
+harness's A15 step gained a requirement inside the existing step (the confirmation must say what else the press
+writes), so the declared **113** checks and the manual step count **123** are unchanged and the stand-in run
+still reports ``113 checks passed, 0 failed`` / **BLOCKED**. The mutation harness went to **17 mutations, 17 of
+17 detected**; two of the three new ones are caught by the new tests, and one older mutation's anchor had to be
+refreshed because the call it mutates grew a keyword argument - reported as ``[stale]`` rather than silently
+mutating nothing, which is what that guard is for.
+
+**Evidence.** Local, at the code head: full suite ``Ran 2073 tests in 56.281s`` ``OK (skipped=13)`` exit 0,
+``compileall`` exit 0, the CSV audit unchanged (``0356b093… over 83 records``), the stand-in acceptance run
+``113 checks passed, 0 failed`` reporting **BLOCKED** by construction (a stand-in Tk is not a desktop), and 17 of
+17 mutations detected. CI: run ``38933027065`` at ``e57788e`` - **13/13 jobs**, ``Ran 2073 tests … OK`` on every
+unit and cross-platform leg (skips 20/13/13/13/13 on Linux, 20 and 13 on macOS, 52 and 45 on Windows) and
+``RESULT: PASS — 113 checks passed`` plus the smoke test's 14 on all five display-backed legs. The earlier heads
+were verified the same way (``38925910370`` at ``2514b52``, ``38927983060`` at the docs commit ``434ef2f``,
+``38914820675`` at the feature commit ``982e87c``).
+
+**What the checklist now asks a person to judge.** Step 122 keeps its number and gains the question this pass
+answered automatically: with a value typed into the form and not saved, the confirmation must say that the form's
+values are saved with the answers and left unconfirmed, and the report afterwards must name that field. Step 122
+is **BLOCKED** with the other five, and no box was ticked. The one thing a machine cannot check is still the
+same: whether a person reading that confirmation understands that only the answer they typed is their own check
+and the form's value - though now saved with it - is not.

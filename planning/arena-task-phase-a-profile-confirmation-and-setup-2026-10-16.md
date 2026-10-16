@@ -45,7 +45,9 @@ be blocked on had no path that asked them for exactly that fact. This task close
   record; and for the setup window: a first run, a partly filled profile, values offered for confirmation
   instead of being asked again, a preference never asked, blanks staying unknown, a declined confirmation,
   cancel, Escape, a second window, an invalid answer, a failed write, a write that cannot be read back, and
-  resumption after a restart.
+  resumption after a restart, plus what that save writes beyond the answers: a value sitting unsaved in the
+  form is stored, named and left unconfirmed, and a check that fails after such a write is reported as what
+  was written rather than as nothing.
 - Acceptance checks inside the existing harness for every functional claim, and the window smoke test's
   expectations extended to the new list and summary so the display-backed legs check them too.
 - Mutation checks on a disposable copy, so a green suite is not mistaken for a suite that bites.

@@ -43,8 +43,9 @@ control confirms the selected fact through the store and reports what the databa
 setup window asks only for what `missing_required_profile_facts` reports, offers the stored-but-unconfirmed
 required facts for confirmation instead of asking again, never asks for a preference and writes nothing on
 cancel ([note](research/candidate-profile-fact-review-and-setup-2026-10-16.md)). Verified on the whole matrix:
-run `38925910370` at `2514b52`, 13/13 jobs, `Ran 2071 tests ... OK` per leg and `RESULT: PASS - 113 checks passed`
-on the five display-backed legs (the increment's first run was `38914820675` at `982e87c`, also 13/13 but on
+run `38933027065` at `e57788e`, 13/13 jobs, `Ran 2073 tests ... OK` per leg and `RESULT: PASS - 113 checks passed`
+on the five display-backed legs (run `38925910370` at `2514b52` was green the same way on `Ran 2071 tests ... OK`
+per leg before the third pass, and the increment's first run was `38914820675` at `982e87c`, also 13/13 but on
 `Ran 2065 tests ... OK` per leg, before the second verification pass that fixed three paths which reported a
 write that had reached the database as "nothing was changed"; the provenance half's own run was `38903585396` at
 `4321458`, and the run that found the one wrong assertion in the four cross-platform legs is `38901274611`). The remaining work in this
@@ -246,7 +247,7 @@ and unconfirmed state (schema 8). Automated coverage: the reader and proposal la
 
 * **Implemented:** the domain core, storage, migrations and backup/restore, the Tk window with its tabs, the
   scheduler engine, the adapter framework, analytics, export/import, résumé reading, the event log.
-* **Automated-tested:** 2071 unit and integration tests plus the two scripted desktop entry points, green on
+* **Automated-tested:** 2073 unit and integration tests plus the two scripted desktop entry points, green on
   five display-backed legs and four interpreter versions — **and the checks are about records, widget cells and
   status lines, never about pixels, wording or focus**.
 * **Human-accepted:** **nothing.** No person has opened this window on any platform.
@@ -257,7 +258,7 @@ and unconfirmed state (schema 8). Automated coverage: the reader and proposal la
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 2071 tests passing locally (13 skipped in a checkout: 12 of them need the optional
+implemented, with 2073 tests passing locally (13 skipped in a checkout: 12 of them need the optional
 `pypdf` library and one runs only where the project is installed) and a
 Python 3.10–3.14 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs

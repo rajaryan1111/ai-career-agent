@@ -3,15 +3,18 @@
 Date: 2026-10-16 · Task: `planning/arena-task-phase-a-profile-confirmation-and-setup-2026-10-16.md` ·
 Branch: `arena/941d963f-ai-career-agent` · Scope: local, offline, no schema change, no external action.
 
-**Status:** implemented, tested, and **green on the whole CI matrix**. The increment's final head `2514b52`
-is verified by run **`38925910370`**: **13/13 jobs**, `Ran 2071 tests … OK` on every unit and cross-platform leg
-(the skip counts differ by platform) and `RESULT: PASS — 113 checks passed` on the five display-backed legs.
-The feature commit `982e87c` had been verified the same way by run `38914820675` (13/13 jobs, `Ran 2065 tests …
-OK` per leg, the same 113 checks) before the second verification pass that section 7 records. Verified locally
-as well: the full suite `Ran 2071 tests … OK (skipped=13)`, `compileall` clean, the stand-in acceptance run
-`113 checks passed, 0 failed` (which reports **BLOCKED** by design — a stand-in Tk is not a desktop), and
-**fourteen mutation checks, 14 of 14 detected**, one of them only after the gap the miss exposed was closed and
-three of them added by the pass that fixed findings 4-6.
+**Status:** implemented, tested, and **green on the whole CI matrix**. The increment's code head `e57788e` is
+verified by run **`38933027065`**: **13/13 jobs**, `Ran 2073 tests … OK` on every unit and cross-platform leg
+(the skip counts differ by platform: 20, 13, 13, 13 and 13 on Linux, 20 and 13 on macOS, 52 and 45 on Windows)
+and `RESULT: PASS — 113 checks passed` on the five display-backed legs. Two earlier heads were verified the same
+way: `2514b52` by run `38925910370` (13/13 jobs, `Ran 2071 tests … OK` per leg), which the second verification
+pass recorded, and the feature commit `982e87c` by run `38914820675` (13/13 jobs, `Ran 2065 tests … OK` per
+leg); the docs commit that recorded them, `434ef2f`, was verified by run `38927983060`. Verified locally at the
+code head as well: the full suite `Ran 2073 tests … OK (skipped=13)`, `compileall` clean, the stand-in
+acceptance run `113 checks passed, 0 failed` (which reports **BLOCKED** by design — a stand-in Tk is not a
+desktop), and **seventeen mutation checks, 17 of 17 detected** — one of them only after the gap the miss
+exposed was closed, three added by the pass that fixed findings 4-6 and three by the third pass that fixed
+finding 9.
 
 The human half is **not** done. This increment adds widgets, so it adds manual steps: **six numbered steps
 (118–123)** in
@@ -123,6 +126,13 @@ what the last handler believed.
   compared before anything is confirmed; only then is one `confirm_profile_fact` call made per fact the person
   typed here or ticked, and only after that is the window rebuilt to say what is still not stated. Incomplete
   is reported as incomplete, in the window and in the status line.
+- **What else the same press writes.** The answers are mirrored into the variables the profile tab's entries
+  are bound to and the write is built from those variables, so a value already sitting in that form - typed
+  there and not yet saved - is stored by the same `save_profile` call, recorded with its own origin, and left
+  **unconfirmed**, because only an answer typed into this window is a confirmation. The question that asks
+  permission says so, the report that follows names those facts beside the answers, and the read-back
+  comparison covers everything the write was asked to store rather than the answers alone. Finding 9 in
+  section 7 is what each of those three omissions looked like before the third verification pass.
 - **What it never does.** Cancel, Escape, the window's close button and a declined confirmation write nothing;
   a validation refusal keeps what the person typed on screen; a write failure leaves the stored profile alone
   and says so; and a write that succeeds but cannot be read back says **"Saved, but not verified"** with the
@@ -169,17 +179,18 @@ what the last handler believed.
 
 | What | Result | Command |
 |---|---|---|
-| Full suite | `Ran 2071 tests … OK (skipped=13)` | `python3 -m unittest discover -s tests` |
+| Full suite | `Ran 2073 tests … OK (skipped=13)` | `python3 -m unittest discover -s tests` |
 | Compile check | clean | `python3 -m compileall -q career_agent scripts tests` |
 | Acceptance harness (development run) | `DEVELOPMENT RESULT: 113 checks passed, 0 failed` — `RESULT: BLOCKED` (no tkinter on this machine) | `python3 scripts/desktop_acceptance.py --stand-in-tk` |
-| Mutation checks | **14 of 14 detected** | `python3 /home/user/scratch/mutation_checks_fact_review.py`, log beside it |
-| CI matrix (final head) | **run `38925910370` @ `2514b52`: 13/13 jobs** — unit legs 3.10–3.14 `Ran 2071 tests … OK`, four cross-platform legs `Ran 2071 tests … OK` with `RESULT: PASS — 113 checks passed`, the Linux display leg with the same 113 checks and the smoke's 14, both installed-package legs and the optional-PDF leg | `gh run view 38925910370` |
+| Mutation checks | **17 of 17 detected** | `python3 /home/user/scratch/mutation_checks_fact_review.py`, log beside it |
+| CI matrix (code head) | **run `38933027065` @ `e57788e`: 13/13 jobs** — unit legs 3.10-3.14 `Ran 2073 tests … OK` (skips 20/13/13/13/13), macOS-3.10 `104.082s OK(20)` and macOS-3.13 `107.194s OK(13)`, Windows-3.13 `730.273s OK(45)` and Windows-3.10 `634.854s OK(52)`, the five display-backed legs with `RESULT: PASS — 113 checks passed` and the smoke test's 14, both installed-package legs and the optional-PDF leg | `gh run view 38933027065` |
+| CI matrix (honesty-fix head) | **run `38925910370` @ `2514b52`: 13/13 jobs** — unit legs 3.10–3.14 `Ran 2071 tests … OK`, four cross-platform legs `Ran 2071 tests … OK` with `RESULT: PASS — 113 checks passed`, the Linux display leg with the same 113 checks and the smoke's 14, both installed-package legs and the optional-PDF leg | `gh run view 38925910370` |
 | CI matrix (feature commit) | **run `38914820675` @ `982e87c1fc55375200e1ab3871cd655d126aa55b`: 13/13 jobs**, `Ran 2065 tests … OK` per leg and the same `RESULT: PASS — 113 checks passed` on the five display-backed legs | `gh run view 38914820675` |
 
-The suite stood at **2004** tests at the commit this increment started from and stands at **2071** with it:
-25 tests were added to `tests/test_profile_provenance.py` (74 in the file now) and 42 to
-`tests/test_desktop_handlers.py` (386 in the file now - 36 with the feature and 6 with the honesty fixes in
-section 7), and the acceptance harness gained 11 checks inside
+The suite stood at **2004** tests at the commit this increment started from and stands at **2073** with it:
+25 tests were added to `tests/test_profile_provenance.py` (74 in the file now) and 44 to
+`tests/test_desktop_handlers.py` (388 in the file now - 36 with the feature, 6 with the honesty fixes in
+section 7 and 2 with the scope fix finding 9 records), and the acceptance harness gained 11 checks inside
 workflow A (A7–A17) - a new workflow letter was deliberately **not** added, so the CI job's loop over workflow
 letters is unchanged and `declared_step_count()` went from 102 to 113. The window smoke test's expectations gained the new list
 (`facts_tree`, four columns) and its summary variable, so all five display-backed legs check that the new
@@ -187,13 +198,13 @@ controls exist and fill, not only that the workflow reached them.
 
 ## 7. What verification found
 
-Eight things, all found by running the code rather than by reading it: **five defects in this increment's
-own reporting** (1, 2, 4, 5 and 6 - three of them saying *nothing was changed* about a write that had
-already happened, and one deciding what a profile states from a read that had failed), **two reporting
-branches that had no test at all** (3 and 7), and **one thing the mutation harness itself was getting
-wrong** (8). Three were found while the increment was written and five by asking the same question of the
-paths around them - *does this sentence still describe what just happened?* - and every defect was reproduced
-against the real store before it was fixed.
+Nine things, all found by running the code rather than by reading it: **six defects in this increment's own
+reporting** (1, 2, 4, 5, 6 and 9 - three of them saying *nothing was changed* about a write that had
+already happened, one deciding what a profile states from a read that had failed, and one writing more than
+its own report named), **two reporting branches that had no test at all** (3 and 7), and **one thing the
+mutation harness itself was getting wrong** (8). Four were found while the increment was written and five by
+asking the same question of the paths around them - *does this sentence still describe what just happened?* -
+and every defect was reproduced against the real store before it was fixed.
 
 1. **The table dropped the row the person had just used.** Confirming a fact redraws the table, and the redraw
    lost the selection, so the second confirmation press - and any reading of "what happened to that row" -
@@ -241,6 +252,21 @@ against the real store before it was fixed.
    named test failing is reported as an invalid mutation, not as a detection. The three mutations added for
    4-6 are caught by the tests written for them, and one of the harness's own anchors had gone stale when the
    code moved - reported as `[stale]` rather than silently mutating nothing, which is what that guard is for.
+
+9. **A save that wrote more than it said.** The setup window mirrors its answers into the same variables the
+   profile tab's entries are bound to and builds its write from those variables, so one press stores the
+   answers *and* any value the form already held. The question that asks permission, the report after the
+   write and the read-back comparison all spoke of the answers alone - so a value typed on the profile tab and
+   never saved could be written by the setup save without being named, or verified, anywhere. Reproduced
+   against the real store (form `country` set to a value never saved, one answer given, the confirmation
+   answered yes): the database held the form's country, recorded as the person's own and left unconfirmed,
+   while the dialog listed the one answer and the report called the save done. This is the same question the
+   second pass asked of the sentences *around* a write, asked of the write itself. Fixed in `e57788e`: the
+   question names the form's values as saved with the answers and left unconfirmed, the report names the facts
+   the write's own return value says it re-attributed, the read-back comparison covers everything the press
+   was about to store, and the *"could not be checked"* sentence distinguishes a save of answers, a save of
+   the form's own values and a save of nothing. Two handler tests and three mutations were written for it, and
+   both tests were run against the pre-fix window source first, where the first of them fails.
 
 One harness-side change is worth recording because it changed the *window's* own record: a check that read the
 setup window's sentence by scanning label text was replaced by `ProfileSetupWindow.awaiting`, the rows the
