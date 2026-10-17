@@ -50,6 +50,39 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Mark uncertain, missing, or conflicting extracted fields for review before they affect eligibility or generated material.
 - Allow manual correction and multiple resume versions. Resume parsing is not claimed as implemented in the current alpha.
 - Never fabricate experience, skills, qualifications, or work authorization.
+- Record where each stored profile fact came from and whether the person confirmed it, so an extracted,
+  imported, or older value is never presented as the person's own statement: a value read out of a document
+  or imported from a file is stored and shown as unconfirmed, only an explicit confirmation by the person
+  confirms a fact, and a write changes the origin of the facts it changed and no others. A document is
+  remembered by name, never by folder; a fact stored before origins were recorded reads as unknown; and
+  which required facts a profile does not state stays answerable without a display, so a setup flow can ask
+  for exactly those. The origins are local bookkeeping and do not enter the version-2 JSON export. The window
+  shows every stored fact with its value, its origin and its confirmation state, names a document by its file
+  name and never by a folder, and offers one explicit action to confirm the selected fact; nothing else in the
+  application confirms one. A profile that is missing a fact a listing can be blocked on is asked for exactly
+  those facts and no others: a fact that is stored is never asked for again whatever its origin, a preference
+  is never treated as required, a blank answer stays unknown rather than being inferred, and a setup that is
+  cancelled, refused or still incomplete writes nothing and says what is still missing. A failure that arrives
+  after a write has reached the database is reported as what it is and never as "nothing was changed": the
+  window reads the stored state again and reports it, and where even that read fails it says the answer is not
+  known and names a safe way back.
+- Report progress from the records the user actually wrote, and never beyond them: a count is always
+  traceable to stored rows; every rate names the denominator it was computed over; a rate is withheld with
+  its reason below a floor of five recorded applications; a metric the schema cannot observe (an offer, an
+  employer's unstated decision) is reported as unmeasurable rather than as zero; a genuine zero is reported
+  as zero; a timing is reported only with its sample size, and a period comparison only when both periods
+  hold enough records to carry one. No projection, no benchmark against other people, and no statement that
+  anything caused a change — the report prints that limitation with the numbers it qualifies.
+- Employment and education history as structured records rather than one summary field: employer, job
+  title, employment type, start and end dates, an explicit current-role flag and optional notes; and
+  institution, qualification, optional discipline, start and completion dates and an ongoing-study flag.
+  An impossible period, an inconsistent current-role or ongoing-study flag, blank required text, a
+  mistyped date or a duplicate record is refused rather than stored. A date the person has not recorded
+  stays unknown and contributes no duration; the reported figure is the months covered by current or fully
+  dated roles, counting a month covered twice once, and it is never written back into the profile's own
+  experience figure. See the README section *Keep your own employment and education record*; importing
+  these records from a résumé, attaching documents and using them in eligibility or matching are not
+  implemented.
 
 ### Job discovery
 - Support multiple independently verified sources.
@@ -60,7 +93,41 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Respect each source's terms, API rules, and technical access requirements.
 - Treat source permission as a hard gate: a public endpoint, free feed, or attribution requirement does not alone establish authorization when broader terms conflict or prohibit automated gathering. Keep unresolved sources disabled until written clarification is recorded. Himalayas is currently blocked pending written clarification; see [the permission review](research/himalayas-api-permission-terms-conflict-2026-10-13.md).
 
+### Follow-ups and reminders
+
+Implemented today: a day to act on per application, listed in the window and on the command line with
+overdue/due-today distinction, a daily local reminder task, a preview of the calendar file before it is
+written, and a follow-up email draft built from the application's recorded context and printed in full.
+Reminders never change application state, and neither the draft nor the preview writes anything.
+
+**Partially implemented, and gated by design:** the email and calendar integration *contract*. Preparing an
+email draft (subject, body, the application it belongs to, and a recipient only if one is supplied) and a
+calendar event (title, day, and, only if the person records them from an invitation, a time, a duration and
+an IANA timezone) are implemented, each with a preview that states exactly what would happen and an explicit
+result of completed, duplicate, failed, disabled, unsupported or invalid. Execution is **not** implemented for
+any real provider and is disabled by default: the default integration refuses every operation with a stated
+reason, no configuration selects another, and no credentials, accounts or external calls exist. Idempotency is
+implemented - a stable operation id derived from the operation's content, duplicate detection against a local
+record, and a retry that cannot duplicate a performed operation. A local mock performs operations in a local
+ledger so the contract is testable and demonstrable without any account. Email, calendar-account, push and
+other notification integrations are **not** enabled, and nothing is simulated into looking present.
+
+### Sources
+
+Implemented today: a read-only source report (`python -m career_agent --sources`) and the adapter
+framework that would run a source, with the gate enforced in one place and no way to open it from the
+adapter layer. Zero adapters exist and live discovery is disabled, because no source has passed both the
+permission review and the source-quality gate; the report says so per source, with the evidence and the
+conditions attached.
+
 ### Matching and eligibility
+
+Implemented today: eligibility is a decision (PASS/FAIL/UNKNOWN) from stated requirements, and matching
+is a transparent, per-factor comparison of required skills, experience, a stated qualification, location,
+work mode and role type, reported with the coverage of what was actually known. Ranked output is a review
+order, never a probability, and a listing whose eligibility fails is blocked from recommendation while
+its comparison stays visible. Missing information is reported as missing rather than approximated, and
+compensation is not compared because no compensation field exists yet.
 - Run hard eligibility rules separately from relevance scoring.
 - Evaluate relevance/ranking changes against a versioned human-reviewed judgment set; measure retrieval coverage separately from ranking precision, and never let relevance scores override hard eligibility gates.
 - Explain positive matches, missing requirements, and unresolved questions.
@@ -91,11 +158,22 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - Retry safely without duplicate submissions.
 - Record errors and recovery attempts.
 - Support manual status updates and optional authorized email integrations.
+- **Implemented (local alpha):** status states with guarded transitions, confirmed-status evidence, and a
+  dated per-application activity history that the candidate writes themselves (applied, employer
+  replied, interview, assessment, followed up, note), each row also recording when this app wrote it. The
+  history is not evidence and cannot change a status. **Planned/gated:** reminders, interview and
+  follow-up scheduling, and any email or calendar integration (each needs its own permission, privacy and
+  failure handling).
 
 ### Scheduling
 - Default discovery schedule: 00:00 and 12:00 Asia/Kolkata.
-- Let users configure schedules.
-- Clearly report missed runs, offline periods, partial failures, and retries.
+- Let users configure schedules. (Implemented: times, timezone, enable/disable, timeout and retry
+  limits are stored per task and editable from the Background tasks tab; a device that is off simply
+  does not run them.)
+- Clearly report missed runs, offline periods, partial failures, and retries. (Partially implemented:
+  the durable record of scheduled occurrences, attempts, retries, refusals and interruptions exists in
+  the database, with a run history per task; the report a person reads, the worker loop, and missed-run
+  catch-up are not built yet.)
 - The desktop scheduler must report sleep/offline periods accurately. To meet the laptop-independent requirement, the product needs an optional or separately deployed always-on worker/scheduler; desktop-only execution cannot run while the computer is powered off or asleep. Any hosted/remote component must disclose cost, uptime limits, and what candidate data leaves the device.
 
 ## 7. Non-functional requirements
@@ -105,9 +183,42 @@ The intended audience is cross-industry and cross-experience: students, interns,
 - No transmission of resume data to an external AI service without explicit consent.
 - Recoverable task state and safe retries.
 - Clear logs without unnecessary sensitive personal data.
-- Data export and deletion.
+  **Implemented (local alpha):** one rule resolves the database path for the window, the backup/restore
+  commands and a read-only `--doctor` report (an explicit path, then `CAREER_AGENT_DATABASE`, then the
+  per-user data folder, which `CAREER_AGENT_HOME` moves when it holds an absolute path), so the three
+  cannot disagree about which file is in use; a relative setting is ignored and reported rather than
+  resolved against the working directory. `--doctor` prints the version, the paths, and what the
+  database contains — or the same refusal the app itself would give — without a display, creating or
+  changing nothing, and exits non-zero when it finds a problem. It does not stop at structure: on a file
+  whose schema is current it decodes every stored record with the same functions the read paths use, so a
+  status, availability value or payload this build cannot interpret is reported with the table and the
+  record rather than passing the check, and the read-only reports answer such a record with one sanitised
+  refusal and exit status 2 instead of an unexpected failure. A file recording an older schema is reported
+  by version and not decoded, because the check never migrates it. Start-up failures are explained in
+  plain language with local paths redacted, plus one bounded owner-only local note. An event log
+  (`logs/application.log`, beside the database) records what the application did - opened, migrated,
+  saved, deleted, imported, exported, backed up, restored, failed - as one bounded, rotated line per
+  event, holding event names, identifiers and counts rather than candidate content, with local paths
+  redacted by the same function that sanitises the start-up note. **Planned:** a diagnostics view in the
+  window that reads the log, and a version/data-compatibility policy for released builds.
+- Preparation and interview records: a per-application checklist (title, kind, optional day, and the
+  moment the person said it was done) and the rounds of an employer's process (stage, planned day, mode,
+  the candidate's own reading of how it went, notes). One combined "what needs doing next" list orders
+  them against the follow-up days; nothing in either record can move an application's status, and no
+  outcome value describes an employer's decision.
+- Data export, import and deletion: a versioned JSON document that can be read back on another
+  computer, planned and confirmed before it writes, with an existing listing linked rather than
+  replaced, a stored profile kept, and an application record never imported at a status it did not
+  reach here.
 - Accessible, understandable user interface.
-- Cross-platform distribution to be evaluated before commitment.
+- Cross-platform distribution to be evaluated before commitment. What is measured as of 2026-10-15:
+  the suite, the installed command surface, schema creation and migration, backup/restore, JSON
+  export/import, the discovery invariants and the optional résumé extra all execute on real Windows and
+  macOS runners as well as on Linux, and a scripted window check builds and drives the real Tk window on
+  all five: the Linux runner under Xvfb, and the four Windows and macOS legs, where Tk needs no display
+  variable (each leg publishes the Tk version, the screen it reported and its 14 checks). A runner with no
+  display reports BLOCKED - never a pass - and so does this machine. Interactive GUI acceptance, packaging,
+  code signing and installation remain unmeasured.
 
 ## 8. Success metrics (proposed, not yet validated)
 
@@ -143,3 +254,65 @@ The intended audience is cross-industry and cross-experience: students, interns,
 ## 11. Production definition of done
 
 A release is not production-ready merely because its UI renders or unit tests pass. For each advertised capability, provide repeatable tests, truthful support status, failure recovery, privacy/security review, and user-facing error handling. Before general release, validate installation and upgrade/uninstall paths; persistence and backup/restore; source freshness and direct application destinations; critical resume-field extraction; hard-eligibility false positives; duplicate protection; evidence-backed submission status; scheduler missed-run recovery; and a representative pilot across more than one profession. Keep unvalidated integrations disabled and label them clearly.
+
+---
+
+## Product Vision Update — Autonomous Personal Career Agent (2026-10-16)
+
+### North-star outcome
+AI Career Agent is intended to become a resume-driven personal career operations agent, not merely a job board, resume editor, or recommendation chatbot. After explicit initial setup, the user uploads a resume and the application runs a bounded workflow: understand the profile, discover relevant vacancies twice daily, evaluate fit and eligibility, prepare truthful application materials, submit through supported and permitted routes, conduct authorized HR outreach, track outcomes, and proactively report progress.
+
+### Core journey
+1. **Resume-to-profile onboarding:** extract skills, education, projects, experience, dates, links, graduation year and job-relevant facts; retain provenance; ask only to confirm uncertain or supply required missing facts.
+2. **Career policy setup:** configure target roles (AI/ML Engineer, Applied AI Engineer, AI Engineer, Forward Deployed Engineer and relevant internships), location/remote preferences, work type, compensation, eligibility, exclusions, action limits and permitted data sharing.
+3. **Twice-daily discovery:** configurable morning/evening runs across sources with verified, permitted integrations. Prioritize official employer career pages and supported ATS/public feeds. Assess LinkedIn, Unstop, Internshala, Naukri.com and other sources individually; do not promise universal coverage before feasibility is established.
+4. **Explainable fit and preparation:** retain job/source evidence, required-versus-preferred qualifications, eligibility findings, freshness and confidence; tailor resume/cover letter using verified facts only.
+5. **Authorized routine execution:** after global automation policy and account setup, execute routine, policy-compliant applications and outreach without per-item approval where the source and workflow permit it. Never bypass platform restrictions or required human attestations.
+6. **HR outreach:** privately import the user's contact list, preserve provenance, resolve duplicates/conflicts, enforce suppression and prior-send checks, and send personalized internship outreach with the correct resume only through an explicitly authorized email account.
+7. **Application and communication command center:** durable history for discovery, evaluation, preparation, blocked tasks, submissions, emails, bounces, replies, interviews, assessments, rejections, offers and follow-ups. Report only evidence-supported states.
+8. **Proactive reporting and controls:** run status, daily/weekly summaries, notifications, next actions, visible failures, pause/stop-all and revocable permissions.
+
+### Autonomy and trust contract
+The desired experience is one-time policy configuration followed by routine autonomy, not repeated approval prompts for every eligible application. Initial account connection, global authorization, privacy/data-sharing boundaries and automation limits still require explicit setup. Missing required facts, legal/sensitive attestations, identity checks, CAPTCHA/OTP, conflicting contact records, suspicious postings, unsupported/prohibited flows, opt-outs and uncertain submission outcomes must stop only the affected operation and explain the blocker.
+
+Never fabricate qualifications or answers. A generated draft, clicked apply button or opened listing is not a confirmed submission. Mark an application submitted only with verifiable evidence such as a confirmation ID/page, receipt email or supported API response. Treat ambiguous outcomes as unknown and do not blindly retry.
+
+### Non-functional requirements
+- Local-first handling where practical; least-privilege account access and secure secret storage.
+- Durable, auditable and idempotent state transitions; duplicate prevention across restarts and imports.
+- Evidence-linked status, timestamps, bounded retries, timeouts, safe recovery, backups and tested restore.
+- User export/delete and revocation controls; private HR data must not enter public source control, fixtures, logs, screenshots or telemetry.
+- Source-specific feasibility, terms/permission review and tests before enabling real discovery, email sending or submission.
+- No real external actions in automated tests; use synthetic data and mocked adapters.
+
+### Current-state boundary
+This is the target product definition, not a claim that all capabilities exist today. Existing source-quality and execution gates remain fail-closed until each source-specific integration and action has been implemented, permitted, tested and evidenced.
+
+
+## Product Requirements Addendum — Career Strategy, Autonomy and Progress (2026-10-17)
+
+This addendum makes the expected user-visible behavior testable. These are target requirements, not a claim that live integrations or autonomous external actions are currently enabled.
+
+### Career strategy and resume lifecycle
+- **FR-CAREER-01 — Resume-first setup:** allow a user to import a resume, review extracted facts and provenance, confirm or correct facts, and answer only required questions that remain missing. Unknown information stays unknown; the system must not infer a qualification from silence.
+- **FR-CAREER-02 — Multiple role strategies:** support multiple editable role families/strategies rather than one job title. Each strategy can define title synonyms, seniority, locations/work mode, job type, compensation, eligibility, exclusions and ranking preferences. Provide occupation-specific packs over an industry-agnostic core; AI/ML, Applied AI/GenAI/LLM, AI agents, FDE, data, backend, MLOps and research/vision are initial examples, not the product's full scope.
+- **FR-CAREER-03 — Resume and artifact versions:** preserve the original resume and maintain separately versioned tailored artifacts linked to the role strategy, job, profile facts and generation timestamp. Show which version was used for each application; never silently overwrite or attach an artifact whose underlying facts have changed without revalidation.
+- **FR-CAREER-04 — Explainable fit:** evaluate mandatory eligibility before ranking. For each job show evidence-backed pass/fail/unknown checks, matched and missing requirements, source freshness, fit rationale and confidence/limitations. A high match score must not override a failed or unknown mandatory requirement.
+
+### Scheduled discovery and routine autonomy
+- **FR-CAREER-05 — Twice-daily discovery:** default to 00:00 and 12:00 Asia/Kolkata, configurable by the user. Record each run and per-source outcome, including disabled/blocked, authentication-required, rate-limited, partial, failed and valid-empty states. A scheduled run must not be described as successful merely because it started.
+- **FR-CAREER-06 — Cross-source deduplication:** deduplicate opportunities across portals, official employer pages, imports and repeated runs; retain provenance and resolve uncertain collisions conservatively. Prevent a second application attempt unless the previous outcome is reconciled or a deliberate recovery action is recorded.
+- **FR-CAREER-07 — One-time global policy:** allow initial authorization for defined permitted routine actions, sources, limits and resume/attachment rules, so eligible supported applications do not require repeated per-job approval. Keep explicit prompts for missing facts, legal/sensitive attestations, identity verification, CAPTCHA/OTP, conflicting data, unsupported flows and uncertain outcomes. Revocation, pause and stop-all must be available.
+
+### HR outreach, tracking and reporting
+- **FR-CAREER-08 — Controlled HR outreach:** import contacts privately; show provenance, duplicate/conflict and suppression state; personalize messages from verified facts; link the correct resume version to the intended opportunity; enforce deduplication, opt-out, send limits and cross-run idempotency. Real sending requires explicit mailbox authorization and a separately passed provider/campaign gate.
+- **FR-CAREER-09 — Evidence-based communication status:** distinguish prepared, queued, send-attempted, sent/accepted by provider, bounced, delivery evidence, reply received and unknown. Do not equate an API success with delivery, or lack of reply with rejection. Read inbox content only after separate authorization.
+- **FR-CAREER-10 — Career command center:** maintain an auditable per-opportunity timeline for discovery, eligibility, preparation, attempts, external confirmation, emails, replies, interviews, deadlines and follow-ups. Every externally asserted state needs evidence and a timestamp; ambiguous side effects must be reconciled before retry.
+- **FR-CAREER-11 — Proactive reports:** provide daily/weekly summaries and actionable alerts for new relevant jobs, blocked tasks, actual application/outreach outcomes, replies, interview/deadline dates, failures and next actions. Include last/next run and per-source health; support quiet hours and user-controlled notification settings.
+- **FR-CAREER-12 — Laptop-independent operation:** treat an always-on worker as a separately deployable capability with explicit remote-data consent, secure credentials, durable leases/recovery, health visibility and verified laptop-off behavior. Do not imply local scheduling runs while the laptop is asleep or off.
+
+### Release and measurement constraints
+- Optimize for **relevant, valid, non-duplicate opportunities and completed permitted workflows**, not raw application or email volume.
+- Measure source coverage and job freshness, eligible-to-shortlisted conversion, duplicate prevention, confirmed application outcomes, truthful unknown-state handling, outreach bounce/opt-out rates, reply tracking, scheduler reliability and user-visible failure recovery.
+- LinkedIn and every other source must be assessed individually for permitted access and automation. Public visibility alone is not permission. No unauthorized scraping/bots, anti-bot evasion or human-verification bypass.
+- The source-quality gate, submission gate, outbound-email gate and inbox-access gate are independent and remain closed until each is evidenced. No real external side effects in automated tests.
