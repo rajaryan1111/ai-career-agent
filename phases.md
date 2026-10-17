@@ -545,3 +545,26 @@ The north star is a resume-first autonomous career operations agent. The user co
 - No real external applications or emails in tests.
 - No personal contact data in public repository, fixtures, CI output, screenshots or telemetry.
 - This documentation update does not merge to main or change unrelated PR state.
+
+
+## Capability Expansion Acceptance Addendum (2026-10-17)
+
+This addendum refines the existing Phase B–G sequence; it does not reorder the safety gates or claim unfinished work as complete.
+
+### Required cross-phase behavior
+- **Phase B — Resume/profile:** preserve the original resume; keep extracted facts with provenance and confirmation state; support missing-information onboarding; add editable, versioned role strategies and tailored-artifact lineage without creating a second candidate source of truth.
+- **Phase C — Opportunity ledger:** represent source identity and canonical job identity, duplicate clusters, eligibility evidence, strategy/profile version, artifact versions, action attempts and external outcome evidence. Preserve an explicit unknown state when an action's outcome cannot be reconciled.
+- **Phase D — Discovery:** schedule the existing default windows (00:00 and 12:00 Asia/Kolkata); record durable run and per-source outcomes; use global deduplication and freshness checks; do not rank an ineligible/unknown-mandatory job as eligible. No source is enabled until its own access/quality gate passes.
+- **Phase E — Application execution:** allow routine applications without per-item approval only inside the user's saved global policy and only through a supported, permitted workflow. Validate required fields and truthful answers, select the correct versioned artifacts, record intent before external action and reconcile ambiguous results before retry.
+- **Phase F — Outreach/inbox:** treat outbound email and inbox access as independent permissions. Require private contact review, suppression/opt-out preservation, opportunity-aware personalization, mailbox authorization, bounded campaigns and idempotency. Distinguish provider acceptance, delivery/bounce evidence and actual replies.
+- **Phase G — Reporting/release:** show source health, last/next run, actionable daily/weekly summaries, actual replies, interviews/deadlines, failure reasons, pause/stop-all and revocation. Prove remote-worker durability and laptop-off behavior before promising always-on service.
+
+### Additional exit criteria
+1. A profile fact changing invalidates or flags tailored artifacts that depend on it; the original resume is never silently replaced.
+2. Re-running discovery, importing the same listing/contact twice, restarting the app or recovering after a timeout does not create duplicate jobs, applications or outreach.
+3. Tests prove that unknown eligibility, missing required facts, a blocked source, opt-out, exhausted limits and uncertain prior submission each stop only the affected action with an honest explanation.
+4. Reporting distinguishes configured/connected/supported/enabled and attempted/sent/submitted/confirmed/replied; no UI label overstates the evidence.
+5. Source access, submission, outbound mail, inbox reading and remote execution each have separate documented gates, revocation paths and mocked tests. Tests never contact real platforms or mailboxes.
+6. Cross-platform automated checks, migration/backup/restore checks and the existing human desktop acceptance checklist remain release gates; CI success alone does not constitute production readiness.
+
+Do not mark any of these criteria complete without code inspection, targeted regression tests and evidence linked in the relevant research note or CI run.
