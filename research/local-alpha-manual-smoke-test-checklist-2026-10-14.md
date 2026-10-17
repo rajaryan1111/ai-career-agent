@@ -123,6 +123,14 @@ mutations of the new rules were all caught, one of them only after the miss expo
 branch, three after the same question was asked of the paths around the write, and three after it was asked
 of the write the report was describing (section 7 of the note).
 
+**Verification correction, 2026-10-17:** the checklist remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**;
+the counts are not changed by the local verification repair. The real macOS display run at the authorized PR
+head first found one four-pixel overflow in K1, in the Jobs & eligibility status line, and the ordinary test
+discovery command also collided with an unrelated installed `tests` package. The status-line padding was
+removed and the repository tests were made an explicit package so helper imports resolve to this checkout.
+After those fixes, local verification reported `Ran 2073 tests ... OK (skipped=1)`, `RESULT: PASS — 113 checks
+passed`, and `RESULT: PASS — 14 checks passed`. These are automated checks only; no manual step was ticked.
+
 **Date created:** 2026-10-14
 
 This checklist is intentionally separate from unit tests. It requires a real desktop session and should be completed on each operating system that the project advertises as supported. Do not mark a step passed based only on code inspection.

@@ -7,7 +7,20 @@ This file is the durable record of meaningful decisions, research findings, assu
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
 - Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented; resume parsing, source adapters and remote worker remain gated or pending.
-- Last updated: 2026-10-16.
+- Last updated: 2026-10-17.
+
+## Latest verified local checkpoint
+
+- On 2026-10-17 at the authorized PR head `fbe19a9`, the local macOS/Python 3.14 verification pass found and
+  fixed a four-pixel K1 overflow in the Jobs & eligibility tab at the declared `900x600` minimum, and made the
+  repository `tests/` directory explicit so standard-library discovery cannot resolve an unrelated installed
+  `tests` package. The full suite then ran **2073 tests, OK (skipped=1)**; the real-window acceptance harness
+  reported **113 checks passed** and the desktop smoke test **14 checks passed**. The manual desktop checklist
+  remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**; no human step was marked from automation.
+- The next evidence-backed product gaps are partial-profile JSON round-trip acceptance, linked application-state
+  reconciliation during JSON import, and the post-write resume-import status distinction identified by the
+  independent review. The external-action gates remain closed: `SOURCE_QUALITY_GATE_PASSED = False` and
+  `enabled_discovery_sources() == ()`.
 
 ## Confirmed user decisions
 

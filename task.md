@@ -1,6 +1,6 @@
 # AI Career Agent — Product Execution Backlog
 
-**Last updated:** 2026-10-16  
+**Last updated:** 2026-10-17
 **Purpose:** Actionable task inventory derived from the product vision. Completion must be based on verified implementation and test evidence.
 
 ## Product outcome
@@ -120,6 +120,17 @@ and `tests/test_store.py::PrivateBytesWriteTests`, run `38891340290` at `546d065
 **Completed increment:** [privacy-reviewed HR contact export](planning/arena-task-phase-0-hr-contact-export-2026-10-16.md). Feature commit `bdf443b`, fixes commit `546d065`, and documentation commit `5fe30194e264967340a9c425da647fdbd924229c`. The research note [HR contact export](research/hr-contact-export-2026-10-16.md) documents the `hr-contact-export/1` CSV contract, excluded fields, suppression limitation, D36 redaction defect and partial-write cleanup. Arena reports run `38893130883` green with 13/13 jobs, 1,950 tests per unit leg, 102 display-backed checks and 20/20 mutation checks caught. The workflow-run lookup did not independently return that run for the short SHA query, so confirm the exact run/commit association before treating the CI result as independently verified. Existing JSON export stays at version 2; schema remains 7; manual GUI steps 112–117 remain BLOCKED.
 
 **Completed increment:** [verified candidate profile and fact provenance](planning/arena-task-phase-a-verified-candidate-profile-provenance-2026-10-16.md). Feature commit `9581f81`, test-fix commit `4321458`, green on run `38903585396` (13/13, `Ran 2004 tests ... OK` per leg, `RESULT: PASS - 102 checks passed` on the five display-backed legs); written up in `research/candidate-profile-provenance-2026-10-16.md`. **Next Arena task (delivered by the increment above):** the trust dialogue it deliberately left open - a control that confirms a single stored fact in the window, with the value visible beside it, plus the setup flow that asks for the required facts a profile does not state. The next prompt in this file (below) is superseded for the profile half: Start Phase A with a migration-safe local profile model and fact-level provenance/verification, after auditing the existing implementation. Preserve backup/restore and JSON v2 compatibility; do not add resume parsing or external integrations in this increment. Keep all external-action gates closed.
+**Verification repair, 2026-10-17:** before taking up another product increment, the authorized PR head was
+re-run locally. A four-pixel K1 overflow in the Jobs & eligibility tab at the declared `900x600` minimum was
+fixed without changing the minimum or weakening the measurement. The repository's `tests/` directory is now an
+explicit package, so `python -m unittest discover -s tests` does not import an unrelated installed `tests`
+package; the leak-watch child uses that same command and interpreter. The current local results are **2073
+tests OK (skipped=1)**, **113/113** real-window acceptance checks, and **14/14** desktop smoke checks. The
+manual checklist remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**. No source, discovery, email, submission or
+external transfer was enabled. The next product audit remains the partial-profile JSON round-trip and linked
+application-state import gap identified by the independent code review, unless a higher-priority release issue
+appears.
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.

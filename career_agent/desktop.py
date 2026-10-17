@@ -455,7 +455,10 @@ class CareerAgentApp:
         ]:
             ttk.Button(actions, text=text, command=callback).pack(side="left", padx=(0, 6))
         self.job_mode = tk.StringVar()
-        ttk.Label(self.jobs_tab, textvariable=self.job_mode).grid(row=11, column=0, columnspan=6, sticky=W, pady=(4, 0))
+        # This status line is the last row in the fixed-height jobs tab.  A top pad here put its bottom
+        # four pixels outside the tab at the declared 900x600 minimum on Tk 8.6, even though the opening
+        # and larger layouts had room for it.
+        ttk.Label(self.jobs_tab, textvariable=self.job_mode).grid(row=11, column=0, columnspan=6, sticky=W, pady=(0, 0))
         self._set_job_mode_display()
         self.jobs_tree = ttk.Treeview(self.jobs_tab, columns=("employer", "role", "availability", "status", "source", "observed"), show="headings", height=9)
         for col, label, width in [("employer", "Employer", 140), ("role", "Role", 170), ("availability", "Availability", 100), ("status", "Tracker status", 150), ("source", "Source", 190), ("observed", "Last saved here (this app, UTC)", 200)]:

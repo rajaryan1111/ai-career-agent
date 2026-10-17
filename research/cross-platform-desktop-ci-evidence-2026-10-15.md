@@ -1085,3 +1085,21 @@ at the path the person chose that looks like an export and is not is worse than 
 `store.write_private_bytes_file` now removes what it started and says in the message whether the removal
 succeeded. Two regression tests hold it (`tests/test_store.py::PrivateBytesWriteTests`, and the export module's
 own `FileSafetyTests`), and the mutation that removes the removal fails both.
+
+## 27. Verification repair at the authorized PR head (local macOS run, 2026-10-17)
+
+The first local run at PR head `fbe19a9` found two verification defects before any new product work began:
+
+* `python -m unittest discover -s tests` imported an unrelated installed `tests` package, so the two test
+  modules that import repository helpers failed to load. Adding the repository's `tests/__init__.py` makes
+  the checkout an explicit package; the existing leak-watch child uses the same interpreter and discovery
+  command, so it now resolves the same helpers.
+* Real Tk at the declared `900x600` minimum placed the Jobs & eligibility status label four pixels below its
+  tab. The label's top padding was removed; the minimum size and the measurement assertion were not weakened.
+
+Verification after the focused repair: `python3 -B -m unittest discover -s tests` ran **2073 tests, OK
+(skipped=1)**; `python3 -B scripts/desktop_acceptance.py` reported **RESULT: PASS — 113 checks passed**;
+and `python3 -B scripts/desktop_smoke_test.py` reported **RESULT: PASS — 14 checks passed**. The manual
+desktop checklist remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**, because automated Tk checks do not
+replace human review. No source-quality gate, discovery source, external transfer, email action or application
+submission was enabled.
