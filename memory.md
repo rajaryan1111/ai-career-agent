@@ -3722,3 +3722,27 @@ values are saved with the answers and left unconfirmed, and the report afterward
 is **BLOCKED** with the other five, and no box was ticked. The one thing a machine cannot check is still the
 same: whether a person reading that confirmation understands that only the answer they typed is their own check
 and the form's value - though now saved with it - is not.
+
+
+## 2026-10-17 — Career automation expansion requirements clarified
+
+The user asked that the previously proposed career-agent features be reflected consistently in the six planning files: `architecture.md`, `phases.md`, `prd.md`, `task.md`, `design.md` and this `memory.md`. This is a documentation/planning change only; it does not authorize real job applications, email sending, enabling sources, deployment or merging PR #2.
+
+### Requirements carried forward
+- Preserve the confirmed product direction: downloadable, local-first, cross-industry career agent; quality over volume; routine permitted actions may run under a one-time saved policy; default scheduled windows remain 00:00 and 12:00 Asia/Kolkata; selection is never guaranteed.
+- Support multiple editable role strategies, with occupation packs rather than AI/software-only assumptions. AI/ML, Applied AI/GenAI/LLM, AI agents, FDE, data, backend, MLOps and research/vision are illustrative initial role families.
+- Preserve the original resume and trace tailored artifacts to the profile facts, role-strategy version and job they were made for. Revalidate dependent artifacts when facts or strategy change.
+- Apply the strict pipeline: source/action permission → bounded discovery → normalization/global deduplication → freshness → mandatory eligibility → explainable ranking → truthful preparation → action-specific policy gate → permitted execution → evidence reconciliation.
+- Treat source discovery, application submission, outbound email, inbox reading and remote execution as separate capabilities. A readable page or a connected account does not by itself authorize automation.
+- Use private HR-contact handling, durable suppression/opt-out, deduplication, bounded outreach and idempotency. Distinguish provider acceptance from delivery evidence and actual replies. Never infer rejection from silence.
+- Provide evidence-based daily/weekly reports and actionable alerts, including last/next run, per-source outcomes, relevant opportunities, blockers, actual outcomes, replies, interviews/deadlines and next actions. Always-on operation is not a claim until the remote worker and data boundary are verified.
+
+### Non-negotiable implementation boundaries
+- `SOURCE_QUALITY_GATE_PASSED` remains `False` and `enabled_discovery_sources()` remains empty until source-specific permission, quality and test gates are passed.
+- No unauthorized LinkedIn bot/scraping, prohibited automation, CAPTCHA/OTP bypass, identity-check bypass or fabricated candidate facts.
+- Do not ask for per-item approval for routine actions already covered by the user's saved global policy, but stop for missing facts, sensitive/legal attestations, human verification, opt-out, policy limits, unsupported routes or uncertain external outcomes.
+- No real external applications, email sends or mailbox reads in automated tests. Keep contact/message/resume content out of logs, fixtures, CI output and public repository data.
+- Inspect and reuse existing store, scheduler, worker, migration, activity and integration contracts before adding a schema, service or duplicate ledger. Do not mark requirements complete without implementation and test evidence.
+
+### Status and next work
+These requirements are recorded as target behavior, not implementation status. The actionable additions are tracked in P7/P8 of `task.md` and the cross-phase acceptance addendum in `phases.md`. Existing source/email/submission gates remain closed; PR #2 stays open and unmerged; `main` must remain untouched. No code tests, external side effects or production deployment are implied by this documentation entry.
