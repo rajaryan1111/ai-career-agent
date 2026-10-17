@@ -21,7 +21,10 @@ This file is the durable record of meaningful decisions, research findings, assu
   version-2 format: optional facts, including country and skills, may be absent and imported values remain
   imported and unconfirmed. The next evidence-backed gaps are linked application-state reconciliation during
   JSON import and the post-write resume-import status distinction identified by the independent review. The
-  external-action gates remain closed: `SOURCE_QUALITY_GATE_PASSED = False` and
+  linked-state JSON import gap was then fixed locally: local listing identity and tracker state are preserved,
+  missing follow-up/activity state is reconciled idempotently, and conflicting local follow-ups are refused.
+  The remaining next gap is the post-write resume-import status distinction. The external-action gates remain
+  closed: `SOURCE_QUALITY_GATE_PASSED = False` and
   `enabled_discovery_sources() == ()`.
 
 ## Confirmed user decisions

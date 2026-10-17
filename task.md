@@ -138,6 +138,12 @@ unconfirmed provenance. Non-object profile shapes remain rejected. Local verific
 (skipped=1)**, including the focused importer/profile/store subset; linked application-state reconciliation
 and post-write resume-import outcome reporting remain open findings.
 
+**Application-state import follow-up, 2026-10-17:** a linked JSON listing now reconciles missing tracker,
+follow-up and activity state through the existing store methods without replacing the local listing payload or
+identity. Existing local tracker state is preserved; a conflicting local follow-up is refused and repeat imports
+are idempotent. The focused subset ran **251 tests OK** and the full local suite **2079 tests OK (skipped=1)**;
+the evidence is in [the JSON import state note](research/json-import-state-reconciliation-2026-10-17.md).
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.

@@ -55,7 +55,10 @@ setup window, and steps 118-123 of the manual checklist are BLOCKED. A local ver
 discovery deterministic; the current local run is 2073 tests OK, with 113 acceptance checks and 14 smoke checks
 passing. A follow-up also corrected version-2 JSON import so a valid partial profile is not rejected for omitting
 country or skills; the focused and full local suite now report 412 and 2075 tests OK respectively. This does not
-close the human GUI steps or alter the external-action gates.
+close the human GUI steps or alter the external-action gates. The linked-listing JSON import follow-up then
+reconciled missing tracker, follow-up and activity state without replacing local listing identity; its focused
+subset ran 251 tests and the full local suite ran 2079 tests, both OK. Resume-import post-write outcome
+reporting remains the next related reliability gap.
 
 Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 

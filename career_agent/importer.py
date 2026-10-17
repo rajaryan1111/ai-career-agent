@@ -123,7 +123,8 @@ class ImportPlan:
     @property
     def adds_anything(self) -> bool:
         """Whether applying this plan would write anything at all."""
-        return bool(self.new_jobs or self.new_profiles or self.new_work_history or self.new_education)
+        return bool(self.new_jobs or self.new_profiles or self.new_work_history or self.new_education
+                    or self.trackers_at_initial_status or self.follow_ups or self.activity_entries)
 
     def describe(self) -> tuple[str, ...]:
         """The plan as lines a person reads, in the order the decisions were made."""
@@ -147,10 +148,15 @@ class ImportPlan:
             lines.append(f"Application records: {len(self.trackers_at_initial_status)} would be created at "
                          f"'{ApplicationStatus.DISCOVERED.value}', the status a new record must start at.")
         for listing_id, status in self.trackers_without_status:
-            lines.append(f"  - {listing_id}: the file recorded '{status}', which is NOT imported. A record "
-                         f"this app never advanced has to start at "
-                         f"'{ApplicationStatus.DISCOVERED.value}'; the application itself, its listing, "
-                         "facts, follow-up plan and history still come across.")
+            if listing_id in self.trackers_at_initial_status:
+                lines.append(f"  - {listing_id}: the file recorded '{status}', which is NOT imported. A "
+                             f"record this app never advanced has to start at "
+                             f"'{ApplicationStatus.DISCOVERED.value}'; the application itself, its listing, "
+                             "facts, follow-up plan and history still come across.")
+            else:
+                lines.append(f"  - {listing_id}: the file recorded '{status}', which is NOT imported. "
+                             "The application record already stored here is kept, along with its local "
+                             "status and evidence.")
         if self.follow_ups:
             lines.append(f"Follow-up days: {len(self.follow_ups)} would be recorded as you set them.")
         if self.activity_entries:
@@ -447,6 +453,7 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
         if key in stored_by_key:
             plan.linked_jobs = plan.linked_jobs + (stored_by_key[key].listing_id,)
             plan.linked_as = plan.linked_as + ((stored_by_key[key].listing_id, parsed.listing_id),)
+            plan = _plan_application_record(store, plan, record, stored_by_key[key])
             continue
         if key in file_keys:
             plan = _with_rejection(plan, RejectedJob(
@@ -483,11 +490,13 @@ def _plan_application_record(store: CareerStore, plan: ImportPlan, record: Mappi
                              job: JobListing) -> ImportPlan:
     """Work out what the file's application record, follow-up plan and history would do."""
     stored = record.get("application_tracker")
+    local_tracker = store.get_tracker(job.listing_id)
     if isinstance(stored, Mapping):
         status = str(stored.get("status") or "")
         # The record is created whatever the file said, so the imported database knows an application
         # exists; only the *status* is refused when it is one this app never advanced to.
-        plan.trackers_at_initial_status = plan.trackers_at_initial_status + (job.listing_id,)
+        if local_tracker is None:
+            plan.trackers_at_initial_status = plan.trackers_at_initial_status + (job.listing_id,)
         if status and status != ApplicationStatus.DISCOVERED.value:
             plan.trackers_without_status = plan.trackers_without_status + ((job.listing_id, status),)
     day = None
@@ -495,7 +504,20 @@ def _plan_application_record(store: CareerStore, plan: ImportPlan, record: Mappi
         day = stored.get("follow_up_on")
     if day:
         if _is_iso_day(str(day)):
-            plan.follow_ups = plan.follow_ups + ((job.listing_id, str(day)),)
+            incoming_day = str(day)
+            incoming_note = _optional_text(stored.get("follow_up_note"))
+            if local_tracker is None or not local_tracker.has_follow_up:
+                plan.follow_ups = plan.follow_ups + ((job.listing_id, incoming_day),)
+            elif (local_tracker.follow_up_on.isoformat(), local_tracker.follow_up_note) != (
+                    incoming_day, incoming_note):
+                plan = _with_rejection(
+                    plan,
+                    RejectedJob(
+                        job.listing_id,
+                        "its follow-up plan differs from the one already stored locally, so it was not "
+                        "imported; the local plan was kept",
+                    ),
+                )
         else:
             plan = _with_rejection(plan, RejectedJob(
                 job.listing_id,
@@ -503,8 +525,22 @@ def _plan_application_record(store: CareerStore, plan: ImportPlan, record: Mappi
                 "imported"))
     entries = record.get("activity") or []
     if isinstance(entries, list):
-        readable = sum(1 for entry in entries if isinstance(entry, Mapping) and _entry_is_readable(entry))
-        unreadable = len(entries) - readable
+        readable = 0
+        unreadable = 0
+        seen: set[tuple[date, ActivityKind, str]] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or not _entry_is_readable(entry):
+                unreadable += 1
+                continue
+            activity_entry = _activity_from_entry(entry)
+            if activity_entry is None:
+                unreadable += 1
+                continue
+            identity = (activity_entry.occurred_on, activity_entry.kind, activity_entry.detail)
+            if identity in seen or _already_recorded(store, job.listing_id, activity_entry):
+                continue
+            seen.add(identity)
+            readable += 1
         if readable:
             plan.activity_entries = plan.activity_entries + ((job.listing_id, readable),)
         if unreadable:
@@ -564,25 +600,20 @@ def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str
         record = _record_for_listing(document, job)
         if record is None:
             continue
-        stored = record.get("application_tracker")
-        if isinstance(stored, Mapping):
-            store.save_tracker(ApplicationTracker(job.listing_id))
-            trackers += 1
-            day = stored.get("follow_up_on")
-            if day and _is_iso_day(str(day)):
-                store.set_follow_up(job.listing_id, _day(str(day)),
-                                    note=_optional_text(stored.get("follow_up_note")))
-                follow_ups += 1
-        for entry in record.get("activity") or []:
-            if not isinstance(entry, Mapping) or not _entry_is_readable(entry):
-                continue
-            activity_entry = _activity_from_entry(entry)
-            if activity_entry is None:
-                continue
-            if _already_recorded(store, job.listing_id, activity_entry):
-                continue
-            store.add_activity(job.listing_id, activity_entry)
-            activity += 1
+        added_trackers, added_follow_ups, added_activity = _apply_application_state(
+            store, record, job.listing_id)
+        trackers += added_trackers
+        follow_ups += added_follow_ups
+        activity += added_activity
+    for local_listing_id, file_listing_id in plan.linked_as:
+        record = _record_for_listing(document, file_listing_id)
+        if record is None:
+            continue
+        added_trackers, added_follow_ups, added_activity = _apply_application_state(
+            store, record, local_listing_id)
+        trackers += added_trackers
+        follow_ups += added_follow_ups
+        activity += added_activity
     return ImportOutcome(
         added_jobs=added_jobs, added_profile=added_profile, linked_jobs=len(plan.linked_jobs),
         trackers_imported=trackers, follow_ups_imported=follow_ups, activity_added=activity,
@@ -591,14 +622,45 @@ def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str
     )
 
 
-def _record_for_listing(document: Mapping[str, Any], job: JobListing) -> Mapping[str, Any] | None:
+def _record_for_listing(document: Mapping[str, Any], job: JobListing | str) -> Mapping[str, Any] | None:
     """The file's record for a listing that was just added, matched on identity."""
+    listing_id = job if isinstance(job, str) else job.listing_id
     for record in document.get("jobs") or []:
         if not isinstance(record, Mapping):
             continue
-        if str(record.get("listing_id") or "") == job.listing_id:
+        if str(record.get("listing_id") or "") == listing_id:
             return record
     return None
+
+
+def _apply_application_state(store: CareerStore, record: Mapping[str, Any], listing_id: str) -> tuple[int, int, int]:
+    """Merge tracker, follow-up and activity state without replacing local state."""
+    trackers = 0
+    follow_ups = 0
+    activity = 0
+    stored = record.get("application_tracker")
+    if isinstance(stored, Mapping):
+        tracker = store.get_tracker(listing_id)
+        if tracker is None:
+            tracker = ApplicationTracker(listing_id)
+            store.save_tracker(tracker)
+            trackers = 1
+        day = stored.get("follow_up_on")
+        if day and _is_iso_day(str(day)) and not tracker.has_follow_up:
+            store.set_follow_up(listing_id, _day(str(day)),
+                                note=_optional_text(stored.get("follow_up_note")))
+            follow_ups = 1
+    for entry in record.get("activity") or []:
+        if not isinstance(entry, Mapping) or not _entry_is_readable(entry):
+            continue
+        activity_entry = _activity_from_entry(entry)
+        if activity_entry is None:
+            continue
+        if _already_recorded(store, listing_id, activity_entry):
+            continue
+        store.add_activity(listing_id, activity_entry)
+        activity += 1
+    return trackers, follow_ups, activity
 
 
 def _already_recorded(store: CareerStore, listing_id: str, entry: ApplicationActivity) -> bool:

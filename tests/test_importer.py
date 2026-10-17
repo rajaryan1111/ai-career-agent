@@ -498,6 +498,91 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual(store.get_record_times("j1"), before,
                              "first_seen_at must not move because a file mentioned the listing")
 
+    def test_a_linked_listing_imports_missing_tracker_follow_up_and_activity_without_replacing_it(self):
+        path, document = self.export_file(profile=False)
+        with self.target_store() as store:
+            store.save_job(job(employer="My own edit"))
+            before = store.get_job("j1")
+            before_times = store.get_record_times("j1")
+
+            plan = importer.plan_import(store, document, source=str(path))
+            outcome = importer.apply_import(store, document, source=str(path))
+
+            self.assertEqual(plan.linked_jobs, ("j1",))
+            self.assertEqual(plan.trackers_at_initial_status, ("j1",))
+            self.assertEqual(plan.follow_ups, (("j1", "2026-10-20"),))
+            self.assertEqual(plan.activity_entries, (("j1", 1),))
+            self.assertEqual(outcome.added_jobs, 0)
+            self.assertEqual(outcome.linked_jobs, 1)
+            self.assertEqual(outcome.trackers_imported, 1)
+            self.assertEqual(outcome.follow_ups_imported, 1)
+            self.assertEqual(outcome.activity_added, 1)
+            self.assertEqual(store.get_job("j1"), before,
+                             "state reconciliation must not replace the local listing payload")
+            self.assertEqual(store.get_record_times("j1"), before_times,
+                             "linking must not change the local listing identity timestamps")
+            self.assertEqual(store.get_tracker("j1").follow_up_on, date(2026, 10, 20))
+            self.assertEqual(store.get_tracker("j1").follow_up_note, "ask about the panel")
+            self.assertEqual(len(store.list_activity("j1")), 1)
+
+    def test_repeating_a_linked_state_import_is_idempotent(self):
+        path, document = self.export_file(profile=False)
+        with self.target_store() as store:
+            store.save_job(job(employer="My own edit"))
+
+            first = importer.apply_import(store, document, source=str(path))
+            second_plan = importer.plan_import(store, document, source=str(path))
+            second = importer.apply_import(store, document, source=str(path))
+
+            self.assertEqual(first.trackers_imported, 1)
+            self.assertEqual(first.follow_ups_imported, 1)
+            self.assertEqual(first.activity_added, 1)
+            self.assertEqual(second_plan.trackers_at_initial_status, ())
+            self.assertEqual(second_plan.follow_ups, ())
+            self.assertEqual(second_plan.activity_entries, ())
+            self.assertFalse(second_plan.adds_anything)
+            self.assertEqual(second.linked_jobs, 1)
+            self.assertEqual(second.trackers_imported, 0)
+            self.assertEqual(second.follow_ups_imported, 0)
+            self.assertEqual(second.activity_added, 0)
+            self.assertEqual(len(store.list_activity("j1")), 1)
+
+    def test_linked_import_keeps_local_tracker_and_refuses_a_different_follow_up(self):
+        path, document = self.export_file(profile=False, status=ApplicationStatus.SHORTLISTED)
+        with self.target_store() as store:
+            store.save_job(job(employer="My own edit"))
+            store.save_tracker(ApplicationTracker("j1"))
+            store.set_follow_up("j1", date(2026, 10, 25), note="local plan")
+
+            plan = importer.plan_import(store, document, source=str(path))
+            outcome = importer.apply_import(store, document, source=str(path))
+            tracker = store.get_tracker("j1")
+
+            self.assertEqual(plan.trackers_at_initial_status, ())
+            self.assertEqual(plan.trackers_without_status,
+                             (("j1", ApplicationStatus.SHORTLISTED.value),))
+            self.assertTrue(any("local plan was kept" in item.reason for item in plan.rejected))
+            self.assertEqual(outcome.trackers_imported, 0)
+            self.assertEqual(outcome.follow_ups_imported, 0)
+            self.assertEqual(tracker.status, ApplicationStatus.DISCOVERED)
+            self.assertEqual(tracker.follow_up_on, date(2026, 10, 25))
+            self.assertEqual(tracker.follow_up_note, "local plan")
+
+    def test_linked_state_follows_the_local_listing_identity(self):
+        path, document = self.export_file(profile=False)
+        with self.target_store() as store:
+            local = job("local-id", url="https://jobs.example.invalid/j1", employer="My own edit")
+            store.save_job(local)
+
+            outcome = importer.apply_import(store, document, source=str(path))
+
+            self.assertEqual(outcome.linked_jobs, 1)
+            self.assertIsNotNone(store.get_tracker("local-id"))
+            self.assertIsNone(store.get_tracker("j1"))
+            self.assertEqual(len(store.list_activity("local-id")), 1)
+            self.assertEqual(store.list_activity("j1"), ())
+            self.assertEqual(store.get_job("local-id"), local)
+
     def test_a_file_record_that_reuses_a_stored_identifier_is_refused_rather_than_written_over(self):
         # Two exports can name different listings with the same identifier: identity for linking is
         # ``duplicate_key`` (the URL here), while the row is keyed by ``listing_id`` and ``save_job`` is an
