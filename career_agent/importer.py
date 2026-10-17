@@ -374,7 +374,7 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
             if parsed is None:
                 plan = _with_rejection(plan, RejectedJob(
                     "the profile in the file",
-                    "it does not carry the fields this app stores a profile with (country and skills)"))
+                    "it is not a candidate profile this app can store"))
             else:
                 plan.new_profiles = (parsed,)
     elif profile_record is not None:
@@ -777,13 +777,9 @@ def _profile_from_record(record: Mapping[str, Any]) -> CandidateProfile | None:
     # The field names are the stored ones, checked against the dataclass rather than written from
     # memory: a mismatch here would reject every profile in every file, silently, which is the kind of
     # bug that hides behind a plan line reading "cannot be read".
-    if not _text(record.get("candidate_country")):
-        return None
-    if "skills" not in record:
-        return None
     try:
         return CandidateProfile(
-            candidate_country=_text(record["candidate_country"]),
+            candidate_country=_optional_text(record.get("candidate_country")),
             degree_discipline=_optional_text(record.get("degree_discipline")),
             study_status=_optional_text(record.get("study_status")),
             graduation_year=_year(record.get("graduation_year")),

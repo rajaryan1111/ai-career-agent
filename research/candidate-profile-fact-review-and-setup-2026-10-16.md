@@ -294,3 +294,18 @@ stays **BLOCKED**.
    asked here, because a listing cannot be blocked on them; a product decision about onboarding, not a bug.
 4. **The conflict between two sources' values** - a résumé that disagrees with a stored fact is currently shown
    as the document's value beside the person's own, and a comparison view would be its own increment.
+
+## 10. Follow-up verification: partial profile JSON import (2026-10-17)
+
+The repository-wide audit found that the version-2 importer rejected a valid partial `CandidateProfile` when
+the record omitted `candidate_country` or `skills`, even though every profile field is optional and the missing-
+facts setup deliberately supports partial profiles. The importer now parses the complete stored shape using the
+existing defaults rather than requiring those two fields. A round-trip regression test verifies that the profile
+survives export and import, that the version remains `2`, and that imported facts retain `IMPORTED_FROM_FILE` /
+`UNVERIFIED` provenance. A non-object profile shape is still rejected before any write.
+
+Verification at the local PR checkout: `python3 -B -m unittest tests.test_importer tests.test_profile_provenance
+tests.test_core tests.test_store tests.test_cli_export_import` — **412 tests, OK**; full discovery — **2075
+tests, OK (skipped=1)**. This is local evidence only; the subsequent PR checkpoint's CI result must be checked
+separately. Linked application-state reconciliation for an already-present listing and honest post-write resume-
+import reporting remain separate follow-ups.

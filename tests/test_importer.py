@@ -383,6 +383,43 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual(len(plan.new_profiles), 1)
             self.assertEqual(store.list_jobs(), (), "planning must write nothing")
 
+    def test_a_partial_profile_without_country_or_skills_round_trips_and_stays_unconfirmed(self):
+        partial = CandidateProfile(degree_discipline="ECE")
+        with self.source_store() as source:
+            source.save_profile(partial)
+            document = importer.export_document(source)
+
+        self.assertEqual(document["format_version"], 2)
+        self.assertIsNone(document["profile"]["candidate_country"])
+        self.assertEqual(document["profile"]["skills"], [])
+
+        with self.target_store() as target:
+            plan = importer.plan_import(target, document, source="partial.json")
+            outcome = importer.apply_import(target, document, source="partial.json",
+                                            document_name="partial.json")
+
+            self.assertEqual(plan.new_profiles, (partial,))
+            self.assertTrue(outcome.added_profile)
+            self.assertEqual(target.get_profile(), partial)
+            self.assertEqual(importer.export_document(target)["profile"], document["profile"])
+            origins = target.get_profile_fact_provenance()
+
+        self.assertEqual([entry.fact for entry in origins], ["degree"])
+        self.assertTrue(all(entry.source is FactSource.IMPORTED_FROM_FILE for entry in origins))
+        self.assertTrue(all(not entry.is_confirmed for entry in origins))
+
+    def test_an_invalid_profile_shape_is_still_rejected(self):
+        _, document = self.export_file()
+        document["profile"] = ["not a stored profile"]
+
+        with self.target_store() as store:
+            plan = importer.plan_import(store, document, source="invalid.json")
+
+            self.assertEqual(plan.new_profiles, ())
+            self.assertEqual(plan.rejected[0].identifier, "the profile in the file")
+            self.assertIn("list", plan.rejected[0].reason)
+            self.assertIsNone(store.get_profile(), "a refused profile must not be written")
+
     def test_the_export_carries_no_trace_of_where_a_fact_came_from(self):
         """Version 2 is a promise to files already on somebody's disk: the format does not change here.
 

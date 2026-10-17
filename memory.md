@@ -17,9 +17,11 @@ This file is the durable record of meaningful decisions, research findings, assu
   `tests` package. The full suite then ran **2073 tests, OK (skipped=1)**; the real-window acceptance harness
   reported **113 checks passed** and the desktop smoke test **14 checks passed**. The manual desktop checklist
   remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**; no human step was marked from automation.
-- The next evidence-backed product gaps are partial-profile JSON round-trip acceptance, linked application-state
-  reconciliation during JSON import, and the post-write resume-import status distinction identified by the
-  independent review. The external-action gates remain closed: `SOURCE_QUALITY_GATE_PASSED = False` and
+- The partial-profile JSON round-trip gap identified by the audit was fixed locally without changing the
+  version-2 format: optional facts, including country and skills, may be absent and imported values remain
+  imported and unconfirmed. The next evidence-backed gaps are linked application-state reconciliation during
+  JSON import and the post-write resume-import status distinction identified by the independent review. The
+  external-action gates remain closed: `SOURCE_QUALITY_GATE_PASSED = False` and
   `enabled_discovery_sources() == ()`.
 
 ## Confirmed user decisions

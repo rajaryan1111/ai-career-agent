@@ -127,9 +127,16 @@ explicit package, so `python -m unittest discover -s tests` does not import an u
 package; the leak-watch child uses that same command and interpreter. The current local results are **2073
 tests OK (skipped=1)**, **113/113** real-window acceptance checks, and **14/14** desktop smoke checks. The
 manual checklist remains **123 steps: 22 PASS, 101 BLOCKED, 0 FAIL**. No source, discovery, email, submission or
-external transfer was enabled. The next product audit remains the partial-profile JSON round-trip and linked
-application-state import gap identified by the independent code review, unless a higher-priority release issue
-appears.
+external transfer was enabled. The next product audit remains the linked application-state import gap and
+post-write resume-import outcome distinction identified by the independent code review, unless a higher-priority
+release issue appears.
+
+**Profile import follow-up, 2026-10-17:** the valid partial-profile JSON gap identified in the audit is now
+fixed in `career_agent/importer.py`. Version-2 exports and imports may omit any optional profile fact,
+including country and skills, without silently dropping the profile; imported values still carry imported,
+unconfirmed provenance. Non-object profile shapes remain rejected. Local verification is **2075 tests OK
+(skipped=1)**, including the focused importer/profile/store subset; linked application-state reconciliation
+and post-write resume-import outcome reporting remain open findings.
 
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.

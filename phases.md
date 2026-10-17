@@ -53,7 +53,9 @@ phase is what no run can supply: a human has still not used the review dialog, t
 setup window, and steps 118-123 of the manual checklist are BLOCKED. A local verification repair on
 2026-10-17 also closed the real-display K1 overflow at the declared 900x600 minimum and made standard test
 discovery deterministic; the current local run is 2073 tests OK, with 113 acceptance checks and 14 smoke checks
-passing. This does not close the human GUI steps or alter the external-action gates.
+passing. A follow-up also corrected version-2 JSON import so a valid partial profile is not rejected for omitting
+country or skills; the focused and full local suite now report 412 and 2075 tests OK respectively. This does not
+close the human GUI steps or alter the external-action gates.
 
 Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 
