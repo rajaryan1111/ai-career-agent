@@ -287,3 +287,32 @@ Never fabricate qualifications or answers. A generated draft, clicked apply butt
 
 ### Current-state boundary
 This is the target product definition, not a claim that all capabilities exist today. Existing source-quality and execution gates remain fail-closed until each source-specific integration and action has been implemented, permitted, tested and evidenced.
+
+
+## Product Requirements Addendum — Career Strategy, Autonomy and Progress (2026-10-17)
+
+This addendum makes the expected user-visible behavior testable. These are target requirements, not a claim that live integrations or autonomous external actions are currently enabled.
+
+### Career strategy and resume lifecycle
+- **FR-CAREER-01 — Resume-first setup:** allow a user to import a resume, review extracted facts and provenance, confirm or correct facts, and answer only required questions that remain missing. Unknown information stays unknown; the system must not infer a qualification from silence.
+- **FR-CAREER-02 — Multiple role strategies:** support multiple editable role families/strategies rather than one job title. Each strategy can define title synonyms, seniority, locations/work mode, job type, compensation, eligibility, exclusions and ranking preferences. Provide occupation-specific packs over an industry-agnostic core; AI/ML, Applied AI/GenAI/LLM, AI agents, FDE, data, backend, MLOps and research/vision are initial examples, not the product's full scope.
+- **FR-CAREER-03 — Resume and artifact versions:** preserve the original resume and maintain separately versioned tailored artifacts linked to the role strategy, job, profile facts and generation timestamp. Show which version was used for each application; never silently overwrite or attach an artifact whose underlying facts have changed without revalidation.
+- **FR-CAREER-04 — Explainable fit:** evaluate mandatory eligibility before ranking. For each job show evidence-backed pass/fail/unknown checks, matched and missing requirements, source freshness, fit rationale and confidence/limitations. A high match score must not override a failed or unknown mandatory requirement.
+
+### Scheduled discovery and routine autonomy
+- **FR-CAREER-05 — Twice-daily discovery:** default to 00:00 and 12:00 Asia/Kolkata, configurable by the user. Record each run and per-source outcome, including disabled/blocked, authentication-required, rate-limited, partial, failed and valid-empty states. A scheduled run must not be described as successful merely because it started.
+- **FR-CAREER-06 — Cross-source deduplication:** deduplicate opportunities across portals, official employer pages, imports and repeated runs; retain provenance and resolve uncertain collisions conservatively. Prevent a second application attempt unless the previous outcome is reconciled or a deliberate recovery action is recorded.
+- **FR-CAREER-07 — One-time global policy:** allow initial authorization for defined permitted routine actions, sources, limits and resume/attachment rules, so eligible supported applications do not require repeated per-job approval. Keep explicit prompts for missing facts, legal/sensitive attestations, identity verification, CAPTCHA/OTP, conflicting data, unsupported flows and uncertain outcomes. Revocation, pause and stop-all must be available.
+
+### HR outreach, tracking and reporting
+- **FR-CAREER-08 — Controlled HR outreach:** import contacts privately; show provenance, duplicate/conflict and suppression state; personalize messages from verified facts; link the correct resume version to the intended opportunity; enforce deduplication, opt-out, send limits and cross-run idempotency. Real sending requires explicit mailbox authorization and a separately passed provider/campaign gate.
+- **FR-CAREER-09 — Evidence-based communication status:** distinguish prepared, queued, send-attempted, sent/accepted by provider, bounced, delivery evidence, reply received and unknown. Do not equate an API success with delivery, or lack of reply with rejection. Read inbox content only after separate authorization.
+- **FR-CAREER-10 — Career command center:** maintain an auditable per-opportunity timeline for discovery, eligibility, preparation, attempts, external confirmation, emails, replies, interviews, deadlines and follow-ups. Every externally asserted state needs evidence and a timestamp; ambiguous side effects must be reconciled before retry.
+- **FR-CAREER-11 — Proactive reports:** provide daily/weekly summaries and actionable alerts for new relevant jobs, blocked tasks, actual application/outreach outcomes, replies, interview/deadline dates, failures and next actions. Include last/next run and per-source health; support quiet hours and user-controlled notification settings.
+- **FR-CAREER-12 — Laptop-independent operation:** treat an always-on worker as a separately deployable capability with explicit remote-data consent, secure credentials, durable leases/recovery, health visibility and verified laptop-off behavior. Do not imply local scheduling runs while the laptop is asleep or off.
+
+### Release and measurement constraints
+- Optimize for **relevant, valid, non-duplicate opportunities and completed permitted workflows**, not raw application or email volume.
+- Measure source coverage and job freshness, eligible-to-shortlisted conversion, duplicate prevention, confirmed application outcomes, truthful unknown-state handling, outreach bounce/opt-out rates, reply tracking, scheduler reliability and user-visible failure recovery.
+- LinkedIn and every other source must be assessed individually for permitted access and automation. Public visibility alone is not permission. No unauthorized scraping/bots, anti-bot evasion or human-verification bypass.
+- The source-quality gate, submission gate, outbound-email gate and inbox-access gate are independent and remain closed until each is evidenced. No real external side effects in automated tests.
