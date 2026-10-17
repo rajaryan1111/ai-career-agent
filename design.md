@@ -207,3 +207,36 @@ Do not repeatedly ask for routine approvals covered by the saved global policy. 
 
 ### Accessibility and usability
 Retain the existing desktop-first alpha's low-friction workflows. Provide readable labels, keyboard-operable controls, explicit focus/error states and filterable tables. Notification settings should support configurable cadence and quiet hours.
+
+
+## UX Addendum — Strategy Profiles, Artifact Versions and Actionable Reports (2026-10-17)
+
+This section extends the current navigation and onboarding rather than introducing another parallel UI or a separate product shell.
+
+### Role strategy manager
+- Let users create multiple named strategies (for example, “Applied AI internships” and “Python/backend roles”) and enable/disable each independently.
+- For each strategy show role-family/title synonyms, experience level, location/work mode, job type, compensation, mandatory eligibility, exclusions and fit preferences. Explain that role examples are configurable and the product is not limited to software or AI jobs.
+- Make hard eligibility blockers visually and semantically distinct from relevance score. Unknown or missing evidence must not appear as a pass; ranking never overrides a mandatory failure.
+- Show the strategy version used for a discovery run and application so later edits do not rewrite history.
+
+### Resume and generated-artifact history
+- Keep the uploaded original clearly labeled and never overwrite it with a tailored copy.
+- Show tailored resume, cover letter and screening-answer artifacts by job, role strategy and creation date, including which confirmed profile facts were used.
+- If source facts or strategy rules change, mark dependent artifacts as “review needed” until revalidated; do not silently attach an outdated version.
+- Keep preview and review distinct from submission. A generated or saved artifact is never shown as sent or applied.
+
+### Run and opportunity status
+- A run summary should show scheduled/start/end times, next run, source-by-source outcome, new and deduplicated jobs, eligible/ineligible/unknown counts, blocked actions and retry/reconciliation needs.
+- Job cards should expose the evidence behind eligibility and fit, last-seen/freshness, source link, duplicate grouping and the next available action.
+- Application and outreach timelines should separate queued, attempted, provider-accepted/sent, confirmed, unknown, bounced, reply received and follow-up due. Show a timestamp and evidence for external states; never treat no reply as rejection.
+- Provide daily/weekly digest preferences, quiet hours, actionable failure alerts and a prominent pause/resume and stop-all control. The interface must reflect the worker/scheduler's read-back state, not assume a click worked.
+
+### One-time policy and connection readiness
+- Present a readable summary of the saved global policy before enabling automation: permitted sources and actions, limits, role/location constraints, resume attachment rules, follow-up policy, data sharing, quiet hours and stop conditions.
+- For each source and mailbox distinguish **Configured**, **Connected**, **Supported**, **Enabled** and **Verified**. Do not collapse these into a single green check.
+- Show why a capability is blocked and the next safe step. A user should not be repeatedly prompted for routine actions already covered by policy, but must be asked for missing facts, legally meaningful attestations, identity checks, human-verification steps or uncertain outcomes.
+- Include explicit disconnect/revoke, pause and stop-all paths. If an always-on worker is not verified, state plainly that the laptop must remain awake and the local app/worker running for local scheduling to execute.
+
+### Privacy and accessibility
+- Keep resume text, contact details and email bodies out of activity summaries, screenshots, analytics and logs. Provide clear controls for local data export/delete and connected-account revocation.
+- Keep all new controls keyboard-operable with explicit labels, focus order, validation messages and meaningful disabled states. Add each workflow to the existing manual desktop checklist; automated widget stubs are not a substitute for human usability review.
