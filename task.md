@@ -157,3 +157,29 @@ See [the resume-import write-verification note](research/resume-import-write-ver
 - No CAPTCHA/OTP bypass, anti-bot evasion, prohibited scraping, fabricated profile facts or unapproved external data transfer.
 - No real external side effects in tests.
 - Never claim completion without code and test evidence.
+
+
+## P7 — Role strategies, resume versions and artifact lineage
+- [ ] Inspect the current profile, resume-import, artifact/preparation and store models first; reuse existing records and migration patterns rather than creating a parallel profile or artifact store.
+- [ ] Define a versioned role-strategy model with role families/title synonyms, seniority, location/work mode, employment type, compensation, hard eligibility, exclusions and explainable ranking preferences. Keep the engine industry-agnostic and treat AI/ML, Applied AI/GenAI/LLM, AI agents, FDE, data, backend, MLOps and research/vision as initial examples only.
+- [ ] Preserve the original resume as immutable input. Link tailored resume/cover-letter/screening artifacts to the source resume, confirmed profile-fact version, role strategy version, job identity and generation timestamp.
+- [ ] Add invalidation/review behavior when a fact or strategy changes; never silently reuse a stale artifact or attach a version whose source facts are no longer current.
+- [ ] Test multiple role strategies, empty/unknown facts, conflicting facts, version changes, artifact lineage, restart persistence and backup/restore. Do not add a schema migration until the current schema and required invariants are inspected.
+
+## P8 — Global policy, outcomes and proactive reporting
+- [ ] Reconcile the current scheduler, worker, application ledger, activity events, integrations and reporting before adding new abstractions. Confirm actual remote-worker status and laptop-off limitations from evidence.
+- [ ] Make the one-time global policy explicit and revocable: allowed source/action pairs, daily limits, job/role/location constraints, attachment rules, follow-up limits, quiet hours and stop conditions. Enforce it centrally immediately before every external side effect.
+- [ ] Implement/verify cross-source job identity and duplicate prevention, plus application/outreach idempotency and reconciliation of timeouts. A prior unknown outcome must block blind retries.
+- [ ] Add daily/weekly report data from durable records only: last/next run, source outcomes, relevant jobs, eligibility blockers, prepared/submitted/unknown applications, outreach/bounces/replies, interview/deadline actions and failures. Never infer success from queued work.
+- [ ] Add notification preferences, quiet hours, pause/resume, stop-all and revocation tests; status must be read back from the scheduler/worker rather than assumed from a click.
+- [ ] Define source-specific acceptance evidence for LinkedIn, Unstop, Internshala, Naukri.com, official employer pages and any ATS/provider route before enabling it. Keep discovery, submission, outbound email and inbox reading as independent fail-closed gates; never bypass platform restrictions or human verification.
+- [ ] Verify secure mailbox authorization, contact-to-opportunity linking, suppression/opt-out persistence, bounded personalized outreach, provider-result versus delivery/reply distinctions and duplicate prevention before any real sending. Use mocked providers in tests only.
+- [ ] Add release evidence for laptop-off operation before claiming always-on behavior; document the remote storage/sync boundary and secure credential handling. Do not point a remote worker at the local SQLite file without a designed and tested boundary.
+
+## Acceptance checklist for the expansion
+- [ ] Resume/profile/role strategy versions and tailored artifacts remain traceable and truthful.
+- [ ] Eligibility is evaluated before ranking and hard failures/unknowns cannot be overridden by fit score.
+- [ ] Repeated runs, duplicate sources, repeated imports and ambiguous timeouts do not produce duplicate applications or emails.
+- [ ] Daily/weekly reports reflect persisted evidence and clearly label blocked, partial, empty, failed and unknown outcomes.
+- [ ] Every external capability has its own permission, quality, test, rate-limit and revocation gate; real external side effects never run in automated tests.
+- [ ] Cross-platform tests and human desktop acceptance remain outstanding until actually completed; documentation must not mark them done based on CI alone.
