@@ -274,3 +274,35 @@ Evolve the existing local-first desktop alpha into a policy-driven career agent 
 - Keep source quality gates disabled until the source is individually assessed, permitted and tested.
 - Respect platform terms, rate limits, authentication and human-verification requirements. No CAPTCHA/OTP bypass, anti-bot evasion or prohibited scraping.
 - Support one-time global authorization for routine eligible actions, with revocation, limits, pause and stop-all.
+
+
+## Career Automation Expansion Contract — 2026-10-17
+
+This section clarifies the implementation contract for the resume-first, multi-role, twice-daily career workflow. It extends the existing architecture; it does not mean these capabilities are already implemented or that any source gate has passed.
+
+### Role strategy and resume versions
+- Keep one canonical candidate fact profile with provenance and confirmation state. Role-specific strategies are derived views over that profile, not independent sources of truth.
+- A strategy contains target role families and title synonyms, seniority/experience range, locations/work mode, employment type, compensation constraints, eligibility constraints, exclusions, ranking weights and a minimum evidence-backed fit threshold. Strategies must be editable, versioned and explainable.
+- Keep the original resume immutable. Any tailored resume or cover letter is a separately versioned artifact linked to the candidate-profile version, role strategy, job identity, generation time and the verified facts used. Never silently replace the original or reuse a stale tailored artifact after relevant facts change.
+- Start with representative role families (AI/ML, Applied AI/GenAI/LLM, AI agents, Forward Deployed Engineer, data, Python/backend, MLOps/platform and research/vision) while keeping the taxonomy occupation-pack based and extensible across industries. These are examples, not a hard-coded eligibility list.
+
+### Discovery, ranking and execution
+- A scheduled run is a durable run record with its configured timezone and intended window, per-source outcome, counts, timestamps, cancellation state and a truthful final summary. The existing default remains 00:00 and 12:00 Asia/Kolkata unless the user changes it.
+- Pipeline order is mandatory: permission/capability gate → bounded discovery → normalization and global deduplication → freshness check → hard eligibility (pass/fail/unknown) → explainable relevance ranking → preparation → action-specific policy gate → permitted execution → evidence reconciliation. Ranking must never override a failed or unknown mandatory eligibility check.
+- Deduplicate across runs, sources, imports and application attempts using canonical URL/source ID where available plus conservative company/role/location identity. Keep collision candidates for review rather than merging uncertain identities.
+- Save a global automation policy once, with per-source/action scopes, daily limits, attachment rules, follow-up limits, quiet hours, exclusions, revocation and pause/stop-all. Routine actions may run without per-item approval only when they fall inside this saved policy and every independent source/action gate passes.
+- Treat discovery, application submission, outbound email and inbox reading as separate capabilities. A source being readable does not authorize scraping, applying, sending messages or reusing its data. LinkedIn automation must not use unauthorized bots/scraping; assess each other platform and approved route individually. Never bypass CAPTCHA, OTP, identity checks, anti-bot controls or required human attestations.
+
+### Communication ledger and privacy
+- Use one durable, auditable ledger for each opportunity and external side effect, reusing the current store/migration/event patterns after inspection. Record intent before a side effect and reconcile its outcome afterwards. Timeout or lost confirmation means unknown, not failed or successful; reconcile before retrying.
+- Outreach records must link contact, opportunity, message/artifact version, authorized mailbox identity, policy decision, idempotency key, send attempt, provider result, bounce/delivery evidence and reply reference where available. Suppression and opt-out state must survive re-imports.
+- Gmail or another mailbox provider may be connected only with explicit, least-privilege authorization, secure credential handling, rate limits and revocation. A successful API request is not proof of delivery, and a missing reply is not a rejection. Follow-ups must be bounded, relevant and suppressed after opt-out, bounce, reply or other stop condition.
+- Store sensitive resume/contact/message content locally by default. Event logs, diagnostics, analytics, fixtures and CI output use identifiers, categories and counts rather than resume text, contact details, message bodies or secrets.
+
+### Reporting and always-on execution
+- The dashboard/reporting layer reads durable run, application and communication records; it must not invent progress from queued work or display a sent/submitted state without evidence.
+- Show last/next scheduled run, source-level outcomes, new relevant jobs, eligibility blocks, prepared/submitted/unknown counts, outreach outcomes, real replies, interviews/deadlines, failures and next actions. Support daily/weekly digests, actionable alerts, quiet hours and user-configurable notification channels.
+- Laptop-independent execution is a separate deployment capability. Before claiming it works, define an explicit remote storage/sync boundary, protect credentials, prove durable task claiming/leases/recovery, verify worker health and test laptop-off behavior. A local SQLite file must not be casually shared with a remote worker.
+
+### Cross-cutting acceptance rule
+A capability is **configured**, **connected**, **supported**, **enabled** or **verified in production** only when evidence justifies that exact label. Keep live discovery, sending and submission fail-closed until their individual gates pass. Preserve migrations, backup/restore, export/delete, cross-platform behavior and the existing manual-GUI acceptance boundary.
