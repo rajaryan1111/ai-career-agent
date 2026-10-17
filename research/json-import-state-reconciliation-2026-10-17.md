@@ -35,6 +35,7 @@ idempotency, preservation of a local tracker and conflicting follow-up, and a lo
 differs from the file's identifier. The focused importer/store/export-import subset ran **251 tests, OK**;
 the full local suite ran **2079 tests, OK (skipped=1)**; compilation and `tabnanny` were clean.
 
-The next related audit item is honest reporting for resume import when a write may have succeeded but its
-read-back verification fails. No live discovery, email, application submission or candidate-data transfer was
-enabled.
+The related resume-import audit item was subsequently closed by
+[the write-verification note](resume-import-write-verification-2026-10-17.md): a committed but unverified write
+is no longer reported as nothing saved. No live discovery, email, application submission or candidate-data
+transfer was enabled.

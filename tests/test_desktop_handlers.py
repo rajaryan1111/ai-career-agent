@@ -4645,26 +4645,84 @@ class ResumeImportHandlerTests(HandlerTestCase):
             BUTTONS.by_text["Save selected values"]()
 
         self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertNotIn("Profile saved, but not verified", MESSAGES.titles("showerror"))
         self.assertIn("database is locked", MESSAGES.text("showerror"))
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
         self.assertIn("nothing was saved", app.status.get().lower())
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertFalse(dialog.destroyed)
 
-    def test_a_stored_profile_that_does_not_match_is_reported_as_failed(self):
+    def test_a_stored_profile_that_does_not_match_is_reported_as_unverified(self):
         self.store.save_profile(PROFILE)
         app, dialog = self.import_resume(self.write_docx())
         self.assertIsNotNone(dialog)
 
+        real_read = self.store.get_profile
+        reads = []
+
+        def read_back_mismatch():
+            reads.append(len(reads))
+            if len(reads) == 1:
+                return real_read()
+            if len(reads) == 2:
+                return CandidateProfile(skills=frozenset({"Rust"}))
+            return real_read()
+
+        for button in RecordingCheckbutton.created:
+            button.variable.set(False)
+        self.selection("graduation_year").set(True)
+        CONFIG["Save these values?"] = True
         with mock.patch.object(
-            self.store, "get_profile", return_value=CandidateProfile(skills=frozenset({"Rust"}))
+            self.store, "get_profile", side_effect=read_back_mismatch
         ):
             BUTTONS.by_text["Save selected values"]()
 
-        self.assertIn("Profile not saved", MESSAGES.titles("showerror"))
+        self.assertIn("Profile saved, but not verified", MESSAGES.titles("showerror"))
         self.assertIn("does not match", MESSAGES.text("showerror"))
         self.assertNotIn("Resume import result", MESSAGES.titles("showinfo"))
-        self.assertNotIn("Verified in the local database", MESSAGES.text())
+        self.assertIn("written to the local database", MESSAGES.text("showerror"))
+        self.assertNotIn("nothing was saved", MESSAGES.text("showerror").lower())
+        self.assertNotIn("nothing was saved", app.status.get().lower())
+        stored = self.store.get_profile()
+        self.assertEqual(stored.graduation_year, 2028,
+                         "the real store committed the selected value before verification mismatched")
+        self.assertEqual(stored.skills, PROFILE.skills,
+                         "values not selected by the resume review remain stored")
+
+    def test_a_resume_save_whose_read_back_fails_keeps_the_committed_profile_and_says_unverified(self):
+        self.store.save_profile(PROFILE)
+        app, dialog = self.import_resume(self.write_docx())
+        self.assertIsNotNone(dialog)
+
+        real_read = self.store.get_profile
+        reads = []
+
+        def read_back_failure():
+            reads.append(len(reads))
+            if len(reads) == 1:
+                return real_read()
+            if len(reads) == 2:
+                raise StoredRecordError("candidate profile", "the saved row could not be read")
+            return real_read()
+
+        for button in RecordingCheckbutton.created:
+            button.variable.set(False)
+        self.selection("graduation_year").set(True)
+        CONFIG["Save these values?"] = True
+        with mock.patch.object(self.store, "get_profile", side_effect=read_back_failure):
+            BUTTONS.by_text["Save selected values"]()
+
+        self.assertIn("Profile saved, but not verified", MESSAGES.titles("showerror"))
+        self.assertIn("written to the local database", MESSAGES.text("showerror"))
+        self.assertIn("unconfirmed", MESSAGES.text("showerror"))
+        self.assertNotIn("nothing was saved", MESSAGES.text("showerror").lower())
+        self.assertIn("written", app.status.get().lower())
+        self.assertNotIn("nothing was saved", app.status.get().lower())
+        stored = self.store.get_profile()
+        self.assertEqual(stored.graduation_year, 2028,
+                         "the real store committed the selected value before read-back failed")
+        self.assertEqual(stored.skills, PROFILE.skills)
+        self.assertFalse(dialog.destroyed, "the review stays open when the committed write is unverified")
 
     def test_missing_and_unsupported_values_are_reported_without_being_stored(self):
         self.store.save_profile(PROFILE)

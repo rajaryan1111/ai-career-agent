@@ -144,6 +144,12 @@ identity. Existing local tracker state is preserved; a conflicting local follow-
 are idempotent. The focused subset ran **251 tests OK** and the full local suite **2079 tests OK (skipped=1)**;
 the evidence is in [the JSON import state note](research/json-import-state-reconciliation-2026-10-17.md).
 
+**Resume-import reliability follow-up, 2026-10-17:** post-write read-back failure and mismatch now report
+**saved, but not verified** instead of **nothing was saved**. Pre-write refusal remains distinct. The review keeps
+the dialog open and directs the person to inspect the Profile tab; extracted values remain unconfirmed. Focused
+desktop/resume tests ran **174** and **523** tests OK, and the full local suite ran **2080 tests OK (skipped=1)**.
+See [the resume-import write-verification note](research/resume-import-write-verification-2026-10-17.md).
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.

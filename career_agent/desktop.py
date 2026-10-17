@@ -65,6 +65,14 @@ from .store import (
 from .urls import redact_url_credentials
 
 
+# Resume application failures are split at the point where ``save_profile`` returns.  A failure before
+# that point is covered by the store's transaction; after it returns, the write has committed and only
+# the handler's read-back check can still fail.
+_RESUME_APPLY_PRE_WRITE_FAILURE = "pre_write_failure"
+_RESUME_APPLY_POST_WRITE_UNVERIFIED = "post_write_unverified"
+_RESUME_APPLY_VERIFIED = "verified"
+
+
 def stored_status_text(row: dict | None) -> str:
     """Status text for a list row, shown exactly as stored when this version does not know it.
 
@@ -3994,8 +4002,15 @@ class CareerAgentApp:
             saved, message = self._apply_accepted_profile_values(
                 accepted, document_name=result.file_name)
             if not saved:
-                messagebox.showerror("Profile not saved", message, parent=dialog)
-                self.status.set("Resume import: nothing was saved.")
+                if self._resume_apply_state == _RESUME_APPLY_POST_WRITE_UNVERIFIED:
+                    messagebox.showerror("Profile saved, but not verified", message, parent=dialog)
+                    self.status.set(
+                        "Resume import: values were written, but read-back verification failed; "
+                        "check the Profile tab."
+                    )
+                else:
+                    messagebox.showerror("Profile not saved", message, parent=dialog)
+                    self.status.set("Resume import: nothing was saved.")
                 return
             dialog.destroy()
             skipped = [label for key, label in resume.PROFILE_FIELD_LABELS if key in resume.RESUMABLE_FIELD_KEYS
@@ -4035,6 +4050,7 @@ class CareerAgentApp:
         entitled to assume the person read every value before clicking. The message says which of the
         two happened, in those words, rather than letting "saved" read as "confirmed".
         """
+        self._resume_apply_state = _RESUME_APPLY_PRE_WRITE_FAILURE
         merged = form_values(self.profile_vars)
         merged.update(accepted)
         try:
@@ -4058,6 +4074,7 @@ class CareerAgentApp:
                 "The profile could not be written to the local database. Nothing was saved; your "
                 f"previously saved profile is unchanged.\n\n{exc}"
             )
+        self._resume_apply_state = _RESUME_APPLY_POST_WRITE_UNVERIFIED
         # The write and the verification are reported separately on purpose: once the row has been
         # written, a failure to read it back must not tell the person that nothing was saved.
         try:
@@ -4076,8 +4093,9 @@ class CareerAgentApp:
             )
         if stored is None:
             return False, (
-                "The profile could not be read back after saving, so this import is reported as "
-                "unconfirmed rather than saved."
+                "The reviewed values were written to the local database, but no saved profile was returned "
+                "by read-back verification. The write may have succeeded, so this import is reported as "
+                "unconfirmed. Open the Profile tab and check what is stored before relying on it."
             )
         mismatched = profile_fields_not_matching(stored, accepted)
         if mismatched:
@@ -4085,9 +4103,12 @@ class CareerAgentApp:
                 label for key, label in resume.PROFILE_FIELD_LABELS if key in mismatched
             )
             return False, (
-                f"The stored profile does not match the value(s) you selected ({labels}), so this "
-                "import is reported as failed rather than saved."
+                "The reviewed values were written to the local database, but read-back verification found "
+                f"that the stored profile does not match the value(s) you selected ({labels}). This import "
+                "is reported as unconfirmed. Open the Profile tab and check what is stored before relying "
+                "on it."
             )
+        self._resume_apply_state = _RESUME_APPLY_VERIFIED
         for key, value in profile_form_values(stored).items():
             self.profile_vars[key].set(value)
         # Redrawn from storage, so the values this import changed appear in the table as what they are:

@@ -308,4 +308,4 @@ Verification at the local PR checkout: `python3 -B -m unittest tests.test_import
 tests.test_core tests.test_store tests.test_cli_export_import` — **412 tests, OK**; full discovery — **2075
 tests, OK (skipped=1)**. This is local evidence only; the subsequent PR checkpoint's CI result must be checked
 separately. Linked application-state reconciliation for an already-present listing and honest post-write resume-
-import reporting remain separate follow-ups.
+import reporting was subsequently closed by [the resume-import write-verification note](resume-import-write-verification-2026-10-17.md).

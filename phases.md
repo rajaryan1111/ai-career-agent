@@ -58,7 +58,8 @@ country or skills; the focused and full local suite now report 412 and 2075 test
 close the human GUI steps or alter the external-action gates. The linked-listing JSON import follow-up then
 reconciled missing tracker, follow-up and activity state without replacing local listing identity; its focused
 subset ran 251 tests and the full local suite ran 2079 tests, both OK. Resume-import post-write outcome
-reporting remains the next related reliability gap.
+reporting was then corrected: focused desktop/resume runs of 174 and 523 tests and the full 2080-test local
+suite were OK, with committed-but-unverified writes reported honestly.
 
 Add PDF/DOCX parsing only after the profile/job workflow is stable. Parsing must run locally, retain source text/field provenance where practical, mark uncertain fields for user review, and never silently promote extracted guesses to verified facts. OCR remains optional and must not become a mandatory paid dependency.
 
