@@ -801,3 +801,9 @@ These are proposed targets. Do not report them as measured results.
 - Added `CareerStore.delete_all_data()`, which removes profile, listings, attempts and events in one transaction and returns per-table counts. Deletion is a no-op on an empty database and leaves the file usable for new records.
 - Added a **Delete all local data…** control in the Sources & settings tab with a warning dialog that defaults to "no", states the exact scope, and recommends exporting a backup first. Declining changes nothing; accepting clears the profile form, job list and tracker and reports the deleted counts.
 - `tests/test_store.py` gains three deletion tests; the suite is 165 tests. Verified through the real Tk widgets under Python 3.12 (delete accepts and clears, cancel preserves the database).
+
+### 2026-10-19 — Scripted GUI regression tests, version reporting, and release notes
+- Added `tests/test_gui_flow.py`: seven scripted Tk tests (prepare records `prepared` and history, declined preparation, declined restore keeps data, cancelled file chooser, Sources tab status, delete-all confirm/decline, no error dialog on evaluation) that use temporary databases and stub only the dialogs. They run under a real display and skip cleanly where Tkinter or a display is unavailable, so CI reports skips rather than failures.
+- Added `--version` backed by a single `career_agent.__version__` constant, with a CLI test that proves it starts no app and opens no database.
+- Added `CHANGELOG.md` describing the verified 0.1.0 scope and the outstanding limitations (manual GUI acceptance, resume import, discovery, submission, packaging), and linked it from the README.
+- Suite is 173 tests: 173 passing on 3.12, 162 passing with 11 environment skips on 3.10/3.11 (no `_tkinter`).

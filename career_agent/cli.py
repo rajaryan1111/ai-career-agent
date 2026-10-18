@@ -10,11 +10,19 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
+from . import __version__
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m career_agent",
         description="Open the offline AI Career Agent desktop workspace.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show the installed version and exit.",
     )
     parser.add_argument(
         "--database",

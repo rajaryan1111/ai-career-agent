@@ -1,4 +1,6 @@
 """AI Career Agent deterministic local domain core."""
+__version__ = "0.1.0"
+
 from .store import CareerStore, StaleApplicationError
 from .export import (
     FORMAT_VERSION, ExportFormatError, RestoreError, build_export_payload,
@@ -18,6 +20,7 @@ from .core import (
 )
 
 __all__ = [
+    "__version__",
     "CareerStore", "StaleApplicationError",
     "FORMAT_VERSION", "ExportFormatError", "RestoreError", "build_export_payload",
     "load_export", "restore_export", "restore_export_file", "restore_from_backup",

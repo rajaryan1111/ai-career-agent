@@ -31,6 +31,17 @@ class ArgumentParsingTests(unittest.TestCase):
         self.assertIn("--database", out.getvalue())
         run.assert_not_called()
 
+    def test_version_is_reported_without_starting_the_app_or_a_database(self):
+        from career_agent import __version__
+
+        with mock.patch.object(cli, "run") as run:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                with self.assertRaises(SystemExit) as raised:
+                    cli.main(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn(__version__, out.getvalue())
+        run.assert_not_called()
+
     def test_missing_option_value_is_a_usage_error(self):
         with mock.patch.object(cli, "run") as run:
             with contextlib.redirect_stderr(io.StringIO()):
