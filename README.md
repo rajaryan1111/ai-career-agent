@@ -63,7 +63,9 @@ python scripts/tracker_smoke_test.py
 
 Runs end-to-end scenarios against temporary databases only: schema version 2, attempt creation, persisted transitions, evidence surviving later status changes, fresh re-application, rejected invalid/stale/duplicate writes, withdrawal history, format-v2 export with attempts and events, consistency after failures, and in-place migration of a schema-v1 database. Exit code 0 means every scenario passed; 1 means at least one failed. Add `--keep` to retain the temporary workspace for inspection. The script never opens the application-data database.
 
-The throwaway database, profile, and listings are synthetic. There is no import/restore API yet, so the export contract is validated but not round-tripped.
+The throwaway database, profile, and listings are synthetic. There is no import/restore API yet, so the export contract is validated but not round-tripped; the smoke test reports that scenario as SKIP, and a skip is not coverage of import/restore.
+
+The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main` and `fix/**`, for all pull requests, and on manual dispatch. A failing scenario fails the job.
 
 ## Safety and product principles
 

@@ -733,3 +733,11 @@ These are proposed targets. Do not report them as measured results.
 - The script prints one PASS/FAIL/SKIP line per scenario with a specific failure message, isolates each scenario in its own database, and returns nonzero if any scenario fails. A negative control (deliberately mutated assertion) confirmed it exits 1 and keeps running the remaining scenarios.
 - Added `tests/test_export.py` for the format-v2 payload, attempt/event preservation, and JSON round-trip. The suite is now 78 tests, passing on Python 3.9.6, 3.10.19, 3.11.15 and 3.12.4; `compileall` and the CSV audit still pass.
 - No import/restore API exists, so the smoke test reports the export round-trip as SKIP rather than inventing one. GUI behavior remains unverified (no usable Tk runtime on this host) and CI was not run.
+
+
+### 2026-10-18 — Tracker smoke test wired into CI
+- Updated `.github/workflows/tests.yml` to run `python scripts/tracker_smoke_test.py` after the unit suite in the existing Python 3.10/3.11/3.12 matrix. `compileall` and the CSV audit remain in place; a failing smoke scenario fails the job because the step returns nonzero.
+- Widened triggers: pushes to `main` and `fix/**`, all pull requests (any base branch), and `workflow_dispatch`. The previous `main`-only filter was why this fix branch had no CI evidence. `permissions: contents: read` is unchanged, and `pull_request_target` is not used.
+- Added a concurrency group keyed on PR number or ref with `cancel-in-progress` to stop superseded runs on rapid pushes. Push and pull-request events for the same commit still produce one run each; the concurrency key treats them as different groups deliberately, so a PR run can cancel only its own predecessors.
+- Verified the full step sequence locally on Python 3.10.19, 3.11.15 and 3.12.4: 78 unit tests OK, smoke test 14 passed / 0 failed / 1 skipped, `compileall` 0, CSV audit 0. YAML was parsed with Ruby/Psych; referenced paths all exist.
+- GitHub Actions itself has not run against this commit (branch is local and unpushed), so no CI pass is claimed. The import/restore skip remains a skip, not coverage.
