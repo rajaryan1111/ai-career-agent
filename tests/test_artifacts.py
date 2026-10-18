@@ -124,6 +124,25 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("Intern at Example Systems", built.content)
         self.assertNotIn("Docker", built.content)
 
+    def test_the_experience_sentence_says_what_the_number_counts(self):
+        """It read "My profile states 1.0 of experience." until a screen could build one."""
+        one = cover_letter_document(ArtifactBasis(facts={"experience": "1"}), STRATEGY, LISTING)
+        self.assertIn("My profile states 1 year of experience.", one.content)
+        several = cover_letter_document(ArtifactBasis(facts={"experience": "2.5"}), STRATEGY, LISTING)
+        self.assertIn("My profile states 2.5 years of experience.", several.content)
+        for built in (one, several):
+            self.assertNotIn("states 1 of experience", built.content)
+            self.assertNotIn("states 2.5 of experience", built.content)
+
+    def test_the_cover_letter_reports_the_requirements_it_leaves_out(self):
+        """A letter reported no gaps at all, so a screen could claim nothing was missing."""
+        built = cover_letter_document(basis(), STRATEGY, LISTING)
+        self.assertEqual(built.gaps, ("Docker",))
+        self.assertNotIn("Docker", built.content)
+        bare = RoleStrategy(strategy_id=new_strategy_id(), version=1, name="Any data role",
+                            role_family="Data engineering")
+        self.assertEqual(cover_letter_document(basis(), bare, LISTING).gaps, ())
+
     def test_a_profile_that_states_no_experience_produces_no_experience_sentence(self):
         quiet = ArtifactBasis(facts={"skills": "Python"}, work=(), education=())
         built = cover_letter_document(quiet, STRATEGY, LISTING)

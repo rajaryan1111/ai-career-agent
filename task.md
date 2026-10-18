@@ -246,9 +246,55 @@ feature of this application.
       `test_the_document_text_never_reaches_the_status_line_or_the_event_log`, and the suite-wide
       gate tests that still pin `enabled_discovery_sources() == ()`.
 
-**Where it stands:** full suite **2690 OK (skipped=13)**; development acceptance run **154 checks,
+**Where it stands:** full suite **2706 OK (skipped=13)**; development acceptance run **155 checks,
 0 failed** under the stand-in widget module (not GUI evidence - no display on this machine);
 [note](research/the-first-tailored-document-2026-10-18.md).
+
+### Post-implementation audit, 2026-10-18 (independent re-read, not the implementer's report)
+
+Every leg of the workflow was re-traced against a throwaway database outside the test suite
+(preview writes nothing -> stored content is byte-identical to the previewed content -> duplicate
+refused -> export `0o600` with the id, strategy version and source file in its header -> overwrite
+refused -> naming the résumé refused and the résumé unchanged -> stale export refused with no file
+written -> journal holds no candidate text and no path). **Two real defects were found and fixed:**
+
+- [x] **A cover letter reported no gaps at all**, so the preview printed "Nothing the strategy asks
+      for is missing from your saved facts" while the strategy required a skill the profile does not
+      state. `cover_letter_document` now computes gaps the way the résumé builder does, which also
+      fixes the rebuild status line. Evidence: `test_the_cover_letter_reports_the_requirements_it_leaves_out`,
+      `test_a_cover_letter_reports_the_requirements_it_could_not_claim`,
+      `test_a_cover_letter_preview_names_what_it_could_not_claim`.
+- [x] **The listing could be edited between the preview and the confirmation** and the document was
+      stored anyway - a letter addressed to "First Employer" about a "GenAI Engineer" role, recorded
+      against a listing now reading "Other Corp / Data Entry Clerk". `ArtifactPlan` now carries the
+      listing it was built from and `store_planned_artifact` refuses when the employer, the role
+      title or the required skills moved (fields no document reads are deliberately not compared).
+      Evidence: `test_a_listing_edited_while_the_document_was_read_is_refused`,
+      `test_a_changed_role_title_or_requirement_is_refused_too`,
+      `test_a_listing_field_no_document_reads_does_not_block_the_build`,
+      `test_a_listing_edited_after_the_preview_refuses_the_build`, acceptance **M13**.
+
+Coverage gaps closed at the same time: a symbolic link named as the export destination (the one path
+by which "never overwrite" could still overwrite a résumé - refused by `create_private_file`, now
+pinned), the singular/plural experience sentence, changing the *kind* after a preview, and
+`visible_text()` (the K5 label-visibility fix had no unit test of its own).
+
+**Known limitation, not fixed here:** `lineage_status` does not notice a listing edited *after* a
+document is stored - the artifact record keeps `listing_id` but not the listing fields it was built
+from, so detecting that needs a new column and a migration (schema is at 15). A stale-by-listing
+cover letter therefore still reads as "Current". This is the highest-priority next task in this
+area; it is written down rather than quietly left.
+
+**Assessed and deliberately not started** (step 5 of the audit brief): *choosing between several
+imported résumés* has no data model behind it - the store holds one `candidate_profile` and a
+`profile_fact_provenance.document_name` per fact, with no table of imported documents - so it is a
+product change with a migration, not a remainder of this feature; and *richer export formats*
+(DOCX/PDF) would require inventing layout this application was never given, which is the kind of
+small lie the rest of the design refuses. Both stay enhancements, unstarted.
+
+**CI at this head:** none. `.github/workflows/tests.yml` triggers on `push`/`pull_request` to `main`
+only, PR #4 targets `arena/351e052d-ai-career-agent`, and `gh api .../commits/<head>/check-runs`
+reports `0`. There is no green CI for this head and none is claimed.
 
 ## Acceptance checklist for the expansion
 - [x] Resume/profile/role strategy versions and tailored artifacts remain traceable and truthful. Every artifact row cites the résumé document by name, the confirmed profile-fact version, the strategy version, the job identity and when it was generated; `require_current_artifact` refuses a stale one with `StaleArtifact` rather than reusing it, and the window surfaces the refusal and the rebuild. Evidence: P7 items 1-5 above, with their test counts.

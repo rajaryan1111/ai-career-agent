@@ -5348,6 +5348,22 @@ class BuildingADocumentTests(HandlerTestCase):
         self.assertIn("changed after the preview", app.status.get())
         self.assertTrue(app.build_artifact_button.instate(["disabled"]))
 
+    def test_changing_the_kind_after_a_preview_refuses_the_build(self):
+        """A résumé was previewed; the chooser now says cover letter. They are not the same text."""
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.artifact_kind_choice.set("Cover letter")
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("changed after the preview", app.status.get())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a document it was not going to store")
+
     def test_a_strategy_revised_after_the_preview_refuses_the_build(self):
         app = self.build_window()
         strategy = self.seed_inputs(app)
@@ -5364,6 +5380,41 @@ class BuildingADocumentTests(HandlerTestCase):
         self.assertIn("Document not built", MESSAGES.titles("showerror"))
         self.assertIn("moved to version 2", MESSAGES.text("showerror"))
         self.assertIn("nothing was stored", app.status.get())
+
+    def test_a_listing_edited_after_the_preview_refuses_the_build(self):
+        """A cover letter writes the employer and the role into its first two lines."""
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app, kind="Cover letter")
+        app._preview_artifact_plan()
+        self.assertIn("Example Employer", app._artifact_plan.content)
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="A Different Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("Document not built", MESSAGES.titles("showerror"))
+        self.assertIn("the listing changed while", MESSAGES.text("showerror"))
+        self.assertIn("A Different Employer", MESSAGES.text("showerror"))
+        self.assertIn("nothing was stored", app.status.get())
+
+    def test_a_cover_letter_preview_names_what_it_could_not_claim(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app, kind="Cover letter")
+
+        app._preview_artifact_plan()
+
+        shown = app.artifact_plan_box.get("1.0", "end")
+        self.assertIn("do not state Docker", shown)
+        self.assertNotIn("Nothing the strategy asks for is missing", shown)
+        self.assertNotIn("Docker", app._artifact_plan.content)
 
     def test_facts_changed_after_the_preview_refuse_the_build(self):
         app = self.build_window()

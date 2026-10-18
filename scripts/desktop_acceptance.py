@@ -3757,6 +3757,33 @@ def workflow_m_tailored_documents(run: Run) -> None:
         require("was not written out" in app.status.get(),
                 f"the status line says {app.status.get()!r}")
 
+    with results.step("M13 a listing edited after the preview refuses the build"):
+        policy.reset()
+        app.store.save_job(second_listing)  # put the facts back where M8 found them
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        choose_in(app.artifacts_tab, app.artifact_listing_choice, str(listing_choice),
+                  what="the listing to build for")
+        choose_in(app.artifacts_tab, app.artifact_kind_choice, "Cover letter",
+                  what="the kind of document")
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        require("Second Employer" in app.artifact_plan_box.get("1.0", "end"),
+                "the letter on screen does not name the employer it is addressed to")
+        stored_before = len(app.store.list_tailored_artifacts())
+        app.store.save_job(JobListing(
+            listing_id=second_listing.listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=second_listing.source_listing_url,
+            employer_name="Renamed Employer", role_title="Machine Learning Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Kubernetes"}), location_text="Delhi, India"))
+        policy.answers["Build this document"] = True
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require("Document not built" in policy.titles("showerror"),
+                f"the build was not refused; dialogs: {policy.titles()!r}")
+        require("the listing changed while" in policy.said("Document not built"),
+                f"the refusal does not say what moved: {policy.said('Document not built')!r}")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a document written for another employer was stored anyway")
+
     workspace.close_window(host, app)
 
 

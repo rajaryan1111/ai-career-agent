@@ -4160,3 +4160,27 @@ falls back to the variable.
 23 artifact tests, 16 handler tests, 11 text tests, acceptance M6-M12 (154 checks, 0 failed, still
 BLOCKED because a stand-in is not a display), suite 2690 OK (skipped=13). Note:
 `research/the-first-tailored-document-2026-10-18.md`.
+
+## The audit of the same day, 2026-10-18
+
+Re-read the morning's work instead of trusting its report, and re-traced the whole path against a
+throwaway database. The trace held everywhere it was checked - preview writes nothing, the stored
+text is byte-identical to the reviewed text, the export is `0o600` with its provenance, the résumé
+is untouched, the journal holds no candidate text and no path. Two things did not hold.
+
+A cover letter reported no gaps, so the screen above it said "nothing the strategy asks for is
+missing" while the strategy asked for Docker and the profile never mentioned it: the letter builder
+had simply never filled in `gaps`, which nobody could see while no screen could build a letter. And
+the listing could be edited between the preview and the confirmation - a letter addressed to one
+employer stored against a listing now naming another. The plan now carries the listing and the write
+refuses when the employer, the role or the required skills moved; fields no document reads are
+deliberately not compared, because a refusal nobody can act on is noise.
+
+Also pinned what was working but untested: a symbolic link as the export destination (live and
+dangling), the singular experience sentence, a kind changed after a preview, and `visible_text()` -
+the K5 fix that decides what a display-backed run even means.
+
+Left open on purpose: `lineage_status` still cannot see a listing edited *after* a document is
+stored, because the artifact row keeps the listing's id and not the fields it used. That needs a
+column and a migration, which is a task, not an audit fix. 2706 OK (skipped=13), acceptance 155
+checks, 0 failed, CI has still never run on this branch.

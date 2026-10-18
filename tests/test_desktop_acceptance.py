@@ -657,3 +657,56 @@ class LayoutMeasurementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class VisibleTextTests(unittest.TestCase):
+    """What the harness counts as text a person can read on a widget.
+
+    Workflow K5 asks whether every interactive control carries text of its own or beside it. It used
+    to read `cget("text")` only, which real Tk answers with "" for a label built with
+    ``textvariable=`` and the stand-in module refuses outright - so a label a person can plainly read
+    was reported as carrying nothing, and on the stand-in run the check crashed instead of answering.
+    """
+
+    class Label:
+        """A label answering `cget` the way whichever option it was actually configured with."""
+
+        def __init__(self, **options):
+            self.options = options
+
+        def winfo_class(self):
+            return "TLabel"
+
+        def cget(self, name):
+            if name not in self.options:
+                raise KeyError(f"TLabel has no option {name!r} as configured")
+            return self.options[name]
+
+    class Variable:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    def test_fixed_text_is_read_as_it_is(self):
+        self.assertEqual(acceptance.visible_text(self.Label(text="For listing")), "For listing")
+
+    def test_a_label_bound_to_a_variable_reads_as_what_the_variable_holds(self):
+        label = self.Label(textvariable=self.Variable("  Choose a listing and a strategy  "))
+        self.assertEqual(acceptance.visible_text(label), "Choose a listing and a strategy")
+
+    def test_a_widget_with_neither_option_reads_as_nothing_rather_than_raising(self):
+        self.assertEqual(acceptance.visible_text(self.Label()), "")
+        self.assertEqual(acceptance.visible_text(self.Label(text="   ")), "")
+        self.assertEqual(acceptance.visible_text(self.Label(textvariable="")), "")
+
+    def test_an_empty_variable_is_not_mistaken_for_text(self):
+        label = self.Label(text="", textvariable=self.Variable(""))
+        self.assertEqual(acceptance.visible_text(label), "")
+
+    def test_the_labelling_check_accepts_a_group_box_title_beside_a_chooser(self):
+        """The *Build one* panel labels its contents; a frame title is text a person reads."""
+        source = Path(acceptance.__file__).read_text(encoding="utf-8")
+        self.assertIn('("TLabel", "Label", "TLabelframe", "Labelframe")', source)
+        self.assertIn("and visible_text(sibling)", source)

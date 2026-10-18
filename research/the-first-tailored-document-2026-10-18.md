@@ -115,3 +115,54 @@ reports both, in separate sentences, and neither is ever written into the docume
 Nothing in this increment opens a gate, enables a source, or sends anything: the only external
 effect in the whole path is one file, written owner-only, at a path the person typed into a save
 dialog.
+
+## Audit, same day: what a second reading found
+
+The implementation above was re-read independently, and the workflow re-traced outside the test
+suite against a throwaway database. The trace held on every leg. Two defects did not.
+
+**A cover letter reported no gaps.** `tailored_resume_document` computed them; the letter builder
+returned `BuiltArtifact(content=...)` and let `gaps` default to `()`. Nothing noticed while no
+screen could build a letter. Now a screen can, and the preview was printing *"Nothing the strategy
+asks for is missing from your saved facts"* over a letter built for a strategy that asks for Docker
+from a profile that never mentions it. The document itself was honest — it claimed nothing — but the
+sentence above it was false, which is worse than silence. The builder now computes gaps the same way
+as the résumé, which also repairs the rebuild status line (`artifact_rebuild_text` reads
+`built.gaps`, so rebuilt letters had been reporting none either).
+
+**The listing could move under a document between the preview and the write.** The preview→store
+pairing checked the strategy version, the facts and the listing's *existence*, which is everything a
+résumé is built from — but a cover letter writes the employer's name and the role title into its
+first two lines, and the gaps on screen come partly from the listing's requirements. Editing the
+listing on the Jobs tab between the two clicks stored a letter addressed to the old employer against
+the new listing, silently. `ArtifactPlan` now carries the listing, and `store_planned_artifact`
+refuses when the employer, the role title or the required skills have moved.
+
+The comparison is deliberately narrow. A listing also carries a source URL, an availability status
+and a provenance note; refusing a build because one of those was touched would be a refusal nobody
+could act on, so only the fields a document is actually written from are compared
+(`_listing_changes`), and a test pins that touching the others does not block a build.
+
+**Coverage gaps closed.** A symbolic link named as the export destination — the one path by which
+"never overwrite" could still overwrite a résumé — was handled by `create_private_file` and pinned
+by nothing; both the live link and the dangling link are now tested. The singular/plural experience
+sentence ("1 year", "2.5 years") had no test, and `experience_years` accepts an int, so the singular
+branch is reachable rather than dead. Changing the document *kind* after a preview was implemented
+but untested. And `visible_text()`, the K5 fix, had no unit test at all — it is the function that
+decides what a display-backed run means, so it has five now.
+
+**What is still open here.** `lineage_status` cannot see a listing edited *after* a document is
+stored: the artifact row keeps `listing_id`, not the listing fields the document used. Detecting it
+needs a column and a migration (schema 15), so it is written down as the next task in this area
+rather than bolted on during an audit. A cover letter whose employer has since been renamed still
+reads as "Current".
+
+**Not started, with reasons.** Choosing between several imported résumés has no data model behind it
+— one `candidate_profile`, one `document_name` per fact, no table of imported documents — so it is a
+product change with a migration, not a remainder of this feature. Richer export formats would mean
+inventing layout nobody supplied. Both are enhancements; neither is a gap in what was built.
+
+**Numbers at the audited head:** full suite **2706 OK (skipped=13)** — 12 × optional `pypdf` absent,
+1 × the checkout is not an installed distribution; acceptance **155 checks, 0 failed**, still
+`RESULT: BLOCKED` (a stand-in widget module is not a display). CI has never run on this branch:
+the workflow triggers on `main` only, and `check-runs` for this head returns `0`.

@@ -368,6 +368,11 @@ def cover_letter_document(basis: ArtifactBasis, strategy: RoleStrategy,
     The listing contributes its employer and role title — what the letter is *about*, not a claim
     about the candidate. Experience appears only as a stated number of years; relevant skills are the
     stated ones the strategy asks for. A fact the basis does not hold produces no sentence at all.
+
+    The gaps are reported for the same reason the résumé builder reports them, and they were missing
+    here until 2026-10-18: a letter that silently omits a required skill looks exactly like a letter
+    built for somebody who has it, and the screen above it was saying "nothing the strategy asks for
+    is missing from your saved facts" on the strength of an empty tuple nobody filled in.
     """
     stated_skills = _stated_skills(basis)
     relevant = _overlap(stated_skills, frozenset(strategy.required_skills | strategy.preferred_skills))
@@ -393,7 +398,10 @@ def cover_letter_document(basis: ArtifactBasis, strategy: RoleStrategy,
     lines.append("")
     lines.append("With regards,")
     lines.append("[Your name]")
-    return BuiltArtifact(content="\n".join(lines) + "\n")
+    gaps = tuple(sorted(
+        skill for skill in strategy.required_skills
+        if skill.lower() not in {value.lower() for value in stated_skills}))
+    return BuiltArtifact(content="\n".join(lines) + "\n", gaps=gaps)
 
 
 # ---------------------------------------------------------------- the lineage: what has moved on since
@@ -652,6 +660,11 @@ class ArtifactPlan:
     strategy: RoleStrategy
     basis: ArtifactBasis
     content: str
+    #: The listing as it was when the document was built. A cover letter writes the employer's name
+    #: and the role title into its first two lines, and the gaps shown on screen come partly from
+    #: the listing's own requirements, so a listing edited between the preview and the confirmation
+    #: makes the stored document a record of something nobody reviewed.
+    listing: "JobListing | None" = None
     gaps: tuple[str, ...] = ()
     #: What *this listing* asks for that the saved facts do not state. Kept apart from ``gaps``,
     #: which is the strategy's requirements: a document is built under a strategy, but it is sent
@@ -740,8 +753,29 @@ def plan_artifact(store: "CareerStore", *, listing_id: str, strategy_id: str,
         skill for skill in listing.required_skills
         if skill.lower() not in stated and skill not in built.gaps))
     return ArtifactPlan(listing_id=listing.listing_id, kind=kind, strategy=strategy, basis=basis,
-                        content=built.content, gaps=tuple(built.gaps), listing_gaps=listing_gaps,
-                        duplicate_of=duplicate)
+                        content=built.content, listing=listing, gaps=tuple(built.gaps),
+                        listing_gaps=listing_gaps, duplicate_of=duplicate)
+
+
+def _listing_changes(planned: "JobListing | None", current: "JobListing") -> tuple[str, ...]:
+    """What moved, among the listing fields a built document actually uses.
+
+    Deliberately not a whole-record comparison: a listing carries fields a document never reads
+    (its source URL, its availability, the note about where it came from), and refusing a build
+    because one of those was touched would be a refusal nobody could act on. What is compared is
+    what a document is written from - the employer it is addressed to, the role it names, and the
+    required skills the screen reported as missing.
+    """
+    if planned is None:  # a plan from before this check existed; nothing to compare against
+        return ()
+    changes = []
+    if planned.employer_name != current.employer_name:
+        changes.append(f"the employer is now {current.employer_name!r}, not {planned.employer_name!r}")
+    if planned.role_title != current.role_title:
+        changes.append(f"the role is now {current.role_title!r}, not {planned.role_title!r}")
+    if frozenset(planned.required_skills) != frozenset(current.required_skills):
+        changes.append("the skills the listing asks for changed")
+    return tuple(changes)
 
 
 def store_planned_artifact(store: "CareerStore", plan: ArtifactPlan) -> TailoredArtifact:
@@ -767,10 +801,17 @@ def store_planned_artifact(store: "CareerStore", plan: ArtifactPlan) -> Tailored
             f"{plan.strategy.name} moved to version {current_strategy.version} while this document "
             f"was being read (it was built under version {plan.strategy.version}). Look at it again "
             f"under the current version; nothing was stored.")
-    if store.get_job(plan.listing_id) is None:
+    current_listing = store.get_job(plan.listing_id)
+    if current_listing is None:
         raise ArtifactError(
             f"the listing {plan.listing_id!r} is no longer stored, so there is nothing to record "
             f"this document against.")
+    moved = _listing_changes(plan.listing, current_listing)
+    if moved:
+        raise ArtifactError(
+            f"the listing changed while this document was being read ({'; '.join(moved)}), so the "
+            f"document in front of you was written for something else. Look at it again; nothing "
+            f"was stored.")
     if capture_basis(store) != plan.basis:
         raise ArtifactError(
             "your saved facts changed while this document was being read, so storing it would "

@@ -125,6 +125,17 @@ class PlanningTests(BuildTestCase):
         self.assertIn("Example Employer", plan.content)
         self.assertEqual(plan.kind, ArtifactKind.COVER_LETTER)
 
+    def test_a_cover_letter_reports_the_requirements_it_could_not_claim(self):
+        """The letter used to report no gaps at all, so the screen above it said none existed."""
+        plan = self.plan(ArtifactKind.COVER_LETTER)
+        self.assertEqual(plan.gaps, ("Docker",),
+                         "a letter that omits a required skill looks like one written for "
+                         "somebody who has it")
+        described = "\n".join(plan.describe())
+        self.assertIn("do not state Docker", described)
+        self.assertNotIn("Nothing the strategy asks for is missing", described)
+        self.assertNotIn("Docker", plan.content)
+
 
 class StoringTests(BuildTestCase):
     def test_storing_a_plan_writes_exactly_what_was_planned_with_its_lineage(self):
@@ -160,6 +171,39 @@ class StoringTests(BuildTestCase):
             store_planned_artifact(self.store, plan)
         self.assertIn("facts changed while", str(caught.exception))
         self.assertEqual(self.store.list_tailored_artifacts(), ())
+
+    def test_a_listing_edited_while_the_document_was_read_is_refused(self):
+        """The letter names the employer and the role; both can be edited on another tab."""
+        plan = self.plan(ArtifactKind.COVER_LETTER)
+        self.assertIn("Example Employer", plan.content)
+        self.store.save_job(replace(LISTING, employer_name="Some Other Employer"))
+        with self.assertRaises(ArtifactError) as caught:
+            store_planned_artifact(self.store, plan)
+        self.assertIn("the listing changed while", str(caught.exception))
+        self.assertIn("Some Other Employer", str(caught.exception))
+        self.assertEqual(self.store.list_tailored_artifacts(), ())
+
+    def test_a_changed_role_title_or_requirement_is_refused_too(self):
+        plan = self.plan()
+        self.store.save_job(replace(LISTING, role_title="Data Entry Clerk"))
+        with self.assertRaises(ArtifactError) as caught:
+            store_planned_artifact(self.store, plan)
+        self.assertIn("the role is now", str(caught.exception))
+        self.store.save_job(LISTING)
+        plan = self.plan()
+        self.store.save_job(replace(LISTING, required_skills=frozenset({"Python", "Rust"})))
+        with self.assertRaises(ArtifactError) as caught:
+            store_planned_artifact(self.store, plan)
+        self.assertIn("skills the listing asks for changed", str(caught.exception))
+        self.assertEqual(self.store.list_tailored_artifacts(), ())
+
+    def test_a_listing_field_no_document_reads_does_not_block_the_build(self):
+        """A refusal nobody can act on is noise: only what a document is written from counts."""
+        plan = self.plan()
+        self.store.save_job(replace(LISTING, provenance_note="re-checked by hand",
+                                    employer_apply_url="https://apply.example.invalid/1"))
+        artifact = store_planned_artifact(self.store, plan)
+        self.assertEqual(artifact.content, plan.content)
 
     def test_a_listing_deleted_while_the_document_was_read_is_refused(self):
         plan = self.plan()
@@ -232,6 +276,28 @@ class ExportTests(BuildTestCase):
             export_artifact(self.store, artifact.artifact_id, original)
         self.assertIn("already exists", str(caught.exception))
         self.assertEqual(original.read_text(encoding="utf-8"), "the candidate's own resume")
+
+    def test_a_symbolic_link_is_refused_rather_than_followed(self):
+        """A link is the one path by which "never overwrite" could still overwrite a résumé."""
+        artifact = self.build()
+        resume = self.root / "my-real-resume.txt"
+        resume.write_text("the candidate's own resume", encoding="utf-8")
+        link = self.root / "looks-like-a-new-name.txt"
+        try:
+            link.symlink_to(resume)
+        except (OSError, NotImplementedError):  # pragma: no cover - platform without symlinks
+            self.skipTest("this platform cannot create symbolic links")
+        with self.assertRaises(ArtifactError):
+            export_artifact(self.store, artifact.artifact_id, link)
+        self.assertEqual(resume.read_text(encoding="utf-8"), "the candidate's own resume")
+
+        dangling = self.root / "dangling.txt"
+        dangling.symlink_to(self.root / "nothing-here.txt")
+        with self.assertRaises(ArtifactError) as caught:
+            export_artifact(self.store, artifact.artifact_id, dangling)
+        self.assertIn("link", str(caught.exception).casefold())
+        self.assertFalse((self.root / "nothing-here.txt").exists(),
+                         "the export wrote through a dangling link")
 
     def test_a_folder_that_does_not_exist_is_refused_and_writes_nothing(self):
         artifact = self.build()
