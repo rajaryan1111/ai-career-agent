@@ -33,6 +33,9 @@ from .core import (
     validate_activity_detail, validate_activity_date,
 )
 from .attempts import AttemptError, AttemptRecord, AttemptState
+from .suppression import (
+    SuppressionEntry, SuppressionError, SuppressionReason, normalise_address,
+)
 from .notifications import (
     NotificationError, NotificationPreferences, preferences_from_payload, preferences_payload,
 )
@@ -48,7 +51,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 13
+_SCHEMA_VERSION = 14
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -92,6 +95,12 @@ SCHEMA_TABLES_BY_VERSION = {
          "hr_contact_conflict", "interview_round", "job_listings", "policy_version",
          "profile_fact_provenance", "role_strategy_version", "scheduled_task", "tailored_artifact",
          "task_run", "worker_lease"),
+    14: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run",
+         "worker_lease"),
     13: ("action_attempt", "app_preference", "application_activity", "application_preparation",
          "application_tracker", "candidate_education", "candidate_profile",
          "candidate_work_history", "hr_contact", "hr_contact_conflict", "interview_round",
@@ -1209,6 +1218,23 @@ def _migration_to_v13(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v14(connection: sqlite3.Connection) -> None:
+    """Schema 14: the do-not-contact list.
+
+    Additive and empty. One row per normalised address, with the reason and when it was recorded,
+    because a suppression that loses its reason cannot be judged later - "they asked us to stop" and
+    "the address bounced" are the same silence with very different meanings.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS contact_suppression (
+               address TEXT PRIMARY KEY,
+               reason TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               note TEXT NOT NULL DEFAULT ''
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1227,6 +1253,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (11, "add the versioned standing authorisation", _migration_to_v11),
     (12, "add the record of attempts and their outcomes", _migration_to_v12),
     (13, "add the person's own settings", _migration_to_v13),
+    (14, "add the do-not-contact list", _migration_to_v14),
 )
 
 
@@ -3975,6 +4002,98 @@ class CareerStore:
             if started.astimezone(moment.tzinfo).date() == today:
                 counted += 1
         return counted
+
+    # ------------------------------------------------------------------ the do-not-contact list
+
+    def _schema_records_suppressions(self) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_suppression'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_suppression(row: sqlite3.Row) -> SuppressionEntry:
+        try:
+            reason = SuppressionReason(str(row["reason"]))
+        except ValueError as exc:
+            raise StoredRecordError(
+                "suppression",
+                f"{row['address']} records a reason this build does not know ({row['reason']!r}), "
+                f"so it cannot be judged; it still blocks") from exc
+        return SuppressionEntry(address=str(row["address"]), reason=reason,
+                                recorded_at=str(row["recorded_at"]), note=str(row["note"] or ""))
+
+    def suppress_contact(self, address: str, *, reason: SuppressionReason, note: str = "",
+                         now: str | None = None) -> SuppressionEntry:
+        """Record that an address must not be written to. Recording it twice keeps the first.
+
+        The first record wins because the earliest reason is the truest one: an address suppressed
+        because somebody asked to stop must not quietly become "our own decision" later, which reads
+        as something this application could undo on its own.
+        """
+        key = normalise_address(address)
+        if not self._schema_records_suppressions():
+            raise SuppressionError(
+                "this file records a schema older than the one that keeps the do-not-contact list. "
+                "Open the application on this file to update it.")
+        existing = self.suppression_for(key)
+        if existing is not None:
+            return existing
+        entry = SuppressionEntry(address=key, reason=reason, recorded_at=now or _now(),
+                                 note=str(note or "").strip())
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO contact_suppression (address, reason, recorded_at, note) "
+                "VALUES (?, ?, ?, ?)",
+                (entry.address, entry.reason.value, entry.recorded_at, entry.note))
+        self._record("suppression.recorded", f"reason={entry.reason.value}")
+        return entry
+
+    def suppression_for(self, address: str) -> SuppressionEntry | None:
+        """The suppression for an address, or ``None``. Matching is on the normalised address."""
+        if not self._schema_records_suppressions():
+            return None
+        key = normalise_address(address)
+        row = self._connection.execute(
+            "SELECT * FROM contact_suppression WHERE address = ?", (key,)).fetchone()
+        return None if row is None else self._decode_suppression(row)
+
+    def is_suppressed(self, address: str) -> bool:
+        """Whether this address must not be written to. An unreadable row still blocks."""
+        if not self._schema_records_suppressions():
+            return False
+        key = normalise_address(address)
+        return self._connection.execute(
+            "SELECT 1 FROM contact_suppression WHERE address = ?", (key,)).fetchone() is not None
+
+    def list_suppressions(self) -> tuple[SuppressionEntry, ...]:
+        """Every suppression, oldest first."""
+        if not self._schema_records_suppressions():
+            return ()
+        rows = self._connection.execute(
+            "SELECT * FROM contact_suppression ORDER BY recorded_at, address").fetchall()
+        return tuple(self._decode_suppression(row) for row in rows)
+
+    def lift_suppression(self, address: str, *, note: str) -> bool:
+        """Remove a suppression, which is a deliberate act and needs a reason written down.
+
+        Returns whether a row was removed. A suppression recorded because somebody asked to stop is
+        still removable **by a person** - this is their database - but never without a note, and
+        never as a side effect of anything else: no import, no retry and no cleanup calls this.
+        """
+        key = normalise_address(address)
+        reason = str(note or "").strip()
+        if len(reason) < 4:
+            raise SuppressionError(
+                "lifting a do-not-contact entry needs a note saying why; an entry removed without "
+                "one cannot be told apart from a mistake")
+        if not self._schema_records_suppressions():
+            return False
+        with self._connection:
+            removed = self._connection.execute(
+                "DELETE FROM contact_suppression WHERE address = ?", (key,)).rowcount
+        if removed:
+            self._record("suppression.lifted", "count=1")
+        return bool(removed)
 
     # ------------------------------------------------------------------ the person's settings
 

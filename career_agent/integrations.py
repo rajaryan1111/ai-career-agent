@@ -55,6 +55,7 @@ from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_chec
 
 from .attempts import AttemptError, AttemptState, may_attempt, state_from_outcome
 from .followups import FollowUpReminder, event_summary, event_uid
+from .suppression import SuppressionError, refusal_message as suppression_refusal
 from .policy import (
     ActionKind, GlobalPolicy, PolicyError, PolicySubject, evaluate_policy, no_authorisation,
 )
@@ -1008,6 +1009,19 @@ def guarded_dispatch(
         # Counted before this attempt's own row exists, or an allowance of one would refuse the
         # first action of the day for having already spent itself.
         done_today = store.actions_done_today(action, now=now)
+    recipient = str(getattr(request, "recipient", "") or "").strip()
+    if recipient:
+        try:
+            suppressed = store.suppression_for(recipient)
+        except SuppressionError:
+            suppressed = None  # An address this application cannot match on reaches no provider anyway.
+        if suppressed is not None:
+            store._record("suppression.blocked", "count=1")
+            return IntegrationResult(
+                outcome=Outcome.DISABLED, operation_id=operation_id,
+                integration_name=integration.name, performed=False,
+                message=suppression_refusal(suppressed),
+                detail=f"reason={suppressed.reason.value}")
     recorded = store.list_attempts(identity_key=identity, action=action)
     if (policy is not None and policy.follow_up_limit is not None
             and (subject is None or subject.follow_ups_so_far is None)):

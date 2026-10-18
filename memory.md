@@ -3990,3 +3990,18 @@ column, no credential store imported, no credential-shaped literal - and the REA
 against a whitespace-normalised copy, because a documentation test that punishes re-wrapping is one
 people route around. 23 tests, suite **2480 OK (skipped=13)**. Note:
 `research/acceptance-evidence-and-the-boundary-2026-10-18.md`.
+
+**A record kept for somebody who is not the user, 2026-10-18:** the do-not-contact list (schema 14)
+is deliberately built *before* sending exists, because a suppression list added at the same time as
+sending is written by somebody who wants the sending to work. Its rules are each a failure that must
+not happen: stored so a no survives a restart; matched on the normalised address so capitalisation
+cannot walk around it; folded for case and whitespace only, never dot-stripping or plus-tags, since
+guessing two addresses are one person suppresses somebody who never asked; the first reason wins so
+"they asked us to stop" cannot soften into "our own decision"; nothing expires, because an
+application deciding a person's no has run out is not a feature; lifting needs a note and is never a
+side effect of an import, retry or cleanup; an unreadable reason still blocks; the check sits inside
+guarded_dispatch *before* the attempt row is written, so a blocked message leaves no record claiming
+something was attempted; and the event log gets a count, never the address. P8 item 7 stays open:
+mailbox authorisation, delivery and reply evidence need a real mailbox, and the honest tested
+statement is only that nothing stores a credential anywhere. 20 tests, suite **2500 OK
+(skipped=13)**. Note: `research/the-do-not-contact-list-2026-10-18.md`.

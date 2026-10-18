@@ -114,6 +114,9 @@ EVENTS: tuple[str, ...] = (
     # is generated (never typed) and the version is a number; the strategy's own content - its name, the
     # places, the employers ruled out - is the person's data and never reaches the log.
     "attempt.started",
+    "suppression.recorded",
+    "suppression.lifted",
+    "suppression.blocked",
     "notifications.saved",
     "notifications.prepared",
     "attempt.settled",

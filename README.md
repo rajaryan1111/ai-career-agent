@@ -1038,6 +1038,30 @@ timed out rather than successful), but the worker cannot force a Python function
 discovery run is recorded as a refusal with the reason. That is the permission rule working, not a
 fault: no source has passed the quality gate, so nothing is read.
 
+## The do-not-contact list
+
+The one record this application keeps about somebody who is **not** you. An address goes on the list
+when a person asks to stop, when mail to it bounces permanently, when it turns out to be the wrong
+person, when they say they are not recruiting, or because you decided not to write to them. The entry
+keeps the reason, because "they asked us to stop" and "the address bounced" are the same silence with
+very different meanings.
+
+What the list guarantees:
+
+- it **survives restarts**, and is checked inside the only function that could ever send;
+- it cannot be walked around by capitalisation or whitespace — matching is on the normalised address;
+- the **first reason wins**: re-recording the same address never softens "they asked to stop" into
+  something this application could undo on its own;
+- **nothing expires.** There is no rule that says a person's no runs out after six months;
+- lifting an entry is a deliberate act that **requires a note**, and nothing else in the application
+  removes one — no import, no retry, no cleanup;
+- a blocked attempt writes **no attempt record and no message**, and the event log records a count,
+  never the address.
+
+What it does not do: this build sends nothing at all, so the list is a guard in front of a door that
+is already locked. It exists now because the alternative — adding it at the same time as sending —
+is how people end up emailing someone who asked them not to.
+
 ## Syncing, credentials, and what is deliberately not claimed
 
 **Laptop-off operation is not available, and this project does not claim it.** The worker is a
