@@ -24,7 +24,7 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Local SQLite persistence for profile, job, attempt, and history records, including per-record delete operations and a confirmed **Delete all local data** action that removes the profile, listings, attempts and history in one transaction.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, local resume import for review, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, application preparation with a readiness checklist and a fact-only draft preview, tracker status changes guarded by the domain state machine, per-attempt history with evidence, re-application after withdrawal, local JSON export, and explicit delete controls. A status change advances the current attempt; only a withdrawal can be followed by a new attempt, and only when the listing is still open and eligible. Resume import covers text-based PDF, DOCX, TXT, and MD files and never saves extracted values automatically; scanned PDFs need OCR, which is not provided. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, local resume import for review, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, application preparation with a readiness checklist and a fact-only draft preview, tracker status changes guarded by the domain state machine, per-attempt history with evidence, re-application after withdrawal, local JSON export, explicit delete controls, and a close confirmation when the profile form has unsaved edits. A status change advances the current attempt; only a withdrawal can be followed by a new attempt, and only when the listing is still open and eligible. Resume import covers text-based PDF, DOCX, TXT, and MD files and never saves extracted values automatically; scanned PDFs need OCR, which is not provided. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 Existing databases are upgraded in place to schema version 2 (one attempt per legacy tracker row, revision 0). History is not invented for records that predate the upgrade.
 
@@ -40,6 +40,8 @@ career-agent --help
 ```
 
 The package declares Python 3.10–3.12 in [pyproject.toml](pyproject.toml). Editable installs are verified locally; no wheel, installer, updater, or code-signing pipeline exists yet.
+
+Tk is not a pip dependency. If `import tkinter` fails, install the matching system package for your interpreter (for example `brew install python-tk@3.12` on Homebrew, `sudo apt install python3-tk` on Debian/Ubuntu, or the official python.org installer on macOS/Windows).
 
 ## Run the desktop app
 
@@ -66,6 +68,20 @@ python -m career_agent --diagnostics
 ```
 
 It reports the version, Python and platform, Tkinter availability, whether the default database exists and at which schema version, the source-quality gate state, and the number of enabled discovery sources. It never prints candidate record contents.
+
+## Troubleshooting
+
+- **`ModuleNotFoundError: No module named 'career_agent'`** — run the command from the repository root, or install the package first with `python -m pip install -e .`.
+- **`ModuleNotFoundError: No module named '_tkinter'`** — the interpreter lacks Tk. Install it with your platform's package manager or use the python.org build. Unit tests do not need Tk; scripted GUI tests skip when it is unavailable.
+- **`TclError: no display name and no $DISPLAY environment variable`** — the session is headless. Run the app on a desktop session; the test suite still runs.
+- **Exit status 2 immediately after launch** — the `--database` parent directory does not exist. Create it, or omit `--database` to use the per-user location. The app never creates parent directories for a supplied path.
+- **`sqlite3.OperationalError: database is locked`** — another instance (or a backup tool) holds the file. Close the other instance and retry; the app does not delete or reset the database automatically.
+- **`Permission denied` writing the database** — check ownership and mode. On POSIX the app restricts the file to mode `0600`; restore write permission for the owning user rather than widening access.
+- **A backup is refused** — check the error text: unsupported `format_version`, files above 10 MiB, non-UTF-8 content, and tampered event histories are rejected deliberately. Restore is replace-only and validates everything before writing.
+- **A resume imports nothing** — only text-based PDF, DOCX, TXT, and MD are supported, and extraction relies on labelled lines. Scanned PDFs need OCR, which is not included; image-only files are reported as having no extractable text.
+- **Discovery is disabled** — this is intentional. The source-quality gate stays closed until a provider's written permission is recorded; see [Job sources and discovery](#job-sources-and-discovery).
+
+For a support report, include the `--diagnostics` output and the exact command and error text. Do not attach your database or resume files.
 
 ## Audit research data
 

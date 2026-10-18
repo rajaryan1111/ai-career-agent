@@ -221,6 +221,26 @@ class GuiFlowTests(unittest.TestCase):
         self.assertEqual(self.app.profile_vars["country"].get(), "")
         self.assertIn("Deleted 1 profile, 1 job(s), 1 attempt(s)", self.app.status.get())
 
+    def test_unsaved_profile_changes_are_confirmed_before_close(self):
+        self.dialogs.clear()
+        self.app.profile_vars["country"].set("India")
+        self.answers["yes"] = False
+        self.app.close()
+        self.assertTrue(
+            any(kind == "askyesno" and "Unsaved" in title for kind, title, _ in self.dialogs)
+        )
+        self.assertIn("Close cancelled", self.app.status.get())
+        self.assertEqual(self.app.profile_vars["country"].get(), "India")
+
+        self.answers["yes"] = True
+        self.app.close()
+
+    def test_clean_close_needs_no_confirmation(self):
+        self.seed()
+        self.dialogs.clear()
+        self.app.close()
+        self.assertEqual(self.dialogs, [])
+
     def test_no_error_dialog_is_raised_by_ordinary_flows(self):
         self.seed()
         self.dialogs.clear()

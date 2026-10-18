@@ -53,6 +53,7 @@ class CareerAgentApp:
         self.tabs.add(self.tracker_tab, text="Application tracker")
         self.tabs.add(self.sources_tab, text="Sources & settings")
         self.profile_vars = {}
+        self._profile_snapshot = ()
         self.job_vars = {}
         self._build_profile()
         self._build_jobs()
@@ -238,11 +239,15 @@ class CareerAgentApp:
             parent=self.root,
         )
 
+    def _profile_form_snapshot(self):
+        return tuple(variable.get() for variable in self.profile_vars.values())
+
     def _load_profile(self):
         profile = self.store.get_profile()
         if not profile:
             for variable in self.profile_vars.values():
                 variable.set("")
+            self._profile_snapshot = self._profile_form_snapshot()
             return
         values = {
             "country": profile.candidate_country or "", "degree": profile.degree_discipline or "",
@@ -254,6 +259,7 @@ class CareerAgentApp:
         }
         for key, value in values.items():
             self.profile_vars[key].set(value)
+        self._profile_snapshot = self._profile_form_snapshot()
 
     def _save_profile(self):
         try:
@@ -270,6 +276,7 @@ class CareerAgentApp:
                 preferred_work_modes=frozenset(split_values(v["work_modes"].get())),
                 preferred_role_types=frozenset(split_values(v["role_types"].get())),
             ))
+            self._profile_snapshot = self._profile_form_snapshot()
             self.status.set("Candidate profile saved locally.")
         except ValueError as exc:
             messagebox.showerror("Invalid profile", str(exc), parent=self.root)
@@ -344,6 +351,7 @@ class CareerAgentApp:
         self.store.delete_profile()
         for variable in self.profile_vars.values():
             variable.set("")
+        self._profile_snapshot = self._profile_form_snapshot()
         self.status.set("Saved profile deleted.")
 
     def _job_from_form(self):
@@ -780,6 +788,14 @@ class CareerAgentApp:
         self.report.configure(state="disabled")
 
     def close(self):
+        if self._profile_form_snapshot() != self._profile_snapshot:
+            if not messagebox.askyesno(
+                "Unsaved profile changes",
+                "The profile form has changes that were not saved. Discard them and close?",
+                parent=self.root,
+            ):
+                self.status.set("Close cancelled; unsaved profile changes are still in the form.")
+                return
         self.store.close()
         self.root.destroy()
 
