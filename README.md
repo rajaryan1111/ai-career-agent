@@ -67,7 +67,7 @@ The throwaway database, profile, and listings are synthetic. There is no import/
 
 The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main` and `fix/**`, for all pull requests, and on manual dispatch. A failing scenario fails the job.
 
-Merging into `main` requires the `unit-tests (3.10)`, `unit-tests (3.11)`, and `unit-tests (3.12)` checks from GitHub Actions. Administrator bypass, force pushes, and branch deletion are disabled. This rule gates pull-request merges; direct pushes to `main` remain possible because push restrictions are not enabled.
+Changes reach `main` only through a pull request, and merging requires the `unit-tests (3.10)`, `unit-tests (3.11)`, and `unit-tests (3.12)` checks from GitHub Actions. Zero approvals are required, so a pull request is a review gate without a mandatory reviewer. Direct pushes are rejected, administrator enforcement is enabled, no bypass actor is configured, and force pushes and branch deletion are disabled.
 
 ## Safety and product principles
 
