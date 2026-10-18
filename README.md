@@ -37,6 +37,14 @@ python -m career_agent
 
 Candidate data is stored in the operating system's per-user application-data directory, not inside the repository. To use the core tests in a headless environment, no display is required.
 
+To run against a specific database, for example a disposable one while testing restore:
+
+```bash
+python -m career_agent --database /tmp/career-agent-test.sqlite3
+```
+
+A supplied path is created when absent, opened and upgraded to the current schema when it already exists, and never replaced. Its parent directory must already exist; otherwise the app prints an error and exits with status 2. Omitting `--database` keeps the per-user default, and `--help` never touches either database.
+
 ## Audit research data
 
 To regenerate a reproducible CSV integrity summary (including input SHA-256, row/column counts, duplicate IDs, canonical URL groups, status and permission counts):
@@ -97,7 +105,7 @@ Safety contract:
 - There are no automatic or scheduled backups; creating one is a manual action.
 - The restore dialog is wired to this contract, but the GUI has not been exercised in an automated or headless session here; desktop acceptance still depends on the manual checklist.
 
-The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main` and `fix/**`, for all pull requests, and on manual dispatch. A failing scenario fails the job.
+The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main`, for all pull requests, and on manual dispatch. A failing scenario fails the job. Branch pushes are not built separately: an open pull request already runs the matrix for each pushed commit, so the same commit is not checked twice.
 
 Changes reach `main` only through a pull request, and merging requires the `unit-tests (3.10)`, `unit-tests (3.11)`, and `unit-tests (3.12)` checks from GitHub Actions. Zero approvals are required, so a pull request is a review gate without a mandatory reviewer. Direct pushes are rejected, administrator enforcement is enabled, no bypass actor is configured, and force pushes and branch deletion are disabled.
 

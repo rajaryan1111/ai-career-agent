@@ -6,7 +6,9 @@ from __future__ import annotations
 import os
 import platform
 import re
+import sys
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
@@ -557,16 +559,29 @@ class CareerAgentApp:
         self.root.destroy()
 
 
-def main():
-    root = tk.Tk()
+def run_desktop(database_path: Path | None = None) -> int:
+    """Create the window and run the app; returns a process exit code."""
     try:
-        CareerAgentApp(root)
+        root = tk.Tk()
+    except tk.TclError as exc:
+        print(f"AI Career Agent could not open a display: {exc}", file=sys.stderr)
+        return 1
+    try:
+        CareerAgentApp(root, database_path)
     except Exception as exc:
         messagebox.showerror("AI Career Agent could not start", str(exc), parent=root)
         root.destroy()
-        raise
+        print(f"AI Career Agent could not start: {exc}", file=sys.stderr)
+        return 1
     root.mainloop()
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Backwards-compatible entry point; parsing lives in :mod:`career_agent.cli`."""
+    from .cli import main as cli_main
+    return cli_main(argv)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

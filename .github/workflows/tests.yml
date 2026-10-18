@@ -1,8 +1,11 @@
 name: Python tests
 
 on:
+  # Pull requests already cover every branch with an open PR, so building branch
+  # pushes as well would run the same matrix twice on the same commit. Main keeps
+  # its post-merge run, and branches without a PR are checked when the PR opens.
   push:
-    branches: [main, "fix/**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
