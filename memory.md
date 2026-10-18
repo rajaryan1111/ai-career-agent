@@ -814,3 +814,9 @@ These are proposed targets. Do not report them as measured results.
 - Failure handling is explicit: encrypted PDFs, non-PDF files named `.pdf`, image-only PDFs (no OCR), malformed or bodyless DOCX, non-UTF-8 text, empty files, unsupported extensions, files over 5 MiB, and over-long documents each produce an actionable error or warning.
 - Wired **Import resume (review)…** into the profile tab: proposals are shown with evidence and applied to the form only after confirmation, and nothing is written until the user clicks Save profile locally. Declining leaves the form unchanged.
 - Tests: `tests/test_resume.py` adds 22 synthetic-file tests and two GUI tests cover apply-without-saving and decline. Suite is 197 tests (197 passing on 3.12, 184 passing with 13 environment skips on 3.10/3.11).
+
+### 2026-10-19 — Owner-only database permissions and privacy-conscious diagnostics
+- `CareerStore` now tightens the SQLite file to mode 0600 on POSIX when opened, including databases created earlier under a permissive umask; failure is non-fatal and the check is skipped for in-memory databases.
+- Moved the per-user path logic into `career_agent/paths.py` with `create=False`, so parsing, `--help`, and diagnostics can compute the location without creating the real database or its folder. `desktop` re-exports the same function.
+- Added `--diagnostics`: version, Python, platform, Tkinter availability, whether the default database exists and at which schema version, gate state, and enabled-source count. It opens the database read-only, prints no record contents, and makes no changes. Verified against the real per-user database (schema 1) without modifying it.
+- Tests: `tests/test_paths.py` (3), database-permission tests (3), and `--diagnostics` tests (3). Suite is 206 tests (206 passing on 3.12, 193 passing with 13 environment skips on 3.10/3.11).

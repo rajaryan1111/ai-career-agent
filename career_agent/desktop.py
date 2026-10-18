@@ -3,8 +3,6 @@
 Launch with python -m career_agent. No network calls or external service dependencies.
 """
 from __future__ import annotations
-import os
-import platform
 import re
 import sys
 import uuid
@@ -18,6 +16,7 @@ from .core import (
     allowed_transitions, evaluate_eligibility, score_relevance,
 )
 from .export import ExportFormatError, RestoreError, restore_from_backup, write_export
+from .paths import default_database_path
 from .preparation import assess_readiness, build_application_draft
 from .resume import ResumeError, read_resume
 from .sources import (
@@ -25,20 +24,6 @@ from .sources import (
 )
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
-
-
-def default_database_path() -> Path:
-    """Choose a per-user app-data directory; never put candidate data in the repository."""
-    system = platform.system()
-    if system == "Darwin":
-        root = Path.home() / "Library" / "Application Support"
-    elif system == "Windows":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    folder = root / ("AI Career Agent" if system in {"Darwin", "Windows"} else "ai-career-agent")
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / "career_agent.sqlite3"
 
 
 class CareerAgentApp:

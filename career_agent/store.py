@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -59,6 +60,21 @@ class CareerStore:
         except Exception:
             self._connection.close()
             raise
+        self._restrict_file_permissions()
+
+    def _restrict_file_permissions(self) -> None:
+        """Best-effort 0600 on the local database file for multi-user machines.
+
+        SQLite creates files with the process umask, which can be group- or
+        world-readable. Failure here is not fatal: the database still works and
+        the caller can restrict it further with operating-system tools.
+        """
+        if self.database_path == ":memory:" or os.name != "posix":
+            return
+        try:
+            os.chmod(self.database_path, 0o600)
+        except OSError:
+            pass
 
     def close(self) -> None:
         self._connection.close()

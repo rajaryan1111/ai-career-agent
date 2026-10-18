@@ -13,9 +13,10 @@ internal local alpha; entries describe what has actually been verified.
 - Versioned JSON backups (format 3, schema 2) with full validation, transactional replace-only restore, rollback on failure, and documented format-2 compatibility.
 - Partial and complete local data deletion, including a confirmed "delete all local data" action.
 - Permission-gated source adapter contract with typed discovery outcomes, rate-limit helper, and a Sources & settings tab that reports the closed source-quality gate. No adapter performs network access.
-- `python -m career_agent --database PATH` plus the `career-agent` console command, `--help`, and `--version`.
+- `python -m career_agent --database PATH` plus the `career-agent` console command, `--help`, `--version`, and `--diagnostics` (environment and database-location facts with no record contents and no writes).
+- Local database files are restricted to the owning user (mode 0600) on POSIX systems when opened, including databases created earlier with a permissive umask.
 - `pyproject.toml` (Python 3.10–3.12, zero runtime dependencies), `.gitignore`, and `scripts/smoke_check.py` for one-command verification.
-- Test suite: 197 tests plus a 15-scenario tracker smoke test; GitHub Actions runs both on Python 3.10, 3.11, and 3.12.
+- Test suite: 206 tests plus a 15-scenario tracker smoke test; GitHub Actions runs both on Python 3.10, 3.11, and 3.12.
 
 ### Known limitations
 - Manual GUI acceptance has not been completed; scripted Tk tests cover the flows where a display exists and skip otherwise.

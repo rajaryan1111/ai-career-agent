@@ -1,5 +1,7 @@
 import json
+import os
 import sqlite3
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -463,6 +465,33 @@ class MigrationTests(unittest.TestCase):
             connection.close()
             with self.assertRaisesRegex(RuntimeError, "newer than supported"):
                 CareerStore(path)
+
+
+@unittest.skipUnless(os.name == "posix", "POSIX permissions are required for this check")
+class DatabasePermissionTests(unittest.TestCase):
+    def test_new_database_file_is_readable_only_by_its_owner(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "private.sqlite3"
+            with CareerStore(path) as store:
+                store.save_profile(CandidateProfile(candidate_country="India"))
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertEqual(oct(mode), oct(0o600))
+
+    def test_a_permissive_existing_database_is_tightened_on_open(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "loose.sqlite3"
+            with CareerStore(path):
+                pass
+            os.chmod(path, 0o644)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+            with CareerStore(path):
+                pass
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_in_memory_databases_are_unaffected(self):
+        with CareerStore(":memory:") as store:
+            store.save_profile(CandidateProfile(candidate_country="India"))
+            self.assertTrue(store.has_data())
 
 
 class DeleteAllDataTests(unittest.TestCase):

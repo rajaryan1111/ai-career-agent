@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import cli
+from career_agent.store import CareerStore
 
 try:
     from career_agent import desktop
@@ -121,6 +122,46 @@ class MainWiringTests(unittest.TestCase):
         self.assertEqual(code, 2)
         run.assert_not_called()
         self.assertIn("folder does not exist", err.getvalue())
+
+
+class DiagnosticsTests(unittest.TestCase):
+    def test_diagnostics_prints_environment_facts_without_starting_the_app(self):
+        with mock.patch.object(cli, "run") as run, \
+                mock.patch.object(cli, "_tk_status", return_value="stubbed"), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = cli.main(["--diagnostics"])
+        self.assertEqual(code, 0)
+        run.assert_not_called()
+        text = out.getvalue()
+        for key in (
+            "version:", "python:", "platform:", "tkinter: stubbed",
+            "database:", "source quality gate: closed", "enabled discovery sources: 0",
+        ):
+            self.assertIn(key, text)
+        self.assertNotIn("skills", text.casefold())
+
+    def test_diagnostics_does_not_create_the_database(self):
+        with tempfile.TemporaryDirectory() as folder:
+            missing = Path(folder) / "missing" / "career_agent.sqlite3"
+            with mock.patch.object(cli, "default_database_path", return_value=missing), \
+                    mock.patch.object(cli, "_tk_status", return_value="stubbed"), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.main(["--diagnostics"]), 0)
+            self.assertFalse(missing.exists())
+            self.assertFalse(missing.parent.exists())
+            self.assertIn("not created yet", out.getvalue())
+
+    def test_diagnostics_reads_the_schema_version_read_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "diag.sqlite3"
+            with CareerStore(path):
+                pass
+            with mock.patch.object(cli, "default_database_path", return_value=path), \
+                    mock.patch.object(cli, "_tk_status", return_value="stubbed"), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.main(["--diagnostics"]), 0)
+            self.assertIn("schema 2", out.getvalue())
+            self.assertIn("KiB", out.getvalue())
 
 
 class FakeRoot:

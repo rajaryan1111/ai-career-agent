@@ -59,6 +59,14 @@ python -m career_agent --database /tmp/career-agent-test.sqlite3
 
 A supplied path is created when absent, opened and upgraded to the current schema when it already exists, and never replaced. Its parent directory must already exist; otherwise the app prints an error and exits with status 2. Omitting `--database` keeps the per-user default, and `--help` never touches either database.
 
+For support requests and release checks, `--diagnostics` prints environment facts without starting the app, opening a record, or creating anything:
+
+```bash
+python -m career_agent --diagnostics
+```
+
+It reports the version, Python and platform, Tkinter availability, whether the default database exists and at which schema version, the source-quality gate state, and the number of enabled discovery sources. It never prints candidate record contents.
+
 ## Audit research data
 
 To regenerate a reproducible CSV integrity summary (including input SHA-256, row/column counts, duplicate IDs, canonical URL groups, status and permission counts):
@@ -149,7 +157,7 @@ Changes reach `main` only through a pull request, and merging requires the `unit
 
 ## Safety and product principles
 
-- Keep candidate profile and application history local by default.
+- Keep candidate profile and application history local by default. On POSIX systems the SQLite file is restricted to the owning user (mode 0600) when opened, so a shared machine cannot read it with the process umask default.
 - Missing eligibility evidence is not a pass.
 - A visible Apply button is not proof that a job is open or that submission succeeded.
 - Never infer worldwide eligibility from the word “remote.”
