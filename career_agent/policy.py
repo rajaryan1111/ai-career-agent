@@ -20,6 +20,7 @@ everything here:
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -124,6 +125,26 @@ class GlobalPolicy:
         if self.revoked_at is not None and not str(self.revoked_at).strip():
             raise PolicyError("a revoked policy records when it was revoked")
 
+    def content_key(self) -> str:
+        """A stable rendering of the authorisation itself, so "nothing changed" can be recognised.
+
+        Pairs and limits are sorted and the JSON is key-sorted: the same authorisation said twice
+        always produces the same text, which is what lets a revision that changes nothing write no
+        row. The version number is deliberately absent - it is identity, not content.
+        """
+        return json.dumps(
+            {
+                "allowed": sorted([source_id, action.value] for source_id, action in self.allowed),
+                "daily_limits": {kind.value: limit
+                                 for kind, limit in sorted(self.daily_limits.items(),
+                                                           key=lambda item: item[0].value)},
+                "quiet_hours": list(self.quiet_hours) if self.quiet_hours else None,
+                "stop_all": self.stop_all,
+                "revoked_at": self.revoked_at,
+            },
+            sort_keys=True, ensure_ascii=False,
+        )
+
     @property
     def is_empty(self) -> bool:
         """Whether this policy authorises nothing at all."""
@@ -222,3 +243,62 @@ def evaluate_policy(policy: GlobalPolicy, *, source_id: str, action: object, now
             f"({done_today} so far)")
     return PolicyDecision(allowed=not refusals, source_id=source_id, action=kind,
                           refusals=tuple(refusals))
+
+
+# ---------------------------------------------------------------- the stored form
+
+def policy_payload(policy: GlobalPolicy) -> str:
+    """One policy as the text the database stores: the authorisation, without its version number.
+
+    The version is a column, not payload, so two stored versions differ exactly when the
+    authorisations do - which is what makes a comparison over stored rows mean the same thing as one
+    over fresh values.
+    """
+    return policy.content_key()
+
+
+def policy_from_payload(payload: str) -> GlobalPolicy:
+    """A stored row back into a policy, refusing what this build cannot read as one.
+
+    Raises :class:`PolicyError` (never a bare ``KeyError`` or ``TypeError``) so the store can report a
+    damaged row as a damaged row instead of crashing a read - and so a policy that cannot be read is
+    never quietly treated as "no restrictions".
+    """
+    try:
+        content = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise PolicyError(f"a stored policy is not readable JSON ({exc.msg})") from exc
+    if not isinstance(content, dict):
+        raise PolicyError(f"a stored policy is a JSON object, not {type(content).__name__}")
+    unknown = sorted(set(content) - {"allowed", "daily_limits", "quiet_hours", "stop_all",
+                                     "revoked_at"})
+    if unknown:
+        raise PolicyError(
+            f"a stored policy holds field(s) this version does not know: {', '.join(unknown)}")
+    pairs = content.get("allowed", [])
+    if not isinstance(pairs, list):
+        raise PolicyError("a stored policy carries its authorisations as a list of pairs")
+    allowed = set()
+    for pair in pairs:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise PolicyError("a stored authorisation is a [source, action] pair")
+        allowed.add((str(pair[0]), _as_action(pair[1])))
+    limits = content.get("daily_limits", {})
+    if not isinstance(limits, dict):
+        raise PolicyError("a stored policy carries its daily limits as an object")
+    quiet = content.get("quiet_hours")
+    if quiet is not None:
+        if not isinstance(quiet, list) or len(quiet) != 2:
+            raise PolicyError("stored quiet hours are a pair of hours")
+        quiet = (quiet[0], quiet[1])
+    stop_all = content.get("stop_all", False)
+    if not isinstance(stop_all, bool):
+        raise PolicyError("a stored policy's stop switch is true or false")
+    revoked_at = content.get("revoked_at")
+    if revoked_at is not None and not isinstance(revoked_at, str):
+        raise PolicyError("a stored policy records its revocation as a timestamp")
+    return GlobalPolicy(
+        allowed=frozenset(allowed),
+        daily_limits={_as_action(name): limit for name, limit in limits.items()},
+        quiet_hours=quiet, stop_all=stop_all, revoked_at=revoked_at,
+    )

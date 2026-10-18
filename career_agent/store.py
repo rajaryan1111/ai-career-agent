@@ -32,6 +32,9 @@ from .core import (
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
 )
+from .policy import (
+    ActionKind, GlobalPolicy, PolicyError, no_authorisation, policy_from_payload, policy_payload,
+)
 from .strategies import (
     CONTENT_FIELDS, RoleStrategy, StrategyError, new_strategy_id, strategy_from_payload,
     strategy_payload,
@@ -41,7 +44,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -76,6 +79,10 @@ SCHEMA_TABLES_BY_VERSION = {
          "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
          "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
          "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    11: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1125,6 +1132,24 @@ def _migration_to_v10(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v11(connection: sqlite3.Connection) -> None:
+    """Schema 11: the standing authorisation, versioned the way a decision with consequences has to be.
+
+    One new table, additive and empty. A policy is append-only: one row per version, the payload
+    holding the authorisation and the version column holding its place in the sequence, so "what was
+    I authorised to do on the day that ran?" has an answer, and a revocation is a new version rather
+    than an erased one. An empty table means *nothing is authorised* - the absence of a row is the
+    safe state, not an unknown one.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS policy_version (
+               version INTEGER PRIMARY KEY,
+               payload TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1140,6 +1165,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (8, "add where each stored profile fact came from, and whether it was confirmed", _migration_to_v8),
     (9, "add the versioned role strategies", _migration_to_v9),
     (10, "add the tailored artifacts and the basis each was built from", _migration_to_v10),
+    (11, "add the versioned standing authorisation", _migration_to_v11),
 )
 
 
@@ -3768,6 +3794,112 @@ class CareerStore:
     # The strategy's *content* is the person's own data (a name, places, employers they rule out), so
     # the events carry the generated identifier and the version number, and nothing else.
 
+    # ------------------------------------------------------------ the standing authorisation
+
+    def get_global_policy(self) -> GlobalPolicy:
+        """The authorisation in force now, or the empty one when nothing has been authorised.
+
+        A file with no policy row authorises **nothing**: the absence of a decision is the safe
+        answer, never an unknown one, so this returns :func:`~career_agent.policy.no_authorisation`
+        rather than ``None`` and a caller cannot forget to handle the missing case.
+        """
+        if not self._schema_records_policy():
+            return no_authorisation()
+        row = self._connection.execute(
+            "SELECT version, payload FROM policy_version ORDER BY version DESC LIMIT 1").fetchone()
+        if row is None:
+            return no_authorisation()
+        return self._decode_policy_version(row)
+
+    def policy_version_number(self) -> int:
+        """Which version of the authorisation is in force; ``0`` when none has ever been given."""
+        if not self._schema_records_policy():
+            return 0
+        row = self._connection.execute(
+            "SELECT version FROM policy_version ORDER BY version DESC LIMIT 1").fetchone()
+        return 0 if row is None else int(row["version"])
+
+    def policy_versions(self) -> tuple[tuple[int, GlobalPolicy], ...]:
+        """Every authorisation ever given, oldest first: the history of what was permitted when."""
+        if not self._schema_records_policy():
+            return ()
+        rows = self._connection.execute(
+            "SELECT version, payload FROM policy_version ORDER BY version ASC").fetchall()
+        return tuple((int(row["version"]), self._decode_policy_version(row)) for row in rows)
+
+    def save_global_policy(self, policy: GlobalPolicy) -> int:
+        """Append the next version of the authorisation, or keep the current one when nothing changes.
+
+        Append-only, for the same reason strategy versions are: an action that ran yesterday was
+        authorised by the policy of yesterday, and rewriting the row would erase what the person had
+        actually agreed to. A policy identical to the one in force writes **no row** and returns the
+        version already in force - a new version would claim a decision that was never made.
+        """
+        if not isinstance(policy, GlobalPolicy):
+            raise PolicyError("a standing authorisation is a GlobalPolicy")
+        if not self._schema_records_policy():
+            raise PolicyError(
+                "this file records a schema older than the one that keeps the standing "
+                "authorisation, so there is nowhere to put it. Open the application on this file to "
+                "update it.")
+        current_version = self.policy_version_number()
+        if current_version:
+            current = self.get_global_policy()
+            if current.content_key() == policy.content_key():
+                return current_version
+        version = current_version + 1
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO policy_version (version, payload, created_at) VALUES (?, ?, ?)",
+                (version, policy_payload(policy), _now()),
+            )
+        # Counts and switches only: which sources and actions a person authorised is their decision,
+        # and the detail here stays small enough to read in a log without describing them.
+        self._record("policy.saved",
+                     f"version={version} pairs={len(policy.allowed)} "
+                     f"stop_all={str(policy.stop_all).lower()} "
+                     f"revoked={'yes' if policy.revoked_at else 'no'}")
+        return version
+
+    def revoke_global_policy(self, *, revoked_at: str | None = None) -> int:
+        """Append a version that authorises nothing, keeping the history of what was authorised.
+
+        Revoking is not deleting: the versions that were in force stay readable, because an action
+        taken last week was taken under one of them. The new version carries the same pairs and
+        limits with ``revoked_at`` set, so a reader can see *what* was withdrawn, and
+        :func:`~career_agent.policy.evaluate_policy` refuses everything while it is in force.
+        """
+        current = self.get_global_policy()
+        if current.revoked_at:
+            return self.policy_version_number()
+        moment = revoked_at or _now()
+        version = self.save_global_policy(replace(current, revoked_at=moment))
+        self._record("policy.revoked", f"version={version}")
+        return version
+
+    def _schema_records_policy(self) -> bool:
+        """Whether this file is new enough to hold the standing authorisation (schema 11)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_version'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_policy_version(row: sqlite3.Row) -> GlobalPolicy:
+        """One stored authorisation, or :class:`StoredRecordError` naming what cannot be read.
+
+        A policy that cannot be decoded is **never** read as "no restrictions": the error travels, and
+        the caller refuses, because the one thing worse than an unreadable authorisation is a
+        permissive guess about it.
+        """
+        noun = "standing authorisation"
+        version = _stored_int(row["version"], noun, "version")
+        if version < 1:
+            raise StoredRecordError(noun, f"its version {version} is not a version number")
+        try:
+            return policy_from_payload(str(row["payload"] or ""))
+        except PolicyError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
     def create_role_strategy(self, **content: object) -> RoleStrategy:
         """Store a new strategy as version 1 under a freshly generated identifier.
 
@@ -4074,6 +4206,9 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     ("hr_contact", "contact_id", CareerStore._decode_contact),
     ("hr_contact_conflict", "conflict_id", CareerStore._decode_contact_conflict),
     ("role_strategy_version", "strategy_id", CareerStore._decode_role_strategy),
+    # The authorisation is read by the doctor through its own decoder for the reason the decoder
+    # exists: a row that cannot be read must be reported, never taken for "nothing was restricted".
+    ("policy_version", "version", CareerStore._decode_policy_version),
     ("tailored_artifact", "artifact_id", CareerStore._decode_tailored_artifact),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
