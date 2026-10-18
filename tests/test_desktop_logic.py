@@ -678,3 +678,60 @@ class WhatsHappeningTextTests(unittest.TestCase):
         for value in ("", "half nine", "-1", "24", "9.5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 logic.parse_notification_hour(value)
+
+
+class DoNotContactTextTests(unittest.TestCase):
+    """The words the do-not-contact panel puts on screen, with no Tk and no database."""
+
+    def test_the_reasons_offered_are_the_suppression_module_s_own(self):
+        from career_agent.suppression import REASON_LABELS
+
+        offered = logic.suppression_reason_choices()
+        self.assertEqual([value for value, _label in offered],
+                         [reason.value for reason in REASON_LABELS])
+        self.assertEqual([label for _value, label in offered], list(REASON_LABELS.values()))
+
+    def test_a_row_says_a_note_exists_and_never_what_it_says(self):
+        entry = SimpleNamespace(address="someone@example.invalid",
+                                reason=SimpleNamespace(value="wrong_person"),
+                                recorded_at="2026-10-18T09:00:00+00:00",
+                                note="they told me on the phone")
+        row = logic.suppression_rows([entry])[0]
+        self.assertEqual(row[0], "someone@example.invalid")
+        self.assertEqual(row[3], "a note is recorded")
+        self.assertNotIn("phone", " ".join(row))
+        blank = SimpleNamespace(address="x@example.invalid", reason=SimpleNamespace(value="x"),
+                                recorded_at="", note="  ")
+        self.assertEqual(logic.suppression_rows([blank])[0][3], "no note")
+
+    def test_the_summary_reports_a_disagreement_between_the_two_records(self):
+        agreed = logic.suppression_summary_text(2, 2, 0)
+        self.assertIn("2 address(es)", agreed)
+        self.assertNotIn("not on the list", agreed)
+        disagreed = logic.suppression_summary_text(1, 2, 1)
+        self.assertIn("1 marked contact(s) are not on the list", disagreed)
+        self.assertIn("marking them again puts them on it", disagreed)
+
+    def test_a_lift_needs_a_note_and_says_why(self):
+        self.assertIsNone(logic.suppression_lift_refusal("they asked us to"))
+        refusal = logic.suppression_lift_refusal(" no ")
+        self.assertIsNotNone(refusal)
+        self.assertIn("four", refusal)
+        self.assertIn("nothing was changed", refusal)
+
+    def test_the_mark_question_says_the_first_reason_wins_and_flags_a_permanent_one(self):
+        asked = logic.suppression_mark_question(3, "they asked not to be contacted", True)
+        self.assertIn("checks before anything may be sent", asked)
+        self.assertIn("keeps the first reason", asked)
+        self.assertIn("permanent", asked)
+        self.assertIn("3 address(es)", asked)
+        mild = logic.suppression_mark_question(0, "you decided not to write to them", False)
+        self.assertNotIn("permanent", mild)
+
+    def test_the_lift_question_is_honest_about_a_mark_that_is_not_on_the_list(self):
+        absent = logic.suppression_lift_question("a@example.invalid", None, False)
+        self.assertIn("not on the do-not-contact list", absent)
+        present = logic.suppression_lift_question("a@example.invalid",
+                                                  "they asked not to be contacted", True)
+        self.assertIn("comes off the do-not-contact list", present)
+        self.assertIn("not something time or an import may do", present)

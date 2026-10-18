@@ -942,3 +942,95 @@ def parse_notification_hour(value: str) -> int:
     if not 0 <= hour <= 23:
         raise ValueError(f"{hour} is not an hour of the day; use a number from 0 to 23.")
     return hour
+
+
+# ---------------------------------------------------------------------------------------------
+# The do-not-contact list, in the window
+#
+# Two marks existed before this: a column on the stored contact row, written by the HR contacts tab,
+# and the list in ``contact_suppression`` that ``guarded_dispatch`` checks before anything is sent.
+# A person who marks somebody "do not contact" means one thing by it, so the window now writes both -
+# and these helpers describe the list, including the disagreement a database marked before this build
+# will have, rather than hiding it behind a count that looks tidy.
+
+#: The reasons a suppression may carry, in the order the window offers them. The labels are the
+#: suppression module's own, so the window cannot invent a sixth reason or reword one of the five.
+def suppression_reason_choices() -> tuple[tuple[str, str], ...]:
+    """The stored reasons and their labels, in the module's own order."""
+    from .suppression import REASON_LABELS  # noqa: PLC0415 - avoids a cycle at import time
+
+    return tuple((reason.value, label) for reason, label in REASON_LABELS.items())
+
+
+def suppression_rows(entries: Iterable[object]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per suppressed address: the address, why, when, and whether a note is kept with it.
+
+    The note's text is never a column. A reason typed about somebody else is stored on the record and
+    shown nowhere else - not in a log, not in an event, not in a list a screen share would carry - and
+    "a note is recorded" is all a reader needs to know that one exists.
+    """
+    from .suppression import REASON_LABELS  # noqa: PLC0415
+
+    rows = []
+    for entry in entries:
+        reason = getattr(entry, "reason", None)
+        # Matched on the stored value rather than on the object: a row read back from a database
+        # written by a later build can carry a reason this one has no member for, and a list that
+        # raised rather than drawing it would hide an address somebody must not be written to.
+        value = getattr(reason, "value", reason)
+        label = next((text for member, text in REASON_LABELS.items() if member.value == value),
+                     str(value))
+        note = (getattr(entry, "note", "") or "").strip()
+        rows.append((
+            getattr(entry, "address", ""),
+            label,
+            format_stored_timestamp(getattr(entry, "recorded_at", "")),
+            "a note is recorded" if note else "no note",
+        ))
+    return tuple(rows)
+
+
+def suppression_summary_text(listed: int, marked_contacts: int, unlisted: int) -> str:
+    """The line above the list: what is enforced, what is only annotated, and whether they agree."""
+    sentence = (f"{listed} address(es) on the list this application checks before anything may be sent "
+                f"· {marked_contacts} stored contact(s) carry the mark.")
+    if unlisted:
+        return (f"{sentence} {unlisted} marked contact(s) are not on the list: they were marked before "
+                "this window wrote both, and marking them again puts them on it.")
+    return f"{sentence} Nothing in this build sends anything, either way."
+
+
+def suppression_lift_refusal(note: str) -> str | None:
+    """Why a lift cannot proceed, or ``None``. The store's rule, checked before anything is asked."""
+    if len(str(note or "").strip()) < 4:
+        return ("Taking a do-not-contact mark off needs a note saying why, of at least four "
+                "characters. An entry removed without one cannot be told apart from a mistake, so "
+                "nothing was changed.")
+    return None
+
+
+def suppression_mark_question(address_count: int, reason_label: str, permanent: bool) -> str:
+    """What the confirmation adds when a mark also goes on the enforced list."""
+    question = (f"This also records the address on the do-not-contact list this application checks "
+                f"before anything may be sent, as: {reason_label}. Recording an address twice keeps "
+                f"the first reason, so an earlier one is never overwritten.")
+    if permanent:
+        question += (" This reason is the one that is meant to be permanent: nothing expires it, and "
+                     "taking it off later needs a note saying why.")
+    if address_count:
+        question += f" {address_count} address(es) are on that list now."
+    return question
+
+
+def suppression_lift_question(address: str, reason_label: str | None, permanent: bool) -> str:
+    """What the confirmation adds when a removal also takes an address off the enforced list."""
+    if reason_label is None:
+        return ("That address is not on the do-not-contact list this application checks, so only the "
+                "mark on the stored contact is removed.")
+    question = (f"The address also comes off the do-not-contact list this application checks before "
+                f"anything may be sent, where it is recorded as: {reason_label}. Your note is kept "
+                f"with the removal.")
+    if permanent:
+        question += (" That reason says they asked not to be contacted. Removing it is yours to do in "
+                     "your own database, and it is not something time or an import may do.")
+    return question

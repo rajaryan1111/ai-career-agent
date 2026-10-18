@@ -88,6 +88,7 @@ EXPECTED_TREES = {
     "artifacts_tree": ("kind", "listing", "strategy", "built", "cited", "state"),
     "policy_tree": ("source", "action", "limit", "state"),
     "attempt_tree": ("operation", "action", "identity", "started", "state"),
+    "suppression_tree": ("address", "reason", "recorded", "note"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once

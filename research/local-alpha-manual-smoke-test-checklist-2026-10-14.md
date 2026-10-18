@@ -1,8 +1,9 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 143 steps — at this revision **22 PASS, 121 BLOCKED, 0 FAIL, no box ticked** (the seven
-newest steps, 137-143, are for the What's happening tab — the report, the attempts nobody settled and the
-notification preference — and all seven are BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 150 steps — at this revision **22 PASS, 128 BLOCKED, 0 FAIL, no box ticked** (the seven
+newest steps, 144-150, are for the do-not-contact list on the HR contacts tab — the mark that now writes
+the list the sending gate reads — and all seven are BLOCKED; steps 137-143, for the What's happening tab,
+are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1395,4 +1396,33 @@ second verification pass, after the first run was already green.
     nothing arrived while the application was closed needs a machine to watch for a day.**
 143. [ ] Keyboard and screen reader: reach the window chooser, the attempt list, the outcome chooser, the
     evidence box and both confirmation buttons with **Tab** alone, and operate them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## HR contacts: the do-not-contact list the sending gate reads (added 2026-10-18)
+
+144. [ ] Select a stored contact that carries no mark. Confirm the **Why** chooser offers exactly five
+    reasons and no blank entry, and that the note box is usable.
+    → **BLOCKED — acceptance check L9 reads the offered values off the real chooser under a stand-in;
+    what they look like at a real window size is not established.**
+145. [ ] Type a note, press **Mark do not contact** and read the confirmation before answering. It must
+    say that the address goes on the list this application checks before anything may be sent, and that
+    recording an address twice keeps the first reason. Answer **Yes**.
+    → **BLOCKED — acceptance check L9 asserts both sentences and both stored records.**
+146. [ ] Confirm the address now appears in the do-not-contact list under the stored contacts, with its
+    reason and the day, and that the note's own text appears nowhere — not in the list, not in the
+    dialog you just read, and not in `logs/application.log`.
+    → **BLOCKED — acceptance check L9 asserts the row, the "a note is recorded" cell and the log.**
+147. [ ] Press **Remove do-not-contact mark** with the note box empty. The refusal must be a dialog, no
+    confirmation may be asked, and both records must be unchanged.
+    → **BLOCKED — acceptance check L9b asserts the refusal, the absent question and the change counter.**
+148. [ ] Type why you are removing it, press the button again and answer **Yes**. The mark and the list
+    entry must both go, and the list above must be empty.
+    → **BLOCKED — acceptance check L9b asserts both records and the redrawn panel.**
+149. [ ] On a database marked with an older build (a contact whose row says *do not contact* while the
+    list below is empty), confirm the line above the list says how many marked contacts are not on it,
+    and that the state line for that contact says the same.
+    → **BLOCKED — the handler tests assert both sentences; a database carried over from an older build
+    on a real machine has not been opened here.**
+150. [ ] Keyboard and screen reader: reach the reason chooser, the note box and both mark controls with
+    **Tab** alone, and operate them without a mouse.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**

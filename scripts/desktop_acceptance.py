@@ -4301,6 +4301,9 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
 #: The reason this run types beside a mark. A person's own words about somebody, and the text that must
 #: never reach a dialog, a status line or an event: the run checks exactly that after storing it.
 SYNTHETIC_MARK_REASON = "synthetic note typed by the acceptance run"
+#: The note a removal is recorded with, in the same spirit: the person's own words, which the
+#: window stores and shows nowhere else.
+SYNTHETIC_LIFT_NOTE = "they wrote back and asked to hear from us (synthetic)"
 #: A second reason, typed beside the mark on the *other* contact, so that deleting one record can be shown
 #: to leave the other contact's mark - and the words written beside it - exactly where they were.
 SYNTHETIC_OTHER_MARK_REASON = "synthetic note about the contact the run does not delete"
@@ -4508,8 +4511,20 @@ def workflow_l_contact_import(run: Run) -> None:
         require(marked.suppressed, "the mark was not stored")
         require(marked.suppressed_note == SYNTHETIC_MARK_REASON,
                 f"the reason was not stored with the mark: {marked.suppressed_note!r}")
-        require(app.store._connection.total_changes - before == 1,
-                f"marking changed {app.store._connection.total_changes - before} row(s), not one")
+        # Two rows, and exactly two: the mark on the stored contact, and the address on the
+        # do-not-contact list this application checks before anything may be sent. One decision,
+        # recorded in both places it has to be, from one confirmation.
+        require(app.store._connection.total_changes - before == 2,
+                f"marking changed {app.store._connection.total_changes - before} row(s), not two")
+        require(app.store.is_suppressed(key),
+                "the mark did not reach the list the sending gate reads")
+        listed = [app.suppression_tree.item(item, "values")
+                  for item in app.suppression_tree.get_children()]
+        require(len(listed) == 1 and listed[0][0] == key, f"the panel shows {listed!r}")
+        require(listed[0][3] == "a note is recorded",
+                f"the panel does not say a note is kept: {listed!r}")
+        require(SYNTHETIC_MARK_REASON not in " ".join(str(value) for value in listed[0]),
+                "the note's own text was drawn in the list")
         row = app.stored_contacts_tree.item(str(marked.contact_id), "values")
         require("do not contact" in str(row[5]), f"the stored list does not show the mark: {row!r}")
         require("1 marked do-not-contact" in app.contacts_summary.get(),
@@ -4528,6 +4543,48 @@ def workflow_l_contact_import(run: Run) -> None:
         for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], SYNTHETIC_MARK_REASON,
                       "synthetic-contacts.csv"):
             require(value not in written, f"{value!r} reached the activity log")
+
+    with results.step("L9b taking that mark off needs a note, and then clears both records"):
+        # The mark L9 made is on the enforced list, which will not give an address up without a note.
+        # The refusal has to come before the question, not after it.
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, " no ")
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        require("Nothing was changed" in policy.titles("showerror"),
+                f"a removal with no note was not refused; dialogs: {policy.titles()!r}")
+        require(policy.titles("askyesno") == [],
+                "the window asked a question it was going to refuse")
+        require(app.store._connection.total_changes == before,
+                "a refused removal wrote to the database")
+        require(app.store.is_suppressed(key), "a refused removal took the address off the list")
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_LIFT_NOTE)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        require(not app.store.is_suppressed(key),
+                "the address stayed on the list the sending gate reads")
+        require(not app.store.get_contact(key).suppressed, "the mark was left on the stored contact")
+        require(app.store._connection.total_changes - before == 2,
+                f"the removal changed {app.store._connection.total_changes - before} row(s), not two")
+        require(app.suppression_tree.get_children() == (),
+                "the panel still lists an address that is no longer on the list")
+        said = policy.said("Remove this contact's do-not-contact mark") + "\n" + app.status.get()
+        require(SYNTHETIC_LIFT_NOTE not in said, "the note's own text reached a dialog")
+        # Put the mark back the way a person would, because the steps after this one are about what
+        # an import, a review and a deletion do to a contact that carries one. Leaving it off here
+        # would quietly weaken four later checks rather than adding this one.
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_MARK_REASON)
+        workspace.root.update()
+        press(app.contacts_tab, "Mark do not contact", workspace.root)
+        require(app.store.get_contact(key).suppressed and app.store.is_suppressed(key),
+                "the mark was not put back, so the later steps would check a weaker state")
 
     contradicting_path = workspace.folder / "contradicting-contacts.csv"
     contradicting_path.write_text(

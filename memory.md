@@ -4026,3 +4026,25 @@ lives. 22 tests (12 handler, 10 text) plus acceptance workflow O's six checks; t
 130 checks, 0 failed, and is still not a window — seven manual steps (137-143) are recorded BLOCKED,
 taking that checklist to 143 steps: 22 PASS, 121 BLOCKED, 0 FAIL. Note:
 `research/what-has-been-happening-in-the-window-2026-10-18.md`.
+
+**One mark, not two, 2026-10-18:** the HR contacts tab wrote a column called "do not contact" that
+nothing enforced, while the list `guarded_dispatch` actually checks before any outbound action was
+reachable only from Python - so a person could mark somebody, watch the row change, and leave the one
+check that matters knowing nothing about it. Nothing in this build sends anything, so no message went
+anywhere it should not have; that is luck about the order the work was done in, not a property of the
+design, and the gap would have closed itself on the day sending arrived in the worst possible way.
+Marking now writes both records from one confirmation, with a reason chosen from the suppression
+module's own five labels and no sixth, and the confirmation says the address goes on the list checked
+before anything may be sent and that recording it twice keeps the first reason. Taking a mark off
+needs a note of at least four characters whenever the address is on that list, refused *before* the
+question is asked rather than after, because a window should not ask something it is about to refuse.
+The panel shows every suppressed address with its reason and day and whether a note exists - never the
+note's text, which stays out of columns, dialogs, events and the log - and a contact marked by an
+older build is reported as "not on the list" rather than quietly counted as protected. Two decisions
+recorded: the note is required exactly where the store requires it, so a legacy column-only mark can
+still be cleared without one rather than the window inventing a stricter rule; and a removal offers no
+reason chooser, because a chooser would imply the stored reason could be rewritten, which is what
+"the first reason wins" exists to prevent. 18 tests (12 handler, 6 text) plus acceptance L9's new
+assertions and a new L9b; the acceptance check that read "marking changed 1 row" now reads 2, and the
+old number was the defect written down. Suite 2540 OK (skipped=13). Note:
+`research/one-mark-not-two-2026-10-18.md`.

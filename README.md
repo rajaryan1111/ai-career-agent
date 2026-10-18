@@ -1080,6 +1080,22 @@ What it does not do: this build sends nothing at all, so the list is a guard in 
 is already locked. It exists now because the alternative — adding it at the same time as sending —
 is how people end up emailing someone who asked them not to.
 
+**In the window.** The list is on the **HR contacts** tab, under the stored contacts, beside the mark
+that writes it — and marking a contact *is* what puts the address on it. That was two separate things
+until 2026-10-18: the window wrote a column on the contact row, and the list the sending gate reads
+could only be reached from Python, so a person could mark somebody "do not contact" and leave the one
+check that matters knowing nothing about it. One decision is now recorded in both places, from one
+confirmation:
+
+- **marking** asks for a reason — the five the list defines, no sixth — and the confirmation says the
+  address goes on the list that is checked before anything may be sent, and that recording an address
+  twice keeps the first reason;
+- **taking a mark off** needs a note of at least four characters, refused *before* the question is
+  asked rather than after, because an entry removed with no note cannot be told apart from a mistake;
+- **a note's text is never shown in the list, a dialog, an event or the log** — only that one exists;
+- a contact marked by an older build shows as **not on the list**, and the line above the list says
+  how many are in that state, because quietly counting them as protected would be the dangerous lie.
+
 ## Syncing, credentials, and what is deliberately not claimed
 
 **Laptop-off operation is not available, and this project does not claim it.** The worker is a

@@ -39,7 +39,9 @@ from career_agent import analytics as career_agent_analytics
 from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
+from career_agent import desktop_logic as logic
 from career_agent.attempts import AttemptState
+from career_agent.suppression import SuppressionReason
 from career_agent.notifications import Cadence, DeliveryChannel
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 
@@ -1153,8 +1155,17 @@ class HandlerTestCase(unittest.TestCase):
         app.contact_mark_state = StringVar(value="No stored contact is selected.")
         app.contact_note = StringVar()
         app.contact_note_entry = Entry(textvariable=app.contact_note, state="disabled")
+        app.contact_reason = StringVar(value="they asked not to be contacted")
+        app.contact_reason_box = RecordingCombobox(textvariable=app.contact_reason, state="disabled")
+        # Taken back out of the created list: that list is how tests assert which choosers a
+        # *handler* built, and a widget this fixture builds is not one a handler offered.
+        RecordingCombobox.created.remove(app.contact_reason_box)
         app.mark_contact_button = Button(text="Mark do not contact", state="disabled")
         app.clear_contact_button = Button(text="Remove do-not-contact mark", state="disabled")
+        # The enforced do-not-contact list, built the way the real tab builds it: a read-only list and
+        # the line above it, both re-read on every refresh.
+        app.suppression_tree = Tree()
+        app.suppression_summary = StringVar(value="Reading the do-not-contact list...")
         # The destructive control, built the way the real tab builds it: disabled until the list has a
         # selected row, so a test that presses it with nothing selected is pressing a greyed-out button.
         app.delete_contact_button = Button(text="Delete selected contact", state="disabled")
@@ -6726,15 +6737,20 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertIn("Selected contact 1 of 2", app.contact_mark_state.get())
         self.assertIn("Not marked do not contact", app.contact_mark_state.get())
 
-        # A marked contact: the other way round, and the reason box is off because the only action left is
-        # removing the mark - which removes the reason with it. The mark is made the way a person makes it.
+        # A marked contact: the other way round. The reason chooser goes off, because a removal is
+        # recorded against the reason already stored rather than rewriting it, and the note box stays
+        # on, because the enforced list will not give an address up without a note.
         app.contact_note.set(CONTACT_NOTE)
         app._mark_selected_contact()
         self.select(app, ids[CONTACT_EMAILS[0]])
         self.assertTrue(app.mark_contact_button.instate(["disabled"]))
         self.assertFalse(app.clear_contact_button.instate(["disabled"]))
-        self.assertTrue(app.contact_note_entry.instate(["disabled"]))
-        self.assertIn("Marked do not contact, and a reason is recorded with it",
+        self.assertTrue(app.contact_reason_box.instate(["disabled"]))
+        self.assertFalse(app.contact_note_entry.instate(["disabled"]),
+                         "a mark cannot be taken off without a note, so the note box must stay usable")
+        self.assertIn("Marked do not contact, a reason is recorded with it",
+                      app.contact_mark_state.get())
+        self.assertIn("on the do-not-contact list this application checks",
                       app.contact_mark_state.get())
 
     def test_marking_asks_first_and_stores_the_mark_with_the_reason_typed(self):
@@ -6751,11 +6767,16 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertIn("row 1 of 2 in the stored list", asked)
         self.assertIn("contacts.csv", asked, "the file the row came from is how a person tells rows apart")
         self.assertIn("no import can clear it", asked)
-        self.assertIn("The reason you typed is stored with the mark", asked)
+        self.assertIn("The note you typed is stored with the mark", asked)
         record = self.store.get_contact(CONTACT_EMAILS[0])
         self.assertTrue(record.suppressed)
         self.assertEqual(record.suppressed_note, CONTACT_NOTE)
-        self.assertEqual(self.changes() - before, 1, "one update and nothing else")
+        # Two rows, because one decision is now recorded in both places it has to be: the mark on the
+        # stored contact, and the address on the list the sending gate checks before anything is sent.
+        self.assertEqual(self.changes() - before, 2, "the mark and the enforced entry, and nothing else")
+        entry = self.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertIsNotNone(entry, "the mark did not reach the list this application checks")
+        self.assertTrue(self.store.is_suppressed(CONTACT_EMAILS[0]))
         self.assertIn("Do-not-contact mark updated", MESSAGES.titles("showinfo"))
         self.assertIn("marked do not contact", app.status.get())
         self.assertEqual(app.contact_note.get(), "", "the reason box is cleared with the mark it recorded")
@@ -6815,6 +6836,9 @@ class ContactMarkControlTests(ContactTabTestCase):
         marked = self.store.get_contact(CONTACT_EMAILS[0])
         MESSAGES.reset()
         CONFIG[CLEAR_TITLE] = False
+        # A removal needs a note of its own: the mark handler empties the box after it writes, and the
+        # enforced do-not-contact list will not give an address up without a reason written down.
+        app.contact_note.set(CONTACT_NOTE)
         before = self.changes()
 
         app._clear_selected_contact()
@@ -6956,7 +6980,7 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertEqual(restored_record.suppressed_note, CONTACT_NOTE,
                          "the reason travels with the mark in a backup and a restore")
         self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
-        self.assertIn("Marked do not contact, and a reason is recorded with it",
+        self.assertIn("Marked do not contact, a reason is recorded with it",
                       app.contact_mark_state.get())
 
     def test_no_contact_value_or_reason_reaches_a_dialog_the_status_line_or_the_log(self):
@@ -6966,6 +6990,10 @@ class ContactMarkControlTests(ContactTabTestCase):
         app.contact_note.set(CONTACT_NOTE)
 
         app._mark_selected_contact()
+        # The note the mark used is cleared by the handler, and a removal is refused without one, so a
+        # person types their reason again - which is also the value this test follows into every dialog,
+        # the status line and the log.
+        app.contact_note.set(CONTACT_NOTE)
         app._clear_selected_contact()
 
         said = MESSAGES.text() + "\n" + app.status.get()
@@ -8961,3 +8989,209 @@ class WhatsHappeningTabTests(HandlerTestCase):
         texts = " ".join(str(label.options.get("text", "")) for label in RecordingLabel.created)
         self.assertIn("no email, no push and no system notification", texts)
         self.assertIn("Nothing here fetches anything, sends anything or submits anything", texts)
+
+
+class DoNotContactListPanelTests(ContactTabTestCase):
+    """The list the sending gate reads, in the window beside the mark that writes it.
+
+    Before this panel the window wrote a column nothing enforced, while the list ``guarded_dispatch``
+    checks before any outbound action was reachable only from Python. These tests drive the tab's own
+    handlers against a real store, so "it reached the list" is the stored entry and "nothing was
+    written" is the connection's change counter.
+    """
+
+    def marked(self, app, note: str = CONTACT_NOTE, reason: str | None = None):
+        """Mark the first synthetic contact the way a person does, through the tab's handlers."""
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        if reason is not None:
+            app.contact_reason.set(reason)
+        app.contact_note.set(note)
+        app._mark_selected_contact()
+
+    def test_the_panel_shows_the_list_the_sending_gate_reads(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+        self.assertIn("0 address(es)", app.suppression_summary.get())
+
+        self.marked(app)
+
+        rows = [app.suppression_tree.item(item, "values")
+                for item in app.suppression_tree.get_children()]
+        self.assertEqual(len(rows), 1, f"the list shows {rows!r}")
+        self.assertEqual(rows[0][0], CONTACT_EMAILS[0])
+        self.assertEqual(rows[0][1], "they asked not to be contacted")
+        self.assertEqual(rows[0][3], "a note is recorded")
+        self.assertIn("1 address(es)", app.suppression_summary.get())
+
+    def test_the_note_itself_is_never_a_column_a_dialog_or_a_log_line(self):
+        app = self.make_app()
+        self.import_two(app)
+
+        self.marked(app)
+
+        drawn = " ".join(" ".join(app.suppression_tree.item(item, "values"))
+                         for item in app.suppression_tree.get_children())
+        self.assertNotIn(CONTACT_NOTE, drawn, "the note's text was drawn in the list")
+        self.assertNotIn(CONTACT_NOTE, MESSAGES.text(), "the note's text reached a dialog")
+        self.assertNotIn(CONTACT_NOTE, app.status.get())
+        written = self.log_text()
+        self.assertIn("event=suppression.recorded", written)
+        self.assertNotIn(CONTACT_NOTE, written, "the note's text reached the activity log")
+        self.assertNotIn(CONTACT_EMAILS[0], written, "an address reached the activity log")
+
+    def real_window(self):
+        """A whole window over the stand-in widgets, so the panel's own labels exist to be read."""
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "suppression.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def test_the_reason_offered_is_recorded_and_the_window_invents_none(self):
+        window = self.real_window()
+        self.assertEqual(window.contact_reason_box.offered,
+                         [label for _value, label in logic.suppression_reason_choices()],
+                         "the window offers a set of reasons the suppression module does not define")
+
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app, reason="this was not the right person")
+
+        entry = app.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertEqual(entry.reason.value, "wrong_person")
+        self.assertEqual(app.contact_reason.get(), "this was not the right person")
+
+    def test_marking_twice_keeps_the_first_reason(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app, reason="they asked not to be contacted")
+        first = app.store.suppression_for(CONTACT_EMAILS[0])
+        # Taking the mark off and putting it back with a different reason: the list keeps the earliest
+        # one, because the first record of somebody asking to stop is the truest one.
+        app.contact_note.set("checked with them again (synthetic)")
+        app._clear_selected_contact()
+        app.store.suppress_contact(CONTACT_EMAILS[0], reason=SuppressionReason.ASKED_TO_STOP,
+                                   note="first (synthetic)")
+        self.marked(app, note="second (synthetic)", reason="you decided not to write to them")
+
+        entry = app.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertEqual(entry.reason, SuppressionReason.ASKED_TO_STOP,
+                         "a later mark overwrote the earlier reason")
+        self.assertNotEqual(entry.recorded_at, "", "the entry lost the day it was recorded")
+        self.assertNotEqual(first, None)
+
+    def test_taking_a_mark_off_without_a_note_is_refused_before_anything_is_asked(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        app.contact_note.set(" no ")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked a question it was going to refuse")
+        self.assertEqual(self.changes(), before, "a refused removal wrote to the database")
+        self.assertTrue(app.store.is_suppressed(CONTACT_EMAILS[0]))
+        self.assertTrue(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+
+    def test_a_confirmed_removal_takes_the_address_off_the_list_too(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        app.contact_note.set("they wrote back asking us to (synthetic)")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertIn(CLEAR_TITLE, MESSAGES.titles("askyesno"))
+        self.assertFalse(app.store.is_suppressed(CONTACT_EMAILS[0]),
+                         "the address stayed on the list the sending gate reads")
+        self.assertFalse(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertEqual(self.changes() - before, 2,
+                         "the mark and the enforced entry, and nothing else")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_a_declined_removal_leaves_both_records_exactly_as_they_were(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        CONFIG[CLEAR_TITLE] = False
+        app.contact_note.set("thinking about it (synthetic)")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertEqual(self.changes(), before, "a declined removal wrote to the database")
+        self.assertTrue(app.store.is_suppressed(CONTACT_EMAILS[0]))
+        self.assertTrue(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertEqual(len(app.suppression_tree.get_children()), 1)
+
+    def test_a_mark_made_before_this_window_is_reported_as_not_on_the_list(self):
+        app = self.make_app()
+        self.import_two(app)
+        # The state a database carries from an earlier build: the column is set and the enforced list
+        # knows nothing about the address.
+        app.store.set_contact_suppression(CONTACT_EMAILS[0], note=CONTACT_NOTE)
+        app._refresh_contacts()
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+
+        self.assertIn("1 marked contact(s) are not on the list", app.suppression_summary.get())
+        self.assertIn("NOT on the list this application checks", app.contact_mark_state.get())
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_the_confirmation_says_the_mark_reaches_the_sending_gate(self):
+        app = self.make_app()
+        self.import_two(app)
+
+        self.marked(app)
+
+        asked = MESSAGES.said(MARK_TITLE) if hasattr(MESSAGES, "said") else MESSAGES.text("askyesno")
+        self.assertIn("do-not-contact list this application checks", asked)
+        self.assertIn("keeps the first reason", asked)
+        self.assertIn("permanent", asked,
+                      "the permanent reason's confirmation does not say that it is permanent")
+
+    def test_the_panel_says_what_the_list_is_and_what_it_cannot_do(self):
+        RecordingLabel.created = []
+        app = self.real_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("checked before any outbound action is attempted", said)
+        self.assertIn("Nothing on it expires", said)
+        self.assertIn("never shown here, logged or put in an event", said)
+        self.assertIsNotNone(app.suppression_summary.get())
+
+    def test_an_unreadable_record_is_reported_and_the_panel_draws_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+
+        def unreadable():
+            raise StoredRecordError("do-not-contact entry", "the stored row could not be read")
+
+        app.store.list_suppressions = unreadable
+        app._refresh_suppressions()
+
+        self.assertTrue(MESSAGES.titles("showerror"), "an unreadable entry was not reported")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_a_database_that_cannot_be_read_is_reported_rather_than_drawn(self):
+        app = self.make_app()
+        self.import_two(app)
+        MESSAGES.reset()
+
+        def unavailable():
+            raise sqlite3.OperationalError("database is locked (synthetic)")
+
+        app.store.list_suppressions = unavailable
+        app._refresh_suppressions()
+
+        self.assertTrue(MESSAGES.titles("showerror"), "an unavailable database was not reported")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
