@@ -70,6 +70,7 @@ EXPECTED_TABS = (
     "HR contacts",
     "Tailored documents",
     "Permissions & limits",
+    "What's happening",
 )
 
 #: The lists carried by the tabs, with the columns each one must expose. These are the controls a person
@@ -86,6 +87,7 @@ EXPECTED_TREES = {
     "facts_tree": ("fact", "value", "origin", "confirmation"),
     "artifacts_tree": ("kind", "listing", "strategy", "built", "cited", "state"),
     "policy_tree": ("source", "action", "limit", "state"),
+    "attempt_tree": ("operation", "action", "identity", "started", "state"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
@@ -107,7 +109,7 @@ EXPECTED_SUMMARY_VARIABLES = (
 #: click would run, not a re-implementation of it.
 REFRESH_BUTTON_TEXT = "Refresh"
 REFRESH_TAB_LABELS = ("Application tracker", "Next actions", "Follow-ups", "Background tasks",
-                     "HR contacts")
+                     "HR contacts", "What's happening")
 
 #: Phrases Tk uses when it cannot reach a display. Only these turn a failure into BLOCKED: on Windows and
 #: macOS a window needs no display variable at all, and anything else that goes wrong while a root is being
@@ -329,7 +331,7 @@ def main() -> int:
             numbers = tuple(int(part) for part in parts)
             require(numbers == (900, 600), f"the minimum window size is {numbers!r}, not (900, 600)")
 
-        with results.step("the notebook holds the nine tabs in the documented order"):
+        with results.step("the notebook holds every documented tab, in the documented order"):
             labels = tuple(app.tabs.tab(tab, "text") for tab in app.tabs.tabs())
             require(labels == EXPECTED_TABS, f"the tabs are {labels!r}")
 

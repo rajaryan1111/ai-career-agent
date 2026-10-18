@@ -3591,6 +3591,108 @@ def workflow_n_permissions(run: Run) -> None:
     workspace.close_window(host, app)
 
 
+def workflow_o_whats_happening(run: Run) -> None:
+    """The What's happening tab: unresolved work first, evidence before a settlement, no sending.
+
+    The properties worth checking here are the ones a screenshot cannot show: an attempt nobody
+    settled is listed and blocks, settling it needs evidence and one explicit yes, a declined dialog
+    leaves the database byte-for-byte as it was, and the notification preference stores a choice
+    without this application gaining any way to reach the person. Nothing in this workflow sends,
+    fetches or submits anything - the only writes are rows in a disposable local database.
+    """
+    from career_agent.attempts import AttemptState  # noqa: PLC0415 - only this workflow needs it
+    from career_agent.notifications import Cadence  # noqa: PLC0415
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.report_tab)
+
+    with results.step("O1 the tab reports from the records, and says what it did not do"):
+        press(app.report_tab, "Refresh", workspace.root)
+        summary = app.report_summary.get()
+        require("need you" in summary or "needs you" in summary,
+                f"the summary says {summary!r}")
+        require(summary.count("need you") <= 1,
+                f"the summary counts the same records twice: {summary!r}")
+        require("nothing here was fetched" in app.report_text.get(),
+                "the report does not state that nothing was fetched, sent or submitted")
+        require("plans, not outcomes" in app.report_text.get(),
+                "the report does not say that scheduled work is not a thing that happened")
+
+    with results.step("O2 an unresolved attempt is listed, and says what it blocks"):
+        app.store.begin_attempt(operation_id="acceptance-op-1", identity_key="job:acceptance",
+                                action="email_send")
+        press(app.report_tab, "Refresh", workspace.root)
+        rows = [app.attempt_tree.item(item, "values")
+                for item in app.attempt_tree.get_children()]
+        require(len(rows) == 1 and rows[0][0] == "acceptance-op-1", f"the list shows {rows!r}")
+        require("outcome not established" in rows[0][4],
+                f"an unsettled attempt is described as {rows[0][4]!r}")
+        app.attempt_tree.selection_set("acceptance-op-1")
+        app._on_attempt_selection()
+        require("blocks any further attempt" in app.attempt_detail.get(),
+                "the detail does not say that an unresolved attempt blocks a retry")
+
+    with results.step("O3 settling without evidence is refused, and writes nothing"):
+        dialogs.reset()
+        before = app.store._connection.total_changes
+        app.attempt_evidence.set(" ")
+        press(app.report_tab, "Record what happened...", workspace.root)
+        require("Nothing was recorded" in dialogs.titles("showerror"),
+                f"no refusal was shown; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                f"a settlement with no evidence still asked the question: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a refused settlement changed the database")
+        require(len(app.store.unresolved_attempts()) == 1, "the attempt was settled anyway")
+
+    with results.step("O4 a declined confirmation leaves the attempt unresolved"):
+        dialogs.reset()
+        dialogs.answers["Record this outcome"] = False
+        app.attempt_evidence.set("checked the provider's own log")
+        before = app.store._connection.total_changes
+        press(app.report_tab, "Record what happened...", workspace.root)
+        require("Record this outcome" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.unresolved_attempts()) == 1,
+                "a declined confirmation settled the attempt")
+
+    with results.step("O5 accepting records the outcome with the evidence, and clears the block"):
+        dialogs.reset()
+        dialogs.answers["Record this outcome"] = True
+        app.attempt_outcome.set("It did happen")
+        app.attempt_evidence.set("checked the provider's own log")
+        press(app.report_tab, "Record what happened...", workspace.root)
+        stored = app.store.get_attempt("acceptance-op-1")
+        require(stored.state is AttemptState.PERFORMED,
+                f"the attempt was recorded as {stored.state!r}")
+        require("provider's own log" in stored.evidence,
+                f"the evidence stored is {stored.evidence!r}")
+        require(app.store.unresolved_attempts() == (), "the attempt is still listed as unresolved")
+        require(app.attempt_tree.get_children() == (), "the settled attempt is still on screen")
+        require(app.attempt_evidence.get() == "",
+                "the evidence box kept its text, which the next attempt could inherit")
+
+    with results.step("O6 a notification preference is stored, and still reaches nobody"):
+        dialogs.reset()
+        dialogs.answers["Save this preference"] = True
+        app.notification_vars["cadence"].set("Every day")
+        app.notification_vars["hour"].set("8")
+        press(app.report_tab, "Save this preference...", workspace.root)
+        preferences = app.store.get_notification_preferences()
+        require(preferences.cadence is Cadence.DAILY,
+                f"the cadence stored is {preferences.cadence!r}")
+        require(preferences.hour == 8, f"the hour stored is {preferences.hour!r}")
+        require("no email" in dialogs.said("Save this preference"),
+                "the confirmation does not say that nothing is sent anywhere")
+        require("Nothing is sent anywhere" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 def workflow_f_cleanup(run: Run) -> None:
     workspace, results = run.workspace, run.results
 
@@ -4877,6 +4979,7 @@ WORKFLOWS = (
     ("L - HR contact import: preview, refusal, cancel and confirm", workflow_l_contact_import),
     ("M - tailored documents: lineage, refusal and rebuild", workflow_m_tailored_documents),
     ("N - permissions: confirmation, withdrawal and the closed gate", workflow_n_permissions),
+    ("O - what's happening: unresolved work, evidence and notifications", workflow_o_whats_happening),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 

@@ -4005,3 +4005,24 @@ something was attempted; and the event log gets a count, never the address. P8 i
 mailbox authorisation, delivery and reply evidence need a real mailbox, and the honest tested
 statement is only that nothing stores a credential anywhere. 20 tests, suite **2500 OK
 (skipped=13)**. Note: `research/the-do-not-contact-list-2026-10-18.md`.
+
+**The window finally says what has been happening, 2026-10-18:** a twelfth tab, *What's happening*,
+puts the operations report, the attempts nobody settled and the notification preference in front of
+the person, because two of those three are not reports: an attempt whose outcome was never
+established blocks the next attempt on the same job and action, and only a person can clear it, while
+a notification preference nobody can see is a claim rather than a setting. The rules it keeps are the
+ones that stop a window from quietly disagreeing with its own data. The report is the reporting
+module's text, headline included — the first draft composed a count of its own, appended the
+headline, and the development acceptance run printed "1 thing(s) from the last day need you. 1 thing
+from the last day need you.", which is exactly the drift a single reporting module exists to prevent;
+the summary is now the headline plus where to act on it, pinned by a test that counts the phrase
+rather than matching a sentence. Settling an attempt needs evidence of at least four characters and
+one explicit yes that quotes the note back and says the block is lifted; the only outcomes offered
+are the three the store accepts, and "still unknown" is deliberately absent because recording it
+would clear nothing and only make the list look handled. Nothing on the tab fetches, sends or
+submits, the preference confirmation says plainly that there is no email, no push and no system
+notification, and quiet hours are shown but edited where the rest of the standing authorisation
+lives. 22 tests (12 handler, 10 text) plus acceptance workflow O's six checks; the stand-in run is
+130 checks, 0 failed, and is still not a window — seven manual steps (137-143) are recorded BLOCKED,
+taking that checklist to 143 steps: 22 PASS, 121 BLOCKED, 0 FAIL. Note:
+`research/what-has-been-happening-in-the-window-2026-10-18.md`.

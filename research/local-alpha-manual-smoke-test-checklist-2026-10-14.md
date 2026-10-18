@@ -1,8 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 136 steps — at this revision **22 PASS, 114 BLOCKED, 0 FAIL, no box ticked** (the six
-newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
-BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 143 steps — at this revision **22 PASS, 121 BLOCKED, 0 FAIL, no box ticked** (the seven
+newest steps, 137-143, are for the What's happening tab — the report, the attempts nobody settled and the
+notification preference — and all seven are BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1363,3 +1363,36 @@ second verification pass, after the first run was already green.
     dialogs, which are the point at which something is written.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. Focus order
     is counted in acceptance check K4 under a stand-in; announcement and native feel are not established.**
+
+## What's happening: the report, unsettled attempts and the notification preference (added 2026-10-18)
+
+137. [ ] Open **What's happening** on a database you have used for a while. Read the summary line and the
+    report under it. The summary must be the report's own headline and must not state a count the report
+    states again in different words; the report must name what it did not do — nothing fetched, sent or
+    submitted — and must describe scheduled work and queued runs as plans rather than outcomes.
+    → **BLOCKED — acceptance check O1 asserts the headline is used once and both caveats are present.**
+138. [ ] Switch the window chooser from **the last day** to **the last seven days** and press **Refresh**.
+    The report must change period and the dates-ahead section must widen with it, and nothing must be
+    written: the tab is a reader.
+    → **BLOCKED — the handler tests assert the window change and that no row is written; the visible
+    re-draw at a real window size is not established.**
+139. [ ] With an attempt whose outcome was never established in the database, confirm it is listed before
+    anything else, that its row says *outcome not established* rather than failed, and that selecting it
+    explains that it blocks any further attempt on the same job and action.
+    → **BLOCKED — acceptance check O2 asserts the row, its wording and the explanation.**
+140. [ ] Select it, leave the evidence box empty and press **Record what happened...**. The refusal must be a
+    dialog, no confirmation may be asked, and nothing may be written.
+    → **BLOCKED — acceptance check O3 asserts the refusal, the absent confirmation and the unchanged
+    database change counter.**
+141. [ ] Type what you checked, press the button and choose **No**. Then press it again and choose **Yes**.
+    The declined one must change nothing; the confirmed one must quote your note back, store it as the
+    evidence, take the row off the list and leave the evidence box empty for the next one.
+    → **BLOCKED — acceptance checks O4 and O5 assert both halves, the stored evidence and the cleared box.**
+142. [ ] Set a notification preference — every day, an hour, in this window — and confirm. Close the
+    application, wait past that hour and reopen it. Nothing may have been sent anywhere while it was closed,
+    and the tab must read back the preference you set.
+    → **BLOCKED — acceptance check O6 asserts the stored preference and the confirmation's wording; that
+    nothing arrived while the application was closed needs a machine to watch for a day.**
+143. [ ] Keyboard and screen reader: reach the window chooser, the attempt list, the outcome chooser, the
+    evidence box and both confirmation buttons with **Tab** alone, and operate them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**

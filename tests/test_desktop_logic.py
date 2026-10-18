@@ -10,6 +10,8 @@ from pathlib import Path
 
 from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.core import ActivityKind
+from types import SimpleNamespace
+
 from career_agent import desktop_logic as logic
 from career_agent.desktop_logic import (
     ACTIVITY_KIND_CHOICES, DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED,
@@ -597,3 +599,82 @@ class PolicyTextTests(unittest.TestCase):
         text = logic.policy_decision_text(decision, gate_reason="the quality gate has not been passed")
         self.assertIn("Refused", text)
         self.assertIn("quality gate", text)
+
+
+class WhatsHappeningTextTests(unittest.TestCase):
+    """The words the "What's happening" tab puts on screen, with no Tk anywhere near them."""
+
+    def test_the_summary_is_the_report_s_own_headline_and_never_counts_again(self):
+        quiet = logic.report_summary_text("Nothing from the last day needs you.", 0)
+        self.assertEqual(quiet, "Nothing from the last day needs you.")
+        busy = logic.report_summary_text("2 things from the last 7 days need you.", 2)
+        self.assertTrue(busy.startswith("2 things from the last 7 days need you."))
+        self.assertIn("listed below", busy)
+        self.assertEqual(busy.count("need you"), 1,
+                         "the window stated the same count twice, in its own words and the report's")
+
+    def test_an_unknown_outcome_is_never_called_a_failure(self):
+        self.assertEqual(logic.ATTEMPT_STATE_LABELS["unknown"], "outcome not established")
+        self.assertEqual(logic.ATTEMPT_STATE_LABELS["failed"], "did not happen")
+        self.assertNotEqual(logic.ATTEMPT_STATE_LABELS["unknown"],
+                            logic.ATTEMPT_STATE_LABELS["failed"])
+
+    def test_rows_carry_the_operation_id_a_person_would_search_a_provider_with(self):
+        record = SimpleNamespace(operation_id="op-1", action="email_send", identity_key="job:1",
+                                 started_at="2026-10-20T09:00:00+00:00",
+                                 state=SimpleNamespace(value="unknown"))
+        row = logic.attempt_rows([record])[0]
+        self.assertEqual(row[0], "op-1")
+        self.assertEqual(row[2], "job:1")
+        self.assertEqual(row[4], "outcome not established")
+
+    def test_the_detail_says_what_it_blocks_and_that_time_will_not_settle_it(self):
+        empty = logic.attempt_detail_text(None)
+        self.assertIn("time cannot settle", empty)
+        record = SimpleNamespace(operation_id="op-1", action="email_send", identity_key="job:1",
+                                 started_at="2026-10-20T09:00:00+00:00", detail="no reply",
+                                 state=SimpleNamespace(value="unknown"))
+        described = logic.attempt_detail_text(record)
+        self.assertIn("no reply", described)
+        self.assertIn("blocks any further attempt", described)
+
+    def test_settling_without_evidence_is_refused_with_a_reason(self):
+        self.assertIsNotNone(logic.reconciliation_refusal(""))
+        self.assertIsNotNone(logic.reconciliation_refusal("  no "))
+        self.assertIsNone(logic.reconciliation_refusal("checked the provider's log"))
+
+    def test_the_question_quotes_the_evidence_and_says_it_lifts_the_block(self):
+        asked = logic.reconciliation_question("op-1", "It did happen", " the log shows it ")
+        self.assertIn("op-1", asked)
+        self.assertIn("the log shows it", asked)
+        self.assertIn("lifted", asked)
+
+    def test_every_offered_outcome_is_one_the_store_can_record(self):
+        from career_agent.attempts import AttemptState
+
+        for value, label in logic.RECONCILIATION_CHOICES:
+            with self.subTest(value=value):
+                self.assertIsInstance(AttemptState(value), AttemptState)
+                self.assertTrue(label.strip())
+        self.assertNotIn("unknown", [value for value, _ in logic.RECONCILIATION_CHOICES],
+                         "recording 'still unknown' would settle nothing and clear nothing")
+
+    def test_the_notification_summary_names_the_quiet_window_it_obeys(self):
+        text = logic.notification_summary_text("Every day from 09:00.", "No report is due.", (22, 7))
+        self.assertIn("22:00-07:00", text)
+        self.assertIn("standing authorisation", text)
+        self.assertNotIn("22:00-07:00", logic.notification_summary_text("x", "y", None))
+
+    def test_the_preference_question_says_what_it_cannot_do(self):
+        asked = logic.notification_question("Every day", 9, "shown in this window")
+        self.assertIn("no email", asked)
+        self.assertIn("09:00", asked)
+        self.assertIn("Stop preparing reports?",
+                      logic.notification_question("No report, thanks", 9, "shown in this window"))
+
+    def test_an_hour_is_read_strictly(self):
+        self.assertEqual(logic.parse_notification_hour(" 9 "), 9)
+        self.assertEqual(logic.parse_notification_hour("07:00"), 7)
+        for value in ("", "half nine", "-1", "24", "9.5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                logic.parse_notification_hour(value)

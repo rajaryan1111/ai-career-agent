@@ -818,6 +818,24 @@ python -m career_agent --report --weekly   # the last seven days, with a fortnig
 
 Read-only: it fetches nothing, sends nothing and changes nothing.
 
+The same report is in the window, on the **What's happening** tab, with the two things a printed report
+cannot give you: the attempts nobody has settled are a list you can act on, and the notification preference
+is a control rather than a stored value you have to take on trust.
+
+- **The list of unsettled attempts comes first**, because an attempt whose outcome was never established
+  blocks any further attempt on the same job and action, and nothing but you can clear it.
+- **Settling one needs evidence and one explicit yes.** The window asks for what you checked — a provider's
+  own log, a sent-mail folder, a reply — refuses an empty or near-empty note, and quotes the note back in the
+  confirmation before anything is written. Settling is the only write on the tab; "still unknown" is not an
+  option, because recording it would clear nothing.
+- **The report is the reporting module's own text**, headline included. The window adds no count and no
+  wording of its own, so the tab and `--report` cannot disagree about the same records.
+- **The notification preference is set here**, and the confirmation says plainly what it does not buy:
+  no email, no push, no system notification, nothing while the application is closed. Changing it writes a
+  preference and starts nothing.
+
+Nothing on the tab fetches, sends or submits anything.
+
 `python -m career_agent --analytics` prints what the records in this database add up to. The same report is
 in the window: a one-line summary under the **Application tracker** list and a **Progress report** button
 that opens it in full. Nothing in it is fetched, estimated or modelled — every figure is a count of rows you
@@ -1180,7 +1198,8 @@ python scripts/desktop_smoke_test.py
 ```
 
 It constructs the real `CareerAgentApp` against a disposable synthetic database in a temporary folder,
-checks the window's title, minimum size, nine tabs in their documented order, that every tab was built,
+checks the window's title, minimum size, every documented tab in its documented order, that every tab was
+built,
 and that the main lists carry the columns they are read from, switches to every tab with a real rendering
 pass, presses the affected tabs' read-only **Refresh** buttons through Tk's own command dispatch, then
 closes the window, releases the database and deletes the folder it created — and checks that the default

@@ -45,13 +45,16 @@ from .preparation import (
 from .store import PrivateWriteError, write_private_text_file
 from .worker import worker_status
 from .desktop_logic import (
-    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values,
+    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, ATTEMPT_STATE_LABELS, JobSaveMode,
+    RECONCILIATION_CHOICES, activity_form_values,
     artifact_citation_text, artifact_rebuild_text, artifact_state_text, artifact_summary_text,
-    build_activity, build_candidate_profile,
+    attempt_detail_text, attempt_rows, build_activity, build_candidate_profile,
     fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
+    notification_question, notification_summary_text, parse_notification_hour,
     plan_job_save, policy_decision_text, policy_grant_question, policy_removal_question,
     policy_revocation_question, policy_rows, policy_stop_question, policy_summary_text,
     profile_fact_review, profile_fields_not_matching, profile_form_values,
+    reconciliation_question, reconciliation_refusal, report_summary_text,
     required_fact_questions, required_facts_to_confirm,
 )
 # Aliased on import: this module already has an ActionKind - the next-actions vocabulary - and the two
@@ -62,6 +65,12 @@ from .policy import (
     evaluate_policy, no_authorisation,
 )
 from .sources import SOURCE_DECISIONS, discovery_gate, submission_gate
+from . import reporting
+from .attempts import AttemptError, AttemptState
+from .notifications import (
+    CHANNEL_LIMITS, Cadence, DeliveryChannel, NotificationError, NotificationPreferences,
+    notification_due,
+)
 from .artifacts import (
     KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, StaleArtifactError, lineage_status,
     rebuild_artifact, require_current_artifact,
@@ -120,6 +129,19 @@ def stored_status_text(row: dict | None) -> str:
 #: label standing in a narrow row beside a control is not part of this policy - it is wrapped to the width of
 #: the row it shares, which is smaller than any tab.
 _TAB_TEXT_WRAP = 780
+
+#: How a notification cadence is named on screen, and how the screen's words map back to the value.
+_CADENCE_LABELS = {
+    Cadence.OFF: "No report, thanks",
+    Cadence.DAILY: "Every day",
+    Cadence.WEEKLY: "Once a week",
+}
+
+#: Where a report may appear, each named with what it cannot do.
+_CHANNEL_LABELS = {
+    DeliveryChannel.IN_APP: "shown in this window",
+    DeliveryChannel.FILE: "written to a file on this machine",
+}
 
 #: How many recorded disagreements the review panel lists at once. The table behind it is bounded only by how
 #: many contradictory files a person imports, so the screen is not. The list keeps the store's own order
@@ -292,6 +314,7 @@ class CareerAgentApp:
         self.contacts_tab = ttk.Frame(self.tabs, padding=12)
         self.artifacts_tab = ttk.Frame(self.tabs, padding=12)
         self.policy_tab = ttk.Frame(self.tabs, padding=12)
+        self.report_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -303,6 +326,7 @@ class CareerAgentApp:
         self.tabs.add(self.contacts_tab, text="HR contacts")
         self.tabs.add(self.artifacts_tab, text="Tailored documents")
         self.tabs.add(self.policy_tab, text="Permissions & limits")
+        self.tabs.add(self.report_tab, text="What's happening")
         # Whatever a person did in another tab, or a second window did to this database, the contacts tab
         # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
         # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
@@ -320,6 +344,7 @@ class CareerAgentApp:
         self._build_scheduler()
         self._build_artifacts()
         self._build_policy()
+        self._build_report()
         self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
@@ -334,6 +359,7 @@ class CareerAgentApp:
         self._refresh_contacts()
         self._refresh_artifacts()
         self._refresh_policy()
+        self._refresh_report()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -687,6 +713,274 @@ class CareerAgentApp:
     # (``CareerStore.import_contacts``); this tab supplies the file chooser, shows what was read, and asks
     # once before anything is written. There is no sending here and no matching to jobs: this increment
     # stores a reviewed list and nothing else.
+
+    def _build_report(self):
+        """The tab that answers "what has this been doing, and what needs me?".
+
+        Three panels, in the order a person needs them: what is unresolved (the only thing here
+        that cannot settle itself), the report built from the stored rows, and when this
+        application may tell them something. Everything is read from the database each time it is
+        drawn; nothing on this tab fetches, sends or submits.
+        """
+        body = self._scrollable_body(self.report_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Everything below is read from what is already written down in this database - "
+                "scheduled runs, your applications, attempts at outside actions, your permissions "
+                "and the source gates. Nothing here fetches anything, sends anything or submits "
+                "anything. Work that is queued is shown as a plan, never as something that "
+                "happened, and an attempt whose outcome nobody established stays unresolved until "
+                "you establish it: time does not settle one."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.report_summary = tk.StringVar(value="Reading what the records say...")
+        ttk.Label(body, textvariable=self.report_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+
+        controls = ttk.Frame(body)
+        controls.grid(row=2, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        self.report_window = tk.StringVar(value="the last day")
+        ttk.Label(controls, text="Covering").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        ttk.Combobox(controls, textvariable=self.report_window, state="readonly", width=18,
+                     values=("the last day", "the last seven days")).grid(row=0, column=1, sticky=W)
+        ttk.Button(controls, text="Refresh",
+                   command=self._refresh_report).grid(row=0, column=2, sticky=W, padx=(8, 0))
+
+        unresolved = ttk.Frame(body)
+        unresolved.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 8))
+        ttk.Label(unresolved, text="Attempts nobody has settled",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        ttk.Label(
+            unresolved,
+            text=("An attempt is listed here when this application may have done something outside "
+                  "this machine and nobody established what happened. It blocks any further attempt "
+                  "at the same job until you record what you found - which is the point, because a "
+                  "blind retry is how one application becomes two."),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        columns = ("operation", "action", "identity", "started", "state")
+        self.attempt_tree = ttk.Treeview(unresolved, columns=columns, show="headings", height=5)
+        for column, heading, width in (
+            ("operation", "Operation id", 230), ("action", "What was attempted", 150),
+            ("identity", "Which job", 230), ("started", "Started", 180),
+            ("state", "Recorded as", 170),
+        ):
+            self.attempt_tree.heading(column, text=heading)
+            self.attempt_tree.column(column, width=width, anchor=W)
+        self.attempt_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.attempt_tree.bind("<<TreeviewSelect>>", self._on_attempt_selection)
+        self.attempt_detail = tk.StringVar(value=attempt_detail_text(None))
+        ttk.Label(unresolved, textvariable=self.attempt_detail, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=3, column=0, columnspan=4, sticky=W, pady=(6, 6))
+        settle = ttk.Frame(unresolved)
+        settle.grid(row=4, column=0, columnspan=4, sticky=W)
+        ttk.Label(settle, text="What actually happened").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.attempt_outcome = tk.StringVar(value=RECONCILIATION_CHOICES[0][1])
+        ttk.Combobox(settle, textvariable=self.attempt_outcome, state="readonly", width=20,
+                     values=[label for _value, label in RECONCILIATION_CHOICES]).grid(
+                         row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(settle, text="What you found").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.attempt_evidence = tk.StringVar(value="")
+        ttk.Entry(settle, textvariable=self.attempt_evidence, width=46).grid(
+            row=0, column=3, sticky=W, padx=(0, 12))
+        self.attempt_settle_button = ttk.Button(
+            settle, text="Record what happened...", state="disabled",
+            command=self._reconcile_selected_attempt)
+        self.attempt_settle_button.grid(row=0, column=4, sticky=W)
+
+        report = ttk.Frame(body)
+        report.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+        ttk.Label(report, text="What the records say",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, sticky=W, pady=(0, 4))
+        self.report_text = tk.StringVar(value="Reading...")
+        ttk.Label(report, textvariable=self.report_text, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT, font=("TkFixedFont", 9)).grid(row=1, column=0, sticky=W)
+
+        notify = ttk.Frame(body)
+        notify.grid(row=5, column=0, columnspan=4, sticky="ew")
+        ttk.Label(notify, text="When this application may tell you something",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=6, sticky=W)
+        self.notification_summary = tk.StringVar(value="Reading your preference...")
+        ttk.Label(notify, textvariable=self.notification_summary,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=1, column=0, columnspan=6, sticky=W, pady=(0, 6))
+        self.notification_vars = {}
+        ttk.Label(notify, text="How often").grid(row=2, column=0, sticky=W, padx=(0, 5))
+        self.notification_vars["cadence"] = tk.StringVar(value=_CADENCE_LABELS[Cadence.OFF])
+        ttk.Combobox(notify, textvariable=self.notification_vars["cadence"], state="readonly",
+                     width=18, values=list(_CADENCE_LABELS.values())).grid(
+                         row=2, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(notify, text="From").grid(row=2, column=2, sticky=W, padx=(0, 5))
+        self.notification_vars["hour"] = tk.StringVar(value="9")
+        ttk.Entry(notify, textvariable=self.notification_vars["hour"], width=5).grid(
+            row=2, column=3, sticky=W, padx=(0, 12))
+        ttk.Label(notify, text="Where").grid(row=2, column=4, sticky=W, padx=(0, 5))
+        self.notification_vars["channel"] = tk.StringVar(
+            value=_CHANNEL_LABELS[DeliveryChannel.IN_APP])
+        ttk.Combobox(notify, textvariable=self.notification_vars["channel"], state="readonly",
+                     width=30, values=list(_CHANNEL_LABELS.values())).grid(
+                         row=2, column=5, sticky=W)
+        self.notification_vars["only_attention"] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(notify, text="Only when something needs me",
+                        variable=self.notification_vars["only_attention"]).grid(
+                            row=3, column=0, columnspan=3, sticky=W, pady=(6, 0))
+        ttk.Button(notify, text="Save this preference...",
+                   command=self._save_notification_preference).grid(
+                       row=3, column=5, sticky=W, pady=(6, 0))
+        ttk.Label(
+            notify,
+            text=("There is no email, no push and no system notification in this build: a report is "
+                  "prepared where you can already see it, and nothing reaches you while this window "
+                  "is closed."),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=4, column=0, columnspan=6, sticky=W, pady=(6, 0))
+        body.columnconfigure(0, weight=1)
+        #: The unresolved attempts the list was drawn from, so a control acts on what is on screen.
+        self._attempts_shown: dict[str, object] = {}
+
+    def _refresh_report(self):
+        """Re-read everything this tab shows. Reads only; never writes and never opens a dialog."""
+        if not hasattr(self, "attempt_tree"):
+            return
+        weekly = self.report_window.get().strip().casefold().endswith("seven days")
+        try:
+            report = (reporting.weekly_report(self.store) if weekly
+                      else reporting.daily_report(self.store))
+            unresolved = self.store.unresolved_attempts()
+            preferences = self.store.get_notification_preferences()
+            policy = self.store.get_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except (reporting.ReportError, NotificationError) as exc:
+            self.report_summary.set(f"This tab could not be drawn: {exc}")
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_attempt_id()
+        self._clear_tree(self.attempt_tree)
+        self._attempts_shown = {record.operation_id: record for record in unresolved}
+        for row in attempt_rows(unresolved):
+            self.attempt_tree.insert("", END, iid=row[0], values=row)
+        self.report_summary.set(
+            report_summary_text(report.headline(), report.attention_count))
+        self.report_text.set("\n".join(report.describe()[1:]))
+        quiet = getattr(policy, "quiet_hours", None)
+        try:
+            decision = notification_due(
+                preferences, now=datetime.now(timezone.utc), last_delivered_at=None,
+                quiet_hours=quiet, attention_count=report.attention_count,
+                stopped=bool(policy.stop_all or policy.revoked_at))
+            decision_text = decision.describe()
+        except NotificationError as exc:
+            decision_text = f"Whether a report is due could not be decided: {exc}"
+        self.notification_summary.set(
+            notification_summary_text(preferences.describe(), decision_text, quiet))
+        self.notification_vars["cadence"].set(_CADENCE_LABELS[preferences.cadence])
+        self.notification_vars["hour"].set(str(preferences.hour))
+        self.notification_vars["channel"].set(_CHANNEL_LABELS[preferences.channel])
+        self.notification_vars["only_attention"].set(preferences.only_when_attention)
+        if selected in self._attempts_shown:  # the row the person was looking at is still unsettled
+            self.attempt_tree.selection_set(selected)
+        self._on_attempt_selection()
+
+    def _selected_attempt_id(self) -> str | None:
+        """The operation id selected in the list, or ``None``. Reads the screen, not the database."""
+        if not hasattr(self, "attempt_tree"):
+            return None
+        selection = self.attempt_tree.selection()
+        return str(selection[0]) if selection else None
+
+    def _on_attempt_selection(self, _event=None) -> None:
+        """Describe the selected attempt, and only offer to settle one when one is selected."""
+        selected = self._selected_attempt_id()
+        record = self._attempts_shown.get(selected) if selected else None
+        self.attempt_detail.set(attempt_detail_text(record))
+        self.attempt_settle_button.configure(state="normal" if record is not None else "disabled")
+
+    def _reconcile_selected_attempt(self) -> None:
+        """Settle one unresolved attempt by hand, with evidence, after one explicit yes."""
+        selected = self._selected_attempt_id()
+        record = self._attempts_shown.get(selected) if selected else None
+        if record is None:
+            self.status.set("Select an attempt in the list first; nothing was changed.")
+            return
+        evidence = self.attempt_evidence.get()
+        refusal = reconciliation_refusal(evidence)
+        if refusal is not None:
+            messagebox.showerror("Nothing was recorded", refusal, parent=self.root)
+            self.status.set("Nothing was recorded; an outcome needs the evidence for it.")
+            return
+        label = self.attempt_outcome.get().strip()
+        chosen = next((value for value, text in RECONCILIATION_CHOICES if text == label), None)
+        if chosen is None:
+            self.status.set("Choose what actually happened first; nothing was changed.")
+            return
+        if not messagebox.askyesno("Record this outcome",
+                                   reconciliation_question(record.operation_id, label, evidence),
+                                   parent=self.root):
+            self.status.set("Nothing was recorded; the attempt is still unresolved.")
+            return
+        try:
+            self.store.reconcile_attempt(record.operation_id, state=AttemptState(chosen),
+                                         evidence=evidence.strip())
+        except AttemptError as exc:
+            messagebox.showerror("Nothing was recorded", str(exc), parent=self.root)
+            self.status.set("Nothing was recorded; the attempt is still unresolved.")
+            self._refresh_report()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.attempt_evidence.set("")
+        self._refresh_report()
+        self.status.set(
+            f"{record.operation_id} is recorded as “{label}” with your evidence. Further attempts "
+            f"at this job are no longer blocked by it.")
+
+    def _save_notification_preference(self) -> None:
+        """Store when this application may tell the person something, after one explicit yes."""
+        cadence_label = self.notification_vars["cadence"].get().strip()
+        cadence = next((kind for kind, text in _CADENCE_LABELS.items() if text == cadence_label),
+                       None)
+        channel_label = self.notification_vars["channel"].get().strip()
+        channel = next((kind for kind, text in _CHANNEL_LABELS.items() if text == channel_label),
+                       None)
+        if cadence is None or channel is None:
+            self.status.set("Choose how often and where first; nothing was changed.")
+            return
+        try:
+            hour = parse_notification_hour(self.notification_vars["hour"].get())
+            preferences = NotificationPreferences(
+                cadence=cadence, hour=hour, channel=channel,
+                only_when_attention=bool(self.notification_vars["only_attention"].get()))
+        except (ValueError, NotificationError) as exc:
+            messagebox.showerror("Preference not saved", str(exc), parent=self.root)
+            self.status.set("Your notification preference was not changed.")
+            return
+        if not messagebox.askyesno("Save this preference",
+                                   notification_question(cadence_label, hour, channel_label),
+                                   parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        try:
+            self.store.save_notification_preferences(preferences)
+        except (NotificationError, StoredRecordError) as exc:
+            messagebox.showerror("Preference not saved", str(exc), parent=self.root)
+            self.status.set("Your notification preference was not changed.")
+            self._refresh_report()
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_report()
+        self.status.set("Saved. Nothing is sent anywhere; a report is prepared where you can see it.")
 
     def _build_contacts(self):
         """The tab about the contact list: what the chosen file holds, and what storing it would do.

@@ -814,3 +814,131 @@ def policy_decision_text(decision: PolicyDecision, *, gate_reason: str) -> str:
         return (f"{decision.describe()} The source gate also permits it, so this would run if you asked "
                 f"for it.")
     return f"{decision.describe()}\n\nThe source gate says: {gate_reason}"
+
+
+# ---------------------------------------------------------------- what has been happening
+
+#: How an attempt's state is named on screen. The words matter: an attempt whose outcome was never
+#: established is "not established", never "failed", because the two call for different actions.
+ATTEMPT_STATE_LABELS: dict[str, str] = {
+    "unknown": "outcome not established",
+    "performed": "done",
+    "failed": "did not happen",
+    "refused": "refused by a rule",
+}
+
+#: What a person may record as the outcome of an attempt nobody could settle automatically.
+RECONCILIATION_CHOICES: tuple[tuple[str, str], ...] = (
+    ("performed", "It did happen"),
+    ("failed", "It did not happen"),
+    ("refused", "It was refused"),
+)
+
+
+def report_summary_text(headline: str, attention_count: int) -> str:
+    """The one line above the report: the report's own headline, and where to act on it.
+
+    The headline is used as the reporting module wrote it. Counting the same records again here would
+    be a second opinion about them, and the two sentences would eventually disagree - the first version
+    of this function did exactly that, and the window said "1 thing(s) from the last day need you. 1
+    thing from the last day need you." All this adds is where the things that need a person are.
+    """
+    headline = headline.strip()
+    if attention_count:
+        return f"{headline} What needs you is listed below, with what is known about each one."
+    return headline
+
+
+def attempt_rows(records: Iterable[object]) -> tuple[tuple[str, str, str, str, str], ...]:
+    """The unresolved-attempt list as rows: id, what was attempted, which job, when, and its state.
+
+    Shows the operation id because that is what a person types into a provider's own records to
+    find out what happened; the identity key because one job may be the same job on two boards.
+    """
+    rows = []
+    for record in records:
+        state = getattr(getattr(record, "state", None), "value", "")
+        rows.append((
+            str(getattr(record, "operation_id", "")),
+            str(getattr(record, "action", "")),
+            str(getattr(record, "identity_key", "")),
+            str(getattr(record, "started_at", "")),
+            ATTEMPT_STATE_LABELS.get(state, state or "unknown"),
+        ))
+    return tuple(rows)
+
+
+def attempt_detail_text(record: object) -> str:
+    """What one unresolved attempt says, and what would settle it."""
+    if record is None:
+        return ("Select an attempt to see what is known about it. An attempt is listed here when "
+                "nobody established what happened, which is the only state time cannot settle.")
+    state = getattr(getattr(record, "state", None), "value", "unknown")
+    detail = str(getattr(record, "detail", "") or "").strip()
+    lines = [
+        f"{getattr(record, 'operation_id', '')}: {getattr(record, 'action', '')} for "
+        f"{getattr(record, 'identity_key', '')}.",
+        f"Started {getattr(record, 'started_at', '')}, recorded as "
+        f"{ATTEMPT_STATE_LABELS.get(state, state)}.",
+    ]
+    if detail:
+        lines.append(f"What was recorded at the time: {detail}")
+    lines.append(
+        "Nothing here will settle it on its own: check the provider's own record, then write down "
+        "what you found. Until then this blocks any further attempt at the same job.")
+    return "\n".join(lines)
+
+
+def reconciliation_question(operation_id: str, outcome_label: str, evidence: str) -> str:
+    """What a person is asked before an unresolved attempt is settled by hand."""
+    return (f"Record this outcome?\n\n{operation_id} will be recorded as “{outcome_label}”, with "
+            f"your note as the evidence:\n\n{evidence.strip()}\n\nThis is how the block on further "
+            f"attempts for this job is lifted, so record what you actually found, not what you "
+            f"expect. It cannot be changed back by this application.")
+
+
+def reconciliation_refusal(evidence: str) -> str | None:
+    """Why a reconciliation cannot be recorded yet, or ``None`` when it can.
+
+    Evidence is required because the whole point of the unresolved state is that nobody knows what
+    happened; a settlement with no reason attached is a guess wearing a record's clothes.
+    """
+    if len(str(evidence or "").strip()) < 4:
+        return ("Write down what you found first - where you looked and what it said. An outcome "
+                "recorded without evidence cannot be told apart from a guess, so nothing was "
+                "changed.")
+    return None
+
+
+def notification_summary_text(description: str, decision_description: str,
+                              quiet_hours: tuple[int, int] | None) -> str:
+    """The notification panel's own summary: the preference, the quiet window, and what is due."""
+    lines = [description]
+    if quiet_hours:
+        lines.append(f"Quiet hours {quiet_hours[0]:02d}:00-{quiet_hours[1]:02d}:00 come from your "
+                     f"standing authorisation; nothing is prepared inside them.")
+    lines.append(decision_description)
+    return " ".join(lines)
+
+
+def notification_question(cadence_label: str, hour: int, channel_label: str) -> str:
+    """What a person is asked before a notification preference is stored."""
+    if cadence_label.casefold().startswith("no"):
+        return ("Stop preparing reports?\n\nNothing will be prepared for you. The report is still "
+                "there whenever you ask for it yourself.")
+    return (f"Save this preference?\n\n{cadence_label} from {hour:02d}:00, {channel_label}.\n\n"
+            f"Nothing is sent anywhere: this application has no email, no push and no system "
+            f"notification. It prepares a report where you can already see it.")
+
+
+def parse_notification_hour(value: str) -> int:
+    """The hour a person typed, or a refusal explaining itself. 0-23, whole numbers only."""
+    text = str(value or "").strip()
+    if text.endswith(":00"):
+        text = text[:-3]
+    if not text.isdigit():
+        raise ValueError("The hour is a whole number from 0 to 23, such as 9 for nine in the morning.")
+    hour = int(text)
+    if not 0 <= hour <= 23:
+        raise ValueError(f"{hour} is not an hour of the day; use a number from 0 to 23.")
+    return hour

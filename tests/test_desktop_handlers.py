@@ -39,6 +39,8 @@ from career_agent import analytics as career_agent_analytics
 from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
+from career_agent.attempts import AttemptState
+from career_agent.notifications import Cadence, DeliveryChannel
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 
 # The acceptance harness owns the definitions the display-backed checks use - what counts as a scrolling
@@ -8806,3 +8808,156 @@ class PermissionsTabTests(HandlerTestCase):
             self.assertFalse(discovery_gate(decision.source_id).allowed)
         source = inspect.getsource(desktop.CareerAgentApp._grant_policy_permission)
         self.assertNotIn("SOURCE_QUALITY_GATE_PASSED", source)
+
+
+class WhatsHappeningTabTests(HandlerTestCase):
+    """The tab that answers "what has this been doing, and what needs me?", through the real window.
+
+    Three properties are worth more than what the screen says: an unresolved attempt cannot be
+    settled without evidence, a declined confirmation writes nothing at all (asserted against the
+    connection's own change counter), and what the tab shows afterwards is re-read from the database
+    rather than assembled from what was typed.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root,
+                                     database_path=Path(self._directory.name) / "report.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def unresolved(self, app, *, operation_id="op-1", identity="job:1", action="email_send"):
+        app.store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action)
+        app._refresh_report()
+        app.attempt_tree.selection_set(operation_id)
+        app._on_attempt_selection()
+        return operation_id
+
+    def settle(self, app, *, outcome="It did happen", evidence="checked the sent folder",
+               answer=True):
+        CONFIG["Record this outcome"] = answer
+        app.attempt_outcome.set(outcome)
+        app.attempt_evidence.set(evidence)
+        app._reconcile_selected_attempt()
+
+    def test_an_empty_database_says_nothing_needs_you_and_lists_no_attempt(self):
+        app = self.build_window()
+        self.assertIn("Nothing from the last day needs you", app.report_summary.get())
+        self.assertEqual(len(app.attempt_tree.get_children()), 0)
+        self.assertEqual(app.attempt_settle_button.options["state"], "disabled")
+        self.assertIn("Select an attempt", app.attempt_detail.get())
+
+    def test_an_unresolved_attempt_is_listed_with_what_it_blocks(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.assertEqual(len(app.attempt_tree.get_children()), 1)
+        self.assertIn("outcome not established", app.attempt_detail.get())
+        self.assertIn("blocks any further attempt", app.attempt_detail.get())
+        self.assertEqual(app.attempt_settle_button.options["state"], "normal")
+        self.assertIn("need you", app.report_summary.get())
+
+    def test_settling_without_evidence_is_refused_and_writes_nothing(self):
+        app = self.build_window()
+        self.unresolved(app)
+        before = app.store._connection.total_changes
+        self.settle(app, evidence="  ")
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.unresolved_attempts()), 1)
+        self.assertNotIn("Record this outcome", MESSAGES.titles("askyesno"),
+                         "a refusal must not even ask the question")
+
+    def test_a_declined_confirmation_writes_nothing_at_all(self):
+        app = self.build_window()
+        self.unresolved(app)
+        before = app.store._connection.total_changes
+        self.settle(app, answer=False)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.unresolved_attempts()), 1)
+        self.assertIn("still unresolved", app.status.get())
+
+    def test_a_settled_attempt_leaves_the_list_and_the_evidence_is_kept(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.settle(app, evidence="the provider's own log shows it was delivered")
+        self.assertEqual(app.store.unresolved_attempts(), (),
+                         "the list is re-read from the database, not from what was typed")
+        stored = app.store.get_attempt("op-1")
+        self.assertIs(stored.state, AttemptState.PERFORMED)
+        self.assertIn("provider's own log", stored.evidence)
+        self.assertEqual(len(app.attempt_tree.get_children()), 0)
+        self.assertEqual(app.attempt_evidence.get(), "",
+                         "the evidence box is cleared so the next attempt cannot inherit it")
+        self.assertIn("no longer blocked", app.status.get())
+
+    def test_the_question_says_what_will_be_recorded_and_that_it_lifts_the_block(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.settle(app, outcome="It did not happen", evidence="nothing in the sent folder",
+                    answer=False)
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("It did not happen", asked)
+        self.assertIn("nothing in the sent folder", asked)
+        self.assertIn("how the block on further attempts", asked)
+
+    def test_the_weekly_window_is_read_back_from_the_database(self):
+        app = self.build_window()
+        app.report_window.set("the last seven days")
+        app._refresh_report()
+        self.assertIn("the last 7 days", app.report_summary.get())
+        self.assertIn("next 14 day(s)", app.report_text.get())
+
+    def test_the_report_text_never_calls_queued_work_done(self):
+        from career_agent.tasks import build_task
+
+        app = self.build_window()
+        app.store.save_scheduled_task(build_task("daily-backup", "Nightly backup",
+                                                 "backup.snapshot", times=("07:00",),
+                                                 timezone="UTC"))
+        app._refresh_report()
+        text = app.report_text.get()
+        self.assertIn("Scheduled is not done", text,
+                      "a scheduled task must reach the window labelled as a plan")
+        self.assertIn("plans, not outcomes", text)
+
+    def test_a_notification_preference_is_saved_and_read_back(self):
+        app = self.build_window()
+        CONFIG["Save this preference"] = True
+        app.notification_vars["cadence"].set("Once a week")
+        app.notification_vars["hour"].set("7")
+        app.notification_vars["channel"].set("written to a file on this machine")
+        app.notification_vars["only_attention"].set(False)
+        app._save_notification_preference()
+
+        stored = app.store.get_notification_preferences()
+        self.assertIs(stored.cadence, Cadence.WEEKLY)
+        self.assertEqual(stored.hour, 7)
+        self.assertIs(stored.channel, DeliveryChannel.FILE)
+        self.assertFalse(stored.only_when_attention)
+        self.assertIn("once a week", app.notification_summary.get())
+        self.assertIn("Nothing is sent anywhere", app.status.get())
+
+    def test_a_declined_preference_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        CONFIG["Save this preference"] = False
+        app.notification_vars["cadence"].set("Every day")
+        app._save_notification_preference()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertTrue(app.store.get_notification_preferences().is_off)
+
+    def test_an_hour_that_is_not_one_is_refused_before_anything_is_asked(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        app.notification_vars["cadence"].set("Every day")
+        app.notification_vars["hour"].set("half past nine")
+        app._save_notification_preference()
+        self.assertIn("Preference not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertNotIn("Save this preference", MESSAGES.titles("askyesno"))
+
+    def test_the_tab_states_what_it_cannot_do(self):
+        app = self.build_window()
+        texts = " ".join(str(label.options.get("text", "")) for label in RecordingLabel.created)
+        self.assertIn("no email, no push and no system notification", texts)
+        self.assertIn("Nothing here fetches anything, sends anything or submits anything", texts)
