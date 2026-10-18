@@ -1,9 +1,9 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 150 steps — at this revision **22 PASS, 128 BLOCKED, 0 FAIL, no box ticked** (the seven
-newest steps, 144-150, are for the do-not-contact list on the HR contacts tab — the mark that now writes
-the list the sending gate reads — and all seven are BLOCKED; steps 137-143, for the What's happening tab,
-are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 156 steps — at this revision **22 PASS, 134 BLOCKED, 0 FAIL, no box ticked** (the six
+newest steps, 151-156, are for the conditions and the quiet window on the Permissions & limits tab, and
+all six are BLOCKED; steps 137-143, for the What's happening tab, and 144-150, for the do-not-contact
+list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1425,4 +1425,28 @@ second verification pass, after the first run was already green.
     on a real machine has not been opened here.**
 150. [ ] Keyboard and screen reader: reach the reason chooser, the note box and both mark controls with
     **Tab** alone, and operate them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## Permissions & limits: the conditions and the quiet window (added 2026-10-18)
+
+151. [ ] Open **Permissions & limits** on a database with no conditions. The line above the boxes must
+    say that no role, place or follow-up condition is recorded, that no quiet hours are recorded, and
+    that with no attachment rule nothing may be attached at all.
+    → **BLOCKED — acceptance check N7 and the handler tests assert the sentence; it has not been read
+    on a screen.**
+152. [ ] Type a role term and a quiet window, press **Record these conditions...** and read the
+    confirmation. It must list each change in both directions, say that a condition can only narrow,
+    and name the version it is about to write. Answer **No**: nothing may be written.
+    → **BLOCKED — acceptance check N7 asserts the wording and the unchanged change counter.**
+153. [ ] Clear the *until* box and press the button again. The refusal must appear with no confirmation
+    asked, and nothing may be written.
+    → **BLOCKED — acceptance check N8 asserts the refusal and the absent question.**
+154. [ ] Put the hour back, add a file ending, and confirm. Re-open the tab: the boxes must read back
+    exactly what was stored, and pressing save again must report that there is nothing to change.
+    → **BLOCKED — acceptance check N9 asserts the stored value, the read-back and the no-op save.**
+155. [ ] With a permission already authorised, record a condition and confirm the permission and its
+    daily ceiling are untouched, and that the version number moved by exactly one.
+    → **BLOCKED — acceptance check N9 and the handler tests assert both; no display-backed run.**
+156. [ ] Keyboard and screen reader: reach all six boxes and the button with **Tab** alone, and operate
+    them without a mouse.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**

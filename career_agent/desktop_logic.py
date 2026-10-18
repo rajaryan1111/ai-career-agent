@@ -1034,3 +1034,149 @@ def suppression_lift_question(address: str, reason_label: str | None, permanent:
         question += (" That reason says they asked not to be contacted. Removing it is yours to do in "
                      "your own database, and it is not something time or an import may do.")
     return question
+
+
+# ---------------------------------------------------------------------------------------------
+# Conditions on what may be acted on, and the quiet window
+#
+# The standing authorisation has carried role terms, places, attachment rules, a follow-up limit and
+# quiet hours since they were added: stored, enforced, round-tripped, and carried untouched through
+# every change the window made. None of them could be *edited* anywhere but Python. These helpers are
+# the reading half of putting them on the Permissions & limits tab - parsing what a person typed, and
+# saying what is stored - with no Tk and no database in sight.
+
+def parse_condition_terms(value: str, *, noun: str) -> tuple[str, ...]:
+    """Split a typed list of terms on commas. Empty means no condition, which means no narrowing.
+
+    Terms are not folded here: the policy value folds them once at its own edge, and a window that
+    folded them too would be a second place that decides what two terms are the same.
+    """
+    terms = [part.strip() for part in str(value or "").replace("\n", ",").split(",")]
+    kept = tuple(term for term in terms if term)
+    if len(set(term.casefold() for term in kept)) != len(kept):
+        raise ValueError(f"the same term is listed twice in the {noun}; list each one once")
+    return kept
+
+
+def parse_attachment_kinds(value: str) -> tuple[str, ...]:
+    """Split typed file endings, each one a suffix. ``pdf`` and ``.pdf`` mean the same ending.
+
+    An empty list is not "anything may be attached": with no rule, nothing may be attached at all,
+    which is what the policy already enforces and what the window says beside this box.
+    """
+    kinds = []
+    for term in parse_condition_terms(value, noun="attachment rules"):
+        ending = term if term.startswith(".") else f".{term}"
+        if ending.count(".") != 1 or len(ending) < 2 or any(ch.isspace() for ch in ending):
+            raise ValueError(
+                f"{term!r} is not a file ending; write endings like .pdf or .docx, separated by commas")
+        kinds.append(ending)
+    return tuple(kinds)
+
+
+def parse_follow_up_limit(value: str) -> int | None:
+    """A whole number of follow-ups per job, or ``None`` when the box is empty."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not text.isdigit():
+        raise ValueError(f"{text!r} is not a whole number of follow-ups per job")
+    return int(text)
+
+
+def parse_quiet_hours(start: str, end: str) -> tuple[int, int] | None:
+    """The quiet window as a pair of hours, or ``None`` when both boxes are empty.
+
+    One box filled and the other empty is refused rather than guessed: "quiet from 22" with no end
+    is either one hour or ten, and a window that picked one would be inventing a rule the person did
+    not state. Equal hours are refused for the same reason the policy refuses them.
+    """
+    first, second = str(start or "").strip(), str(end or "").strip()
+    if not first and not second:
+        return None
+    if not first or not second:
+        raise ValueError(
+            "quiet hours need both ends: say which hour they start and which hour they end, or "
+            "leave both empty for none")
+    hours = (parse_notification_hour(first), parse_notification_hour(second))
+    if hours[0] == hours[1]:
+        raise ValueError(
+            "quiet hours that start and end at the same hour say nothing; leave them empty for "
+            "none, or name two different hours")
+    return hours
+
+
+def condition_terms_text(terms: Iterable[str]) -> str:
+    """How a stored set of terms is written back into a box, so a re-save changes nothing."""
+    return ", ".join(sorted(str(term) for term in terms))
+
+
+def conditions_summary_text(role_terms: Iterable[str], locations: Iterable[str],
+                            attachments: Iterable[str], follow_up_limit: int | None,
+                            quiet_hours: tuple[int, int] | None) -> str:
+    """One line saying what is recorded now, in the words a refusal would use."""
+    parts = []
+    roles = sorted(role_terms)
+    places = sorted(locations)
+    endings = sorted(attachments)
+    parts.append(f"roles must mention: {', '.join(roles)}" if roles
+                 else "no role condition is recorded")
+    parts.append(f"places allowed: {', '.join(places)}" if places
+                 else "no place condition is recorded")
+    parts.append(f"attachments allowed: {', '.join(endings)}" if endings
+                 else "no attachment rule is recorded, so nothing may be attached")
+    parts.append(f"at most {follow_up_limit} follow-up(s) per job" if follow_up_limit is not None
+                 else "no follow-up limit is recorded")
+    parts.append(f"quiet from {quiet_hours[0]:02d}:00 to {quiet_hours[1]:02d}:00"
+                 if quiet_hours else "no quiet hours are recorded")
+    return " · ".join(parts) + "."
+
+
+def conditions_question(changes: Iterable[str], version: int) -> str:
+    """The one confirmation before conditions are stored, naming what changes and what does not."""
+    listed = list(changes)
+    body = "\n".join(f"  - {change}" for change in listed) if listed else "  - nothing changes"
+    return (
+        "Record these conditions on what may be acted on?\n\n"
+        f"{body}\n\n"
+        "Conditions only narrow what is already authorised: they can refuse something that is "
+        "otherwise allowed, and they can never permit something that is not. A condition that cannot "
+        "be checked - because nothing describes the job being acted on - refuses.\n\n"
+        f"This is stored as a new version of the standing authorisation (version {version + 1}); the "
+        "version you have now is kept. Nothing is switched on, and nothing runs: every source is "
+        "still disabled."
+    )
+
+
+def condition_changes(before: Mapping[str, object], after: Mapping[str, object]) -> tuple[str, ...]:
+    """What a save would change, in a person's words, for the confirmation to list."""
+    labels = {
+        "role_terms": "roles must mention",
+        "locations": "places allowed",
+        "allowed_attachments": "attachments allowed",
+        "follow_up_limit": "follow-ups per job",
+        "quiet_hours": "quiet hours",
+    }
+    def quiet_text(value: object) -> str:
+        if not value:
+            return "nothing"
+        start, end = tuple(value)  # type: ignore[arg-type]
+        return f"{start:02d}:00-{end:02d}:00"
+
+    changes = []
+    for key, label in labels.items():
+        old, new = before.get(key), after.get(key)
+        if key == "quiet_hours":
+            old_text, new_text = quiet_text(old), quiet_text(new)
+            if old_text != new_text:
+                changes.append(f"{label}: {old_text} → {new_text}")
+            continue
+        if isinstance(old, (set, frozenset, tuple, list)) or isinstance(new, (set, frozenset, tuple, list)):
+            old_text = condition_terms_text(old or ()) or "nothing"
+            new_text = condition_terms_text(new or ()) or "nothing"
+        else:
+            old_text = "nothing" if old is None else str(old)
+            new_text = "nothing" if new is None else str(new)
+        if old_text != new_text:
+            changes.append(f"{label}: {old_text} → {new_text}")
+    return tuple(changes)

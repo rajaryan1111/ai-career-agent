@@ -4048,3 +4048,23 @@ reason chooser, because a chooser would imply the stored reason could be rewritt
 assertions and a new L9b; the acceptance check that read "marking changed 1 row" now reads 2, and the
 old number was the defect written down. Suite 2540 OK (skipped=13). Note:
 `research/one-mark-not-two-2026-10-18.md`.
+
+**Conditions you can actually set, 2026-10-18:** role terms, places, attachment rules, the follow-up
+limit and the quiet window have been stored, validated, folded at the value's own edge, part of
+`content_key()`, round-tripped, enforced and reported together since the day they were added - and
+settable only from a Python prompt, which for a person using the application means they did not
+exist. They are now a panel on the Permissions & limits tab, under the permissions they narrow.
+Reading what was typed is its own Tk-free module and refuses rather than guesses: `my resume.pdf` is
+not a file ending, `a few` is not a number of follow-ups, the same term listed twice is refused
+instead of quietly folded, and half a quiet window is refused because "quiet from 22" with no end is
+either one hour or ten. Terms are not folded in the window - the policy value folds once, and a
+second folder would be a second opinion about what two terms are the same. The confirmation lists
+each change in both directions, because clearing a condition is a change a person should see
+described rather than an empty box that silently stops protecting them; it says a condition can only
+narrow, and names the version it is about to write. The boxes are rewritten from the stored value on
+every refresh, so saving again reports "nothing to change" instead of writing a version that records
+nothing, and the write uses `dataclasses.replace` - the discipline this tab was corrected into after
+it once lost the conditions by rebuilding the value field by field. 20 tests (12 handler, 8 text) and
+acceptance N7-N9; stand-in run 134 checks, 0 failed, still not a window. Suite 2560 OK (skipped=13).
+Six manual steps (151-156) BLOCKED, checklist now 156: 22 PASS, 134 BLOCKED, 0 FAIL. Note:
+`research/conditions-you-can-actually-set-2026-10-18.md`.

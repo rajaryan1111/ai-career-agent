@@ -54,6 +54,8 @@ from .desktop_logic import (
     plan_job_save, policy_decision_text, policy_grant_question, policy_removal_question,
     policy_revocation_question, policy_rows, policy_stop_question, policy_summary_text,
     profile_fact_review, profile_fields_not_matching, profile_form_values,
+    condition_changes, condition_terms_text, conditions_question, conditions_summary_text,
+    parse_attachment_kinds, parse_condition_terms, parse_follow_up_limit, parse_quiet_hours,
     reconciliation_question, reconciliation_refusal, report_summary_text,
     required_fact_questions, required_facts_to_confirm,
     suppression_lift_question, suppression_lift_refusal, suppression_mark_question,
@@ -2252,6 +2254,58 @@ class CareerAgentApp:
             ),
             wraplength=_TAB_TEXT_WRAP, justify=LEFT,
         ).grid(row=7, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        # The conditions. They have been stored, enforced and carried untouched through every change
+        # this tab makes since they were added, and until now the only way to set one was Python. They
+        # live under the permissions because they are not permissions: they narrow what an existing
+        # permission may be used for, and can never widen it.
+        ttk.Label(body, text="Conditions on what may be acted on").grid(
+            row=8, column=0, columnspan=4, sticky=W, pady=(14, 2))
+        self.conditions_summary = tk.StringVar(value="Reading the conditions...")
+        ttk.Label(body, textvariable=self.conditions_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=9, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        conditions = ttk.Frame(body)
+        conditions.grid(row=10, column=0, columnspan=4, sticky=W)
+        self.condition_vars = {
+            "roles": tk.StringVar(),
+            "places": tk.StringVar(),
+            "attachments": tk.StringVar(),
+            "follow_ups": tk.StringVar(),
+            "quiet_from": tk.StringVar(),
+            "quiet_until": tk.StringVar(),
+        }
+        for row, (key, label, width) in enumerate((
+                ("roles", "A role's title must mention (any of, comma separated)", 34),
+                ("places", "The place must be one of (comma separated)", 34),
+                ("attachments", "Only these file endings may ever be attached", 34))):
+            ttk.Label(conditions, text=label).grid(row=row, column=0, sticky=W, pady=(2, 0))
+            ttk.Entry(conditions, textvariable=self.condition_vars[key], width=width).grid(
+                row=row, column=1, sticky=W, padx=(8, 0), pady=(2, 0))
+        ttk.Label(conditions, text="At most this many follow-ups per job").grid(
+            row=3, column=0, sticky=W, pady=(2, 0))
+        ttk.Entry(conditions, textvariable=self.condition_vars["follow_ups"], width=6).grid(
+            row=3, column=1, sticky=W, padx=(8, 0), pady=(2, 0))
+        quiet = ttk.Frame(conditions)
+        quiet.grid(row=4, column=0, columnspan=2, sticky=W, pady=(2, 0))
+        ttk.Label(quiet, text="Quiet hours, local, from").pack(side="left")
+        ttk.Entry(quiet, textvariable=self.condition_vars["quiet_from"], width=6).pack(
+            side="left", padx=(6, 6))
+        ttk.Label(quiet, text="until").pack(side="left")
+        ttk.Entry(quiet, textvariable=self.condition_vars["quiet_until"], width=6).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(body, text="Record these conditions...",
+                   command=self._save_policy_conditions).grid(row=11, column=0, sticky=W, pady=(8, 0))
+        ttk.Label(
+            body,
+            text=(
+                "Empty means no condition of that kind, with one exception said plainly: with no "
+                "attachment rule, nothing may be attached at all. A condition that cannot be checked "
+                "- because nothing describes the job being acted on - refuses, and every failed "
+                "condition is reported together rather than one per attempt. Quiet hours may wrap "
+                "past midnight; nothing acts and nothing is prepared inside them. Saving records a "
+                "new version of the standing authorisation and starts nothing."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=12, column=0, columnspan=4, sticky=W, pady=(6, 0))
         body.columnconfigure(0, weight=1)
         #: The authorisation the list was drawn from, so a control acts on what the person is looking
         #: at and a refusal can be explained without reading the database again mid-click.
@@ -2284,6 +2338,7 @@ class CareerAgentApp:
             text="Allow actions again..." if policy.stop_all else "Stop everything now...")
         self._policy_shown = policy
         self._policy_version_shown = version
+        self._show_policy_conditions(policy)
         if selected in drawn:  # the row the person was looking at is still permitted
             self.policy_tree.selection_set(selected)
         self._on_policy_selection()
@@ -2339,6 +2394,77 @@ class CareerAgentApp:
             return
         self._refresh_policy()
         self.status.set(f"{done} Saved as authorisation version {version}; nothing was started.")
+
+    def _show_policy_conditions(self, policy: GlobalPolicy) -> None:
+        """Write the stored conditions into the boxes and the line above them. Reads only.
+
+        The boxes are set from the stored value on every refresh, so what a person sees is what is
+        recorded rather than what they last typed - and saving again without editing anything writes
+        no new version, because the authorisation's content key is unchanged.
+        """
+        if not hasattr(self, "condition_vars"):
+            return
+        quiet = policy.quiet_hours
+        self.condition_vars["roles"].set(condition_terms_text(policy.role_terms))
+        self.condition_vars["places"].set(condition_terms_text(policy.locations))
+        self.condition_vars["attachments"].set(condition_terms_text(policy.allowed_attachments))
+        self.condition_vars["follow_ups"].set(
+            "" if policy.follow_up_limit is None else str(policy.follow_up_limit))
+        self.condition_vars["quiet_from"].set("" if quiet is None else f"{quiet[0]:02d}:00")
+        self.condition_vars["quiet_until"].set("" if quiet is None else f"{quiet[1]:02d}:00")
+        self.conditions_summary.set(conditions_summary_text(
+            policy.role_terms, policy.locations, policy.allowed_attachments,
+            policy.follow_up_limit, quiet))
+
+    def _save_policy_conditions(self) -> None:
+        """Record the conditions typed into the boxes, after one confirmation. Writes one version."""
+        policy = self._policy_shown
+        try:
+            roles = parse_condition_terms(self.condition_vars["roles"].get(),
+                                          noun="role conditions")
+            places = parse_condition_terms(self.condition_vars["places"].get(),
+                                           noun="place conditions")
+            attachments = parse_attachment_kinds(self.condition_vars["attachments"].get())
+            follow_ups = parse_follow_up_limit(self.condition_vars["follow_ups"].get())
+            quiet = parse_quiet_hours(self.condition_vars["quiet_from"].get(),
+                                      self.condition_vars["quiet_until"].get())
+        except ValueError as exc:
+            # Refused before the question is asked: a window should not ask about something it is
+            # about to reject, and nothing has been written at this point.
+            messagebox.showerror("Nothing was changed", str(exc), parent=self.root)
+            self.status.set("The conditions were not changed; nothing was written.")
+            return
+        changes = condition_changes(
+            {
+                "role_terms": policy.role_terms, "locations": policy.locations,
+                "allowed_attachments": policy.allowed_attachments,
+                "follow_up_limit": policy.follow_up_limit, "quiet_hours": policy.quiet_hours,
+            },
+            {
+                "role_terms": roles, "locations": places, "allowed_attachments": attachments,
+                "follow_up_limit": follow_ups, "quiet_hours": quiet,
+            },
+        )
+        if not changes:
+            messagebox.showinfo(
+                "Nothing to change",
+                "The conditions in the boxes are the ones already recorded, so there is nothing to "
+                "save and no new version was written.", parent=self.root)
+            self.status.set("The conditions already say that; nothing was written.")
+            return
+        if not messagebox.askyesno("Record these conditions",
+                                   conditions_question(changes, self._policy_version_shown),
+                                   parent=self.root):
+            self.status.set("Cancelled; the conditions were not changed.")
+            return
+        # ``replace`` rather than a fresh value built field by field: a condition that was added to
+        # this value and forgotten in one of these handlers would be a silent loosening of somebody's
+        # own rule, which is exactly how this tab lost the conditions once before.
+        updated = dataclasses.replace(
+            policy, role_terms=frozenset(roles), locations=frozenset(places),
+            allowed_attachments=frozenset(attachments), follow_up_limit=follow_ups,
+            quiet_hours=quiet)
+        self._save_policy(updated, done="Your conditions were recorded.")
 
     def _grant_policy_permission(self) -> None:
         """Add one permission, after one explicit yes. A no writes nothing at all."""

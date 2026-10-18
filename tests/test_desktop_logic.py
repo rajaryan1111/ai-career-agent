@@ -735,3 +735,74 @@ class DoNotContactTextTests(unittest.TestCase):
                                                   "they asked not to be contacted", True)
         self.assertIn("comes off the do-not-contact list", present)
         self.assertIn("not something time or an import may do", present)
+
+
+class PolicyConditionTextTests(unittest.TestCase):
+    """Reading what a person typed into the condition boxes, with no Tk and no policy value."""
+
+    def test_terms_are_split_on_commas_and_never_folded_here(self):
+        self.assertEqual(logic.parse_condition_terms(" engineer , Data ", noun="role conditions"),
+                         ("engineer", "Data"))
+        self.assertEqual(logic.parse_condition_terms("", noun="role conditions"), ())
+        with self.assertRaises(ValueError):
+            logic.parse_condition_terms("engineer, Engineer", noun="role conditions")
+
+    def test_a_file_ending_is_read_as_one_and_anything_else_is_refused(self):
+        self.assertEqual(logic.parse_attachment_kinds("pdf, .docx"), (".pdf", ".docx"))
+        for value in ("my resume.pdf", "a b", "."):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                logic.parse_attachment_kinds(value)
+
+    def test_a_follow_up_limit_is_a_whole_number_or_nothing(self):
+        self.assertIsNone(logic.parse_follow_up_limit("  "))
+        self.assertEqual(logic.parse_follow_up_limit("2"), 2)
+        self.assertEqual(logic.parse_follow_up_limit("0"), 0)
+        for value in ("-1", "two", "1.5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                logic.parse_follow_up_limit(value)
+
+    def test_half_a_quiet_window_is_refused_rather_than_guessed(self):
+        self.assertIsNone(logic.parse_quiet_hours("", ""))
+        self.assertEqual(logic.parse_quiet_hours("22:00", "7"), (22, 7))
+        with self.assertRaises(ValueError) as refused:
+            logic.parse_quiet_hours("22", "")
+        self.assertIn("both ends", str(refused.exception))
+        with self.assertRaises(ValueError) as same:
+            logic.parse_quiet_hours("9", "09:00")
+        self.assertIn("say nothing", str(same.exception))
+
+    def test_the_summary_says_what_an_empty_attachment_rule_means(self):
+        empty = logic.conditions_summary_text((), (), (), None, None)
+        self.assertIn("no attachment rule is recorded, so nothing may be attached", empty)
+        self.assertIn("no quiet hours are recorded", empty)
+        full = logic.conditions_summary_text(("data",), ("remote",), (".pdf",), 2, (22, 7))
+        self.assertIn("roles must mention: data", full)
+        self.assertIn("at most 2 follow-up(s) per job", full)
+        self.assertIn("quiet from 22:00 to 07:00", full)
+
+    def test_what_changes_is_described_in_both_directions(self):
+        before = {"role_terms": frozenset({"data"}), "locations": frozenset(),
+                  "allowed_attachments": frozenset({".pdf"}), "follow_up_limit": 2,
+                  "quiet_hours": (22, 7)}
+        after = {"role_terms": frozenset(), "locations": frozenset({"remote"}),
+                 "allowed_attachments": frozenset({".pdf"}), "follow_up_limit": None,
+                 "quiet_hours": None}
+        changes = logic.condition_changes(before, after)
+        self.assertIn("roles must mention: data → nothing", changes)
+        self.assertIn("places allowed: nothing → remote", changes)
+        self.assertIn("follow-ups per job: 2 → nothing", changes)
+        self.assertIn("quiet hours: 22:00-07:00 → nothing", changes)
+        self.assertNotIn("attachments allowed", " ".join(changes),
+                         "an unchanged condition was described as a change")
+        self.assertEqual(logic.condition_changes(before, before), ())
+
+    def test_the_question_says_a_condition_can_only_narrow(self):
+        asked = logic.conditions_question(("places allowed: nothing → remote",), 3)
+        self.assertIn("only narrow", asked)
+        self.assertIn("version 4", asked)
+        self.assertIn("refuses", asked)
+        self.assertIn("nothing runs", asked)
+
+    def test_terms_are_written_back_the_way_they_are_stored(self):
+        self.assertEqual(logic.condition_terms_text(frozenset({"b", "a"})), "a, b")
+        self.assertEqual(logic.condition_terms_text(()), "")

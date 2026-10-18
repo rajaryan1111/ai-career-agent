@@ -9195,3 +9195,186 @@ class DoNotContactListPanelTests(ContactTabTestCase):
 
         self.assertTrue(MESSAGES.titles("showerror"), "an unavailable database was not reported")
         self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+
+class PolicyConditionsTabTests(HandlerTestCase):
+    """Editing the conditions and the quiet window, through the real window.
+
+    The conditions were stored, enforced and carried untouched through every change this tab made
+    since they were added, and could only be set from Python. These tests drive the tab's own
+    handlers against a real store: "nothing was written" is the connection's change counter and the
+    stored version number, and what the boxes show is read back from the authorisation.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "conditions.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def typed(self, app, *, roles="", places="", attachments="", follow_ups="",
+              quiet_from="", quiet_until=""):
+        app.condition_vars["roles"].set(roles)
+        app.condition_vars["places"].set(places)
+        app.condition_vars["attachments"].set(attachments)
+        app.condition_vars["follow_ups"].set(follow_ups)
+        app.condition_vars["quiet_from"].set(quiet_from)
+        app.condition_vars["quiet_until"].set(quiet_until)
+
+    def test_a_fresh_database_records_no_condition_and_says_what_that_means(self):
+        app = self.build_window()
+        summary = app.conditions_summary.get()
+        self.assertIn("no role condition is recorded", summary)
+        self.assertIn("no attachment rule is recorded, so nothing may be attached", summary)
+        self.assertIn("no quiet hours are recorded", summary)
+        self.assertEqual(app.condition_vars["roles"].get(), "")
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_saving_conditions_asks_first_and_a_declined_question_writes_nothing(self):
+        app = self.build_window()
+        CONFIG["Record these conditions"] = False
+        self.typed(app, roles="engineer", quiet_from="22:00", quiet_until="07:00")
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("roles must mention: nothing → engineer", asked)
+        self.assertIn("quiet hours: nothing → 22:00-07:00", asked)
+        self.assertIn("only narrow", asked)
+        self.assertIn("nothing runs", asked)
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined confirmation changed the database")
+        self.assertEqual(app.store.policy_version_number(), 0)
+        self.assertIn("Cancelled", app.status.get())
+
+    def test_a_confirmed_save_stores_every_condition_and_one_new_version(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer, Data", places="Remote, Delhi",
+                   attachments="pdf, .docx", follow_ups="2",
+                   quiet_from="22:00", quiet_until="7")
+
+        app._save_policy_conditions()
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(stored.role_terms, frozenset({"engineer", "data"}))
+        self.assertEqual(stored.locations, frozenset({"remote", "delhi"}))
+        self.assertEqual(stored.allowed_attachments, frozenset({".pdf", ".docx"}))
+        self.assertEqual(stored.follow_up_limit, 2)
+        self.assertEqual(stored.quiet_hours, (22, 7))
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertIn("conditions were recorded", app.status.get())
+        self.assertIn("nothing was started", app.status.get())
+
+    def test_the_boxes_read_back_what_is_stored_and_a_resave_writes_no_version(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer", attachments=".pdf", quiet_from="22", quiet_until="7")
+        app._save_policy_conditions()
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertEqual(app.condition_vars["quiet_from"].get(), "22:00")
+        self.assertEqual(app.condition_vars["attachments"].get(), ".pdf")
+        MESSAGES.reset()
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing to change", MESSAGES.titles("showinfo"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a change it had already decided was none")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 1)
+
+    def test_a_half_written_quiet_window_is_refused_before_anything_is_asked(self):
+        app = self.build_window()
+        self.typed(app, quiet_from="22")
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [])
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_quiet_hours_that_start_and_end_together_are_refused(self):
+        app = self.build_window()
+        self.typed(app, quiet_from="9", quiet_until="09:00")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("say nothing", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_something_that_is_not_a_file_ending_is_refused(self):
+        app = self.build_window()
+        self.typed(app, attachments="my resume.pdf")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("not a file ending", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_a_follow_up_limit_that_is_not_a_number_is_refused(self):
+        app = self.build_window()
+        self.typed(app, follow_ups="a few")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_recording_a_condition_leaves_the_permissions_it_narrows_alone(self):
+        app = self.build_window()
+        CONFIG["Authorise this action"] = True
+        app.policy_vars["source"].set("jobicy")
+        app.policy_vars["action"].set("look for jobs")
+        app.policy_vars["limit"].set("3")
+        app._grant_policy_permission()
+        granted = app.store.get_global_policy()
+
+        self.typed(app, roles="engineer")
+        app._save_policy_conditions()
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(stored.allowed, granted.allowed, "a condition changed what is permitted")
+        self.assertEqual(stored.daily_limits, granted.daily_limits,
+                         "a condition changed a daily ceiling")
+        self.assertEqual(stored.role_terms, frozenset({"engineer"}))
+        self.assertEqual(app.store.policy_version_number(), 2)
+
+    def test_clearing_a_condition_is_a_change_a_person_sees_described(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer", places="remote")
+        app._save_policy_conditions()
+        MESSAGES.reset()
+        self.typed(app, places="remote")
+
+        app._save_policy_conditions()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("roles must mention: engineer → nothing", asked)
+        self.assertEqual(app.store.get_global_policy().role_terms, frozenset())
+        self.assertEqual(app.store.get_global_policy().locations, frozenset({"remote"}))
+
+    def test_a_condition_a_person_typed_twice_is_refused_rather_than_folded_quietly(self):
+        app = self.build_window()
+        self.typed(app, roles="Engineer, engineer")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("listed twice", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_the_tab_says_what_an_empty_attachment_rule_means(self):
+        RecordingLabel.created = []
+        app = self.build_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("with no attachment rule, nothing may be attached at all", said)
+        self.assertIn("every failed condition is reported together", said)
+        self.assertIn("may wrap past midnight", said)
+        self.assertIsNotNone(app.conditions_summary.get())

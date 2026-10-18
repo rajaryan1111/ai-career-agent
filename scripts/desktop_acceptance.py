@@ -3588,6 +3588,66 @@ def workflow_n_permissions(run: Run) -> None:
         require("withdrawn" in app.policy_summary.get(),
                 f"the summary says {app.policy_summary.get()!r}")
 
+    with results.step("N7 conditions are editable here, and a declined question writes nothing"):
+        dialogs.reset()
+        dialogs.answers["Record these conditions"] = False
+        before_version = app.store.policy_version_number()
+        before = app.store._connection.total_changes
+        app.condition_vars["roles"].set("engineer")
+        app.condition_vars["quiet_from"].set("22:00")
+        app.condition_vars["quiet_until"].set("07:00")
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        asked = dialogs.said("Record these conditions")
+        require("roles must mention: nothing \u2192 engineer" in asked,
+                f"the confirmation does not say what changes: {asked!r}")
+        require("only narrow" in asked,
+                "the confirmation does not say that a condition cannot permit anything")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.policy_version_number() == before_version,
+                "a declined confirmation wrote a version")
+
+    with results.step("N8 a half-written quiet window is refused before the question is asked"):
+        dialogs.reset()
+        app.condition_vars["quiet_until"].set("")
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        require("Nothing was changed" in dialogs.titles("showerror"),
+                f"a half-written quiet window was not refused; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                "the window asked about something it was going to refuse")
+        require(app.store._connection.total_changes == before,
+                "a refused condition changed the database")
+
+    with results.step("N9 recorded conditions are stored, read back, and narrow nothing else"):
+        dialogs.reset()
+        dialogs.answers.pop("Record these conditions", None)
+        permitted = app.store.get_global_policy()
+        app.condition_vars["quiet_until"].set("07:00")
+        app.condition_vars["attachments"].set("pdf")
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        stored = app.store.get_global_policy()
+        require(stored.role_terms == frozenset({"engineer"}),
+                f"the role condition stored is {stored.role_terms!r}")
+        require(stored.quiet_hours == (22, 7), f"the quiet window stored is {stored.quiet_hours!r}")
+        require(stored.allowed_attachments == frozenset({".pdf"}),
+                f"the attachment rule stored is {stored.allowed_attachments!r}")
+        require(stored.allowed == permitted.allowed,
+                "recording a condition changed what is permitted")
+        require(stored.daily_limits == permitted.daily_limits,
+                "recording a condition changed a daily ceiling")
+        require(app.condition_vars["quiet_from"].get() == "22:00",
+                f"the box reads back {app.condition_vars['quiet_from'].get()!r}")
+        require("quiet from 22:00 to 07:00" in app.conditions_summary.get(),
+                f"the summary says {app.conditions_summary.get()!r}")
+        dialogs.reset()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        require("Nothing to change" in dialogs.titles("showinfo"),
+                "saving the conditions already recorded was treated as a change")
+        require(app.store._connection.total_changes == before,
+                "saving an unchanged condition wrote a version")
+
     workspace.close_window(host, app)
 
 

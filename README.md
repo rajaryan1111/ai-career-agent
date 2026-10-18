@@ -974,6 +974,21 @@ the job being acted on — **refuses**, and every failed condition is reported t
 attempt. A tightened authorisation is a different authorisation: it gets its own stored version, and
 changing permissions in the window carries the conditions through untouched.
 
+**Where you set them.** On the **Permissions & limits** tab, under the permissions they narrow — role
+terms, places, file endings, the follow-up limit and the quiet window, each in its own box. They were
+stored and enforced from the day they were added and could only be *set* from Python until 2026-10-18.
+Four rules the tab keeps:
+
+- **Empty means no condition of that kind**, with the one exception said beside the box: with no
+  attachment rule, nothing may be attached at all.
+- **Half a quiet window is refused, not guessed.** "Quiet from 22" with no end hour is either one hour
+  or ten, and the refusal happens before the confirmation is asked. Hours that start and end together
+  are refused for the same reason.
+- **The confirmation lists what changes**, in both directions — `roles must mention: data → nothing` —
+  says a condition can only narrow, and names the version number it is about to write.
+- **The boxes read back what is stored**, so pressing save again writes no new version: the
+  authorisation's content key is unchanged, and a version that records nothing is not written.
+
 ## Can it send email or add things to my calendar?
 
 Short answer: no, and it will not pretend otherwise. What exists is the interface a real integration would
