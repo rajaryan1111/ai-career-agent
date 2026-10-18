@@ -3765,3 +3765,18 @@ tests all passed. The repository suite then ran 2082 tests with 1 skip; `compile
 `git diff --check` passed; the real-window desktop smoke and acceptance harnesses reported 14 and 113
 checks passed. The limitation remains explicit: this is a DTD/entity boundary, not a general malware
 scanner. Human GUI acceptance remains separate and blocked.
+
+
+## 2026-10-18 — JSON import/export number boundary closed
+
+The reliability audit reproduced four real holes at the version-2 format boundary before fixing them:
+`json.loads` accepted `NaN`/`Infinity`/`-Infinity` literals whole; an overflowing `1e400` crashed an
+import mid-write with an uncaught `OverflowError` from `_year`; booleans coerced to `1.0`/`1` in numeric
+fields; and `write_export` could emit non-standard JSON a strict reader (including this app's own
+importer) refuses. `read_export` now refuses a constant-bearing document whole with a `parse_constant`
+hook; `_year`/`_number` drop booleans and non-finite values like any unreadable value; `write_export`
+passes `allow_nan=False` and reports a stored non-finite number as a refused write with nothing left on
+disk. Evidence: 8 new tests in `tests/test_importer.py::NonStandardNumberTests` (all failing pre-fix),
+focused run 51 OK, full local suite **2090 tests OK (skipped=13)**, `compileall` and `git diff --check`
+clean; schema stays **8**, export version stays **2**, all external-action gates unchanged. Note:
+[import number boundary](research/import-number-boundary-2026-10-18.md).
