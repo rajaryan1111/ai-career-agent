@@ -101,10 +101,37 @@ class DiscoveryResult:
     listings: tuple[JobListing, ...]
     message: str
     retrieved_at: str
+    attempts: int = 1
+    duplicates_suppressed: int = 0
 
     @property
     def ok(self) -> bool:
         return self.outcome in {DiscoveryOutcome.OK, DiscoveryOutcome.EMPTY}
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Bounded exponential backoff; providers enforce their own quotas too."""
+
+    attempts: int = 3
+    base_delay: float = 0.5
+    max_delay: float = 5.0
+
+    def __post_init__(self) -> None:
+        if self.attempts < 1:
+            raise ValueError("A retry policy needs at least one attempt.")
+        if self.attempts > 5:
+            raise ValueError("A retry policy allows at most 5 attempts.")
+        if self.base_delay < 0 or self.max_delay < 0:
+            raise ValueError("Retry delays cannot be negative.")
+        if self.max_delay < self.base_delay:
+            raise ValueError("max_delay cannot be smaller than base_delay.")
+
+    def delay_for(self, attempt: int) -> float:
+        """Delay before retry ``attempt`` (1-based), capped by ``max_delay``."""
+        if attempt < 1:
+            raise ValueError("Attempt numbers start at 1.")
+        return min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
 
 
 class SourceAdapter(Protocol):
@@ -112,6 +139,10 @@ class SourceAdapter(Protocol):
 
     def discover(self, request: DiscoveryRequest) -> Sequence[JobListing]:
         """Return observed listings; raise for transport/schema failures."""
+
+
+class SourceSchemaError(RuntimeError):
+    """Raised by an adapter when the payload shape is wrong; never retried."""
 
 
 class RateLimitExceeded(RuntimeError):
@@ -199,10 +230,29 @@ def discovery_available() -> bool:
 
 
 def _result(declaration: SourceDeclaration, outcome: DiscoveryOutcome, message: str,
-            listings: Sequence[JobListing] = ()) -> DiscoveryResult:
+            listings: Sequence[JobListing] = (), *, attempts: int = 1,
+            duplicates_suppressed: int = 0) -> DiscoveryResult:
     return DiscoveryResult(
-        declaration.source_id, outcome, tuple(listings), message, _now()
+        declaration.source_id, outcome, tuple(listings), message, _now(),
+        attempts, duplicates_suppressed,
     )
+
+
+def deduplicate_observations(
+    listings: Sequence[JobListing],
+) -> tuple[tuple[JobListing, ...], int]:
+    """Collapse repeated observations of one job, keeping the first seen."""
+    from .core import duplicate_key
+
+    seen: set[str] = set()
+    unique: list[JobListing] = []
+    for listing in listings:
+        key = duplicate_key(listing)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(listing)
+    return tuple(unique), len(listings) - len(unique)
 
 
 def run_discovery(
@@ -210,11 +260,14 @@ def run_discovery(
     request: DiscoveryRequest,
     *,
     limiter: RateLimiter | None = None,
+    retry: RetryPolicy | None = None,
+    sleep=time.sleep,
 ) -> DiscoveryResult:
     """Run one adapter behind the permission gate and report typed outcomes.
 
     Refusals never call the adapter, so a closed gate cannot cause network
-    access. Transport and schema failures stay distinct from a valid empty run.
+    access. Transport and schema failures stay distinct from a valid empty run,
+    and retries are bounded by ``retry`` with injectable sleep for tests.
     """
     declaration = adapter.declaration
     if not quality_gate_open():
@@ -237,21 +290,52 @@ def run_discovery(
             limiter.acquire()
         except RateLimitExceeded as exc:
             return _result(declaration, DiscoveryOutcome.RATE_LIMITED, str(exc))
-    try:
-        listings = tuple(adapter.discover(request))
-    except TimeoutError:
-        return _result(declaration, DiscoveryOutcome.TIMEOUT, "The source timed out.")
-    except Exception as exc:  # Adapters must not leak transport details into the UI.
+
+    attempts_allowed = retry.attempts if retry is not None else 1
+    for attempt in range(1, attempts_allowed + 1):
+        try:
+            observed = tuple(adapter.discover(request))
+            break
+        except SourceSchemaError as exc:
+            return _result(
+                declaration, DiscoveryOutcome.SCHEMA_ERROR,
+                f"The source payload was not understood: {exc}", attempts=attempt,
+            )
+        except TimeoutError:
+            failure = DiscoveryOutcome.TIMEOUT
+            failure_message = "The source timed out."
+        except Exception as exc:  # Adapters must not leak transport details into the UI.
+            failure = DiscoveryOutcome.TRANSIENT_ERROR
+            failure_message = f"The source failed: {type(exc).__name__}."
+        else:  # pragma: no cover - defensive; the loop always breaks or returns
+            failure = None
+        if attempt == attempts_allowed:
+            return _result(
+                declaration, failure,
+                f"{failure_message} Gave up after {attempt} attempt(s).",
+                attempts=attempt,
+            )
+        if retry is not None:
+            sleep(retry.delay_for(attempt))
+    else:  # pragma: no cover - the loop returns on the final attempt
+        return _result(declaration, DiscoveryOutcome.TRANSIENT_ERROR, "No attempt was made.")
+
+    if not all(isinstance(item, JobListing) for item in observed):
         return _result(
-            declaration, DiscoveryOutcome.TRANSIENT_ERROR,
-            f"The source failed: {type(exc).__name__}.",
+            declaration, DiscoveryOutcome.SCHEMA_ERROR,
+            "The source returned records that are not listings.", attempts=attempt,
         )
-    if not listings:
+    unique, suppressed = deduplicate_observations(observed)
+    if not unique:
         return _result(
             declaration, DiscoveryOutcome.EMPTY,
             "The source returned no listings; this is a valid empty result.",
+            attempts=attempt,
         )
+    message = f"Observed {len(unique)} listing(s)."
+    if suppressed:
+        message += f" Suppressed {suppressed} duplicate observation(s)."
     return _result(
-        declaration, DiscoveryOutcome.OK,
-        f"Observed {len(listings)} listing(s).", listings,
+        declaration, DiscoveryOutcome.OK, message, unique,
+        attempts=attempt, duplicates_suppressed=suppressed,
     )

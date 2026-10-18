@@ -9,9 +9,12 @@ from career_agent.sources import (
     DiscoveryRequest,
     RateLimiter,
     RateLimitExceeded,
+    RetryPolicy,
     SourceCapability,
     SourceDeclaration,
+    SourceSchemaError,
     SourceStatus,
+    deduplicate_observations,
     discovery_available,
     enabled_discovery_sources,
     run_discovery,
@@ -48,14 +51,17 @@ def listing(i=1):
 
 
 class FakeAdapter:
-    def __init__(self, items=(), error=None, decl=None):
+    def __init__(self, items=(), error=None, decl=None, errors=()):
         self.declaration = decl or declaration()
         self.items = list(items)
         self.error = error
+        self.errors = list(errors)
         self.calls = 0
 
     def discover(self, request):
         self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
         if self.error is not None:
             raise self.error
         return self.items
@@ -166,6 +172,75 @@ class RunDiscoveryTests(unittest.TestCase):
             limiter.acquire()
         now = 61.0
         limiter.acquire()
+
+
+class RetryPolicyTests(unittest.TestCase):
+    def test_policy_bounds_and_backoff(self):
+        policy = RetryPolicy(attempts=3, base_delay=0.5, max_delay=1.5)
+        self.assertEqual([policy.delay_for(n) for n in (1, 2, 3)], [0.5, 1.0, 1.5])
+        with self.assertRaises(ValueError):
+            RetryPolicy(attempts=0)
+        with self.assertRaises(ValueError):
+            RetryPolicy(attempts=6)
+        with self.assertRaises(ValueError):
+            RetryPolicy(base_delay=2.0, max_delay=1.0)
+        with self.assertRaises(ValueError):
+            policy.delay_for(0)
+
+    def test_transient_failure_is_retried_then_succeeds(self):
+        delays = []
+        adapter = FakeAdapter([listing()], errors=[TimeoutError(), OSError("reset")])
+        with mock.patch.object(sources, "SOURCE_QUALITY_GATE_PASSED", True):
+            result = run_discovery(
+                adapter, RunDiscoveryTests.request,
+                retry=RetryPolicy(attempts=3, base_delay=0.25, max_delay=1.0),
+                sleep=delays.append,
+            )
+        self.assertIs(result.outcome, DiscoveryOutcome.OK)
+        self.assertEqual(adapter.calls, 3)
+        self.assertEqual(result.attempts, 3)
+        self.assertEqual(delays, [0.25, 0.5])
+
+    def test_retries_stop_at_the_configured_limit(self):
+        adapter = FakeAdapter([listing()], error=TimeoutError())
+        with mock.patch.object(sources, "SOURCE_QUALITY_GATE_PASSED", True):
+            result = run_discovery(
+                adapter, RunDiscoveryTests.request,
+                retry=RetryPolicy(attempts=2, base_delay=0.0, max_delay=0.0),
+                sleep=lambda _: None,
+            )
+        self.assertIs(result.outcome, DiscoveryOutcome.TIMEOUT)
+        self.assertIn("2 attempt(s)", result.message)
+        self.assertEqual(adapter.calls, 2)
+
+    def test_schema_failure_is_not_retried(self):
+        adapter = FakeAdapter([listing()], error=SourceSchemaError("missing title"))
+        with mock.patch.object(sources, "SOURCE_QUALITY_GATE_PASSED", True):
+            result = run_discovery(
+                adapter, RunDiscoveryTests.request,
+                retry=RetryPolicy(attempts=3, base_delay=0.0, max_delay=0.0),
+                sleep=lambda _: self.fail("schema failures must not sleep or retry"),
+            )
+        self.assertIs(result.outcome, DiscoveryOutcome.SCHEMA_ERROR)
+        self.assertEqual(adapter.calls, 1)
+        self.assertIn("missing title", result.message)
+
+    def test_non_listing_records_are_a_schema_error(self):
+        adapter = FakeAdapter([listing(), {"title": "not a listing"}])
+        with mock.patch.object(sources, "SOURCE_QUALITY_GATE_PASSED", True):
+            result = run_discovery(adapter, RunDiscoveryTests.request)
+        self.assertIs(result.outcome, DiscoveryOutcome.SCHEMA_ERROR)
+        self.assertEqual(result.listings, ())
+
+    def test_duplicate_observations_are_suppressed(self):
+        adapter = FakeAdapter([listing(1), listing(1), listing(2)])
+        with mock.patch.object(sources, "SOURCE_QUALITY_GATE_PASSED", True):
+            result = run_discovery(adapter, RunDiscoveryTests.request)
+        self.assertIs(result.outcome, DiscoveryOutcome.OK)
+        self.assertEqual(len(result.listings), 2)
+        self.assertEqual(result.duplicates_suppressed, 1)
+        self.assertIn("duplicate", result.message)
+        self.assertEqual([item.listing_id for item in deduplicate_observations([listing(1), listing(1)])[0]], ["fixture-1"])
 
 
 if __name__ == "__main__":
