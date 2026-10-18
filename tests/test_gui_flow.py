@@ -169,6 +169,33 @@ class GuiFlowTests(unittest.TestCase):
         self.assertEqual(self.dialogs, [])
         self.assertIsNotNone(self.app.store.get_tracker("j1"))
 
+    def test_resume_import_proposals_stay_unsaved_until_save_is_clicked(self):
+        resume_file = Path(self.folder.name) / "resume.txt"
+        resume_file.write_text(
+            "Country: India\nSkills: Python, SQL\nGraduation year: 2027\n", encoding="utf-8"
+        )
+        self.answers["file"] = str(resume_file)
+        self.answers["yes"] = True
+        self.assertIsNone(self.app.store.get_profile())
+        find_button(self.app.profile_tab, "Import resume (review)…").invoke()
+        self.assertEqual(self.app.profile_vars["country"].get(), "India")
+        self.assertEqual(self.app.profile_vars["skills"].get(), "Python, SQL")
+        self.assertEqual(self.app.profile_vars["graduation_year"].get(), "2027")
+        self.assertIsNone(self.app.store.get_profile(), "import must not save the profile")
+        self.assertIn("Nothing was saved yet", self.app.status.get())
+
+        find_button(self.app.profile_tab, "Save profile locally").invoke()
+        self.assertEqual(self.app.store.get_profile().candidate_country, "India")
+
+    def test_declined_resume_import_changes_nothing(self):
+        resume_file = Path(self.folder.name) / "resume.txt"
+        resume_file.write_text("Country: India\n", encoding="utf-8")
+        self.answers["file"] = str(resume_file)
+        self.answers["yes"] = False
+        find_button(self.app.profile_tab, "Import resume (review)…").invoke()
+        self.assertEqual(self.app.profile_vars["country"].get(), "")
+        self.assertIn("cancelled", self.app.status.get())
+
     def test_sources_tab_reports_the_closed_gate(self):
         rows = {item: self.app.sources_tree.item(item, "values")
                 for item in self.app.sources_tree.get_children()}

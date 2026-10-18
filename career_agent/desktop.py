@@ -19,6 +19,7 @@ from .core import (
 )
 from .export import ExportFormatError, RestoreError, restore_from_backup, write_export
 from .preparation import assess_readiness, build_application_draft
+from .resume import ResumeError, read_resume
 from .sources import (
     CANDIDATE_SOURCES, discovery_available, enabled_discovery_sources, quality_gate_open,
 )
@@ -102,6 +103,7 @@ class CareerAgentApp:
         actions = ttk.Frame(self.profile_tab)
         actions.grid(row=6, column=0, columnspan=4, sticky=W, pady=12)
         ttk.Button(actions, text="Save profile locally", command=self._save_profile).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="Import resume (review)…", command=self._import_resume).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Delete saved profile", command=self._delete_profile).pack(side="left")
         ttk.Label(self.profile_tab, text="Privacy: no cloud sync, external AI API, resume upload, or data transfer is performed. Data stays in the local application-data folder.", wraplength=850).grid(row=7, column=0, columnspan=4, sticky=W, pady=8)
 
@@ -286,6 +288,70 @@ class CareerAgentApp:
             self.status.set("Candidate profile saved locally.")
         except ValueError as exc:
             messagebox.showerror("Invalid profile", str(exc), parent=self.root)
+
+    _RESUME_FIELD_MAP = {
+        "skills": ("skills", "Skills"),
+        "candidate_country": ("country", "Country"),
+        "preferred_locations": ("locations", "Preferred locations"),
+        "preferred_work_modes": ("work_modes", "Preferred work modes"),
+        "preferred_role_types": ("role_types", "Preferred role types"),
+        "degree_discipline": ("degree", "Degree / discipline"),
+        "study_status": ("study_status", "Study status"),
+        "graduation_year": ("graduation_year", "Graduation year"),
+        "experience_years": ("experience", "Experience years"),
+        "work_authorization": ("work_authorization", "Work authorization"),
+    }
+
+    def _import_resume(self):
+        source = filedialog.askopenfilename(
+            parent=self.root,
+            title="Import resume for review",
+            filetypes=[
+                ("Resume (DOCX, PDF, TXT, MD)", "*.docx *.pdf *.txt *.md"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not source:
+            return
+        try:
+            extraction = read_resume(source)
+        except ResumeError as exc:
+            messagebox.showerror("Cannot import resume", str(exc), parent=self.root)
+            return
+        if not extraction.proposals:
+            messagebox.showinfo(
+                "Nothing to import",
+                "\n".join(extraction.warnings) or "No labelled fields were found in this file.",
+                parent=self.root,
+            )
+            self.status.set("Resume import changed nothing: no labelled fields were found.")
+            return
+        review_lines = [
+            f"- {self._RESUME_FIELD_MAP[item.field][1]}: {item.value}"
+            f"\n    evidence: {item.evidence}"
+            for item in extraction.proposals
+        ]
+        if not messagebox.askyesno(
+            "Apply proposed fields for review?",
+            f"{extraction.source_name} was read locally. These fields were found:\n\n"
+            + "\n".join(review_lines)
+            + "\n\nThey will be placed in the form for review only. Nothing is saved until you "
+            "click Save profile locally, and nothing was uploaded.",
+            parent=self.root,
+        ):
+            self.status.set("Resume import cancelled; the profile was not changed.")
+            return
+        applied = 0
+        for item in extraction.proposals:
+            key = self._RESUME_FIELD_MAP[item.field][0]
+            self.profile_vars[key].set(item.value)
+            applied += 1
+        self.status.set(
+            f"Proposed {applied} field(s) from {extraction.source_name} in the form. "
+            "Review them, then click Save profile locally. Nothing was saved yet."
+        )
+        if extraction.warnings:
+            messagebox.showwarning("Import notes", "\n".join(extraction.warnings), parent=self.root)
 
     def _delete_profile(self):
         if not messagebox.askyesno("Delete profile", "Permanently delete the saved profile on this device?", parent=self.root):

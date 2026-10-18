@@ -807,3 +807,10 @@ These are proposed targets. Do not report them as measured results.
 - Added `--version` backed by a single `career_agent.__version__` constant, with a CLI test that proves it starts no app and opens no database.
 - Added `CHANGELOG.md` describing the verified 0.1.0 scope and the outstanding limitations (manual GUI acceptance, resume import, discovery, submission, packaging), and linked it from the README.
 - Suite is 173 tests: 173 passing on 3.12, 162 passing with 11 environment skips on 3.10/3.11 (no `_tkinter`).
+
+### 2026-10-19 — Dependency-free resume import with review-only proposals
+- Added `career_agent/resume.py`: extracts text from DOCX (`zipfile` + `xml.etree`), text-based PDF (stream scan plus zlib inflation, `Tj`/`TJ` operators, PDF string unescaping), and UTF-8 TXT/MD. No third-party dependency and no upload; the original document is never modified.
+- Extraction is conservative: only explicitly labelled lines become proposals, each carrying its evidence line and a "review" confidence. Unlabelled sentences never become facts, and a document with no recognised labels yields a warning instead of invented fields.
+- Failure handling is explicit: encrypted PDFs, non-PDF files named `.pdf`, image-only PDFs (no OCR), malformed or bodyless DOCX, non-UTF-8 text, empty files, unsupported extensions, files over 5 MiB, and over-long documents each produce an actionable error or warning.
+- Wired **Import resume (review)…** into the profile tab: proposals are shown with evidence and applied to the form only after confirmation, and nothing is written until the user clicks Save profile locally. Declining leaves the form unchanged.
+- Tests: `tests/test_resume.py` adds 22 synthetic-file tests and two GUI tests cover apply-without-saving and decline. Suite is 197 tests (197 passing on 3.12, 184 passing with 13 environment skips on 3.10/3.11).

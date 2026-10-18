@@ -24,7 +24,7 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Local SQLite persistence for profile, job, attempt, and history records, including per-record delete operations and a confirmed **Delete all local data** action that removes the profile, listings, attempts and history in one transaction.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, application preparation with a readiness checklist and a fact-only draft preview, tracker status changes guarded by the domain state machine, per-attempt history with evidence, re-application after withdrawal, local JSON export, and explicit delete controls. A status change advances the current attempt; only a withdrawal can be followed by a new attempt, and only when the listing is still open and eligible. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, local resume import for review, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, application preparation with a readiness checklist and a fact-only draft preview, tracker status changes guarded by the domain state machine, per-attempt history with evidence, re-application after withdrawal, local JSON export, and explicit delete controls. A status change advances the current attempt; only a withdrawal can be followed by a new attempt, and only when the listing is still open and eligible. Resume import covers text-based PDF, DOCX, TXT, and MD files and never saves extracted values automatically; scanned PDFs need OCR, which is not provided. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
 
 Existing databases are upgraded in place to schema version 2 (one attempt per legacy tracker row, revision 0). History is not invented for records that predate the upgrade.
 
@@ -92,6 +92,18 @@ python scripts/tracker_smoke_test.py
 Runs end-to-end scenarios against temporary databases only: schema version 2, attempt creation, persisted transitions, evidence surviving later status changes, fresh re-application, rejected invalid/stale/duplicate writes, withdrawal history, format-v3 backup contents, backup round-trip into a separate database, a tampered backup being rejected without mutation, consistency after failures, and in-place migration of a schema-v1 database. Exit code 0 means every scenario passed; 1 means at least one failed. Add `--keep` to retain the temporary workspace for inspection. The script never opens the application-data database.
 
 The throwaway database, profile, and listings are synthetic. The smoke test includes a negative control: a backup with a tampered event history must be rejected, and the target database must remain unchanged.
+
+## Resume import
+
+**Candidate profile → Import resume (review)…** reads DOCX (text body), text-based PDF, TXT, and MD files with the standard library only — no extra dependency and no upload. Extraction is deliberately conservative:
+
+- Only explicitly labelled lines become proposals (`Skills:`, `Country:`, `Degree:`, `Graduation year:`, `Experience:`, `Work authorization:`, `Preferred …:`). Unlabelled sentences are never turned into facts.
+- Each proposal carries the evidence line it came from and is marked for review.
+- Proposals fill the profile form; nothing is written until you click **Save profile locally**, and nothing is sent anywhere.
+- Encrypted PDFs, malformed DOCX files, non-UTF-8 text, empty files, unsupported extensions, and files over 5 MiB are refused with an actionable message.
+- Scanned or image-only PDFs are reported as needing OCR rather than being treated as an empty resume.
+
+This is not a full parser: contact fields, projects, certifications, tables, multi-column layouts, and unusual fonts are out of scope, and every imported value must be reviewed against the original document.
 
 ## Job sources and discovery
 

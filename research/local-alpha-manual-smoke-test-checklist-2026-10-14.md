@@ -40,8 +40,9 @@ This checklist is intentionally separate from unit tests. It requires a real des
 21. [ ] Inspect the application workflow for network access: local alpha operations must not send requests or candidate data to external services.
 22. [ ] Close and reopen the app after a forced close or normal exit; confirm the SQLite database remains readable.
 23. [ ] Select a shortlisted, eligible job and choose **Prepare application**. Confirm the readiness checklist is explicit, the draft preview uses only recorded facts and labels missing fields "Not recorded", declining the confirmation changes nothing, and accepting records `prepared` with a new history entry. With an ineligible job the action must warn and leave the tracker unchanged.
-24. [ ] Open **Sources & settings**. The banner must say discovery is disabled with manual entry only, the gate must read closed, and blocked providers should be listed with their status. No search button or network control may be present.
-25. [ ] With disposable data present, choose **Delete all local data…**, decline once (nothing may change), then accept. The profile form, job list and tracker must empty, the status bar must report the deleted counts, and an exported backup file must remain intact.
+24. [ ] Choose **Import resume (review)…** on the profile tab with a synthetic DOCX or TXT file that has labelled lines (`Skills:`, `Country:`, `Degree:`). Confirm the proposals show their evidence line, that nothing is saved until **Save profile locally** is clicked, that declining leaves the form unchanged, and that a scanned or malformed file produces a clear error instead of empty fields.
+25. [ ] Open **Sources & settings**. The banner must say discovery is disabled with manual entry only, the gate must read closed, and blocked providers should be listed with their status. No search button or network control may be present.
+26. [ ] With disposable data present, choose **Delete all local data…**, decline once (nothing may change), then accept. The profile form, job list and tracker must empty, the status bar must report the deleted counts, and an exported backup file must remain intact.
 
 ## Record results
 
