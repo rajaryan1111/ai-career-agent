@@ -1,0 +1,95 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from career_agent import ApplicationStatus, Availability, CandidateProfile, JobListing
+from career_agent.export import FORMAT_VERSION, build_export_payload, write_export
+from career_agent.store import CareerStore
+
+
+def sample_profile():
+    return CandidateProfile(
+        candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+        graduation_year=2027, experience_years=0.5, skills=frozenset({"Python", "RAG"}),
+        preferred_work_modes=frozenset({"remote"}),
+    )
+
+
+def sample_job():
+    return JobListing(
+        listing_id="j1", source_id="manual", source_name="Manual",
+        source_listing_url="https://jobs.example/role/1", employer_name="Example",
+        role_title="AI Intern", availability_status=Availability.OPEN,
+        eligibility_scope="restricted", eligible_countries=("India",),
+        required_skills=frozenset({"Python"}), provenance_note="Checked today.",
+    )
+
+
+def walk_to_confirmed(store):
+    tracker = store.start_application("j1")
+    for status in (
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.PREPARED,
+        ApplicationStatus.AWAITING_USER,
+        ApplicationStatus.SUBMISSION_ATTEMPTED,
+    ):
+        tracker = store.save_tracker(tracker.transition(status))
+    tracker = store.save_tracker(
+        tracker.transition(
+            ApplicationStatus.CONFIRMED,
+            evidence="Employer confirmation page shown",
+            candidate_confirmed=True,
+        )
+    )
+    return store.save_tracker(tracker.transition(ApplicationStatus.RESPONSE_RECEIVED))
+
+
+class ExportContractTests(unittest.TestCase):
+    def test_format_v2_payload_is_json_serializable(self):
+        with CareerStore(":memory:") as store:
+            store.save_profile(sample_profile())
+            store.save_job(sample_job())
+            payload = build_export_payload(store)
+            self.assertEqual(payload["format_version"], FORMAT_VERSION)
+            self.assertEqual(payload["format_version"], 2)
+            self.assertEqual(payload["profile"]["skills"], ["Python", "RAG"])
+            self.assertEqual(payload["profile"]["preferred_work_modes"], ["remote"])
+            json.dumps(payload)  # must not raise on frozensets/tuples
+
+    def test_attempts_and_events_are_preserved_per_attempt(self):
+        with CareerStore(":memory:") as store:
+            store.save_profile(sample_profile())
+            store.save_job(sample_job())
+            confirmed = walk_to_confirmed(store)
+            store.save_tracker(confirmed.transition(ApplicationStatus.WITHDRAWN))
+            store.start_application("j1")
+
+            payload = build_export_payload(store)
+            attempts = payload["jobs"][0]["application_attempts"]
+            self.assertEqual([a["attempt_number"] for a in attempts], [1, 2])
+            self.assertEqual(attempts[0]["status"], "withdrawn")
+            self.assertEqual(attempts[0]["status_evidence"], "Employer confirmation page shown")
+            confirmation = [e for e in attempts[0]["application_events"] if e["to_status"] == "confirmed"]
+            self.assertEqual(len(confirmation), 1)
+            self.assertEqual(confirmation[0]["evidence"], "Employer confirmation page shown")
+            self.assertTrue(confirmation[0]["candidate_confirmed"])
+            self.assertEqual(attempts[1]["status"], "discovered")
+            self.assertIsNone(attempts[1]["status_evidence"])
+            self.assertEqual(len(attempts[1]["application_events"]), 1)
+
+    def test_write_export_round_trips_through_json(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "export.json"
+            with CareerStore(":memory:") as store:
+                store.save_profile(sample_profile())
+                store.save_job(sample_job())
+                walk_to_confirmed(store)
+                written = write_export(store, destination)
+            reloaded = json.loads(destination.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded, written)
+            self.assertEqual(reloaded["jobs"][0]["application_attempts"][0]["status"], "response_received")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

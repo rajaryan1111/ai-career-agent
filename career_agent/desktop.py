@@ -3,12 +3,10 @@
 Launch with python -m career_agent. No network calls or external service dependencies.
 """
 from __future__ import annotations
-import json
 import os
 import platform
 import re
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
@@ -17,6 +15,7 @@ from .core import (
     ApplicationStatus, Availability, CandidateProfile, Decision, JobListing,
     allowed_transitions, evaluate_eligibility, score_relevance,
 )
+from .export import write_export
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
@@ -493,41 +492,8 @@ class CareerAgentApp:
         destination = filedialog.asksaveasfilename(parent=self.root, title="Export local data", defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not destination:
             return
-        profile = self.store.get_profile()
-        payload = {"format_version": 2, "profile": asdict(profile) if profile else None, "jobs": [],
-                   "privacy_note": "Export may contain personal information; store securely."}
-        if payload["profile"]:
-            for key, value in payload["profile"].items():
-                if isinstance(value, (set, frozenset, tuple)):
-                    payload["profile"][key] = sorted(value)
-        for job in self.store.list_jobs():
-            record = asdict(job)
-            record["availability_status"] = job.availability_status.value
-            for key, value in record.items():
-                if isinstance(value, (set, frozenset, tuple)):
-                    record[key] = sorted(value)
-            record["application_attempts"] = [
-                {
-                    "attempt_number": attempt.attempt_number,
-                    "status": attempt.status.value,
-                    "status_evidence": attempt.status_evidence,
-                    "candidate_confirmed": attempt.candidate_confirmed,
-                    "application_events": [
-                        {
-                            "from_status": event.from_status.value if event.from_status else None,
-                            "to_status": event.to_status.value,
-                            "evidence": event.evidence,
-                            "candidate_confirmed": event.candidate_confirmed,
-                            "recorded_at": event.recorded_at,
-                        }
-                        for event in self.store.list_events(job.listing_id, attempt.attempt_number)
-                    ],
-                }
-                for attempt in self.store.list_attempts(job.listing_id)
-            ]
-            payload["jobs"].append(record)
         try:
-            Path(destination).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            payload = write_export(self.store, destination)
             self.status.set(f"Exported {len(payload['jobs'])} jobs to a user-selected local file.")
             messagebox.showinfo("Export complete", "JSON export created. Keep it private; it may contain personal data.", parent=self.root)
         except OSError as exc:

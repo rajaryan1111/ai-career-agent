@@ -55,6 +55,16 @@ Python 3.10+; no third-party packages are required.
 python -m unittest discover -s tests -v
 ```
 
+## Tracker integrity smoke test
+
+```bash
+python scripts/tracker_smoke_test.py
+```
+
+Runs end-to-end scenarios against temporary databases only: schema version 2, attempt creation, persisted transitions, evidence surviving later status changes, fresh re-application, rejected invalid/stale/duplicate writes, withdrawal history, format-v2 export with attempts and events, consistency after failures, and in-place migration of a schema-v1 database. Exit code 0 means every scenario passed; 1 means at least one failed. Add `--keep` to retain the temporary workspace for inspection. The script never opens the application-data database.
+
+The throwaway database, profile, and listings are synthetic. There is no import/restore API yet, so the export contract is validated but not round-tripped.
+
 ## Safety and product principles
 
 - Keep candidate profile and application history local by default.
