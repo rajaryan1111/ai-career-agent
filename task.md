@@ -279,11 +279,9 @@ by which "never overwrite" could still overwrite a résumé - refused by `create
 pinned), the singular/plural experience sentence, changing the *kind* after a preview, and
 `visible_text()` (the K5 label-visibility fix had no unit test of its own).
 
-**Known limitation, not fixed here:** `lineage_status` does not notice a listing edited *after* a
-document is stored - the artifact record keeps `listing_id` but not the listing fields it was built
-from, so detecting that needs a new column and a migration (schema is at 15). A stale-by-listing
-cover letter therefore still reads as "Current". This is the highest-priority next task in this
-area; it is written down rather than quietly left.
+**That known limitation is now closed — see "Listing-aware artifact lineage" below.** It read: the
+artifact record keeps `listing_id` but not the listing fields it was built from, so a stale-by-listing
+cover letter still read as "Current".
 
 **Assessed and deliberately not started** (step 5 of the audit brief): *choosing between several
 imported résumés* has no data model behind it - the store holds one `candidate_profile` and a
@@ -295,6 +293,62 @@ small lie the rest of the design refuses. Both stay enhancements, unstarted.
 **CI at this head:** none. `.github/workflows/tests.yml` triggers on `push`/`pull_request` to `main`
 only, PR #4 targets `arena/351e052d-ai-career-agent`, and `gh api .../commits/<head>/check-runs`
 reports `0`. There is no green CI for this head and none is claimed.
+
+### Listing-aware artifact lineage, 2026-10-18 (schema 16)
+
+A tailored document is written *for a job*, and until this change the row recorded only the job's
+identifier. Renaming the employer left a cover letter addressed to somebody else reading as
+**Current** and exportable. Research note:
+`research/listing-aware-artifact-lineage-2026-10-18.md`.
+
+- [x] **Schema 16**: one nullable column, `tailored_artifact.listing_fingerprint`, added by step 16
+      of the existing `_MIGRATIONS` table (`ALTER TABLE ... ADD COLUMN`, no table rewritten, no row
+      touched, re-runnable). It holds the employer, the role title and the required skills as they
+      were when the document was written, plus a sha256 of those three values in the canonical form
+      the integration layer already uses. No candidate facts and no résumé text: a test asserts the
+      stored JSON has exactly those four keys and contains neither.
+- [x] **Existing rows get `NULL`, and nothing is back-filled.** A listing read *today* is not
+      evidence of what it said last month; writing it in would have declared every old document
+      verified. Evidence: `test_the_listing_step_adds_its_column_and_leaves_every_stored_document_alone`,
+      `test_running_the_listing_step_again_changes_nothing`.
+- [x] **Listing drift makes a document stale**, evaluated beside fact, document-citation, work,
+      education and strategy drift. Employer, role title and required skills each do it
+      independently; the source URL, the availability flag and the provenance note deliberately do
+      not, because no document reads them. One comparison
+      (`ListingFingerprint.changes_against`) now serves both the build-time refusal and the lineage
+      check, so the two cannot disagree. Evidence: `ListingLineageTests` (16 tests),
+      `test_a_stored_document_keeps_the_listing_it_was_written_for`.
+- [x] **A document that cannot be checked is never reported current.** A row with no fingerprint
+      (stored before schema 16) and a row whose listing has gone are reported as unverifiable, with
+      their own wording in the window - "Cannot be checked — …" rather than "Rebuild before use —
+      …" - their own export refusal title, and their own count in the summary line. Not one of the
+      three states is signalled by colour. `require_current_artifact` refuses them, so none can be
+      exported. Evidence: `test_a_document_stored_before_schema_16_is_never_reported_as_current`,
+      `test_a_document_that_cannot_be_checked_is_not_written_out`,
+      `test_a_document_with_no_record_of_its_listing_says_so_in_words`,
+      `test_a_document_that_cannot_be_checked_is_not_offered_for_saving`, acceptance **M16**.
+- [x] **The record is checkable, and the store is the last gate.** A fingerprint edited in the
+      database no longer matches its digest and is reported as a damaged record rather than
+      believed; `save_tailored_artifact` refuses a document whose fingerprint disagrees with the
+      listing it is being filed under. Evidence:
+      `test_a_fingerprint_edited_in_the_database_is_reported_as_damage`,
+      `test_a_document_cannot_be_filed_under_a_listing_it_was_not_written_for`.
+- [x] **Rebuild closes the loop**: it uses the listing as it stands, the new row is current and
+      carries its own fingerprint, and the original keeps its historical record unchanged and stays
+      stale. Evidence: `test_rebuilding_writes_the_current_listing_and_keeps_the_old_record_intact`,
+      `test_rebuilding_a_legacy_document_produces_one_that_can_be_checked`, acceptance **M15**.
+- [x] **Migration fault found and fixed on the way**: a column step run against a file whose
+      recorded `user_version` runs ahead of its tables raised, leaving a database that could not be
+      opened at all (exposed by `tests/test_route_evidence.py`'s version-14-with-no-tables file).
+      Steps 4 and 16 now check the table exists and do nothing when it does not. Evidence:
+      `test_the_listing_step_does_not_break_a_file_whose_version_runs_ahead_of_its_tables`.
+
+**Verification at this head:** full suite **2733 tests, 0 failures, 0 errors, 13 skipped** (12 ×
+"the optional pypdf package is not installed", 1 × "ai-career-agent is not installed in this
+interpreter (source checkout)"). `scripts/desktop_acceptance.py --stand-in-tk` → **158 checks, 0
+failed**, exit verdict `RESULT: BLOCKED` — a stand-in Tk is not a desktop and this is not GUI
+acceptance. **CI at this head: none**; the workflow triggers on `main` only, and no check run exists
+for this commit. Not production-ready, and not claimed to be.
 
 ## Acceptance checklist for the expansion
 - [x] Resume/profile/role strategy versions and tailored artifacts remain traceable and truthful. Every artifact row cites the résumé document by name, the confirmed profile-fact version, the strategy version, the job identity and when it was generated; `require_current_artifact` refuses a stale one with `StaleArtifact` rather than reusing it, and the window surfaces the refusal and the rebuild. Evidence: P7 items 1-5 above, with their test counts.

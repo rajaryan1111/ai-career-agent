@@ -762,8 +762,22 @@ only you can read it.
   and nothing happens, even if you meant it. The file most likely to be picked by accident is the résumé
   the document was built from, and a replace prompt is one careless click away from losing it. Choose a
   name that is free.
-- **A document whose facts or strategy have moved on will not be saved out**, and the row says which
-  fact or version moved. Rebuild it from your current facts first — the old document stays as history.
+- **A document whose facts, strategy or listing have moved on will not be saved out**, and the row says
+  which fact, version or part of the listing moved. Rebuild it from your current facts first — the old
+  document stays as history.
+
+**The job itself can move too.** A document is written *for a job*, so the employer's name, the role
+title and the skills that job asks for are stored with it. Rename the employer, retitle the role, or
+change what the listing asks for, and every document written for it reads **Rebuild before use —** with
+the old and new values spelled out. Editing something no document reads — the listing's URL, its
+availability, the note on where you found it — changes nothing, because none of it appears in what was
+written.
+
+**A third state: "Cannot be checked".** Documents built by a version of this app older than schema 16
+have no record of what their listing said at the time. The app will not guess, and it will not call them
+current: the row says they were stored before the listing was recorded with them, and they cannot be
+saved out. Rebuilding one gives you a document that can be checked from then on. All three states are
+written in the row in words — nothing here is signalled by colour alone.
 
 **What it will not write.** No employment, qualification, metric, certification or project outcome you
 have not recorded. Screening-question answers are not offered at all: an answer invented by software

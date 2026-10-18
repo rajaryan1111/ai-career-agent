@@ -4184,3 +4184,31 @@ Left open on purpose: `lineage_status` still cannot see a listing edited *after*
 stored, because the artifact row keeps the listing's id and not the fields it used. That needs a
 column and a migration, which is a task, not an audit fix. 2706 OK (skipped=13), acceptance 155
 checks, 0 failed, CI has still never run on this branch.
+
+## The job a document was written for, 2026-10-18
+
+The thing left open by the audit, closed the same day. A document is written for a job, and the row
+kept only the job's identifier - so renaming the employer left a letter addressed to somebody else
+reading as "Current", with the export button enabled. Schema 16 adds one nullable column to
+`tailored_artifact`: the employer, the role title and the required skills as they were when the
+document was written, with a sha256 of those three values beside them. Step 16 of the same
+`_MIGRATIONS` table, `ALTER TABLE ... ADD COLUMN`, re-runnable, nothing rewritten.
+
+The decision that took the longest was what to do with the rows already out there, and the answer
+was: nothing. `NULL`, and a third state in the window - "Cannot be checked" - rather than
+back-filling from the listing as it reads today, which would have quietly declared every old
+document verified. Not current, not exportable, and a rebuild gives you one that can be checked. The
+same honesty runs through the wording: a document nobody can check is not told it is out of date,
+because that is a claim this build cannot make.
+
+Three fields, not twenty-two: a document reads the employer, the role and the skills, so editing a
+source URL or an availability flag moves nothing. The comparison that refuses a build when the
+listing changes mid-preview is now literally the same code as the staleness check, so the two cannot
+drift apart.
+
+On the way, a real fault: a column step run on a file whose recorded version runs ahead of its
+tables raised, and a step that raises leaves a database nobody can open. Step 4 had carried that
+hole since schema 4. Both steps now check the table is there first.
+
+2733 tests OK (skipped=13), acceptance 158 checks 0 failed - still `RESULT: BLOCKED`, because a
+stand-in Tk is not a desktop. CI has still never run on this branch.
