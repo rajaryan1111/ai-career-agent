@@ -56,10 +56,10 @@ class PolicyStoreTests(unittest.TestCase):
     def logged(self) -> str:
         return log_path(self.database).read_text(encoding="utf-8")
 
-    def test_the_schema_holds_the_authorisation_at_version_11(self):
-        self.assertEqual(SCHEMA_VERSION, 11)
+    def test_the_schema_holds_the_authorisation_from_version_11_on(self):
+        self.assertGreaterEqual(SCHEMA_VERSION, 11)
         self.assertEqual(
-            self.store._connection.execute("PRAGMA user_version").fetchone()[0], 11)
+            self.store._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
 
     def test_a_file_with_no_policy_authorises_nothing(self):
         self.assertEqual(self.store.get_global_policy(), no_authorisation())
@@ -195,13 +195,14 @@ class PolicyMigrationTests(unittest.TestCase):
         connection = sqlite3.connect(self.database)
         with connection:
             connection.execute("DROP TABLE policy_version")
+            connection.execute("DROP TABLE IF EXISTS action_attempt")
             connection.execute("PRAGMA user_version = 10")
         connection.close()
 
         reopened = CareerStore(str(self.database))
         self.addCleanup(reopened.close)
         self.assertEqual(
-            reopened._connection.execute("PRAGMA user_version").fetchone()[0], 11)
+            reopened._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         self.assertEqual(reopened.get_global_policy(), no_authorisation(),
                          "an upgraded file authorises nothing until a person says otherwise")
         self.assertEqual(reopened.save_global_policy(a_policy()), 1)

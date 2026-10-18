@@ -3900,3 +3900,22 @@ BLOCKED, suite **2303 OK (skipped=13)**. Still not true, and said plainly: nothi
 actions from durable records, quiet hours are not editable in the window, there are no job/role/location
 or attachment constraints yet, and every source remains disabled - so nothing runs today whatever the
 tab lists. Note: `research/standing-authorisation-stored-and-enforced-2026-10-18.md`.
+
+**Identity, idempotency and the unknown outcome, 2026-10-18:** P8 item 3. Three questions that look
+like one. *Is this the same job?* - `career_agent/identity.py` answers with three verdicts, and the
+third is the point: a requisition id or a shared employer page proves a match, different employers or
+two requisition ids prove a difference, and everything else - including the same title at the same
+employer, and two spellings of one id - is **unknown**, kept apart and handed to a person through
+`possible_duplicates()`. A missed merge costs somebody seeing a job twice; a wrong merge costs them a
+job they never applied for, so the asymmetry is deliberate and `identity_key()` folds case but not
+punctuation. *Has this already been done?* - schema **12** adds `action_attempt`, keyed by identity
+rather than by listing id, so one vacancy found on two sources cannot be applied to twice, with
+`operation_id` as the primary key so idempotency lives in the schema rather than in a caller's memory.
+*Did it actually happen?* - the attempt is written **before** the act in state `unknown`, and a
+*failed* dispatch settles as `UNKNOWN`, not `FAILED`, because a failure mid-flight may still have
+arrived. An unknown attempt blocks every further attempt at that job and action until a person
+reconciles it with evidence in words; age never resolves anything, it only puts a row on the list of
+things to check. `integrations.guarded_dispatch` composes it with the policy door. Evidence: 22
+identity tests, 43 attempt tests, suite **2368 OK (skipped=13)**. Still not true: nothing in the window
+shows unresolved attempts or duplicate pairs, there is no submission path to guard, and no provider is
+enabled. Note: `research/job-identity-and-unknown-outcomes-2026-10-18.md`.

@@ -53,6 +53,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
+from .attempts import AttemptError, AttemptState, may_attempt, state_from_outcome
 from .followups import FollowUpReminder, event_summary, event_uid
 from .policy import ActionKind, GlobalPolicy, PolicyError, evaluate_policy, no_authorisation
 from .store import write_private_text_file
@@ -950,6 +951,71 @@ def authorised_dispatch(
             performed=False, integration_name=integration.name,
             detail="; ".join(decision.refusals))
     return dispatch_with_retry(integration, request, attempts=attempts)
+
+
+def guarded_dispatch(
+    store, integration: Integration, request: EmailDraft, *,
+    identity_key: str,
+    policy: GlobalPolicy | None,
+    source_id: str,
+    now: datetime,
+    done_today: int | None,
+    source_gate_allows: bool,
+    attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> IntegrationResult:
+    """Dispatch at most once per job identity, writing the attempt down before it is made.
+
+    This is :func:`authorised_dispatch` with the part that makes a retry safe to allow at all: a
+    durable record of what has already been tried, keyed by the **cross-source job identity** rather
+    than by a listing id, so the same vacancy found on two sources cannot be written to twice.
+
+    The order is the point:
+
+    1. read what is already recorded for this identity and action, and refuse when an earlier attempt
+       ended without an established outcome (it may have happened) or already succeeded (a second one
+       is a duplicate, not a retry);
+    2. write the attempt as ``unknown`` **before** performing it, so a crash in the middle leaves
+       evidence rather than silence;
+    3. perform it through the authorised door, which still checks the policy and the gate;
+    4. record what was observed - and a dispatch that *failed* settles as ``unknown``, not as
+       ``failed``, because a failure mid-flight is exactly the case nobody can resolve from here.
+
+    Nothing about this function can make an action permissible: every refusal in
+    :func:`authorised_dispatch` still applies, and today every one of them fires.
+    """
+    identity = str(identity_key or "").strip()
+    if not identity:
+        raise AttemptError(
+            "A dispatch is recorded against a job identity so it cannot be repeated; none was given.")
+    operation_id = str(getattr(request, "operation_id", "") or "").strip()
+    action = ActionKind.EMAIL_SEND.value
+    if not operation_id:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id="", integration_name=integration.name,
+            performed=False,
+            message="Nothing was sent: this request carries no operation id, and without one a "
+                    "repeat could not be told from a first attempt.")
+    recorded = store.list_attempts(identity_key=identity, action=action)
+    decision = may_attempt(recorded, identity_key=identity, action=action)
+    if not decision.allowed:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id=operation_id, integration_name=integration.name,
+            performed=False, message=decision.describe(),
+            detail="; ".join(decision.blocking_operation_ids))
+    store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action)
+    result = authorised_dispatch(
+        integration, request, policy=policy, source_id=source_id, now=now,
+        done_today=done_today, source_gate_allows=source_gate_allows, attempts=attempts)
+    state = state_from_outcome(result.outcome.value, performed=result.performed)
+    store.settle_attempt(operation_id, state=state, detail=result.message[:300])
+    if state is AttemptState.UNKNOWN:
+        return replace(
+            result,
+            message=(result.message + " Whether it arrived could not be established, so it is "
+                     "recorded as unknown and no further attempt will be made at this job until "
+                     "you check and reconcile it."),
+            detail="unknown outcome recorded")
+    return result
 
 
 @dataclass(frozen=True)

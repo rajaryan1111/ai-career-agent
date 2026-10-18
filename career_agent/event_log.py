@@ -113,6 +113,10 @@ EVENTS: tuple[str, ...] = (
     # The versioned role strategies: one event per strategy written, revised or deleted. The identifier
     # is generated (never typed) and the version is a number; the strategy's own content - its name, the
     # places, the employers ruled out - is the person's data and never reaches the log.
+    "attempt.started",
+    "attempt.settled",
+    "attempt.unresolved",
+    "attempt.reconciled",
     "policy.saved",
     "policy.revoked",
     "strategy.created",

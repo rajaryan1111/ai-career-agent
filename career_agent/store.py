@@ -32,6 +32,7 @@ from .core import (
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
 )
+from .attempts import AttemptError, AttemptRecord, AttemptState
 from .policy import (
     ActionKind, GlobalPolicy, PolicyError, no_authorisation, policy_from_payload, policy_payload,
 )
@@ -44,7 +45,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -83,6 +84,11 @@ SCHEMA_TABLES_BY_VERSION = {
          "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
          "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
          "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    12: ("action_attempt", "application_activity", "application_preparation", "application_tracker",
+         "candidate_education", "candidate_profile", "candidate_work_history", "hr_contact",
+         "hr_contact_conflict", "interview_round", "job_listings", "policy_version",
+         "profile_fact_provenance", "role_strategy_version", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1150,6 +1156,34 @@ def _migration_to_v11(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v12(connection: sqlite3.Connection) -> None:
+    """Schema 12: attempts at acts with consequences, written before the act and never guessed at.
+
+    One new table, additive and empty. A row is written *before* an action is performed, in the state
+    ``unknown``, so a crash between the write and the act leaves evidence instead of silence; the
+    outcome is written afterwards only from what was observed. ``operation_id`` is unique, which is
+    the idempotency rule in the schema rather than in a caller's memory: the same operation cannot be
+    started twice. ``identity_key`` is the cross-source job identity, so the same job found on two
+    sources cannot be applied to twice.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS action_attempt (
+               operation_id TEXT PRIMARY KEY,
+               identity_key TEXT NOT NULL,
+               action TEXT NOT NULL,
+               state TEXT NOT NULL,
+               started_at TEXT NOT NULL,
+               settled_at TEXT,
+               detail TEXT NOT NULL DEFAULT '',
+               evidence TEXT NOT NULL DEFAULT ''
+           )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS action_attempt_identity "
+        "ON action_attempt (identity_key, action)"
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1166,6 +1200,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (9, "add the versioned role strategies", _migration_to_v9),
     (10, "add the tailored artifacts and the basis each was built from", _migration_to_v10),
     (11, "add the versioned standing authorisation", _migration_to_v11),
+    (12, "add the record of attempts and their outcomes", _migration_to_v12),
 )
 
 
@@ -3877,6 +3912,184 @@ class CareerStore:
         self._record("policy.revoked", f"version={version}")
         return version
 
+    # ------------------------------------------------------------------ attempts and outcomes
+
+    def begin_attempt(self, *, operation_id: str, identity_key: str, action: str,
+                      now: str | None = None) -> AttemptRecord:
+        """Record that an attempt is about to be made, before it is made. Idempotent by operation id.
+
+        The row is written first and written as ``unknown``, which is the only honest state for an
+        act that has not finished: a process that dies between this write and the act leaves a record
+        somebody can reconcile, where a row written afterwards would leave nothing at all. Starting
+        the same ``operation_id`` twice returns the record that already exists rather than writing a
+        second one - that is the idempotency rule, kept in the schema's primary key rather than in a
+        caller's memory - and raises if the same id is reused for a different job or action, because
+        the two cannot be the same attempt.
+        """
+        identity = str(identity_key or "").strip()
+        name = str(action or "").strip()
+        key = str(operation_id or "").strip()
+        if not key or not identity or not name:
+            raise AttemptError(
+                "An attempt needs an operation id, a job identity and the action it attempts.")
+        if not self._schema_records_attempts():
+            raise AttemptError(
+                "this file records a schema older than the one that keeps attempts, so an attempt "
+                "cannot be recorded before it is made. Open the application on this file to update "
+                "it.")
+        existing = self.get_attempt(key)
+        if existing is not None:
+            if existing.identity_key != identity or existing.action != name:
+                raise AttemptError(
+                    f"The operation id {key} already records a different attempt "
+                    f"({existing.action} for {existing.identity_key}), so it cannot be reused.")
+            return existing
+        started = now or _now()
+        record = AttemptRecord(operation_id=key, identity_key=identity, action=name,
+                               state=AttemptState.UNKNOWN, started_at=started)
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO action_attempt (operation_id, identity_key, action, state, started_at, "
+                "settled_at, detail, evidence) VALUES (?, ?, ?, ?, ?, NULL, '', '')",
+                (key, identity, name, AttemptState.UNKNOWN.value, started),
+            )
+        self._record("attempt.started", f"action={name} state=unknown")
+        return record
+
+    def settle_attempt(self, operation_id: str, *, state: AttemptState, detail: str = "",
+                       now: str | None = None) -> AttemptRecord:
+        """Record what became of an attempt, from what was observed rather than from what is hoped.
+
+        Only an unresolved attempt may be settled: an attempt that is already recorded as performed,
+        failed or refused is a fact about the past, and overwriting it would erase the evidence a
+        reconciliation rests on. Settling to ``unknown`` is allowed and is not a settlement - it
+        records what was seen (a timeout, a dropped connection) and leaves the attempt blocking.
+        """
+        if not isinstance(state, AttemptState):
+            raise AttemptError(f"An attempt state must be an AttemptState, not {state!r}.")
+        record = self.get_attempt(operation_id)
+        if record is None:
+            raise AttemptError(
+                f"No attempt is recorded as {operation_id}, so there is nothing to settle. An "
+                f"attempt is recorded before it is made, not after.")
+        if not record.is_unresolved:
+            raise AttemptError(
+                f"The attempt {operation_id} is already recorded as {record.state.value}; a settled "
+                f"outcome is not rewritten.")
+        if state is AttemptState.UNKNOWN:
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE action_attempt SET detail=? WHERE operation_id=?",
+                    (str(detail or ""), record.operation_id))
+            self._record("attempt.unresolved", f"action={record.action} state=unknown")
+            return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                                 action=record.action, state=AttemptState.UNKNOWN,
+                                 started_at=record.started_at, detail=str(detail or ""))
+        settled = now or _now()
+        with self._connection:
+            self._connection.execute(
+                "UPDATE action_attempt SET state=?, settled_at=?, detail=? WHERE operation_id=?",
+                (state.value, settled, str(detail or ""), record.operation_id))
+        self._record("attempt.settled", f"action={record.action} state={state.value}")
+        return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                             action=record.action, state=state, started_at=record.started_at,
+                             settled_at=settled, detail=str(detail or ""))
+
+    def reconcile_attempt(self, operation_id: str, *, state: AttemptState, evidence: str,
+                          now: str | None = None) -> AttemptRecord:
+        """Settle an unknown attempt from what a person actually checked, with their evidence kept.
+
+        Reconciliation is the only way out of ``unknown``, and it requires evidence in words - the
+        sent-items folder, the employer's portal, a reply - because the whole point of the unknown
+        state is that this machine cannot establish the answer. Blank evidence is refused rather than
+        stored as a confident-looking record of nothing.
+        """
+        written = str(evidence or "").strip()
+        if len(written) < 4:
+            raise AttemptError(
+                "Reconciling an unknown outcome needs a note of what you checked; this application "
+                "cannot establish it, and a record without evidence would look like one that could.")
+        if state is AttemptState.UNKNOWN:
+            raise AttemptError("Reconciling an attempt means establishing what happened to it.")
+        record = self.settle_attempt(operation_id, state=state, detail=written, now=now)
+        with self._connection:
+            self._connection.execute(
+                "UPDATE action_attempt SET evidence=? WHERE operation_id=?",
+                (written, record.operation_id))
+        self._record("attempt.reconciled", f"action={record.action} state={state.value}")
+        return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                             action=record.action, state=record.state,
+                             started_at=record.started_at, settled_at=record.settled_at,
+                             detail=record.detail, evidence=written)
+
+    def get_attempt(self, operation_id: str) -> AttemptRecord | None:
+        """One attempt by its operation id, or ``None``. Raises if the row cannot be read."""
+        if not self._schema_records_attempts():
+            return None
+        row = self._connection.execute(
+            "SELECT * FROM action_attempt WHERE operation_id = ?",
+            (str(operation_id or "").strip(),)).fetchone()
+        return None if row is None else self._decode_attempt(row)
+
+    def list_attempts(self, *, identity_key: str | None = None,
+                      action: str | None = None) -> tuple[AttemptRecord, ...]:
+        """Every recorded attempt, oldest first, optionally for one job identity and action."""
+        if not self._schema_records_attempts():
+            return ()
+        query = "SELECT * FROM action_attempt"
+        clauses: list[str] = []
+        values: list[str] = []
+        if identity_key is not None:
+            clauses.append("identity_key = ?")
+            values.append(str(identity_key).strip())
+        if action is not None:
+            clauses.append("action = ?")
+            values.append(str(action).strip())
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY started_at, operation_id"
+        return tuple(self._decode_attempt(row)
+                     for row in self._connection.execute(query, values).fetchall())
+
+    def unresolved_attempts(self) -> tuple[AttemptRecord, ...]:
+        """Attempts whose outcome was never established. These are what block further attempts."""
+        return tuple(record for record in self.list_attempts() if record.is_unresolved)
+
+    def _schema_records_attempts(self) -> bool:
+        """Whether this file is new enough to hold attempt records (schema 12)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='action_attempt'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_attempt(row: sqlite3.Row) -> AttemptRecord:
+        """One stored attempt, or :class:`StoredRecordError` naming what cannot be read.
+
+        An unreadable attempt is never read as "nothing was attempted": that is the reading that
+        would permit a blind retry, which is the one outcome this table exists to prevent.
+        """
+        noun = "attempt record"
+        raw_state = str(row["state"] or "").strip()
+        try:
+            state = AttemptState(raw_state)
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its outcome is recorded as {raw_state!r}, which is not a state this "
+                      f"application knows") from exc
+        try:
+            return AttemptRecord(
+                operation_id=str(row["operation_id"] or ""),
+                identity_key=str(row["identity_key"] or ""),
+                action=str(row["action"] or ""),
+                state=state,
+                started_at=str(row["started_at"] or ""),
+                settled_at=(str(row["settled_at"]) if row["settled_at"] else None),
+                detail=str(row["detail"] or ""),
+                evidence=str(row["evidence"] or ""),
+            )
+        except AttemptError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
     def _schema_records_policy(self) -> bool:
         """Whether this file is new enough to hold the standing authorisation (schema 11)."""
         return self._connection.execute(
@@ -4209,6 +4422,9 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     # The authorisation is read by the doctor through its own decoder for the reason the decoder
     # exists: a row that cannot be read must be reported, never taken for "nothing was restricted".
     ("policy_version", "version", CareerStore._decode_policy_version),
+    # An attempt that cannot be read must be reported too: the reading that would be convenient -
+    # "nothing was attempted" - is the one that permits a blind retry.
+    ("action_attempt", "operation_id", CareerStore._decode_attempt),
     ("tailored_artifact", "artifact_id", CareerStore._decode_tailored_artifact),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
