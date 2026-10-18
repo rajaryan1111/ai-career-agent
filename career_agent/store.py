@@ -248,6 +248,25 @@ class CareerStore:
                 return True
         return False
 
+    def delete_all_data(self) -> dict[str, int]:
+        """Delete every local candidate record in one transaction.
+
+        Returns the number of removed rows per table so the UI can report what
+        happened. An empty database is a no-op with zero counts.
+        """
+        with self._connection:
+            counts = {
+                "profile": self._connection.execute("SELECT COUNT(*) FROM candidate_profile").fetchone()[0],
+                "jobs": self._connection.execute("SELECT COUNT(*) FROM job_listings").fetchone()[0],
+                "attempts": self._connection.execute("SELECT COUNT(*) FROM application_tracker").fetchone()[0],
+                "events": self._connection.execute("SELECT COUNT(*) FROM application_events").fetchone()[0],
+            }
+            self._connection.execute("DELETE FROM application_events")
+            self._connection.execute("DELETE FROM application_tracker")
+            self._connection.execute("DELETE FROM job_listings")
+            self._connection.execute("DELETE FROM candidate_profile")
+        return counts
+
     def import_snapshot(
         self, *, profile: CandidateProfile | None, jobs, attempts, events, replace: bool,
     ) -> None:

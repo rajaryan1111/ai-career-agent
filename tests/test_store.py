@@ -465,5 +465,42 @@ class MigrationTests(unittest.TestCase):
                 CareerStore(path)
 
 
+class DeleteAllDataTests(unittest.TestCase):
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def seed(self):
+        self.store.save_profile(CandidateProfile(candidate_country="India", skills=frozenset({"Python"})))
+        self.store.save_job(sample_job("j1"))
+        tracker = self.store.start_application("j1")
+        self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
+
+    def test_deletes_every_record_and_reports_counts(self):
+        self.seed()
+        counts = self.store.delete_all_data()
+        self.assertEqual(counts, {"profile": 1, "jobs": 1, "attempts": 1, "events": 2})
+        self.assertFalse(self.store.has_data())
+        self.assertIsNone(self.store.get_profile())
+        self.assertEqual(self.store.list_jobs(), ())
+        self.assertEqual(self.store.list_attempts("j1"), ())
+        self.assertEqual(self.store.list_events("j1"), ())
+
+    def test_empty_database_is_a_safe_no_op(self):
+        self.assertEqual(
+            self.store.delete_all_data(),
+            {"profile": 0, "jobs": 0, "attempts": 0, "events": 0},
+        )
+
+    def test_database_remains_usable_after_deletion(self):
+        self.seed()
+        self.store.delete_all_data()
+        self.store.save_job(sample_job("j2"))
+        started = self.store.start_application("j2")
+        saved = self.store.save_tracker(started.transition(ApplicationStatus.SHORTLISTED))
+        self.assertEqual(saved.status, ApplicationStatus.SHORTLISTED)
+        self.assertEqual(self.store.list_events("j2")[-1].to_status, ApplicationStatus.SHORTLISTED)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

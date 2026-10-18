@@ -207,6 +207,49 @@ class CareerAgentApp:
             text=f"Source-quality gate: {gate}. Live discovery and application submission remain out of scope for this build.",
             wraplength=900,
         ).pack(anchor=W, pady=8)
+        local_data = ttk.LabelFrame(self.sources_tab, text="Local data", padding=10)
+        local_data.pack(fill=X, pady=(8, 0))
+        ttk.Label(
+            local_data,
+            text=(
+                "Everything is stored in one local SQLite database. Export a backup before deleting; "
+                "deletion removes the profile, listings, attempts and history from this device only."
+            ),
+            wraplength=860,
+        ).pack(anchor=W)
+        ttk.Button(
+            local_data, text="Delete all local data…", command=self._delete_all_data
+        ).pack(anchor=W, pady=(6, 0))
+
+    def _delete_all_data(self):
+        if not self.store.has_data():
+            messagebox.showinfo("Nothing to delete", "No local records are stored in this database.", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "Delete all local data?",
+            "This permanently deletes the candidate profile, every listing, every application attempt "
+            "and all history from this device.\n\nExport a backup first if you may need it. This cannot "
+            "be undone. Continue?",
+            parent=self.root,
+            default="no",
+            icon="warning",
+        ):
+            self.status.set("Deletion cancelled; nothing was removed.")
+            return
+        counts = self.store.delete_all_data()
+        self.selected_job_id = None
+        self._clear_form()
+        self._load_profile()
+        self._refresh_jobs()
+        self.status.set(
+            f"Deleted {counts['profile']} profile, {counts['jobs']} job(s), "
+            f"{counts['attempts']} attempt(s) and {counts['events']} history event(s)."
+        )
+        messagebox.showinfo(
+            "Local data deleted",
+            "All local records were removed from this database. An exported backup is unaffected.",
+            parent=self.root,
+        )
 
     def _load_profile(self):
         profile = self.store.get_profile()

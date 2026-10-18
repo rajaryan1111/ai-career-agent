@@ -796,3 +796,8 @@ These are proposed targets. Do not report them as measured results.
 - The registry contains manual entry as the only enabled source; Himalayas and SmartRecruiters remain blocked with their recorded reasons. `SOURCE_QUALITY_GATE_PASSED` stays false and no adapter performs network access.
 - Added a **Sources & settings** tab that states discovery is disabled, lists each candidate source with status, capabilities, review date and notes, and shows the gate state. `tests/test_sources.py` adds 13 tests covering the gate, declaration validation, outcome categories, blocked/no-capability refusals, and the rate limiter.
 - Verified the tab through the real Tk widgets under Python 3.12 (three rows, manual supported, blocked providers listed, closed-gate banner). Suite is 162 tests.
+
+### 2026-10-19 — Complete local data deletion
+- Added `CareerStore.delete_all_data()`, which removes profile, listings, attempts and events in one transaction and returns per-table counts. Deletion is a no-op on an empty database and leaves the file usable for new records.
+- Added a **Delete all local data…** control in the Sources & settings tab with a warning dialog that defaults to "no", states the exact scope, and recommends exporting a backup first. Declining changes nothing; accepting clears the profile form, job list and tracker and reports the deleted counts.
+- `tests/test_store.py` gains three deletion tests; the suite is 165 tests. Verified through the real Tk widgets under Python 3.12 (delete accepts and clears, cancel preserves the database).
