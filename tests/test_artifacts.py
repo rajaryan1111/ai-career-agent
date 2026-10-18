@@ -15,7 +15,7 @@ from pathlib import Path
 from career_agent.artifacts import (
     MAX_CONTENT_CHARS, ArtifactBasis, ArtifactError, ArtifactKind, BuiltArtifact, LineageReport,
     StaleArtifactError, TailoredArtifact, capture_basis, cover_letter_document, lineage_status,
-    new_artifact_id, require_current_artifact, tailored_resume_document,
+    new_artifact_id, rebuild_artifact, require_current_artifact, tailored_resume_document,
 )
 from career_agent.backup import create_backup, restore_backup
 from career_agent.core import (
@@ -250,8 +250,9 @@ class ArtifactStoreTests(unittest.TestCase):
 
     def test_listing_filters_and_newest_first_order(self):
         first = self.save_one()
-        revised = self.store.revise_role_strategy(self.strategy.strategy_id, name=self.strategy.name,
-                                                  role_family=self.strategy.role_family)
+        # A real change, so a second version is really written: a revision that repeats the stored
+        # content writes nothing, which is what the strategy store promises.
+        revised = self.store.revise_role_strategy(self.strategy.strategy_id, seniority="senior")
         second = self.save_one(strategy=revised, content="Second build.\n")
         other_listing = JobListing(
             listing_id="j2", source_id="manual", source_name="Manual entry",
@@ -520,6 +521,103 @@ class ArtifactCitationTests(unittest.TestCase):
         self.assertIn(f"id={saved.artifact_id}", written)
         self.assertNotIn("personal-cv-2026.docx", written,
                          "the file somebody's résumé is called is their data, not an event detail")
+
+
+class RebuildArtifactTests(unittest.TestCase):
+    """Rebuilding a stale document: a new row from current facts, never an edit of the old one."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.database = self.folder / "career_agent.sqlite3"
+        self.store = CareerStore(str(self.database))
+        self.addCleanup(self.store.close)
+        self.store.save_job(LISTING)
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="resume-v1.docx")
+        self.strategy = self.store.create_role_strategy(
+            name=STRATEGY.name, role_family=STRATEGY.role_family, seniority=STRATEGY.seniority,
+            required_skills=STRATEGY.required_skills, preferred_skills=STRATEGY.preferred_skills)
+
+    def save_one(self, kind=ArtifactKind.TAILORED_RESUME, content="A tailored resume.\n"):
+        return self.store.new_tailored_artifact(
+            listing_id=LISTING.listing_id, strategy=self.strategy, kind=kind, content=content,
+            basis=capture_basis(self.store))
+
+    def go_stale(self):
+        """Change a stored fact, the way a person updating their profile would."""
+        self.store.save_profile(replace(PROFILE, experience_years=2.0))
+
+    def test_a_rebuild_appends_a_current_document_and_keeps_the_stale_one(self):
+        stale = self.save_one()
+        self.go_stale()
+        self.assertFalse(lineage_status(self.store, stale).is_current)
+        rebuilt = rebuild_artifact(self.store, stale.artifact_id)
+        self.assertNotEqual(rebuilt.artifact.artifact_id, stale.artifact_id)
+        self.assertEqual(rebuilt.replaced_artifact_id, stale.artifact_id)
+        self.assertTrue(lineage_status(self.store, rebuilt.artifact).is_current)
+        self.assertEqual(require_current_artifact(self.store, rebuilt.artifact.artifact_id),
+                         rebuilt.artifact)
+        stored = self.store.list_tailored_artifacts(listing_id=LISTING.listing_id)
+        self.assertEqual(len(stored), 2, "the stale document is history, not something to overwrite")
+        self.assertIsNotNone(self.store.get_tailored_artifact(stale.artifact_id))
+
+    def test_a_rebuild_is_built_under_the_newest_strategy_version(self):
+        stale = self.save_one()
+        newer = self.store.revise_role_strategy(self.strategy.strategy_id,
+                                                preferred_skills=frozenset({"PyTorch", "SQL"}))
+        self.assertGreater(newer.version, stale.strategy_version)
+        rebuilt = rebuild_artifact(self.store, stale.artifact_id)
+        self.assertEqual(rebuilt.artifact.strategy_version, newer.version)
+        self.assertTrue(lineage_status(self.store, rebuilt.artifact).is_current)
+
+    def test_a_rebuild_reports_gaps_rather_than_inventing_the_missing_skill(self):
+        stale = self.save_one()
+        self.go_stale()
+        rebuilt = rebuild_artifact(self.store, stale.artifact_id)
+        self.assertIn("Docker", rebuilt.gaps,
+                      "the strategy requires Docker and the profile does not state it")
+        self.assertNotIn("Docker", rebuilt.artifact.content,
+                         "a gap is reported to the person, never written into the document")
+
+    def test_a_rebuilt_cover_letter_is_rebuilt_as_a_cover_letter(self):
+        stale = self.save_one(kind=ArtifactKind.COVER_LETTER, content="Dear hiring team,\n")
+        self.go_stale()
+        rebuilt = rebuild_artifact(self.store, stale.artifact_id)
+        self.assertEqual(rebuilt.artifact.kind, ArtifactKind.COVER_LETTER)
+        self.assertIn(LISTING.employer_name, rebuilt.artifact.content)
+        self.assertIn(LISTING.role_title, rebuilt.artifact.content)
+
+    def test_screening_answers_are_not_rebuilt_by_a_machine(self):
+        stale = self.save_one(kind=ArtifactKind.SCREENING_ANSWERS,
+                              content="Q: Are you eligible? A: Yes, I am a citizen.\n")
+        self.go_stale()
+        with self.assertRaises(ArtifactError) as caught:
+            rebuild_artifact(self.store, stale.artifact_id)
+        self.assertIn("screening answers", str(caught.exception).lower())
+        self.assertEqual(len(self.store.list_tailored_artifacts()), 1, "nothing was written")
+
+    def test_rebuilding_something_that_is_not_stored_is_refused(self):
+        with self.assertRaises(ArtifactError) as caught:
+            rebuild_artifact(self.store, "0" * 32)
+        self.assertIn("no artifact", str(caught.exception))
+
+    def test_a_rebuild_cites_the_documents_the_facts_now_come_from(self):
+        stale = self.save_one()
+        self.store.save_profile(replace(PROFILE, experience_years=2.0),
+                                source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="resume-v2.docx")
+        rebuilt = rebuild_artifact(self.store, stale.artifact_id)
+        self.assertEqual(rebuilt.artifact.basis.fact_documents["experience"], "resume-v2.docx")
+        self.assertEqual(self.store.get_tailored_artifact(stale.artifact_id)
+                         .basis.fact_documents["experience"], "resume-v1.docx")
+
+    def test_a_current_document_can_still_be_rebuilt_without_pretending_it_was_stale(self):
+        current = self.save_one()
+        rebuilt = rebuild_artifact(self.store, current.artifact_id)
+        self.assertTrue(lineage_status(self.store, rebuilt.artifact).is_current)
+        self.assertEqual(len(self.store.list_tailored_artifacts()), 2)
 
 
 class LineageTests(unittest.TestCase):

@@ -33,7 +33,8 @@ from .core import (
     validate_activity_detail, validate_activity_date,
 )
 from .strategies import (
-    RoleStrategy, StrategyError, new_strategy_id, strategy_from_payload, strategy_payload,
+    CONTENT_FIELDS, RoleStrategy, StrategyError, new_strategy_id, strategy_from_payload,
+    strategy_payload,
 )
 from .tasks import (
     RunState, ScheduledTask, TaskRun, TaskValidationError, WorkerLease, WorkerLeaseHeld,
@@ -3782,6 +3783,13 @@ class CareerStore:
     def revise_role_strategy(self, strategy_id: str, **content: object) -> RoleStrategy:
         """Append the next version of a stored strategy, or return the current one when nothing changes.
 
+        A revision **states what changes**: the fields named here replace the current version's, and
+        every field not named is carried forward. Building the new version out of the arguments alone
+        would mean a caller that renames a strategy also deletes the exclusions and required skills it
+        did not repeat - and those are *gates* in matching, so a version that lost them would silently
+        unblock work the person said no to, permanently, because versions are append-only. Clearing a
+        field stays possible by naming it with an empty value.
+
         A revision whose content matches the current version byte-for-byte writes **no row** and
         returns the stored version as it is: a version that changed nothing would be a claim that
         something did, and an artifact's lineage is only worth what the version numbers mean.
@@ -3790,12 +3798,21 @@ class CareerStore:
         if latest is None:
             raise StrategyError(
                 f"no strategy with the identifier {strategy_id!r} is stored, so there is nothing to revise")
+        unknown = sorted(set(content) - set(CONTENT_FIELDS))
+        if unknown:
+            # A misspelled field would otherwise be dropped on the floor and the revision would read
+            # as "nothing changed", which is the quietest possible way to lose somebody's edit.
+            raise StrategyError(
+                f"a strategy has no {', '.join(unknown)} to revise; its fields are "
+                f"{', '.join(CONTENT_FIELDS)}")
+        merged: dict[str, object] = {name: getattr(latest, name) for name in CONTENT_FIELDS}
+        merged.update(content)
         candidate = RoleStrategy(strategy_id=strategy_id, version=latest.version,
-                                 **content)  # type: ignore[arg-type]
+                                 **merged)  # type: ignore[arg-type]
         if candidate.content_key() == latest.content_key():
             return latest
         revised = RoleStrategy(strategy_id=strategy_id, version=latest.version + 1,
-                               **content)  # type: ignore[arg-type]
+                               **merged)  # type: ignore[arg-type]
         self._write_strategy_row(revised)
         self._record("strategy.revised", f"id={strategy_id} version={revised.version}")
         return revised

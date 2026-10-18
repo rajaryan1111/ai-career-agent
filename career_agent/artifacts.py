@@ -469,6 +469,56 @@ def require_current_artifact(store: "CareerStore", artifact_id: str) -> Tailored
     return artifact
 
 
+@dataclass(frozen=True)
+class RebuiltArtifact:
+    """What a rebuild produced: the new row, the gaps it reported, and what it was built instead of.
+
+    The stale document is *not* touched - artifacts are append-only, and the record of what was
+    prepared last week is evidence, not a draft. ``replaced_artifact_id`` only says which document
+    this one was rebuilt from, so a window can show the pair.
+    """
+
+    artifact: "TailoredArtifact"
+    gaps: tuple[str, ...]
+    replaced_artifact_id: str
+
+
+def rebuild_artifact(store: "CareerStore", artifact_id: str) -> RebuiltArtifact:
+    """Build the same kind of document again from what the store holds now, as a new row.
+
+    This is the answer to a refused artifact: the sources moved, so the document is made again from
+    the current facts and the strategy's newest version, and the stale one stays stored. Screening
+    answers are refused - the builders here only restate stored facts, and answers a person wrote
+    are not facts this application can regenerate without inventing them.
+    """
+    stale = store.get_tailored_artifact(artifact_id)
+    if stale is None:
+        raise ArtifactError(f"no artifact with the identifier {artifact_id!r} is stored.")
+    if stale.kind is ArtifactKind.SCREENING_ANSWERS:
+        raise ArtifactError(
+            "screening answers are written by the person, so this application will not rebuild them: "
+            "open the questions again and answer them yourself.")
+    listing = store.get_job(stale.listing_id)
+    if listing is None:
+        raise ArtifactError(
+            f"the listing {stale.listing_id!r} this document was prepared for is no longer stored, "
+            "so there is nothing to rebuild it for.")
+    strategy = store.get_role_strategy(stale.strategy_id)
+    if strategy is None:
+        raise ArtifactError(
+            f"the strategy {stale.strategy_id!r} this document was built under is no longer stored, "
+            "so a rebuild would have no preferences to follow.")
+    basis = capture_basis(store)
+    if stale.kind is ArtifactKind.TAILORED_RESUME:
+        built = tailored_resume_document(basis, strategy)
+    else:
+        built = cover_letter_document(basis, strategy, listing)
+    artifact = store.new_tailored_artifact(
+        listing_id=stale.listing_id, strategy=strategy, kind=stale.kind, content=built.content,
+        basis=basis)
+    return RebuiltArtifact(artifact=artifact, gaps=built.gaps, replaced_artifact_id=artifact_id)
+
+
 def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> LineageReport:
     """Compare one artifact's stored basis with what the store holds now. Reads only.
 

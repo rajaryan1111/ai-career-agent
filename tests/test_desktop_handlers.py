@@ -4953,6 +4953,201 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertIn("profile was not changed", app.status.get())
 
+class TailoredDocumentsTabTests(HandlerTestCase):
+    """The tab that makes the lineage rule visible: what a document was built from, and the refusal.
+
+    These tests build the real window against stub widgets and a real database, so a row's cells are
+    read back from the tree the person looks at, "nothing was written" is the connection's change
+    counter, and the refusal path is the store's own gate rather than a message typed in the handler.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "artifacts.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def seed(self, app, *, kind=None, document="resume-v1.docx"):
+        """One listing, one profile read out of a résumé, one strategy and one built document."""
+        from career_agent.artifacts import ArtifactKind, capture_basis
+
+        listing = JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="Example Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India")
+        app.store.save_job(listing)
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=1.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})),
+            source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name=document)
+        strategy = app.store.create_role_strategy(
+            name="Applied AI roles", role_family="Applied AI engineering",
+            required_skills=frozenset({"Python", "Docker"}))
+        artifact = app.store.new_tailored_artifact(
+            listing_id="j1", strategy=strategy, kind=kind or ArtifactKind.TAILORED_RESUME,
+            content="A tailored resume built from the stored facts.\n",
+            basis=capture_basis(app.store))
+        app._refresh_artifacts()
+        return artifact
+
+    def row(self, app, artifact_id):
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    def change_a_fact(self, app):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=3.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+
+    def test_the_list_says_what_each_document_was_built_from(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        row = self.row(app, artifact.artifact_id)
+        self.assertEqual(row["kind"], "Tailored resume")
+        self.assertEqual(row["listing"], "j1")
+        self.assertIn("v1", row["strategy"])
+        self.assertEqual(row["cited"], "resume-v1.docx")
+        self.assertEqual(row["state"], "Current")
+        self.assertIn("1 tailored document", app.artifact_summary.get())
+
+    def test_a_document_whose_facts_moved_is_shown_as_needing_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Rebuild before use"))
+        self.assertIn("experience", row["state"], "the row names the fact that moved")
+        self.assertIn("1 need", app.artifact_summary.get())
+
+    def test_the_controls_are_off_until_a_document_is_selected(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(())
+        app._on_artifact_selection()
+        self.assertTrue(app.check_artifact_button.instate(["disabled"]))
+        self.assertTrue(app.rebuild_artifact_button.instate(["disabled"]))
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+        self.assertFalse(app.check_artifact_button.instate(["disabled"]))
+        self.assertFalse(app.rebuild_artifact_button.instate(["disabled"]))
+
+    def test_checking_a_current_document_says_so_and_writes_nothing(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        before = app.store._connection.total_changes
+        app._check_selected_artifact()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(MESSAGES.titles(), [], "a current document needs no dialog")
+        self.assertIn("still matches your saved facts", app.status.get())
+        self.assertIn("sends nothing", app.status.get())
+
+    def test_checking_a_stale_document_names_the_reasons_and_offers_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["This document is out of date"] = False
+        before = app.store._connection.total_changes
+
+        app._check_selected_artifact()
+
+        self.assertIn("This document is out of date", MESSAGES.titles("askyesno"))
+        self.assertIn("experience", MESSAGES.text("askyesno"),
+                      "the offer says what moved, not just that something did")
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined rebuild writes nothing")
+        self.assertIn("was not used", app.status.get())
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_accepting_the_offer_rebuilds_and_keeps_the_old_document(self):
+        app = self.build_window()
+        stale = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(stale.artifact_id)
+        CONFIG["This document is out of date"] = True
+
+        app._check_selected_artifact()
+
+        stored = app.store.list_tailored_artifacts()
+        self.assertEqual(len(stored), 2, "a rebuild appends; the old document is history")
+        rebuilt = next(item for item in stored if item.artifact_id != stale.artifact_id)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertEqual(self.row(app, stale.artifact_id)["state"][:18], "Rebuild before use")
+        self.assertIn(rebuilt.artifact_id, app.status.get())
+        self.assertIn(stale.artifact_id, app.status.get())
+        self.assertIn("Docker", app.status.get(),
+                      "the gap the document refused to invent is reported to the person")
+
+    def test_the_rebuild_button_asks_first_and_a_declined_confirmation_writes_nothing(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = False
+        before = app.store._connection.total_changes
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Rebuild this document", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIn("cancelled", app.status.get())
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_screening_answers_are_refused_rather_than_written_by_the_machine(self):
+        from career_agent.artifacts import ArtifactKind
+
+        app = self.build_window()
+        artifact = self.seed(app, kind=ArtifactKind.SCREENING_ANSWERS)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+        before = app.store._connection.total_changes
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Document not rebuilt", MESSAGES.titles("showerror"))
+        self.assertIn("written by the person", MESSAGES.text("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_nothing_on_the_tab_shows_or_logs_the_document_text(self):
+        from career_agent.event_log import log_path
+
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+        app._check_selected_artifact()
+        shown = " ".join([app.status.get(), app.artifact_detail.get(), app.artifact_summary.get(),
+                          *self.row(app, artifact.artifact_id).values()])
+        self.assertNotIn("A tailored resume built from the stored facts", shown)
+        written = log_path(Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertNotIn("A tailored resume built from the stored facts", written)
+
+    def test_rebuilding_a_document_that_was_deleted_elsewhere_is_refused(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app.store.delete_tailored_artifact(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Document not rebuilt", MESSAGES.titles("showerror"))
+        self.assertIn("no artifact", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+
+
 class WindowConstructionTests(HandlerTestCase):
     """Every widget the real window builds must accept the options it is given.
 

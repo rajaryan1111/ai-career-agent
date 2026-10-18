@@ -672,3 +672,51 @@ def required_facts_to_confirm(profile: CandidateProfile | None,
     required = set(REQUIRED_PROFILE_FACTS)
     return tuple(row for row in profile_fact_review(profile, provenance)
                  if row.fact in required and not row.confirmed)
+
+
+# ---------------------------------------------------------------- tailored documents: what a row says
+
+#: What the list shows for a document whose basis names no file. It is not "unknown": a basis without a
+#: citation was built from values the person typed, or was stored before artifacts carried citations.
+ARTIFACT_NO_DOCUMENT = "no source document recorded"
+
+
+def artifact_citation_text(documents: Iterable[str]) -> str:
+    """The documents an artifact was built from, as one cell of the list."""
+    names = [name for name in documents if name]
+    return ", ".join(names) if names else ARTIFACT_NO_DOCUMENT
+
+
+def artifact_state_text(is_current: bool, reasons: Iterable[str]) -> str:
+    """The state cell: current, or why this document must be rebuilt before it is used.
+
+    The reasons come from the lineage report, which always has at least one line, so a row never says
+    only "stale" - the point of the whole lineage is that the person is told what moved.
+    """
+    if is_current:
+        return "Current"
+    return "Rebuild before use — " + "; ".join(reasons)
+
+
+def artifact_summary_text(total: int, stale: int) -> str:
+    """The line above the list: how many documents are stored, and how many cannot be used as they are."""
+    if total == 0:
+        return ("No tailored document is stored yet. Documents are built from your saved facts under a "
+                "role strategy; nothing here is sent anywhere.")
+    documents = "1 tailored document" if total == 1 else f"{total} tailored documents"
+    if stale == 0:
+        return f"{documents} stored; every one still matches the facts and strategy it was built from."
+    needs = "1 needs" if stale == 1 else f"{stale} need"
+    return (f"{documents} stored; {needs} rebuilding before use because the facts or the strategy "
+            "moved on. Nothing is reused silently.")
+
+
+def artifact_rebuild_text(artifact_id: str, replaced_id: str, gaps: Iterable[str]) -> str:
+    """What to say after a rebuild: the new document, the old one, and the gaps it refused to invent."""
+    missing = [gap for gap in gaps if gap]
+    line = (f"Rebuilt from your current facts as document {artifact_id}; {replaced_id} is kept as "
+            "history and was not changed.")
+    if missing:
+        line += (" Your saved facts do not state " + ", ".join(missing)
+                 + ", so the document does not claim them.")
+    return line

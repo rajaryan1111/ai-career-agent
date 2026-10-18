@@ -44,11 +44,16 @@ from .preparation import (
 from .store import PrivateWriteError, write_private_text_file
 from .worker import worker_status
 from .desktop_logic import (
-    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity,
-    build_candidate_profile,
+    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values,
+    artifact_citation_text, artifact_rebuild_text, artifact_state_text, artifact_summary_text,
+    build_activity, build_candidate_profile,
     fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
     plan_job_save, profile_fact_review, profile_fields_not_matching, profile_form_values,
     required_fact_questions, required_facts_to_confirm,
+)
+from .artifacts import (
+    KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, StaleArtifactError, lineage_status,
+    rebuild_artifact, require_current_artifact,
 )
 from . import contact_export, resume
 from .diagnostics import describe_startup_failure, record_startup_failure
@@ -274,6 +279,7 @@ class CareerAgentApp:
         self.actions_tab = ttk.Frame(self.tabs, padding=12)
         self.history_tab = ttk.Frame(self.tabs, padding=12)
         self.contacts_tab = ttk.Frame(self.tabs, padding=12)
+        self.artifacts_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -283,6 +289,7 @@ class CareerAgentApp:
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.tabs.add(self.contacts_tab, text="HR contacts")
+        self.tabs.add(self.artifacts_tab, text="Tailored documents")
         # Whatever a person did in another tab, or a second window did to this database, the contacts tab
         # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
         # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
@@ -298,6 +305,7 @@ class CareerAgentApp:
         self._build_follow_ups()
         self._build_data_safety()
         self._build_scheduler()
+        self._build_artifacts()
         self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
@@ -310,6 +318,7 @@ class CareerAgentApp:
         self._refresh_actions()
         self._refresh_scheduler()
         self._refresh_contacts()
+        self._refresh_artifacts()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -1515,6 +1524,197 @@ class CareerAgentApp:
         """Empty a list before refilling it, so it can never show a row the database no longer holds."""
         for item in tree.get_children():
             tree.delete(item)
+
+    def _build_artifacts(self):
+        """The tab about prepared documents: what each was built from, and what to do when it moved on.
+
+        This is where the lineage rule becomes visible. A tailored résumé or cover letter is built from
+        the facts the person has saved, under one version of a role strategy, for one listing; when any
+        of that changes the document is **not** quietly reused - the row says so, the controls refuse to
+        hand it over, and the only way forward is a rebuild, which writes a new document and keeps the
+        old one as history. Nothing on this tab sends anything anywhere.
+        """
+        body = self._scrollable_body(self.artifacts_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Tailored résumés and cover letters are built only from facts you have saved: a "
+                "requirement your profile does not state is reported as a gap, never written into the "
+                "document. Each one records the listing, the strategy version, when it was built and "
+                "the file its facts were read from. A document whose facts or strategy have changed "
+                "since is never used as it is - rebuild it, and the old one stays as history."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.artifact_summary = tk.StringVar(value="Reading the stored documents...")
+        ttk.Label(body, textvariable=self.artifact_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.check_artifact_button = ttk.Button(
+            body, text="Check before use", command=self._check_selected_artifact, state="disabled")
+        self.check_artifact_button.grid(row=2, column=0, sticky=W, pady=4)
+        self.rebuild_artifact_button = ttk.Button(
+            body, text="Rebuild from current facts...", command=self._rebuild_selected_artifact,
+            state="disabled")
+        self.rebuild_artifact_button.grid(row=2, column=1, sticky=W, padx=(8, 0), pady=4)
+        ttk.Button(body, text="Refresh",
+                   command=self._refresh_artifacts).grid(row=2, column=2, sticky=W, padx=(8, 0), pady=4)
+        columns = ("kind", "listing", "strategy", "built", "cited", "state")
+        self.artifacts_tree = ttk.Treeview(body, columns=columns, show="headings", height=8)
+        for column, heading, width in (
+            ("kind", "Document", 140), ("listing", "Prepared for", 120),
+            ("strategy", "Strategy version", 150), ("built", "Built", 170),
+            ("cited", "Built from", 200), ("state", "State", 360),
+        ):
+            self.artifacts_tree.heading(column, text=heading)
+            self.artifacts_tree.column(column, width=width, anchor=W)
+        self.artifacts_tree.grid(row=3, column=0, columnspan=4, sticky="nsew")
+        self.artifacts_tree.bind("<<TreeviewSelect>>", self._on_artifact_selection)
+        self.artifact_detail = tk.StringVar(
+            value="Select a document to see what it was built from.")
+        ttk.Label(body, textvariable=self.artifact_detail, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=4, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        body.columnconfigure(0, weight=1)
+        #: The lineage report for each row currently drawn, so the detail line and the controls describe
+        #: the same reading the list was filled from rather than asking the database again on every click.
+        self._artifact_reports: dict[str, object] = {}
+
+    def _refresh_artifacts(self):
+        """Re-read every stored document and what its lineage says now. Reads only, never a dialog."""
+        if not hasattr(self, "artifacts_tree"):
+            return
+        try:
+            artifacts = self.store.list_tailored_artifacts()
+            reports = {artifact.artifact_id: lineage_status(self.store, artifact)
+                       for artifact in artifacts}
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_artifact_id()
+        self._clear_tree(self.artifacts_tree)
+        for artifact in artifacts:
+            report = reports[artifact.artifact_id]
+            self.artifacts_tree.insert(
+                "", END, iid=artifact.artifact_id,
+                values=(
+                    ARTIFACT_KIND_LABELS[artifact.kind], artifact.listing_id,
+                    f"{artifact.strategy_id} v{artifact.strategy_version}",
+                    format_stored_timestamp(artifact.created_at),
+                    artifact_citation_text(artifact.source_documents),
+                    artifact_state_text(report.is_current, report.summary()),
+                ),
+            )
+        self._artifact_reports = reports
+        stale = sum(1 for report in reports.values() if not report.is_current)
+        self.artifact_summary.set(artifact_summary_text(len(artifacts), stale))
+        if selected in reports:  # the row the person was looking at is still there
+            self.artifacts_tree.selection_set(selected)
+        self._on_artifact_selection()
+
+    def _selected_artifact_id(self) -> str | None:
+        """The document selected in the list, or ``None``. Does no database lookup on purpose."""
+        if not hasattr(self, "artifacts_tree"):
+            return None
+        selection = self.artifacts_tree.selection()
+        return selection[0] if selection else None
+
+    def _on_artifact_selection(self, _event=None) -> None:
+        """Describe the selected document under the list, and offer only the controls that apply."""
+        artifact_id = self._selected_artifact_id()
+        report = self._artifact_reports.get(artifact_id) if artifact_id else None
+        for button in (self.check_artifact_button, self.rebuild_artifact_button):
+            button.configure(state="normal" if report is not None else "disabled")
+        if report is None:
+            self.artifact_detail.set("Select a document to see what it was built from.")
+            return
+        lines = "; ".join(report.summary())
+        if report.is_current:
+            self.artifact_detail.set(f"{artifact_id}: {lines}.")
+        else:
+            self.artifact_detail.set(
+                f"{artifact_id} cannot be used as it is: {lines}. Rebuilding writes a new document "
+                "from your current facts and keeps this one as history.")
+
+    def _check_selected_artifact(self) -> None:
+        """Ask the same gate any use of a document must pass, and show the answer in the person's words.
+
+        Nothing is attached or sent here - this application sends nothing. What the check is for is the
+        honest answer to 'can I use this one?', and when the answer is no, the reasons the lineage
+        report gives and the offer to rebuild.
+        """
+        artifact_id = self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        try:
+            require_current_artifact(self.store, artifact_id)
+        except StaleArtifactError as exc:
+            reasons = "\n".join(f"- {line}" for line in exc.report.summary())
+            self.status.set(
+                f"{artifact_id} was not used: it is no longer built on what is stored.")
+            if messagebox.askyesno(
+                "This document is out of date",
+                f"{artifact_id} was built from facts or a strategy version that have changed:\n\n"
+                f"{reasons}\n\nRebuild it from your current facts now? The old document is kept.",
+                parent=self.root,
+            ):
+                self._rebuild_selected_artifact(artifact_id=artifact_id, confirmed=True)
+            else:
+                self.status.set(
+                    f"{artifact_id} is out of date and was not used; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except ArtifactError as exc:
+            messagebox.showerror("Document not checked", str(exc), parent=self.root)
+            self.status.set("That document could not be checked; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.status.set(
+            f"{artifact_id} still matches your saved facts and its strategy version, so it can be "
+            "attached by hand. This application sends nothing.")
+
+    def _rebuild_selected_artifact(self, *, artifact_id: str | None = None,
+                                   confirmed: bool = False) -> None:
+        """Build the selected document again from the current facts, as a new row, after one confirmation."""
+        artifact_id = artifact_id or self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        if not confirmed and not messagebox.askyesno(
+            "Rebuild this document",
+            f"Build {artifact_id} again from the facts you have saved now, under the strategy's "
+            "newest version?\n\nThe document you have now is kept as history and is not changed.",
+            parent=self.root,
+        ):
+            self.status.set("Rebuild cancelled; nothing was changed.")
+            return
+        try:
+            rebuilt = rebuild_artifact(self.store, artifact_id)
+        except ArtifactError as exc:
+            messagebox.showerror("Document not rebuilt", str(exc), parent=self.root)
+            self.status.set("That document was not rebuilt; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_artifacts()
+        if rebuilt.artifact.artifact_id in self._artifact_reports:
+            self.artifacts_tree.selection_set(rebuilt.artifact.artifact_id)
+            self._on_artifact_selection()
+        self.status.set(artifact_rebuild_text(rebuilt.artifact.artifact_id,
+                                              rebuilt.replaced_artifact_id, rebuilt.gaps))
 
     def _build_data_safety(self):
         ttk.Label(

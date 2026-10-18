@@ -3850,3 +3850,18 @@ schema change: the citation rides in the existing `fact_basis` JSON and a missin
 nothing", so artifacts stored before today stay readable and current. 10 tests; suite **2185 tests OK
 (skipped=13)**. Note:
 [tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).
+
+
+**The invalidation window, 2026-10-18:** the **Tailored documents** tab surfaces the lineage rule:
+each row names the listing, strategy version, build time and the file its facts were read from, and
+says `Rebuild before use` with every reason when the sources moved. **Check before use** calls
+`artifacts.require_current_artifact`, so the window cannot have a second opinion; a refusal lists
+what moved and offers a rebuild, and `artifacts.rebuild_artifact` appends a new document under the
+strategy's newest version while the stale one stays stored untouched. Screening answers are refused -
+a person writes those. Building this found a real defect: `store.revise_role_strategy` constructed
+the new version from its arguments alone, so a partial revision would have silently emptied the
+exclusions and required skills that act as gates in matching; a revision now merges onto the current
+version and refuses unknown field names. Evidence: 8 rebuild tests, 5 revision tests, 10 handler
+tests through the real window, 7 text tests, acceptance workflow **M** (M1-M5, stand-in run only -
+no display-backed run yet), manual steps 124-129 all BLOCKED, suite **2215 tests OK (skipped=13)**.
+Note: [the invalidation window](research/artifact-invalidation-window-2026-10-18.md).

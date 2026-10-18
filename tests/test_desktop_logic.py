@@ -10,6 +10,7 @@ from pathlib import Path
 
 from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.core import ActivityKind
+from career_agent import desktop_logic as logic
 from career_agent.desktop_logic import (
     ACTIVITY_KIND_CHOICES, DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED,
     JobSaveMode, activity_form_values, build_activity,
@@ -457,3 +458,46 @@ class ProfileReadBackComparisonTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TailoredDocumentTextTests(unittest.TestCase):
+    """The sentences the Tailored documents tab puts in front of a person."""
+
+    def test_a_document_built_from_named_files_cites_them(self):
+        self.assertEqual(logic.artifact_citation_text(("resume-v1.docx", "resume-v2.docx")),
+                         "resume-v1.docx, resume-v2.docx")
+
+    def test_a_document_that_cites_nothing_says_so_rather_than_guessing(self):
+        self.assertEqual(logic.artifact_citation_text(()), logic.ARTIFACT_NO_DOCUMENT)
+        self.assertEqual(logic.artifact_citation_text(("",)), logic.ARTIFACT_NO_DOCUMENT)
+        self.assertNotIn("unknown", logic.ARTIFACT_NO_DOCUMENT.lower())
+
+    def test_the_state_of_a_stale_document_names_every_reason(self):
+        text = logic.artifact_state_text(False, ("facts changed since this was built: experience",
+                                                 "work history changed since this was built"))
+        self.assertTrue(text.startswith("Rebuild before use"))
+        self.assertIn("experience", text)
+        self.assertIn("work history", text)
+
+    def test_a_current_document_reads_as_current(self):
+        self.assertEqual(logic.artifact_state_text(True, ("every source fact is unchanged",)),
+                         "Current")
+
+    def test_the_summary_counts_what_cannot_be_used_as_it_is(self):
+        self.assertIn("No tailored document is stored yet", logic.artifact_summary_text(0, 0))
+        self.assertIn("1 tailored document", logic.artifact_summary_text(1, 0))
+        self.assertIn("every one still matches", logic.artifact_summary_text(2, 0))
+        self.assertIn("1 needs rebuilding", logic.artifact_summary_text(3, 1))
+        self.assertIn("2 need rebuilding", logic.artifact_summary_text(3, 2))
+
+    def test_a_rebuild_names_both_documents_and_the_gaps_it_refused_to_invent(self):
+        text = logic.artifact_rebuild_text("new123", "old456", ("Docker", "Kubernetes"))
+        self.assertIn("new123", text)
+        self.assertIn("old456", text)
+        self.assertIn("kept as history", text)
+        self.assertIn("Docker, Kubernetes", text)
+        self.assertIn("does not claim them", text)
+
+    def test_a_rebuild_with_no_gaps_claims_nothing_about_gaps(self):
+        text = logic.artifact_rebuild_text("new123", "old456", ())
+        self.assertNotIn("do not state", text)

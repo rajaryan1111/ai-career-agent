@@ -231,6 +231,58 @@ class RoleStrategyStoreTests(RoleStrategyStoreTestCase):
         self.assertEqual(self.rows(), 1, "a version that changed nothing is a claim that something did")
         self.assertEqual(self.store._connection.total_changes, before)
 
+    def test_a_revision_changes_the_fields_it_names_and_carries_the_rest_forward(self):
+        first = self.store.create_role_strategy(**FULL_CONTENT)
+        second = self.store.revise_role_strategy(first.strategy_id, seniority="senior")
+
+        self.assertEqual(second.version, 2)
+        self.assertEqual(second.seniority, "senior")
+        for name in ("name", "role_family", "title_synonyms", "locations", "work_modes",
+                     "employment_types", "compensation_min", "compensation_max",
+                     "compensation_currency", "required_skills", "excluded_role_titles",
+                     "excluded_employers", "preferred_skills"):
+            with self.subTest(field=name):
+                self.assertEqual(getattr(second, name), getattr(first, name),
+                                 "a revision states a change, not a whole strategy from memory")
+
+    def test_a_revision_cannot_silently_drop_a_hard_gate(self):
+        """The dangerous case: a rename must not quietly delete the exclusions and required skills.
+
+        Those two fields are *gates* in matching - an excluded employer and a required skill decide
+        whether a job is blocked - and a version that lost them would silently unblock work the
+        person said no to, permanently, because versions are append-only.
+        """
+        first = self.store.create_role_strategy(**FULL_CONTENT)
+        renamed = self.store.revise_role_strategy(first.strategy_id, name="Applied AI roles, NCR")
+        self.assertEqual(renamed.excluded_employers, FULL_CONTENT["excluded_employers"])
+        self.assertEqual(renamed.excluded_role_titles, FULL_CONTENT["excluded_role_titles"])
+        self.assertEqual(renamed.required_skills, FULL_CONTENT["required_skills"])
+
+    def test_a_field_can_still_be_cleared_on_purpose(self):
+        first = self.store.create_role_strategy(**FULL_CONTENT)
+        cleared = self.store.revise_role_strategy(first.strategy_id,
+                                                  excluded_employers=frozenset())
+        self.assertEqual(cleared.excluded_employers, frozenset(),
+                         "saying 'no exclusions' is a change a person can make")
+        self.assertEqual(cleared.required_skills, first.required_skills)
+
+    def test_a_partial_revision_that_changes_nothing_writes_no_version(self):
+        first = self.store.create_role_strategy(**FULL_CONTENT)
+        before = self.store._connection.total_changes
+        again = self.store.revise_role_strategy(first.strategy_id, seniority=FULL_CONTENT["seniority"])
+        self.assertEqual(again, first)
+        self.assertEqual(self.rows(), 1)
+        self.assertEqual(self.store._connection.total_changes, before)
+
+    def test_a_revision_that_names_a_field_the_model_does_not_have_is_refused(self):
+        first = self.store.create_role_strategy(**FULL_CONTENT)
+        before = self.store._connection.total_changes
+        with self.assertRaises(StrategyError) as caught:
+            self.store.revise_role_strategy(first.strategy_id, favourite_colour="blue")
+        self.assertIn("favourite_colour", str(caught.exception))
+        self.assertEqual(self.rows(), 1)
+        self.assertEqual(self.store._connection.total_changes, before)
+
     def test_revising_a_strategy_that_is_not_stored_is_refused(self):
         with self.assertRaises(StrategyError) as caught:
             self.store.revise_role_strategy(new_strategy_id(), **FULL_CONTENT)

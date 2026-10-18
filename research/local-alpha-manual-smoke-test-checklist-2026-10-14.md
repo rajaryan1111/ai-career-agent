@@ -1,8 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 123 steps — at this revision **22 PASS, 101 BLOCKED, 0 FAIL, no box ticked** (the six
+**Status:** 129 steps — at this revision **22 PASS, 107 BLOCKED, 0 FAIL, no box ticked** (the six
 newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
-BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 123 steps today, 101 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 129 steps today, 107 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1299,3 +1299,38 @@ second verification pass, after the first run was already green.
   window's questions and hints read clearly and its sentence about a blank staying unknown is understood;
   whether the confirmation that a save is about to record makes it clear that the answer becomes the person's own
   statement; and whether the whole panel looks like part of the profile tab rather than bolted on.
+
+124. [ ] Open the **Tailored documents** tab with at least one prepared document stored. Read the list: each row
+    must say what kind of document it is, which listing it was prepared for, which strategy version it was built
+    under, when it was built, **which file its facts were read from**, and whether it is still current. Judge
+    whether those six columns fit the tab at 1120x760 and at 900x600 without the list being cut off, and whether
+    the sentence above them makes it clear that nothing here is sent anywhere.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the cell values are asserted through
+    the real window in acceptance check M1 and in the handler tests, but whether they read clearly and fit is a
+    person's judgement.**
+125. [ ] Change one saved fact (for example your years of experience) and come back to this tab. The row must
+    change by itself when you press **Refresh**, say *Rebuild before use* and **name the fact that moved**. Judge
+    whether somebody who has not read the code could tell, from that row alone, what happened and what to do.
+    → **BLOCKED — the state text and the named fact are asserted in acceptance check M2; whether the wording
+    explains itself to a person is not something a test can answer.**
+126. [ ] Select that row and press **Check before use**. The refusal must open as a dialog that lists what moved
+    and asks whether to rebuild. Choose **No** and confirm by reading the list again that nothing changed, then
+    check that the status line says the document was not used.
+    → **BLOCKED — acceptance check M3 asserts the dialog, its reasons and that a declined offer writes nothing;
+    whether the dialog is understandable and the choice feels safe is a person's check.**
+127. [ ] Press **Check before use** again and choose **Yes**. A new document must appear as *Current*, the old one
+    must still be listed and still say it needs rebuilding, and the status line must name both documents and any
+    requirement your facts do not state. Confirm the old document's text is unchanged by opening it from a backup
+    or export if you keep one.
+    → **BLOCKED — acceptance check M4 asserts the append, the kept content and the reported gap through the real
+    window; judging the wording and the sense of what just happened is a person's check.**
+128. [ ] Press **Rebuild from current facts...** on a document that is already current and choose **No** at the
+    confirmation. Nothing may change, and the status line must say so. Then judge whether the confirmation makes
+    clear that the document you have now is kept.
+    → **BLOCKED — acceptance check M5 asserts the confirmation and the zero-write decline; the wording is a
+    person's judgement.**
+129. [ ] Keyboard and screen reader: reach the list with **Tab**, move the selection with the arrow keys and use
+    both controls without a mouse. Check that the two controls are announced as disabled while nothing is
+    selected, and listen to what a screen reader makes of a row whose last cell is a sentence about what moved.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The disabled
+    state is asserted in the handler tests; everything about focus order, announcement and native feel is not.**

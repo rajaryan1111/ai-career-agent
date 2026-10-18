@@ -3354,6 +3354,123 @@ def workflow_j_data_safety(run: Run) -> None:
 # --------------------------------------------------------------------------------------------------
 # Workflow F - cleanup, lifecycle, and cleanup after a failure
 # --------------------------------------------------------------------------------------------------
+def workflow_m_tailored_documents(run: Run) -> None:
+    """The Tailored documents tab: what a prepared document was built from, and the refusal to reuse it.
+
+    The rule this tab exists for is that a document built from facts that have since changed is never
+    quietly reused. What a screenshot cannot show is that the refusal is real: that the row says which
+    fact moved, that asking to use the document opens the refusal rather than handing it over, that a
+    declined offer writes nothing at all, and that accepting it appends a new document while the old one
+    stays exactly as it was. Every fact, listing and strategy here is synthetic and local; nothing on
+    this tab sends anything anywhere.
+    """
+    from career_agent.artifacts import ArtifactKind, capture_basis  # noqa: PLC0415 - only this workflow
+    from career_agent.core import (  # noqa: PLC0415 - the synthetic profile and listing
+        Availability, CandidateProfile, FactSource, JobListing,
+    )
+
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.artifacts_tab)
+
+    listing = JobListing(
+        listing_id="acceptance-m1", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m1", employer_name="Example Employer",
+        role_title="GenAI Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India")
+    app.store.save_job(listing)
+    app.store.save_profile(
+        CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027,
+                         experience_years=1.0, work_authorization="citizen",
+                         skills=frozenset({"Python", "SQL"}),
+                         preferred_locations=frozenset({"Delhi"})),
+        source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name="acceptance-resume.docx")
+    strategy = app.store.create_role_strategy(
+        name="Applied AI roles", role_family="Applied AI engineering",
+        required_skills=frozenset({"Python", "Docker"}))
+    prepared = app.store.new_tailored_artifact(
+        listing_id=listing.listing_id, strategy=strategy, kind=ArtifactKind.TAILORED_RESUME,
+        content="A tailored resume built from the stored facts.\n", basis=capture_basis(app.store))
+
+    def row_of(artifact_id: str) -> dict:
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    with results.step("M1 the list names what each document was built from"):
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        cells = row_of(prepared.artifact_id)
+        require(cells["kind"] == "Tailored resume", f"the document is listed as {cells['kind']!r}")
+        require(cells["listing"] == listing.listing_id, f"it is listed for {cells['listing']!r}")
+        require(cells["cited"] == "acceptance-resume.docx",
+                f"the row does not cite the resume it was built from: {cells['cited']!r}")
+        require(cells["state"] == "Current", f"an untouched document reads as {cells['state']!r}")
+
+    with results.step("M2 a changed fact turns the row into a refusal that names the fact"):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027,
+                             experience_years=3.0, work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(prepared.artifact_id)["state"]
+        require(state.startswith("Rebuild before use"), f"the row says {state!r}")
+        require("experience" in state, f"the row does not name the fact that moved: {state!r}")
+        require("need" in app.artifact_summary.get(),
+                f"the summary does not count what cannot be used: {app.artifact_summary.get()!r}")
+
+    with results.step("M3 asking to use it opens the refusal, and declining writes nothing"):
+        policy.reset()
+        policy.answers["This document is out of date"] = False
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.artifacts_tab, "Check before use", workspace.root)
+        require("This document is out of date" in policy.titles("askyesno"),
+                f"the refusal was not put in front of the person; dialogs: {policy.titles()!r}")
+        require("experience" in policy.said("This document is out of date"),
+                "the refusal does not say what moved")
+        require(app.store._connection.total_changes == before,
+                "a declined offer changed the database")
+        require(len(app.store.list_tailored_artifacts()) == 1,
+                "a declined offer wrote a document")
+        require("was not used" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("M4 accepting the offer appends a rebuild and keeps the old document"):
+        policy.reset()
+        policy.answers["This document is out of date"] = True
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        press(app.artifacts_tab, "Check before use", workspace.root)
+        stored = app.store.list_tailored_artifacts()
+        require(len(stored) == 2, f"after a rebuild the database holds {len(stored)} document(s)")
+        rebuilt = next(item for item in stored if item.artifact_id != prepared.artifact_id)
+        require(row_of(rebuilt.artifact_id)["state"] == "Current",
+                f"the rebuilt document reads as {row_of(rebuilt.artifact_id)['state']!r}")
+        require(row_of(prepared.artifact_id)["state"].startswith("Rebuild before use"),
+                "the document that was rebuilt from stopped being shown as out of date")
+        require(app.store.get_tailored_artifact(prepared.artifact_id).content
+                == prepared.content, "the old document was changed by the rebuild")
+        require("Docker" in app.status.get(),
+                f"the gap the document refused to invent was not reported: {app.status.get()!r}")
+
+    with results.step("M5 the rebuild control asks first, and a declined confirmation writes nothing"):
+        policy.reset()
+        policy.answers["Rebuild this document"] = False
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.artifacts_tab, "Rebuild from current facts...", workspace.root)
+        require("Rebuild this document" in policy.titles("askyesno"),
+                f"the rebuild was not confirmed first; dialogs: {policy.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.list_tailored_artifacts()) == 2,
+                "a declined confirmation wrote a document")
+        require("cancelled" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 def workflow_f_cleanup(run: Run) -> None:
     workspace, results = run.workspace, run.results
 
@@ -4638,6 +4755,7 @@ WORKFLOWS = (
     ("J - data safety: backup and restore", workflow_j_data_safety),
     ("K - layout, focus order and labelling, measured", workflow_k_layout_focus_labels),
     ("L - HR contact import: preview, refusal, cancel and confirm", workflow_l_contact_import),
+    ("M - tailored documents: lineage, refusal and rebuild", workflow_m_tailored_documents),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 

@@ -486,7 +486,7 @@ class DisplayBackedWorkflowTests(unittest.TestCase):
         # before it, it asserts nothing about the records and only reports numbers about the window, so
         # it runs after them and before F for the same reason they do.
         self.assertEqual([name[0] for name in names],
-                         ["A", "B", "C", "D", "E", "G", "H", "I", "J", "K", "L", "F"])
+                         ["A", "B", "C", "D", "E", "G", "H", "I", "J", "K", "L", "M", "F"])
         for name, workflow in acceptance.WORKFLOWS:
             self.assertTrue(callable(workflow), f"{name} is not runnable")
             self.assertTrue(workflow.__doc__ or workflow.__name__, f"{name} has no name in the report")
