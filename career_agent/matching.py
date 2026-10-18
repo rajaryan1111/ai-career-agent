@@ -42,8 +42,10 @@ import math
 from typing import Any, Iterable, Mapping, Sequence
 
 from .core import (
-    CandidateProfile, Decision, EligibilityReport, JobListing, evaluate_eligibility,
+    CandidateProfile, Decision, EligibilityReport, JobListing, RequirementResult,
+    evaluate_eligibility,
 )
+from .strategies import RoleStrategy
 
 DISCLAIMER = (
     "This is a comparison of the facts recorded here, not a prediction and not a probability of being "
@@ -507,8 +509,31 @@ def _score_location(profile: CandidateProfile, job: JobListing) -> MatchFactor:
     )
 
 
+class _CombinedWeights:
+    """The caller's ``MatchWeights`` with the strategy factors' own fixed weights beside them.
+
+    Internal to :func:`assess_for_strategy`: the profile's weights object is returned untouched in
+    the assessment, and this exists only so one weighted summary can cover both factor sets without
+    ``MatchWeights`` - the profile comparison's contract - growing strategy fields.
+    """
+
+    def __init__(self, weights: MatchWeights,
+                 strategy_factors: Sequence[MatchFactor] = ()) -> None:
+        self._weights = weights
+        self._strategy_factors = tuple(strategy_factors)
+
+    def as_dict(self) -> dict[str, float]:
+        combined = {**self._weights.as_dict()}
+        for factor in self._strategy_factors:
+            # A preference the strategy does not state is visible in the assessment but carries no
+            # weight either way - the honest reading of "I have no preference here".
+            combined[factor.name] = (0.0 if factor.status is FactorStatus.NOT_APPLICABLE
+                                     else STRATEGY_FACTOR_WEIGHTS.get(factor.name, 0.0))
+        return combined
+
+
 def _weighted_summary(
-    factors: Sequence[MatchFactor], weights: MatchWeights,
+    factors: Sequence[MatchFactor], weights: MatchWeights | "_CombinedWeights",
 ) -> tuple[float, float, float | None, Band, tuple[str, ...]]:
     """Total the known factors, and report how much of the applicable weight was known.
 
@@ -547,6 +572,27 @@ def _weighted_summary(
     else:
         band = Band.WEAK
     return round(score, 4) if score is not None else 0.0, round(coverage, 4), score, band, ()
+
+
+def _recommendation_for(decision: Decision, score: float | None, band: Band) -> Recommendation:
+    """The one ladder from a comparison to a recommendation, so two callers cannot disagree.
+
+    Order matters and is not symmetric: a failed requirement blocks whatever the score says, an
+    undecided one stays undecided, and only a comparable score is read at all.
+    """
+    if score is None:
+        return Recommendation.NEEDS_INFORMATION
+    if decision is Decision.FAIL:
+        return Recommendation.BLOCKED
+    if decision is Decision.UNKNOWN:
+        return Recommendation.ELIGIBILITY_UNKNOWN
+    if band is Band.INSUFFICIENT:
+        return Recommendation.NEEDS_INFORMATION
+    if band is Band.STRONG:
+        return Recommendation.REVIEW
+    if band is Band.MODERATE:
+        return Recommendation.CHECK_GAPS
+    return Recommendation.LOW_OVERLAP
 
 
 def assess(
@@ -593,29 +639,20 @@ def assess(
             unknown_inputs.append(factor.name.replace("_", " "))
     notes: list[str] = []
     if score is None:
-        recommendation = Recommendation.NEEDS_INFORMATION
         notes.append("Nothing could be compared from the facts recorded so far.")
     elif report.decision is Decision.FAIL:
-        recommendation = Recommendation.BLOCKED
         failed = ", ".join(result.requirement for result in report.failed_requirements)
         notes.append(f"A stated requirement is not met, so this listing is not recommended: {failed}.")
     elif report.decision is Decision.UNKNOWN:
-        recommendation = Recommendation.ELIGIBILITY_UNKNOWN
         unknown = ", ".join(result.requirement for result in report.unknown_requirements)
         notes.append(
             f"Eligibility could not be decided from what is recorded ({unknown}), so this listing is "
             "shown as undecided rather than as a match.")
     elif band is Band.INSUFFICIENT:
-        recommendation = Recommendation.NEEDS_INFORMATION
         notes.append(
             f"Only {coverage:.0%} of the applicable weight had a recorded value, so the overlap is not "
             "enough to rank on. Recording the missing values is what moves this.")
-    elif band is Band.STRONG:
-        recommendation = Recommendation.REVIEW
-    elif band is Band.MODERATE:
-        recommendation = Recommendation.CHECK_GAPS
-    else:
-        recommendation = Recommendation.LOW_OVERLAP
+    recommendation = _recommendation_for(report.decision, score, band)
     if missing:
         notes.append(
             "Skills the listing asks for that are not in your recorded skills (they may still be worth "
@@ -649,6 +686,276 @@ def rank(
         chosen = [item for item in assessed if item.recommendation is not Recommendation.BLOCKED]
     else:
         chosen = assessed
+    return tuple(sorted(chosen, key=lambda item: item.rank_key))
+
+
+# ---------------------------------------------------------------- applying a role strategy
+#
+# A role strategy (``career_agent.strategies``) is the person's statement of intent about one kind of
+# search. This section applies it in the only two ways the model supports, and keeps them separate:
+#
+# * **Hard statements gate before ranking** (``evaluate_strategy_eligibility``): an excluded employer
+#   or role title fails outright, and a skill the strategy marks required fails when the *profile*
+#   does not state it - the person declared it essential, and silence is not a pass. Every failure
+#   names the statement that produced it, so a blocked listing is reviewable, not just rejected.
+# * **Preferences rank, and only explainably**: the strategy's places, work modes and preferred
+#   skills become their own factors beside the profile's, each with its evidence, each reported as
+#   unknown when the listing is silent and not-applicable when the strategy states no preference. A
+#   factor the strategy does not state contributes no weight at all - a bare strategy changes no
+#   score, which is what "I have no preference here" has to mean.
+#
+# Two recorded strategy fields are deliberately **not compared**, because the listing domain model
+# has no field to compare them against: compensation bounds and employment types. The honest answer
+# is the one this module already gives for compensation - "recorded, not compared" - rather than a
+# factor invented from free text. Ranking remains a review order, never a prediction.
+
+#: The fixed weight each strategy preference carries. Strategy preferences are one person's stated
+#: priorities for one search; they sit beside the profile factors at a deliberate, documented weight
+#: rather than inside ``MatchWeights``, which is the profile's own comparison and must not drift.
+STRATEGY_FACTOR_WEIGHTS: dict[str, float] = {
+    "strategy_locations": 1.0,
+    "strategy_work_mode": 1.0,
+    "strategy_preferred_skills": 1.0,
+}
+
+
+def _contains_phrase(needles: Iterable[str], haystack: str) -> str | None:
+    """The first needle that appears in ``haystack`` as a phrase, matched case- and space-insensitively.
+
+    "Blocked Employer" matches "Blocked Employer Ltd" because that is what ruling an employer out
+    means; "Sales Engineer" does not match "Aerospace Systems Engineer" because the words only
+    co-occur there by accident. The returned needle is the *strategy's own spelling*, for the evidence.
+    """
+    def fold(value: str) -> str:
+        return " ".join(value.split()).lower()
+
+    folded = fold(haystack)
+    for needle in needles:
+        if fold(needle) and fold(needle) in folded:
+            return needle
+    return None
+
+
+def evaluate_strategy_eligibility(profile: CandidateProfile, job: JobListing,
+                                  strategy: RoleStrategy) -> EligibilityReport:
+    """The strategy's hard statements about one listing, as requirement results with their reasons.
+
+    Three requirements, always all three (a strategy that states none of a kind passes it with the
+    reason it passes): the employer is not excluded, the role title is not excluded, and every skill
+    the strategy marks required is stated in the *profile*. A listing whose skills are silent does
+    not fail the skills requirement - the requirement here is about the profile's own completeness,
+    which the listing cannot decide - and the assessment's notes carry that distinction.
+    """
+    requirements: list[RequirementResult] = []
+
+    excluded_employer = _contains_phrase(strategy.excluded_employers, job.employer_name)
+    if excluded_employer is not None:
+        requirements.append(RequirementResult(
+            requirement="an employer your strategy has not excluded", decision=Decision.FAIL,
+            explanation=f"your strategy rules out {excluded_employer}, and this listing names "
+                        f"{job.employer_name}",
+            evidence=job.employer_name))
+    else:
+        requirements.append(RequirementResult(
+            requirement="an employer your strategy has not excluded", decision=Decision.PASS,
+            explanation="no excluded employer is named in this listing",
+            evidence=job.employer_name or None))
+
+    excluded_title = _contains_phrase(strategy.excluded_role_titles, job.role_title)
+    if excluded_title is not None:
+        requirements.append(RequirementResult(
+            requirement="a role title your strategy has not excluded", decision=Decision.FAIL,
+            explanation=f"your strategy rules out {excluded_title}, and this listing's title is "
+                        f"{job.role_title}",
+            evidence=job.role_title))
+    else:
+        requirements.append(RequirementResult(
+            requirement="a role title your strategy has not excluded", decision=Decision.PASS,
+            explanation="no excluded role title is named in this listing",
+            evidence=job.role_title or None))
+
+    stated = {normalize_skill(skill) for skill in profile.skills} - {None}
+    # Named the way the strategy spelled them: the comparison folds case, the explanation must not
+    # quietly lower-case the person's own words.
+    missing = sorted(
+        skill for skill in strategy.required_skills
+        if (normalize_skill(skill) or "") not in stated)
+    if missing:
+        requirements.append(RequirementResult(
+            requirement="the skills your strategy requires", decision=Decision.FAIL,
+            explanation="your strategy requires " + ", ".join(missing)
+                        + ", which your profile does not state",
+            evidence=", ".join(sorted(item for item in stated if item)) or None))
+    else:
+        requirements.append(RequirementResult(
+            requirement="the skills your strategy requires", decision=Decision.PASS,
+            explanation="your profile states every skill your strategy requires"
+            if strategy.required_skills else "your strategy requires no particular skills",
+            evidence=", ".join(sorted(strategy.required_skills)) or None))
+
+    decision = Decision.FAIL if any(result.decision is Decision.FAIL for result in requirements) \
+        else Decision.PASS
+    return EligibilityReport(decision=tuple(requirements) and decision, requirements=tuple(requirements))
+
+
+def _score_strategy_locations(strategy: RoleStrategy, job: JobListing) -> MatchFactor:
+    """Where the strategy wants to work, against where the listing says it is."""
+    if not strategy.locations:
+        return MatchFactor("strategy_locations", FactorStatus.NOT_APPLICABLE,
+                           "your strategy names no places, so location is not compared here", 0.0)
+    if not job.location_text:
+        return MatchFactor("strategy_locations", FactorStatus.UNKNOWN,
+                           "the listing does not state where it is", 1.0)
+    matched = _contains_phrase(strategy.locations, job.location_text)
+    if matched is not None:
+        return MatchFactor("strategy_locations", FactorStatus.PASS,
+                           f"the listing is in {job.location_text}, which your strategy names", 1.0,
+                           1.0, matched)
+    return MatchFactor("strategy_locations", FactorStatus.FAIL,
+                       f"the listing is in {job.location_text}, which your strategy does not name",
+                       1.0, 0.0, job.location_text)
+
+
+def _score_strategy_work_mode(strategy: RoleStrategy, job: JobListing) -> MatchFactor:
+    """How the strategy wants to work, against what the listing says about the work mode."""
+    if not strategy.work_modes:
+        return MatchFactor("strategy_work_mode", FactorStatus.NOT_APPLICABLE,
+                           "your strategy names no work modes, so this is not compared here", 0.0)
+    if not job.work_mode:
+        return MatchFactor("strategy_work_mode", FactorStatus.UNKNOWN,
+                           "the listing does not state a work mode", 1.0)
+    matched = _contains_phrase(strategy.work_modes, job.work_mode)
+    if matched is not None:
+        return MatchFactor("strategy_work_mode", FactorStatus.PASS,
+                           f"the listing's work mode is {job.work_mode}, which your strategy accepts",
+                           1.0, 1.0, matched)
+    return MatchFactor("strategy_work_mode", FactorStatus.FAIL,
+                       f"the listing's work mode is {job.work_mode}, which your strategy does not "
+                       "name", 1.0, 0.0, job.work_mode)
+
+
+def _score_strategy_preferred_skills(strategy: RoleStrategy, job: JobListing) -> MatchFactor:
+    """The skills the strategy would like to use, against what the listing asks for.
+
+    The score is the share of the strategy's preferred skills the listing asks for: asking for all of
+    them is a pass, asking for none is a fail, and a listing that states no required skills at all is
+    unknown rather than failing a comparison nobody could make.
+    """
+    if not strategy.preferred_skills:
+        return MatchFactor("strategy_preferred_skills", FactorStatus.NOT_APPLICABLE,
+                           "your strategy names no preferred skills, so this is not compared here",
+                           0.0)
+    if not job.required_skills:
+        return MatchFactor("strategy_preferred_skills", FactorStatus.UNKNOWN,
+                           "the listing does not state the skills it asks for", 1.0)
+    listing_keys = {normalize_skill(skill) for skill in job.required_skills} - {None}
+    asked = sorted(
+        skill for skill in strategy.preferred_skills
+        if normalize_skill(skill) in listing_keys)
+    share = len(asked) / len(strategy.preferred_skills)
+    if not asked:
+        return MatchFactor("strategy_preferred_skills", FactorStatus.FAIL,
+                           "the listing asks for none of the skills your strategy prefers", 1.0,
+                           0.0, ", ".join(sorted(job.required_skills)))
+    if share >= 1.0:
+        return MatchFactor("strategy_preferred_skills", FactorStatus.PASS,
+                           "the listing asks for every skill your strategy prefers", 1.0, 1.0,
+                           ", ".join(asked))
+    return MatchFactor("strategy_preferred_skills", FactorStatus.PARTIAL,
+                       f"the listing asks for {len(asked)} of the "
+                       f"{len(strategy.preferred_skills)} skills your strategy prefers", 1.0,
+                       round(share, 4), ", ".join(asked))
+
+
+def assess_for_strategy(
+    profile: CandidateProfile,
+    job: JobListing,
+    strategy: RoleStrategy,
+    *,
+    weights: MatchWeights | None = None,
+    skill_aliases: Mapping[str, str] | None = None,
+) -> MatchAssessment:
+    """Compare one listing with one profile *under one role strategy*.
+
+    The strategy's hard statements gate before anything is ranked (an excluded employer or title, or
+    a required skill the profile does not state, blocks with the statement named); its preferences
+    become three more explainable factors beside the profile's own six. Everything the profile-only
+    comparison says is still here: the same factors, the same evidence, the same disclaimers - the
+    strategy adds statements, it never removes them.
+    """
+    weights = weights or MatchWeights()
+    if not isinstance(strategy, RoleStrategy):
+        raise TypeError("assess_for_strategy takes a RoleStrategy, not "
+                        f"{type(strategy).__name__}.")
+
+    profile_report = evaluate_eligibility(profile, job)
+    strategy_report = evaluate_strategy_eligibility(profile, job, strategy)
+    requirements = profile_report.requirements + strategy_report.requirements
+    if Decision.FAIL in {result.decision for result in requirements}:
+        merged = EligibilityReport(decision=Decision.FAIL, requirements=requirements)
+    elif Decision.UNKNOWN in {result.decision for result in requirements}:
+        merged = EligibilityReport(decision=Decision.UNKNOWN, requirements=requirements)
+    else:
+        merged = EligibilityReport(decision=Decision.PASS, requirements=requirements)
+
+    base = assess(profile, job, weights=weights, eligibility=merged, skill_aliases=skill_aliases)
+    strategy_factors = (
+        _score_strategy_locations(strategy, job),
+        _score_strategy_work_mode(strategy, job),
+        _score_strategy_preferred_skills(strategy, job),
+    )
+    # Every strategy factor stays in the assessment - a factor that says "your strategy names no
+    # places" is an explanation, not a zero - and the combined weights give a not-applicable one no
+    # weight at all, so a bare strategy changes neither the score nor the coverage it is read with.
+    combined_factors = base.factors + strategy_factors
+
+    combined = _CombinedWeights(weights, strategy_factors)
+    _earned, coverage, score, band, _unused = _weighted_summary(combined_factors, combined)
+    recommendation = _recommendation_for(merged.decision, score, band)
+
+    notes = list(base.notes)
+    for result in strategy_report.failed_requirements:
+        # The gate's own explanation names the person's statement and what this listing is: the
+        # requirement *name* alone ("an employer your strategy has not excluded") is not reviewable.
+        notes.append(result.explanation)
+    stated = {normalize_skill(skill) for skill in profile.skills} - {None}
+    unmet = sorted(
+        skill for skill in strategy.required_skills
+        if (normalize_skill(skill) or "") not in stated)
+    if unmet:
+        notes.append("Your strategy requires " + ", ".join(unmet)
+                     + " and your profile does not state any of them; state the ones you have, or "
+                       "revise the strategy.")
+    described = ", ".join(f"{factor.name.replace('strategy_', '').replace('_', ' ')} "
+                          f"({factor.status.value.replace('_', ' ')})" for factor in strategy_factors)
+    notes.insert(0, f"Assessed under your strategy '{strategy.name}': {described}.")
+
+    return MatchAssessment(
+        listing_id=job.listing_id, factors=combined_factors, score=score, coverage=coverage,
+        band=band, recommendation=recommendation, eligibility=merged.decision,
+        skill_matches=base.skill_matches, missing_skills=base.missing_skills,
+        unknown_inputs=base.unknown_inputs, notes=tuple(notes), weights=weights,
+    )
+
+
+def rank_for_strategy(
+    profile: CandidateProfile,
+    jobs: Iterable[JobListing],
+    strategy: RoleStrategy,
+    *,
+    weights: MatchWeights | None = None,
+    skill_aliases: Mapping[str, str] | None = None,
+    include_blocked: bool = False,
+) -> tuple[MatchAssessment, ...]:
+    """Assess every listing under one strategy and return them best-first, with no silent drops.
+
+    The same contract as :func:`rank`: strategy-blocked listings leave the default order but stay in
+    the assessment set saying why, and the order is stable for the same input.
+    """
+    assessed = [assess_for_strategy(profile, job, strategy, weights=weights,
+                                    skill_aliases=skill_aliases) for job in jobs]
+    chosen = assessed if include_blocked else [
+        item for item in assessed if item.recommendation is not Recommendation.BLOCKED]
     return tuple(sorted(chosen, key=lambda item: item.rank_key))
 
 

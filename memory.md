@@ -3816,3 +3816,20 @@ in `tests/test_strategies.py`; focused run 605 OK, full local suite **2151 tests
 desktop smoke BLOCKED by construction here. Next: strategy-aware matching/eligibility consumption,
 then artifact invalidation surfaced through a window. Note:
 [tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).
+
+
+## 2026-10-18 — Strategy-aware matching (P7, part 3)
+
+`matching.assess_for_strategy(profile, listing, strategy)` applies a role strategy the only two ways
+the model supports, kept separate: hard statements **gate before ranking** (excluded employer/title
+matched as phrases, required skills checked against the profile with silence-is-not-a-pass, every
+block's note naming the person's own statement) and preferences **rank explainably** (locations, work
+mode, preferred skills as factors; listing silence is unknown; an unstated preference is
+not-applicable and weightless, so a bare strategy changes no score). Compensation bounds and
+employment types stay recorded-but-not-compared. The recommendation ladder was extracted into
+`_recommendation_for` so plain `assess` and the strategy path cannot disagree; the plain path is
+pinned unchanged by test. Fail-first tests caught three real defects while building (normalized
+spelling leaking into explanations, unnamed block reasons, NOT_APPLICABLE coverage penalty).
+Evidence: 19 tests in `tests/test_strategy_matching.py`, full local suite **2170 tests OK
+(skipped=13)**; gates stay closed. Note:
+[strategy-aware matching](research/strategy-aware-matching-2026-10-18.md).

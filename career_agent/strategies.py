@@ -23,10 +23,13 @@ Three rules hold the model together:
   absent field is *not stated* rather than empty-by-choice: a strategy that names no location says
   nothing about location, and a comparison that treats silence as a preference would be inventing one.
 
-Compensation is recorded but **not compared**: a job listing in this domain model has no compensation
-field (``career_agent.matching`` records the same limitation), so a strategy's bounds are a statement
-of what the person wants, not an eligibility check this build can run. Saying otherwise would be the
-kind of untruthful status the rest of the product is built to avoid.
+Compensation bounds and employment types are recorded but **not compared**: the job listing domain
+model has no field for either (``career_agent.matching`` records the same limitation), so those two
+are statements of what the person wants, not eligibility checks this build can run. Saying otherwise
+would be the kind of untruthful status the rest of the product is built to avoid. The fields
+``career_agent.matching`` *does* compare for a strategy are the excluded employers and role titles
+(hard gates), the required skills (a hard gate against the profile), and the locations, work modes
+and preferred skills (explainable ranking factors).
 """
 from __future__ import annotations
 
