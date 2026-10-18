@@ -3833,3 +3833,9 @@ spelling leaking into explanations, unnamed block reasons, NOT_APPLICABLE covera
 Evidence: 19 tests in `tests/test_strategy_matching.py`, full local suite **2170 tests OK
 (skipped=13)**; gates stay closed. Note:
 [strategy-aware matching](research/strategy-aware-matching-2026-10-18.md).
+
+
+**Artifact use gate, 2026-10-18:** `artifacts.require_current_artifact` refuses to hand out an
+artifact whose fact basis or strategy version has moved on (`StaleArtifactError` carries the lineage
+report and names what changed); reading history back is untouched. 5 tests; suite **2175 tests OK
+(skipped=13)**.

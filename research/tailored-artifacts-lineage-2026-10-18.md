@@ -65,3 +65,13 @@ strategy-deletion refusal. `tests/test_strategies.py` — the export pin extende
   about a window, as its own output states).
 * No external action; `SOURCE_QUALITY_GATE_PASSED` stays `False`, `enabled_discovery_sources()` stays
   `()`; export format stays **2**.
+
+## Follow-up the same day: the use gate
+
+`artifacts.require_current_artifact(store, artifact_id)` is the enforcement point of the rule above:
+it returns the artifact only while `lineage_status` is current, and raises `StaleArtifactError`
+(carrying the structured `LineageReport` and a message that names what moved) otherwise. A missing
+identifier is refused as missing. The gate refuses *use*, not history — the row still reads back —
+so any future caller (a window, a submission route) has one canonical place to ask before an
+artifact is attached, sent or built on. 5 tests in `RequireCurrentArtifactTests`; suite **2175 OK
+(skipped=13)**.

@@ -384,6 +384,39 @@ class LineageReport:
         return tuple(lines)
 
 
+class StaleArtifactError(ArtifactError):
+    """An artifact whose sources have moved on was refused, with the lineage that says so.
+
+    Raised by :func:`require_current_artifact` - the one gate any caller passes before an artifact is
+    *used* (attached, sent, built on) rather than read. ``report`` carries the structured reason, so
+    a caller can offer the person the exact lines instead of a bare "stale".
+    """
+
+    def __init__(self, artifact_id: str, report: LineageReport) -> None:
+        self.report = report
+        reasons = "; ".join(report.summary())
+        super().__init__(
+            f"The artifact {artifact_id} is no longer built on what is stored: {reasons}. Rebuild it "
+            "from the current facts and strategy, or confirm them, before using this document.")
+
+
+def require_current_artifact(store: "CareerStore", artifact_id: str) -> TailoredArtifact:
+    """Return one stored artifact only while every source fact and its strategy version are current.
+
+    This is the enforcement point of the rule the lineage report exists for: an artifact whose
+    profile facts, history or strategy have moved on is refused with the named reason and is never
+    silently reused. Reading the artifact back stays available through the store - the gate refuses
+    *use*, not history.
+    """
+    artifact = store.get_tailored_artifact(artifact_id)
+    if artifact is None:
+        raise ArtifactError(f"no artifact with the identifier {artifact_id!r} is stored.")
+    report = lineage_status(store, artifact)
+    if not report.is_current:
+        raise StaleArtifactError(artifact.artifact_id, report)
+    return artifact
+
+
 def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> LineageReport:
     """Compare one artifact's stored basis with what the store holds now. Reads only.
 

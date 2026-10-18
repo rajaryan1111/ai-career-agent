@@ -326,6 +326,68 @@ class ArtifactStoreTests(unittest.TestCase):
         self.assertNotIn("Example Employer", written)
 
 
+class RequireCurrentArtifactTests(unittest.TestCase):
+    """The one gate any future caller must pass before an artifact is used, not just read.
+
+    Reading an artifact back is history; *using* one - attaching it, sending it, building on it - is
+    a claim that its sources still say what the document says. This gate is where that claim is
+    checked, and a stale artifact is refused with the reason, never silently reused.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.store = CareerStore(str(self.folder / "career_agent.sqlite3"))
+        self.addCleanup(self.store.close)
+        self.store.save_job(LISTING)
+        self.store.save_profile(PROFILE)
+        self.strategy = self.store.create_role_strategy(
+            name=STRATEGY.name, role_family=STRATEGY.role_family,
+            required_skills=STRATEGY.required_skills, preferred_skills=STRATEGY.preferred_skills)
+        self.artifact = self.store.new_tailored_artifact(
+            listing_id=LISTING.listing_id, strategy=self.strategy,
+            kind=ArtifactKind.TAILORED_RESUME,
+            content="Built from the facts as they were.\n", basis=capture_basis(self.store))
+
+    def test_a_current_artifact_is_returned_as_itself(self):
+        from career_agent.artifacts import require_current_artifact
+        self.assertEqual(require_current_artifact(self.store, self.artifact.artifact_id),
+                         self.artifact)
+
+    def test_an_artifact_whose_fact_changed_is_refused_with_the_fact_named(self):
+        from career_agent.artifacts import StaleArtifactError, require_current_artifact
+        self.store.save_profile(CandidateProfile(
+            candidate_country="India", graduation_year=2027, experience_years=3.0,
+            skills=frozenset({"Python", "SQL", "PyTorch"})))
+        with self.assertRaises(StaleArtifactError) as caught:
+            require_current_artifact(self.store, self.artifact.artifact_id)
+        self.assertIn("experience", str(caught.exception))
+        self.assertIn("experience", caught.exception.report.facts_changed)
+
+    def test_an_artifact_under_a_superseded_strategy_version_is_refused(self):
+        from career_agent.artifacts import StaleArtifactError, require_current_artifact
+        self.store.revise_role_strategy(self.strategy.strategy_id, name=self.strategy.name,
+                                        role_family=self.strategy.role_family, seniority="mid")
+        with self.assertRaises(StaleArtifactError) as caught:
+            require_current_artifact(self.store, self.artifact.artifact_id)
+        self.assertIn("newer version", str(caught.exception))
+
+    def test_an_artifact_missing_from_the_store_is_refused_as_missing(self):
+        from career_agent.artifacts import ArtifactError, require_current_artifact
+        with self.assertRaises(ArtifactError) as caught:
+            require_current_artifact(self.store, "no-such-artifact")
+        self.assertIn("no artifact", str(caught.exception))
+
+    def test_a_stale_artifact_still_reads_back_after_the_refusal(self):
+        """The gate refuses use, not history: the row is untouched by the check."""
+        from career_agent.artifacts import require_current_artifact
+        self.store.add_work_history("Another Example", "Engineer", date(2026, 6, 1))
+        with self.assertRaises(ArtifactError):
+            require_current_artifact(self.store, self.artifact.artifact_id)
+        self.assertEqual(self.store.get_tailored_artifact(self.artifact.artifact_id), self.artifact)
+
+
 class LineageTests(unittest.TestCase):
     """Lineage says what moved, and is current only when nothing did."""
 
