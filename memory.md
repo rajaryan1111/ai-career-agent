@@ -3839,3 +3839,14 @@ Evidence: 19 tests in `tests/test_strategy_matching.py`, full local suite **2170
 artifact whose fact basis or strategy version has moved on (`StaleArtifactError` carries the lineage
 report and names what changed); reading history back is untouched. 5 tests; suite **2175 tests OK
 (skipped=13)**.
+
+
+**Artifact source citation, 2026-10-18:** a tailored artifact now names the document its facts were
+read from. `ArtifactBasis.fact_documents` copies the per-fact document name out of provenance
+(schema 8) at capture time — never invented, never a path — `source_documents`/`describe()` report
+it, and `lineage_status` adds `documents_changed`, so an artifact whose facts no longer come from the
+résumé it cites is refused by `require_current_artifact` even when the values are unchanged. No
+schema change: the citation rides in the existing `fact_basis` JSON and a missing key reads as "cites
+nothing", so artifacts stored before today stay readable and current. 10 tests; suite **2185 tests OK
+(skipped=13)**. Note:
+[tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).

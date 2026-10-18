@@ -5,15 +5,17 @@ network connection, sends anything anywhere, or touches a real file outside a di
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 from career_agent.artifacts import (
     MAX_CONTENT_CHARS, ArtifactBasis, ArtifactError, ArtifactKind, BuiltArtifact, LineageReport,
-    TailoredArtifact, capture_basis, cover_letter_document, lineage_status, new_artifact_id,
-    tailored_resume_document,
+    StaleArtifactError, TailoredArtifact, capture_basis, cover_letter_document, lineage_status,
+    new_artifact_id, require_current_artifact, tailored_resume_document,
 )
 from career_agent.backup import create_backup, restore_backup
 from career_agent.core import (
@@ -386,6 +388,138 @@ class RequireCurrentArtifactTests(unittest.TestCase):
         with self.assertRaises(ArtifactError):
             require_current_artifact(self.store, self.artifact.artifact_id)
         self.assertEqual(self.store.get_tailored_artifact(self.artifact.artifact_id), self.artifact)
+
+
+class ArtifactCitationTests(unittest.TestCase):
+    """An artifact names the document its facts were read from, and says so when that stops being true.
+
+    The roadmap's rule is that a tailored document is traceable to the resume it came out of. The
+    document name already lives beside each fact as provenance (schema 8); what makes it a *citation*
+    is that the artifact's own basis keeps the name it was built under, so the claim can be checked
+    later against what the store says now.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.database = self.folder / "career_agent.sqlite3"
+        self.store = CareerStore(str(self.database))
+        self.addCleanup(self.store.close)
+        self.store.save_job(LISTING)
+        self.strategy = self.store.create_role_strategy(
+            name=STRATEGY.name, role_family=STRATEGY.role_family, seniority=STRATEGY.seniority,
+            required_skills=STRATEGY.required_skills, preferred_skills=STRATEGY.preferred_skills)
+
+    def read_from_document(self, profile=PROFILE, document="resume-v1.docx"):
+        """Save the profile the way the résumé reader does: values out of a named file."""
+        return self.store.save_profile(profile, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                       document_name=document)
+
+    def save_one(self, captured):
+        return self.store.new_tailored_artifact(
+            listing_id=LISTING.listing_id, strategy=self.strategy,
+            kind=ArtifactKind.TAILORED_RESUME,
+            content="A tailored resume built from the stored facts.\n", basis=captured)
+
+    def test_the_basis_cites_the_document_each_fact_was_read_from(self):
+        self.read_from_document()
+        captured = capture_basis(self.store)
+        self.assertEqual(captured.fact_documents["skills"], "resume-v1.docx")
+        self.assertEqual(captured.source_documents, ("resume-v1.docx",))
+
+    def test_a_fact_the_person_typed_cites_no_document(self):
+        self.store.save_profile(PROFILE)
+        captured = capture_basis(self.store)
+        self.assertEqual(captured.fact_documents, {},
+                         "a typed value came out of no file, so naming one would be a fiction")
+        self.assertEqual(captured.source_documents, ())
+
+    def test_a_citation_names_a_fact_the_basis_states(self):
+        with self.assertRaises(ArtifactError) as caught:
+            ArtifactBasis(facts={"skills": "Python"}, fact_documents={"email": "resume.docx"})
+        self.assertIn("email", str(caught.exception))
+
+    def test_a_citation_is_a_file_name_and_never_a_folder(self):
+        for name in ("/home/person/resume.docx", "C:\\Users\\person\\resume.docx", "  "):
+            with self.subTest(name=name), self.assertRaises(ArtifactError):
+                ArtifactBasis(facts={"skills": "Python"}, fact_documents={"skills": name})
+
+    def test_the_citation_round_trips_through_the_stored_row(self):
+        self.read_from_document()
+        saved = self.save_one(capture_basis(self.store))
+        loaded = self.store.get_tailored_artifact(saved.artifact_id)
+        self.assertEqual(loaded, saved)
+        self.assertEqual(loaded.basis.fact_documents["skills"], "resume-v1.docx")
+        self.assertEqual(loaded.source_documents, ("resume-v1.docx",))
+        self.assertIn("resume-v1.docx", loaded.describe())
+
+    def test_an_artifact_stored_before_citations_reads_back_and_stays_current(self):
+        self.read_from_document()
+        saved = self.save_one(capture_basis(self.store))
+        legacy = {name: value for name, value in saved.basis.to_json().items()
+                  if name != "documents"}
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE tailored_artifact SET fact_basis=? WHERE artifact_id=?",
+                (json.dumps(legacy, sort_keys=True), saved.artifact_id))
+        loaded = self.store.get_tailored_artifact(saved.artifact_id)
+        self.assertEqual(loaded.basis.fact_documents, {})
+        self.assertEqual(loaded.source_documents, ())
+        self.assertTrue(lineage_status(self.store, loaded).is_current,
+                        "a row that cites no document claims nothing about one, so nothing about it "
+                        "can have become untrue")
+
+    def test_a_fact_no_longer_read_from_the_cited_document_is_reported(self):
+        self.read_from_document()
+        saved = self.save_one(capture_basis(self.store))
+        # The person clears the skills fact and types the same value straight back into the form: the
+        # value the artifact states is what it was, but it no longer comes out of the cited résumé.
+        self.store.save_profile(replace(PROFILE, skills=frozenset()))
+        self.store.save_profile(PROFILE)
+        report = lineage_status(self.store, saved)
+        self.assertEqual(report.facts_changed, (), "the value is still what the artifact states")
+        self.assertEqual(report.documents_changed, ("skills",))
+        self.assertFalse(report.is_current)
+        self.assertIn("resume-v1.docx", "; ".join(report.summary()))
+        with self.assertRaises(StaleArtifactError) as caught:
+            require_current_artifact(self.store, saved.artifact_id)
+        self.assertIn("skills", str(caught.exception))
+
+    def test_a_changed_value_is_reported_once_as_a_changed_fact(self):
+        self.read_from_document()
+        saved = self.save_one(capture_basis(self.store))
+        self.read_from_document(replace(PROFILE, skills=frozenset({"Python"})), "resume-v2.docx")
+        report = lineage_status(self.store, saved)
+        self.assertEqual(report.facts_changed, ("skills",))
+        self.assertEqual(report.documents_changed, (),
+                         "the changed value is the headline; the citation is not a second complaint")
+
+    def test_a_rebuilt_artifact_cites_the_document_it_was_rebuilt_from(self):
+        self.read_from_document()
+        stale = self.save_one(capture_basis(self.store))
+        self.read_from_document(replace(PROFILE, skills=frozenset({"Python", "SQL"})),
+                                "resume-v2.docx")
+        rebuilt = self.save_one(capture_basis(self.store))
+        # Origins are per fact, and a save only re-attributes the facts it changes, so the rebuilt
+        # basis cites *both* résumés: the skills came out of the second one, everything else is
+        # still what the first one said. Claiming a single source here would be the fiction.
+        self.assertEqual(rebuilt.basis.fact_documents["skills"], "resume-v2.docx")
+        self.assertEqual(rebuilt.source_documents, ("resume-v1.docx", "resume-v2.docx"))
+        self.assertTrue(lineage_status(self.store, rebuilt).is_current)
+        self.assertFalse(lineage_status(self.store, stale).is_current,
+                         "the first artifact is still history, and still stale")
+        self.assertEqual(self.store.get_tailored_artifact(stale.artifact_id).source_documents,
+                         ("resume-v1.docx",), "an append-only row keeps the citation it was written with")
+
+    def test_the_log_never_carries_the_cited_document_name(self):
+        self.read_from_document(document="personal-cv-2026.docx")
+        saved = self.save_one(capture_basis(self.store))
+        from career_agent.event_log import log_path
+        written = log_path(self.database).read_text(encoding="utf-8")
+        self.assertIn(f"id={saved.artifact_id}", written)
+        self.assertNotIn("personal-cv-2026.docx", written,
+                         "the file somebody's résumé is called is their data, not an event detail")
 
 
 class LineageTests(unittest.TestCase):

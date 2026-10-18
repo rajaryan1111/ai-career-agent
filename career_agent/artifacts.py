@@ -26,7 +26,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from .core import (
-    PROFILE_FACTS, EducationEntry, EmploymentType, JobListing, WorkHistoryEntry, profile_fact_values,
+    PROFILE_FACTS, EducationEntry, EmploymentType, JobListing, WorkHistoryEntry, document_name_only,
+    profile_fact_values,
 )
 from .strategies import RoleStrategy
 
@@ -85,6 +86,7 @@ class ArtifactBasis:
     unconfirmed_facts: frozenset[str] = field(default_factory=frozenset)
     work: tuple[WorkHistoryEntry, ...] = ()
     education: tuple[EducationEntry, ...] = ()
+    fact_documents: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name, value in self.facts.items():
@@ -102,6 +104,34 @@ class ArtifactBasis:
             raise ArtifactError(
                 f"the basis marks {', '.join(unknown)} as unconfirmed, but the basis does not state "
                 "them: an unconfirmed fact is a stated fact nobody confirmed, not a fact on its own")
+        uncited = sorted(set(self.fact_documents) - set(self.facts))
+        if uncited:
+            raise ArtifactError(
+                f"the basis cites a document for {', '.join(uncited)}, but the basis does not state "
+                "them: a citation describes a fact the document was built from, not a fact on its own")
+        for name, document in self.fact_documents.items():
+            if not isinstance(document, str):
+                raise ArtifactError(f"the document cited for {name} must be a file's name")
+            try:
+                cleaned = document_name_only(document)
+            except ValueError as exc:  # over the length a file name is recorded at
+                raise ArtifactError(f"the document cited for {name} is refused: {exc}") from exc
+            if cleaned != document:
+                # Exactly what provenance recorded, or nothing: a path would put somebody's folders
+                # in a row that gets backed up and handed around, and silently trimming it would make
+                # the artifact cite a document the store never recorded.
+                raise ArtifactError(
+                    f"the document cited for {name} must be the file's name as it was recorded, not "
+                    "a path or a blank")
+
+    @property
+    def source_documents(self) -> tuple[str, ...]:
+        """The distinct documents this basis says its facts were read from, in name order.
+
+        Empty means the basis cites no document - either every value was typed, or the row was
+        written before artifacts carried citations. It never means "unknown file".
+        """
+        return tuple(sorted(set(self.fact_documents.values())))
 
     def to_json(self) -> dict:
         """The stored form: plain JSON, dates as ISO text, no row identifiers."""
@@ -110,6 +140,7 @@ class ArtifactBasis:
             "unconfirmed": sorted(self.unconfirmed_facts),
             "work": [_plain_work(entry) for entry in self.work],
             "education": [_plain_education(entry) for entry in self.education],
+            "documents": dict(self.fact_documents),
         }
 
     @classmethod
@@ -123,11 +154,17 @@ class ArtifactBasis:
         unconfirmed = payload.get("unconfirmed", [])
         if not isinstance(unconfirmed, list) or any(not isinstance(item, str) for item in unconfirmed):
             raise ArtifactError("a stored basis carries its unconfirmed facts as a list of names")
+        # Citations arrived after the first artifacts were stored, so their absence is read as "this
+        # row cites nothing" rather than as damage: an older row makes no claim about a document.
+        documents = payload.get("documents", {})
+        if not isinstance(documents, dict):
+            raise ArtifactError("a stored basis carries its cited documents as an object")
         return cls(
             facts={str(name): value for name, value in facts.items()},
             unconfirmed_facts=frozenset(unconfirmed),
             work=tuple(_work_from_plain(item) for item in payload.get("work", [])),
             education=tuple(_education_from_plain(item) for item in payload.get("education", [])),
+            fact_documents={str(name): document for name, document in documents.items()},
         )
 
 
@@ -212,10 +249,17 @@ def capture_basis(store: "CareerStore") -> ArtifactBasis:
             "Save a profile first.")
     values = profile_fact_values(profile)
     facts = {name: value for name, value in values.items() if value}
-    confirmed = {entry.fact for entry in store.get_profile_fact_provenance() if entry.is_confirmed}
+    provenance = store.get_profile_fact_provenance()
+    confirmed = {entry.fact for entry in provenance if entry.is_confirmed}
+    # The citation is copied from what the store recorded beside the fact, for the facts this basis
+    # actually states. A fact the person typed names no document and so appears here at all - the
+    # basis says "read out of this file" only where the store says exactly that.
+    documents = {entry.fact: entry.document_name for entry in provenance
+                 if entry.document_name and entry.fact in facts}
     return ArtifactBasis(
         facts=facts,
         unconfirmed_facts=frozenset(name for name in facts if name not in confirmed),
+        fact_documents=documents,
         work=tuple(_replace(entry, entry_id=None, created_at=None, updated_at=None)
                    for entry in store.list_work_history()),
         education=tuple(_replace(entry, entry_id=None, created_at=None, updated_at=None)
@@ -359,11 +403,14 @@ class LineageReport:
     work_changed: bool
     education_changed: bool
     strategy_version_current: bool
+    documents_changed: tuple[str, ...] = ()
+    cited_documents: tuple[str, ...] = ()
 
     @property
     def is_current(self) -> bool:
         return not (self.facts_changed or self.facts_confirmed_since
                     or self.work_changed or self.education_changed
+                    or self.documents_changed
                     or not self.strategy_version_current)
 
     def summary(self) -> tuple[str, ...]:
@@ -373,6 +420,11 @@ class LineageReport:
         if self.facts_confirmed_since:
             lines.append(f"facts confirmed since this was built: "
                          f"{', '.join(self.facts_confirmed_since)}")
+        if self.documents_changed:
+            cited = ", ".join(self.cited_documents) or "a document that is no longer recorded"
+            lines.append(
+                f"these facts no longer come from the document this was built from ({cited}): "
+                + ", ".join(self.documents_changed))
         if self.work_changed:
             lines.append("work history changed since this was built")
         if self.education_changed:
@@ -435,6 +487,15 @@ def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> Lineag
     confirmed_now = {entry.fact for entry in store.get_profile_fact_provenance() if entry.is_confirmed}
     facts_confirmed_since = tuple(sorted(
         name for name in basis.unconfirmed_facts if name in confirmed_now and name not in facts_changed))
+    # Only the facts this basis *cites* can have a citation that stopped being true. A basis that
+    # cites nothing - every value typed, or a row written before citations existed - claims nothing
+    # about a document, so nothing about it can have moved. A fact whose value changed is reported
+    # as a changed fact and not a second time here.
+    documents_now = {entry.fact: entry.document_name for entry in store.get_profile_fact_provenance()}
+    documents_changed = tuple(sorted(
+        name for name, document in basis.fact_documents.items()
+        if name not in facts_changed and documents_now.get(name) != document))
+    cited_documents = tuple(sorted({basis.fact_documents[name] for name in documents_changed}))
     strategy = store.get_role_strategy(artifact.strategy_id)
     strategy_version_current = strategy is not None and strategy.version == artifact.strategy_version
     work_changed = [_plain_work(entry) for entry in store.list_work_history()] \
@@ -448,6 +509,8 @@ def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> Lineag
         work_changed=work_changed,
         education_changed=education_changed,
         strategy_version_current=strategy_version_current,
+        documents_changed=documents_changed,
+        cited_documents=cited_documents,
     )
 
 
@@ -492,6 +555,13 @@ class TailoredArtifact:
         if not isinstance(self.basis, ArtifactBasis):
             raise ArtifactError("an artifact carries the basis it was built from")
 
+    @property
+    def source_documents(self) -> tuple[str, ...]:
+        """The documents this artifact's facts were read from, as its basis recorded them."""
+        return self.basis.source_documents
+
     def describe(self) -> str:
+        cited = ", ".join(self.source_documents) or "no source document recorded"
         return (f"{KIND_LABELS[self.kind]} for {self.listing_id} "
-                f"(strategy {self.strategy_id} version {self.strategy_version})")
+                f"(strategy {self.strategy_id} version {self.strategy_version}, "
+                f"built from {cited})")

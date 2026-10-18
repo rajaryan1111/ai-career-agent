@@ -75,3 +75,39 @@ identifier is refused as missing. The gate refuses *use*, not history — the ro
 so any future caller (a window, a submission route) has one canonical place to ask before an
 artifact is attached, sent or built on. 5 tests in `RequireCurrentArtifactTests`; suite **2175 OK
 (skipped=13)**.
+
+## Follow-up the same day: the artifact cites the document its facts were read from
+
+P7's traceability line asks a tailored document to be traceable to the **source resume**, not only to
+the strategy version and the job. Provenance (schema 8) already records, per fact, the *name* of the
+file the value was read out of; what was missing is that the artifact kept that name, so the claim
+could be checked afterwards. `ArtifactBasis.fact_documents` now carries it:
+
+* **Copied, never guessed.** `capture_basis` takes the document name from the stored provenance of
+  the facts the basis actually states. A fact the person typed names no file, so it simply has no
+  citation — "unknown document" is never written. `source_documents` is the distinct set, in name
+  order, and `TailoredArtifact.describe()` ends with `built from <names>` or
+  `built from no source document recorded`.
+* **A name, never a path.** A citation must be exactly what `core.document_name_only` would keep; a
+  path, a blank or an over-long name is refused rather than trimmed, so a row that gets backed up and
+  handed around cannot carry somebody's folders, and the artifact cannot cite a document the store
+  never recorded.
+* **Per fact, so a rebuild may legitimately cite two résumés.** A profile save only re-attributes the
+  facts it changes, so a basis captured after a second import cites the new file for the facts that
+  moved and the old one for the rest. That is the truth about where the document came from, and the
+  test pins it rather than flattening it to one name.
+* **Lineage: only a cited fact can lose its citation.** `LineageReport.documents_changed` names the
+  facts whose recorded document is no longer the one the basis cites (with `cited_documents` naming
+  what it had cited), and that makes the artifact not current — the one case reachable today is a
+  value cleared and retyped, which leaves the value identical but the résumé no longer its source. A
+  fact whose *value* changed is reported once, as a changed fact. A basis that cites nothing claims
+  nothing, so artifacts stored before this change stay current: `from_json` reads a missing
+  `documents` key as "no citation", which is what keeps schema-10 rows written last week readable.
+* **No schema change.** The citation travels inside the existing `fact_basis` JSON of the same
+  append-only row; nothing migrates, and an older build reading a newer row ignores a key it does not
+  know. The log still carries only ids, kinds and counts — a résumé's file name is the candidate's
+  data and never reaches an event.
+
+Evidence: 10 tests in `tests/test_artifacts.py::ArtifactCitationTests` (capture, typed-value silence,
+path refusal, stored round-trip, legacy row, citation drift, changed-value precedence, rebuild,
+privacy of the log), `tests/test_artifacts.py` 45 OK, full local suite **2185 tests OK (skipped=13)**.
