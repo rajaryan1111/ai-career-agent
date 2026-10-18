@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import math
 import re
 
 
@@ -123,6 +124,26 @@ def _country_norm(value: str) -> str:
     return " ".join(value.strip().casefold().replace(".", "").split())
 
 
+def _label_norm(value: str) -> str:
+    """Collapse case and whitespace for label-like values (discipline, study status).
+
+    This normalizes formatting only. It never maps one distinct label onto another,
+    so a related discipline or an approximate cohort still fails the check.
+    """
+    return " ".join(str(value).strip().casefold().split())
+
+
+def _membership_key(value: str, *, fold_separators: bool = False) -> str:
+    """Normalized comparison key for an explicitly listed requirement value.
+
+    ``fold_separators`` additionally treats underscores as spaces, which is the same
+    tolerance the project uses for comma/newline-separated lists; it does not make
+    different values equivalent.
+    """
+    folded = _label_norm(value)
+    return folded.replace("_", " ") if fold_separators else folded
+
+
 def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> EligibilityReport:
     """Evaluate only explicit hard requirements; missing evidence remains unknown.
 
@@ -158,9 +179,10 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     if job.allowed_work_authorizations is not None:
         _check_membership(
             results, "work_authorization", profile.work_authorization, job.allowed_work_authorizations,
-            "Candidate work-authorization value exactly matches an explicitly allowed value.",
+            "Candidate work-authorization value matches an explicitly allowed value.",
             "Candidate work-authorization value does not match the explicitly allowed values.",
             "Work-authorization requirement or candidate work-authorization value is missing.",
+            fold_separators=True,
         )
 
     _check_membership(results, "degree_discipline", profile.degree_discipline, job.allowed_degree_disciplines,
@@ -177,7 +199,14 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
                       "Graduation cohort or candidate graduation year is missing.")
 
     if job.minimum_experience_years is not None or job.maximum_experience_years is not None:
-        if profile.experience_years is None:
+        if not (_is_real_number(profile.experience_years) and _is_real_number(job.minimum_experience_years)
+                and _is_real_number(job.maximum_experience_years)):
+            # A stored value that is not a real number (an old or hand-edited row holding nan or
+            # infinity) cannot be compared with anything: nan is false against every bound, so
+            # comparing it would fall through to "within the stated range" and pass a requirement
+            # that was never actually satisfied. Unknown is the honest answer.
+            results.append(RequirementResult("experience_years", Decision.UNKNOWN, "The stated experience range or the candidate experience value is not a real number, so it cannot be evaluated."))
+        elif profile.experience_years is None:
             results.append(RequirementResult("experience_years", Decision.UNKNOWN, "Required experience range cannot be checked because candidate experience is missing."))
         elif job.minimum_experience_years is not None and profile.experience_years < job.minimum_experience_years:
             results.append(RequirementResult("experience_years", Decision.FAIL, "Candidate experience is below the stated minimum."))
@@ -191,16 +220,41 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
     return EligibilityReport(overall, tuple(results))
 
 
+def _is_real_number(value: object) -> bool:
+    """True when ``value`` is ``None`` (not stated) or a finite number.
+
+    Guards the experience comparison against a stored ``nan`` or ``inf``: ``nan`` is false against
+    every bound, so an unguarded comparison reaches the "within range" branch and reports a pass for
+    a requirement nobody satisfied.
+    """
+    if value is None:
+        return True
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _check_membership(
-    results: list[RequirementResult], name: str, actual: Any, allowed: Sequence[Any] | None,
-    pass_message: str, fail_message: str, unknown_message: str,
+    results: list[RequirementResult], name: str, actual: str | None, allowed: Sequence[str] | None,
+    pass_message: str, fail_message: str, unknown_message: str, *, fold_separators: bool = False,
 ) -> None:
-    if allowed is None or actual is None or actual == "":
+    """Record a PASS/FAIL/UNKNOWN membership check for one explicitly listed requirement.
+
+    Formatting is normalized on both sides (case and surrounding whitespace; work
+    authorization additionally treats underscores like spaces) so that the same
+    declared value written differently still matches. Genuinely different values
+    still fail, missing values stay unknown, and no fuzzy or semantic matching is
+    applied: a related discipline or an approximate cohort must be reviewed by hand.
+    """
+    if allowed is None or actual is None or not str(actual).strip():
         results.append(RequirementResult(name, Decision.UNKNOWN, unknown_message))
-    elif actual in allowed:
+        return
+    normalized = _membership_key(str(actual), fold_separators=fold_separators)
+    allowed_keys = {_membership_key(str(item), fold_separators=fold_separators) for item in allowed}
+    if normalized in allowed_keys:
         results.append(RequirementResult(name, Decision.PASS, pass_message, str(actual)))
     else:
-        # No fuzzy inference: a related discipline or approximate cohort needs review.
         results.append(RequirementResult(name, Decision.FAIL, fail_message, str(actual)))
 
 
@@ -221,6 +275,115 @@ _TRACKER_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
 }
 
 
+#: The only status a tracker record may be created with. A record with no history
+#: cannot legitimately appear shortlisted, submitted, confirmed, or completed, so the
+#: first write must be the honest starting point and every later status must be a
+#: permitted transition from it.
+INITIAL_APPLICATION_STATUS = ApplicationStatus.DISCOVERED
+
+
+#: Instruction text this application or its repository displays about tracker evidence. A
+#: confirmation claims that a real application was really confirmed, so guidance text must never
+#: be storable as the evidence for it: a tester following the smoke-test checklist (or a user
+#: copying a label) can paste instruction text into the evidence field, where it would then read
+#: as proof. Entries are the app's own sentences, normalized the same way evidence is, so they
+#: match pasted instructions without refusing ordinary notes that merely share a word.
+#: Each entry names the place it is displayed.
+_INSTRUCTIONAL_EVIDENCE_FRAGMENTS = (
+    "a confirmed application requires evidence",        # tracker tab label and store refusal message
+    "confirmation requires evidence",                   # refusal message when evidence is empty
+    "click or attempted submission is not proof",        # refusal message
+    "attempt or timeout is not proof",                   # tracker tab label
+    "evidence / note (required to confirm)",             # status dialog field label
+    "required to confirm",                               # status dialog field label
+    "meaningful evidence note",                          # local-alpha smoke-test checklist, tracker step
+    "move the status forward with a meaningful note",     # no-change dialog
+    "move the status forward",                           # no-change dialog
+    "keep the existing record as it is",                 # no-change dialog
+    "do not confirm a simulated",                        # confirmation guidance
+)
+
+#: Whole-value placeholders that are never a record of what an employer showed. Matched after
+#: normalization as the *complete* value rather than as a substring, so a real note that merely
+#: contains one of these words (for example "Portal shows no test results yet") is not refused.
+_PLACEHOLDER_EVIDENCE_VALUES = frozenset(
+    {
+        "", "-", "--", "...", "?", "n/a", "na", "none", "nil", "null", "todo", "tbd", "tbc",
+        "fixme", "placeholder", "evidence", "note", "notes", "text", "unknown", "asdf", "test",
+        "testing", "confirmed", "yes", "no",
+        # A phrase about trying the feature is not a record of what an employer showed either. These
+        # are whole values, like the list above, so an honest note that merely contains a word such as
+        # "test" or "sample" is still accepted; only the bare phrase is refused.
+        "this is a test", "this is only a test", "just a test", "just testing", "test only",
+        "testing only", "for testing", "test text", "sample", "sample text", "example",
+        "example text", "dummy", "lorem ipsum",
+    }
+)
+
+
+def _normalize_evidence_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).casefold()
+
+
+def is_substantive_confirmation_evidence(text: str | None) -> bool:
+    """True when ``text`` could honestly be a record of what the employer showed.
+
+    This is a deliberately narrow *floor*, not authentication: it refuses empty or
+    whitespace-only text, this project's own instructional text, and bare placeholders
+    such as ``todo``, ``n/a``, or ``yes``. It cannot and does not decide whether a
+    confirmation genuinely happened. That decision always remains the candidate's explicit
+    assertion, which is why the desktop dialog asks for the assertion instead of inferring it
+    from the chosen status.
+    """
+    normalized = _normalize_evidence_text(text or "")
+    if not normalized or normalized in _PLACEHOLDER_EVIDENCE_VALUES:
+        return False
+    if normalized.startswith("<") and normalized.endswith(">"):
+        return False
+    return not any(fragment in normalized for fragment in _INSTRUCTIONAL_EVIDENCE_FRAGMENTS)
+
+
+def require_confirmation_evidence(text: str | None) -> str:
+    """Return the trimmed evidence text for a confirmation, or raise ``ValueError``.
+
+    The message is user-facing and describes what to enter instead, without claiming the
+    software can verify the claim itself.
+    """
+    if not (text or "").strip():
+        raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
+    if not is_substantive_confirmation_evidence(text):
+        raise ValueError(
+            "That text looks like an instruction or a placeholder rather than a record of what the "
+            "employer showed you. Describe what you actually observed, for example "
+            "\"Employer portal showed Application Received on 2026-10-14\". Nothing was saved."
+        )
+    return text.strip()
+
+
+def is_allowed_tracker_transition(current: ApplicationStatus, new_status: ApplicationStatus) -> bool:
+    """True when the domain state machine permits this status change.
+
+    Re-applying the current status is treated as an idempotent no-op rather than an
+    invalid jump, so a repeated save of unchanged state is not an error. Every other
+    change must be listed in ``_TRACKER_TRANSITIONS``.
+    """
+    return new_status == current or new_status in _TRACKER_TRANSITIONS[current]
+
+
+def selectable_tracker_statuses(current: ApplicationStatus) -> tuple[ApplicationStatus, ...]:
+    """The statuses a chooser may offer for a record that is currently at ``current``.
+
+    Exactly the statuses an action can succeed with: the current one (so a record can be re-saved, and
+    a new record can be created at the permitted initial status) plus every permitted transition.
+    Offering anything else would imply the application supports a move it will refuse, and a chooser
+    that lists all thirteen statuses invites a user to pick one that cannot be recorded. The order
+    follows the declaration order of :class:`ApplicationStatus` — the order the statuses are documented
+    in — so the list reads the same way every time and no option is promoted by being listed first.
+    """
+    permitted = _TRACKER_TRANSITIONS[current]
+    return tuple(status for status in ApplicationStatus if status is current or status in permitted)
+
+
 @dataclass(frozen=True)
 class ApplicationTracker:
     listing_id: str
@@ -232,12 +395,19 @@ class ApplicationTracker:
         self, new_status: ApplicationStatus, *, evidence: str | None = None,
         candidate_confirmed: bool | None = None,
     ) -> "ApplicationTracker":
+        """Return the tracker moved to ``new_status``, or ``self`` for a no-op.
+
+        Requesting the status the tracker already holds is not an update: the tracker
+        is returned unchanged, so newly supplied evidence is neither recorded nor
+        silently discarded. Evidence is revised by moving the status forward with
+        ``evidence=...``; a confirmed status always requires evidence text.
+        """
         if new_status == self.status:
             return self
         if new_status not in _TRACKER_TRANSITIONS[self.status]:
             raise ValueError(f"Invalid application transition: {self.status.value} -> {new_status.value}")
-        if new_status is ApplicationStatus.CONFIRMED and not (evidence and evidence.strip()):
-            raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
+        if new_status is ApplicationStatus.CONFIRMED:
+            require_confirmation_evidence(evidence)
         return ApplicationTracker(
             listing_id=self.listing_id,
             status=new_status,
