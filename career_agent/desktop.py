@@ -13,8 +13,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
-from .core import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing, evaluate_eligibility, score_relevance
-from .store import CareerStore
+from .core import (
+    ApplicationStatus, Availability, CandidateProfile, Decision, JobListing,
+    allowed_transitions, evaluate_eligibility, score_relevance,
+)
+from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
 
@@ -42,6 +45,7 @@ class CareerAgentApp:
         self.db_path = Path(database_path) if database_path else default_database_path()
         self.store = CareerStore(self.db_path)
         self.selected_job_id = None
+        self._tracker_rows = {}
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         header = ttk.Frame(root, padding=12)
         header.pack(fill=X)
@@ -135,10 +139,12 @@ class CareerAgentApp:
         actions.pack(fill=X, pady=(0, 8))
         ttk.Button(actions, text="Refresh", command=self._refresh_tracker).pack(side="left", padx=(0, 8))
         ttk.Button(actions, text="Update selected status", command=self._update_status).pack(side="left", padx=8)
+        ttk.Button(actions, text="Re-apply after withdrawal", command=self._reapply).pack(side="left", padx=8)
+        ttk.Button(actions, text="View history", command=self._view_history).pack(side="left", padx=8)
         ttk.Button(actions, text="Export local data to JSON", command=self._export).pack(side="left", padx=8)
-        ttk.Label(self.tracker_tab, text="A confirmed application requires evidence. An attempt or timeout is not proof.").pack(anchor=W, pady=(0, 8))
-        self.tracker_tree = ttk.Treeview(self.tracker_tab, columns=("employer", "role", "status", "evidence"), show="headings")
-        for col, label, width in [("employer", "Employer", 170), ("role", "Role", 200), ("status", "Status", 180), ("evidence", "Evidence / note", 420)]:
+        ttk.Label(self.tracker_tab, text="A confirmed application requires evidence. Earlier evidence is kept in the attempt history. Re-applying creates a new attempt; the withdrawn record is never revived.").pack(anchor=W, pady=(0, 8))
+        self.tracker_tree = ttk.Treeview(self.tracker_tab, columns=("employer", "role", "attempt", "status", "evidence"), show="headings")
+        for col, label, width in [("employer", "Employer", 160), ("role", "Role", 190), ("attempt", "Attempt", 60), ("status", "Status", 160), ("evidence", "Evidence / note", 360)]:
             self.tracker_tree.heading(col, text=label)
             self.tracker_tree.column(col, width=width, anchor=W)
         self.tracker_tree.pack(fill=BOTH, expand=True)
@@ -228,8 +234,10 @@ class CareerAgentApp:
                     if not messagebox.askyesno("Possible duplicate", "This job matches an existing canonical URL/requisition. Existing source observations are kept separately. Save another observation anyway?\n\n" + summary, parent=self.root):
                         return
             self.store.save_job(job)
-            if not existed or self.store.get_tracker(job.listing_id) is None:
-                self.store.save_tracker(ApplicationTracker(job.listing_id))
+            # Only an open listing gets an application attempt; a closed or unverified
+            # listing stays untracked rather than showing a status that was never saved.
+            if self.store.get_tracker(job.listing_id) is None and job.availability_status is Availability.OPEN:
+                self.store.start_application(job.listing_id)
             self.selected_job_id = job.listing_id
             self._refresh_jobs()
             self.status.set(f"Saved {job.role_title} locally. Nothing was submitted.")
@@ -251,7 +259,7 @@ class CareerAgentApp:
             tracker = self.store.get_tracker(job.listing_id)
             self.jobs_tree.insert("", END, iid=job.listing_id, values=(
                 job.employer_name, job.role_title, job.availability_status.value,
-                tracker.status.value if tracker else "discovered", job.source_name,
+                tracker.status.value if tracker else "not tracked", job.source_name,
             ))
         self._refresh_tracker()
 
@@ -287,6 +295,10 @@ class CareerAgentApp:
             messagebox.showinfo("Select a job", "Save or select a job first.", parent=self.root)
             return
         job, profile = self.store.get_job(listing_id), self.store.get_profile()
+        if job is None:
+            messagebox.showinfo("Job missing", "This saved job no longer exists. Refreshing the list.", parent=self.root)
+            self._refresh_jobs()
+            return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
             self.tabs.select(self.profile_tab)
@@ -307,6 +319,10 @@ class CareerAgentApp:
             messagebox.showinfo("Select a job", "Select a saved job first.", parent=self.root)
             return
         job, profile = self.store.get_job(listing_id), self.store.get_profile()
+        if job is None:
+            messagebox.showinfo("Job missing", "This saved job no longer exists. Refreshing the list.", parent=self.root)
+            self._refresh_jobs()
+            return
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
             return
@@ -315,8 +331,11 @@ class CareerAgentApp:
             messagebox.showwarning("Not eligible to shortlist", f"Eligibility is {report.decision.value.upper()}. Resolve unknown/failed requirements first.", parent=self.root)
             self._evaluate()
             return
+        tracker = self.store.get_tracker(listing_id)
+        if tracker is None:
+            messagebox.showinfo("No application", "Start an application for this open listing before shortlisting.", parent=self.root)
+            return
         try:
-            tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
             self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
             self._refresh_jobs()
             self.status.set("Job shortlisted locally. No external action was taken.")
@@ -340,54 +359,142 @@ class CareerAgentApp:
             return
         for item in self.tracker_tree.get_children():
             self.tracker_tree.delete(item)
+        self._tracker_rows = {}
+        index = 0
         for job in self.store.list_jobs():
-            tracker = self.store.get_tracker(job.listing_id) or ApplicationTracker(job.listing_id)
-            self.tracker_tree.insert("", END, iid=job.listing_id, values=(
-                job.employer_name, job.role_title, tracker.status.value, tracker.status_evidence or "",
-            ))
+            for attempt in self.store.list_attempts(job.listing_id):
+                row_id = f"row-{index}"
+                index += 1
+                self._tracker_rows[row_id] = (job.listing_id, attempt.attempt_number)
+                self.tracker_tree.insert("", END, iid=row_id, values=(
+                    job.employer_name, job.role_title, attempt.attempt_number,
+                    attempt.status.value, attempt.status_evidence or "",
+                ))
 
-    def _select_tracker(self, _event=None):
-        selection = self.tracker_tree.selection()
-        if selection:
-            self.selected_job_id = selection[0]
-            if selection[0] in self.jobs_tree.get_children():
-                self.jobs_tree.selection_set(selection[0])
-
-    def _update_status(self):
+    def _selected_attempt(self):
         selection = self.tracker_tree.selection()
         if not selection:
+            return None
+        return self._tracker_rows.get(selection[0])
+
+    def _select_tracker(self, _event=None):
+        selected = self._selected_attempt()
+        if selected:
+            listing_id, _attempt_number = selected
+            self.selected_job_id = listing_id
+            if listing_id in self.jobs_tree.get_children():
+                self.jobs_tree.selection_set(listing_id)
+
+    def _update_status(self):
+        selected = self._selected_attempt()
+        if not selected:
             messagebox.showinfo("Select application", "Select an application row first.", parent=self.root)
             return
-        listing_id = selection[0]
-        tracker = self.store.get_tracker(listing_id) or ApplicationTracker(listing_id)
+        listing_id, attempt_number = selected
+        tracker = self.store.get_tracker(listing_id, attempt_number)
+        if tracker is None:
+            messagebox.showinfo("No application", "This attempt is no longer stored. Refreshing the tracker.", parent=self.root)
+            self._refresh_jobs()
+            return
         dialog = tk.Toplevel(self.root)
         dialog.title("Update application status")
         dialog.transient(self.root)
         dialog.grab_set()
         ttk.Label(dialog, text=f"Current status: {tracker.status.value}").pack(anchor=W, padx=12, pady=(12, 5))
-        status_var, evidence_var = tk.StringVar(), tk.StringVar()
+        status_var, evidence_var = tk.StringVar(value=tracker.status.value), tk.StringVar()
         ttk.Label(dialog, text="New status").pack(anchor=W, padx=12)
-        ttk.Combobox(dialog, textvariable=status_var, values=[x.value for x in ApplicationStatus], state="readonly", width=30).pack(fill=X, padx=12, pady=4)
+        next_values = [tracker.status.value] + sorted(x.value for x in allowed_transitions(tracker.status))
+        ttk.Combobox(dialog, textvariable=status_var, values=next_values, state="readonly", width=30).pack(fill=X, padx=12, pady=4)
         ttk.Label(dialog, text="Evidence / note (required to confirm)").pack(anchor=W, padx=12, pady=(8, 0))
         ttk.Entry(dialog, textvariable=evidence_var, width=48).pack(fill=X, padx=12, pady=4)
         def apply():
             try:
                 new_status = ApplicationStatus(status_var.get())
-                updated = tracker.transition(new_status, evidence=evidence_var.get().strip() or None, candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None)
-                self.store.save_tracker(updated)
+                updated = tracker.transition(
+                    new_status,
+                    evidence=evidence_var.get().strip() or None,
+                    candidate_confirmed=True if new_status is ApplicationStatus.CONFIRMED else None,
+                )
+                saved = self.store.save_tracker(updated)
                 dialog.destroy()
                 self._refresh_jobs()
-                self.status.set(f"Application status updated to {new_status.value}.")
+                self.status.set(
+                    f"Attempt {saved.attempt_number} updated to {saved.status.value}. Evidence is kept in the attempt history."
+                )
+            except StaleApplicationError as exc:
+                messagebox.showerror("Application changed elsewhere", str(exc), parent=dialog)
+                dialog.destroy()
+                self._refresh_jobs()
             except (ValueError, KeyError) as exc:
                 messagebox.showerror("Invalid status change", str(exc), parent=dialog)
         ttk.Button(dialog, text="Save status", command=apply).pack(anchor="e", padx=12, pady=12)
+
+    def _reapply(self):
+        selected = self._selected_attempt()
+        if not selected:
+            messagebox.showinfo("Select application", "Select an application row first.", parent=self.root)
+            return
+        listing_id, _attempt_number = selected
+        job = self.store.get_job(listing_id)
+        if job is None:
+            messagebox.showinfo("Listing missing", "The saved listing no longer exists.", parent=self.root)
+            return
+        profile = self.store.get_profile()
+        if not profile:
+            messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
+            return
+        if job.availability_status is not Availability.OPEN:
+            messagebox.showwarning(
+                "Listing not open", f"The listing is {job.availability_status.value}; a new attempt is not offered.", parent=self.root,
+            )
+            return
+        report = evaluate_eligibility(profile, job)
+        if report.decision is not Decision.PASS:
+            messagebox.showwarning(
+                "Not eligible", f"Eligibility is {report.decision.value.upper()}. Resolve failed or unknown requirements first.", parent=self.root,
+            )
+            return
+        try:
+            started = self.store.start_application(listing_id)
+        except ValueError as exc:
+            messagebox.showerror("Cannot re-apply", str(exc), parent=self.root)
+            return
+        self._refresh_jobs()
+        self.status.set(
+            f"Started attempt {started.attempt_number} for {job.role_title}. Prior attempts are unchanged and no data was submitted."
+        )
+
+    def _view_history(self):
+        selected = self._selected_attempt()
+        if not selected:
+            messagebox.showinfo("Select application", "Select an application row first.", parent=self.root)
+            return
+        listing_id, attempt_number = selected
+        events = self.store.list_events(listing_id, attempt_number)
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Application history — attempt {attempt_number}")
+        dialog.transient(self.root)
+        ttk.Label(dialog, text=f"Immutable record of attempt {attempt_number}. Evidence is shown as recorded.").pack(anchor=W, padx=12, pady=(12, 6))
+        text = tk.Text(dialog, width=92, height=16, wrap="word")
+        text.pack(fill=BOTH, expand=True, padx=12, pady=(0, 6))
+        lines = []
+        for event in events:
+            source = event.from_status.value if event.from_status else "start"
+            lines.append(f"{event.recorded_at}  {source} -> {event.to_status.value}")
+            if event.evidence:
+                lines.append(f"    evidence: {event.evidence}")
+            if event.candidate_confirmed:
+                lines.append("    candidate confirmed: yes")
+        text.insert("1.0", "\n".join(lines) if lines else "No history recorded for this attempt.")
+        text.configure(state="disabled")
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(anchor="e", padx=12, pady=12)
 
     def _export(self):
         destination = filedialog.asksaveasfilename(parent=self.root, title="Export local data", defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not destination:
             return
         profile = self.store.get_profile()
-        payload = {"format_version": 1, "profile": asdict(profile) if profile else None, "jobs": [],
+        payload = {"format_version": 2, "profile": asdict(profile) if profile else None, "jobs": [],
                    "privacy_note": "Export may contain personal information; store securely."}
         if payload["profile"]:
             for key, value in payload["profile"].items():
@@ -399,11 +506,25 @@ class CareerAgentApp:
             for key, value in record.items():
                 if isinstance(value, (set, frozenset, tuple)):
                     record[key] = sorted(value)
-            tracker = self.store.get_tracker(job.listing_id)
-            record["application_tracker"] = {
-                "status": tracker.status.value, "status_evidence": tracker.status_evidence,
-                "candidate_confirmed": tracker.candidate_confirmed,
-            } if tracker else None
+            record["application_attempts"] = [
+                {
+                    "attempt_number": attempt.attempt_number,
+                    "status": attempt.status.value,
+                    "status_evidence": attempt.status_evidence,
+                    "candidate_confirmed": attempt.candidate_confirmed,
+                    "application_events": [
+                        {
+                            "from_status": event.from_status.value if event.from_status else None,
+                            "to_status": event.to_status.value,
+                            "evidence": event.evidence,
+                            "candidate_confirmed": event.candidate_confirmed,
+                            "recorded_at": event.recorded_at,
+                        }
+                        for event in self.store.list_events(job.listing_id, attempt.attempt_number)
+                    ],
+                }
+                for attempt in self.store.list_attempts(job.listing_id)
+            ]
             payload["jobs"].append(record)
         try:
             Path(destination).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

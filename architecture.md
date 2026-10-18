@@ -47,6 +47,15 @@ Proposed states: discovered, shortlisted, rejected_by_rules, prepared, awaiting_
 
 Transitions must be auditable. A timeout after clicking submit must not be treated as a confirmed success. Retrying must first check whether a previous submission may already have succeeded.
 
+Implementation invariants (schema version 2, local SQLite):
+
+- An application attempt is keyed by `(listing_id, attempt_number)`. Re-application after withdrawal creates a new attempt; the earlier attempt and its history are immutable.
+- Every persisted change appends a row to `application_events` (from status, to status, evidence, confirmation flag, timestamp). Evidence is carried forward when a later transition supplies none, so a confirmation's supporting record is never erased.
+- The store enforces the transition map, the confirmation-evidence rule, and a database `CHECK` on status values. Persistence is not a bypass around domain rules.
+- Writes use an optimistic `revision` token; a stale read raises instead of silently overwriting a newer status.
+- Only one active attempt may exist for a canonical job identity across duplicate source observations.
+- Version 1 databases migrate in place: each existing tracker becomes attempt 1 with revision 0, and no history is fabricated for pre-migration changes.
+
 ## 7. Reliability concepts to validate
 
 - Persistent scheduled-run records.

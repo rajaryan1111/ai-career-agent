@@ -16,10 +16,16 @@ The dependency-free Python domain core in `career_agent/` provides:
 - Conservative URL/requisition deduplication.
 - Separate source-listing and employer-application URLs.
 - Guarded application status transitions; confirmation requires evidence.
-- Local SQLite persistence for profile, job, and tracker records, including explicit delete operations.
+- Append-only application history: each persisted status change is recorded, and the evidence behind a confirmation is never erased by a later transition.
+- Applications are attempts: a withdrawal is preserved as an immutable record, and re-applying creates a new attempt for the same listing instead of reviving the old one.
+- Optimistic concurrency: a stale window cannot silently overwrite a newer application status.
+- One active application per identified job; a duplicate source observation cannot be shortlisted twice.
+- Local SQLite persistence for profile, job, attempt, and history records, including explicit delete operations.
 - No network access, resume parsing, candidate-data transfer, form filling, or application submission.
 
-The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine, local JSON export, and explicit delete controls. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+The local alpha supports manual candidate-profile entry, manual job entry, eligibility evaluation, shortlisting only on explicit eligibility PASS, tracker status changes guarded by the domain state machine, per-attempt history with evidence, re-application after withdrawal, local JSON export, and explicit delete controls. A status change advances the current attempt; only a withdrawal can be followed by a new attempt, and only when the listing is still open and eligible. PDF/DOCX parsing is deferred to a follow-on local-only increment. Job-source adapters remain disabled until their source-specific permissions and quality checks are resolved.
+
+Existing databases are upgraded in place to schema version 2 (one attempt per legacy tracker row, revision 0). History is not invented for records that predate the upgrade.
 
 ## Run the desktop app
 

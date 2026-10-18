@@ -6,7 +6,7 @@ future desktop application to call and test.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -220,30 +220,94 @@ _TRACKER_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
     ApplicationStatus.WITHDRAWN: frozenset(),
 }
 
+TERMINAL_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    status for status in ApplicationStatus if not _TRACKER_TRANSITIONS[status]
+)
+
+# Re-application is offered only after the candidate withdrew from the earlier attempt.
+# A rejection stays terminal unless a future product decision defines another route.
+REAPPLICATION_ALLOWED_FROM: frozenset[ApplicationStatus] = frozenset({ApplicationStatus.WITHDRAWN})
+
+
+def allowed_transitions(status: ApplicationStatus) -> frozenset[ApplicationStatus]:
+    """Return the permitted next states for an attempt in ``status``."""
+    if not isinstance(status, ApplicationStatus):
+        raise ValueError("Application status must be an ApplicationStatus value.")
+    return _TRACKER_TRANSITIONS[status]
+
 
 @dataclass(frozen=True)
 class ApplicationTracker:
+    """One application attempt for one listing.
+
+    ``attempt_number`` distinguishes a re-application from the earlier, immutable
+    attempt on the same listing. ``revision`` is the optimistic-concurrency token
+    persisted by the store; it is not part of the application history.
+    """
+
     listing_id: str
     status: ApplicationStatus = ApplicationStatus.DISCOVERED
     status_evidence: str | None = None
     candidate_confirmed: bool = False
+    attempt_number: int = 1
+    revision: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.listing_id or not self.listing_id.strip():
+            raise ValueError("An application attempt requires a listing_id.")
+        if not isinstance(self.status, ApplicationStatus):
+            raise ValueError("Application status must be an ApplicationStatus value.")
+        if not isinstance(self.attempt_number, int) or self.attempt_number < 1:
+            raise ValueError("Attempt number must be a positive whole number.")
+        if not isinstance(self.revision, int) or self.revision < 0:
+            raise ValueError("Revision must be a non-negative whole number.")
+
+    @property
+    def is_terminal(self) -> bool:
+        return not _TRACKER_TRANSITIONS[self.status]
 
     def transition(
         self, new_status: ApplicationStatus, *, evidence: str | None = None,
         candidate_confirmed: bool | None = None,
     ) -> "ApplicationTracker":
+        """Return the next attempt state, preserving evidence already recorded.
+
+        A status change never erases evidence collected for this attempt: when no new
+        evidence is supplied the existing evidence is carried forward. Confirmation is
+        the exception in the other direction — it always requires newly supplied
+        evidence, because a click or an attempted submission is not proof.
+        """
+        if not isinstance(new_status, ApplicationStatus):
+            raise ValueError("Application status must be an ApplicationStatus value.")
+        cleaned = evidence.strip() if evidence and evidence.strip() else None
+        flag = self.candidate_confirmed if candidate_confirmed is None else candidate_confirmed
         if new_status == self.status:
-            return self
+            if cleaned is None or cleaned == self.status_evidence:
+                return self
+            return replace(self, status_evidence=cleaned, candidate_confirmed=flag)
         if new_status not in _TRACKER_TRANSITIONS[self.status]:
             raise ValueError(f"Invalid application transition: {self.status.value} -> {new_status.value}")
-        if new_status is ApplicationStatus.CONFIRMED and not (evidence and evidence.strip()):
+        if new_status is ApplicationStatus.CONFIRMED and cleaned is None:
             raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
-        return ApplicationTracker(
-            listing_id=self.listing_id,
+        return replace(
+            self,
             status=new_status,
-            status_evidence=evidence.strip() if evidence else None,
-            candidate_confirmed=self.candidate_confirmed if candidate_confirmed is None else candidate_confirmed,
+            status_evidence=cleaned or self.status_evidence,
+            candidate_confirmed=flag,
         )
+
+
+@dataclass(frozen=True)
+class ApplicationEvent:
+    """Append-only record of one persisted change to an application attempt."""
+
+    listing_id: str
+    attempt_number: int
+    from_status: ApplicationStatus | None
+    to_status: ApplicationStatus
+    evidence: str | None
+    candidate_confirmed: bool
+    recorded_at: str
 
 
 def canonicalize_url(url: str) -> str:

@@ -46,6 +46,12 @@ States: Discovered, Shortlisted, Prepared, Awaiting user, Submission attempted, 
 
 Show evidence for confirmed status where available. Unknown must not silently become confirmed.
 
+Each listing carries one or more numbered application attempts. A status change applies to the selected attempt, and the app records an append-only history entry (source status, destination status, evidence, timestamp) for every persisted change. Later status changes must not erase the evidence recorded for a confirmation; the history view shows what was recorded and when.
+
+A withdrawn attempt is terminal and remains visible with its history. "Re-apply after withdrawal" starts a new numbered attempt only when the listing is open and the candidate passes eligibility; the prior attempt is never revived or overwritten, and its evidence is never copied forward. A rejection is terminal and is not offered a re-application route.
+
+If the same job was saved from more than one source observation, shortlisting is refused while a sibling observation already has an active application. The user is directed to the existing record.
+
 ## 7. Exception handling
 
 Pause when candidate information is missing/conflicting; a sensitive declaration is needed; a mandatory requirement cannot be verified; an assessment/custom response is required; CAPTCHA/OTP or another unsupported step appears; platform policy/workflow is unclear; or submission result is ambiguous.

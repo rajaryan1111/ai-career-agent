@@ -2,7 +2,8 @@ import unittest
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    Decision, JobListing, canonicalize_url, deduplicate_listings,
+    Decision, JobListing, REAPPLICATION_ALLOWED_FROM, TERMINAL_STATUSES,
+    canonicalize_url, deduplicate_listings,
     evaluate_eligibility, score_relevance, job_to_public_dict,
 )
 
@@ -147,10 +148,62 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertTrue(response.candidate_confirmed)
         self.assertEqual(response.status_evidence, "Employer email received")
 
+    def test_evidence_is_carried_forward_when_a_transition_supplies_none(self):
+        """C1: a later status change must not silently erase the confirmation evidence."""
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page shown")
+        response = confirmed.transition(ApplicationStatus.RESPONSE_RECEIVED)
+        self.assertEqual(response.status, ApplicationStatus.RESPONSE_RECEIVED)
+        self.assertEqual(response.status_evidence, "Employer confirmation page shown")
+
+    def test_confirmation_still_requires_new_evidence_when_evidence_exists(self):
+        tracker = ApplicationTracker(
+            "j1", ApplicationStatus.SUBMISSION_ATTEMPTED, status_evidence="Older note from this attempt",
+        )
+        with self.assertRaises(ValueError):
+            tracker.transition(ApplicationStatus.CONFIRMED)
+
+    def test_same_status_update_records_new_evidence(self):
+        """C6: re-submitting the current status with a note must not drop the note."""
+        tracker = ApplicationTracker("j1", ApplicationStatus.INTERVIEW)
+        updated = tracker.transition(ApplicationStatus.INTERVIEW, evidence="Panel scheduled for Monday")
+        self.assertEqual(updated.status, ApplicationStatus.INTERVIEW)
+        self.assertEqual(updated.status_evidence, "Panel scheduled for Monday")
+
+    def test_same_status_without_new_evidence_is_a_noop(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, status_evidence="Employer email")
+        self.assertIs(tracker.transition(ApplicationStatus.CONFIRMED), tracker)
+
     def test_invalid_transition_is_rejected(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
         with self.assertRaises(ValueError):
             tracker.transition(ApplicationStatus.CONFIRMED, evidence="confirmation")
+
+    def test_non_enum_status_is_rejected(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
+        with self.assertRaises(ValueError):
+            tracker.transition("confirmed")
+        with self.assertRaises(ValueError):
+            ApplicationTracker("j1", "confirmed")
+
+    def test_attempt_number_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            ApplicationTracker("j1", attempt_number=0)
+
+    def test_terminal_states_have_no_exit_and_are_explicit(self):
+        """C2: the no-exit states are declared rather than implicit."""
+        self.assertEqual(TERMINAL_STATUSES, frozenset({ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED_BY_EMPLOYER}))
+        for status in TERMINAL_STATUSES:
+            self.assertTrue(ApplicationTracker("j1", status).is_terminal)
+            for destination in ApplicationStatus:
+                if destination is status:
+                    continue
+                with self.assertRaises(ValueError):
+                    ApplicationTracker("j1", status).transition(destination, evidence="evidence")
+        self.assertFalse(ApplicationTracker("j1", ApplicationStatus.SHORTLISTED).is_terminal)
+
+    def test_reapplication_is_allowed_only_after_withdrawal(self):
+        self.assertEqual(REAPPLICATION_ALLOWED_FROM, frozenset({ApplicationStatus.WITHDRAWN}))
 
 
 if __name__ == "__main__":
