@@ -297,6 +297,28 @@ def find_widgets(parent, *, klass: str | None = None, text: str | None = None) -
     return matches
 
 
+def visible_text(widget) -> str:
+    """What a widget shows, whether it was given fixed text or a variable to follow.
+
+    A label built with ``textvariable=`` has no ``text`` option: real Tk answers "" for it and the
+    stand-in module refuses the option outright, so reading ``cget("text")`` alone reports a label
+    that a person can plainly read as carrying nothing. The variable's current value is the honest
+    answer in that case.
+    """
+    for option in ("text", "textvariable"):
+        try:
+            value = widget.cget(option)
+        except Exception:  # noqa: BLE001 - a widget without the option simply has no text this way
+            continue
+        if option == "textvariable" and value not in (None, ""):
+            getter = getattr(value, "get", None)
+            value = getter() if callable(getter) else value
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def find_widget(parent, *, klass: str | None = None, text: str | None = None, what: str = "widget"):
     """Exactly one matching widget, or a failure that says what was looked for and what was there."""
     matches = find_widgets(parent, klass=klass, text=text)
@@ -2837,6 +2859,89 @@ def workflow_h_follow_ups_and_actions(run: Run) -> None:
         require(listing_b not in listed, f"the reminder whose record is gone is still listed: {listed}")
         require(listing_c in listed, f"the tab lost the reminders it can still show: {listed}")
 
+    with results.step("H15 trying to send a follow-up offers only stored contacts, and refuses without one"):
+        from career_agent import contacts as contact_reader  # noqa: PLC0415
+
+        policy.reset()
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        require(app.follow_up_recipient_box.cget("values") in ((), "", []),
+                f"a recipient is offered before any contact is stored: "
+                f"{app.follow_up_recipient_box.cget('values')!r}")
+        csv_path = workspace.folder / "acceptance-contacts.csv"
+        csv_path.write_bytes(
+            b"Email,Name,Company Label,Source Rows,Review Reason\r\n"
+            b"acceptance.contact@example.invalid,Acceptance Contact,Fixture Employer,1,\r\n")
+        app.store.import_contacts(contact_reader.read_contact_csv(csv_path))
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        offered = tuple(app.follow_up_recipient_box.cget("values"))
+        require(any("acceptance.contact@example.invalid" in str(choice) for choice in offered),
+                f"the stored contact is not offered as a recipient: {offered!r}")
+        select_follow_up_row(app, listing_c, workspace.root)
+        app.follow_up_recipient.set("")
+        before = app.store._connection.total_changes
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        require("Nothing was sent" in policy.titles("showerror"),
+                f"no refusal was shown without a recipient; dialogs: {policy.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "an attempt with no recipient changed the database")
+
+    with results.step("H16 the question names the order the guard checks things in, and a no writes nothing"):
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = False
+        select_follow_up_row(app, listing_c, workspace.root)
+        app.follow_up_recipient.set(
+            next(str(choice) for choice in app.follow_up_recipient_box.cget("values")
+                 if "acceptance.contact@example.invalid" in str(choice)))
+        before = app.store._connection.total_changes
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        asked = policy.said("Try to send this follow-up")
+        require("do-not-contact" in asked,
+                "the question does not say the do-not-contact list is checked first")
+        require("unknown outcome" in asked,
+                "the question does not say the attempt is written down before it is made")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.list_attempts(action="email_send") == (),
+                "a declined confirmation wrote an attempt row")
+
+    with results.step("H17 a confirmed attempt is refused by the closed gate, and the refusal is recorded"):
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from career_agent.attempts import AttemptState  # noqa: PLC0415
+
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = True
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        attempts = app.store.list_attempts(action="email_send")
+        require(len(attempts) == 1, f"{len(attempts)} attempt row(s) were written by one press")
+        require(attempts[0].state is AttemptState.REFUSED,
+                f"the attempt is recorded as {attempts[0].state!r} rather than refused")
+        require(app.store.unresolved_attempts() == (),
+                "a refusal was left as an unresolved outcome")
+        require(app.store.actions_done_today("email_send",
+                                             now=datetime.now(timezone.utc)) == 0,
+                "a refusal spent the daily allowance")
+
+    with results.step("H18 the same message again is reported, not attempted a second time"):
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = True
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        require(len(app.store.list_attempts(action="email_send")) == 1,
+                "a second press wrote a second attempt row for the same message")
+
+    with results.step("H19 an address on the do-not-contact list is withdrawn from the chooser"):
+        from career_agent.suppression import SuppressionReason  # noqa: PLC0415
+
+        app.store.suppress_contact("acceptance.contact@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP,
+                                   note="fixture: they asked us to stop")
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        offered = tuple(app.follow_up_recipient_box.cget("values"))
+        require(not any("acceptance.contact@example.invalid" in str(choice) for choice in offered),
+                f"a suppressed address is still offered as a recipient: {offered!r}")
+        # Put the workspace back as the later steps expect it: the mark was this step's own fixture.
+        app.store.lift_suppression("acceptance.contact@example.invalid",
+                                   note="fixture cleanup for the following steps")
+
     with results.step("H14 nothing here is recorded as an employer decision or as a career outcome"):
         from career_agent import analytics  # noqa: PLC0415
 
@@ -3354,6 +3459,816 @@ def workflow_j_data_safety(run: Run) -> None:
 # --------------------------------------------------------------------------------------------------
 # Workflow F - cleanup, lifecycle, and cleanup after a failure
 # --------------------------------------------------------------------------------------------------
+def workflow_m_tailored_documents(run: Run) -> None:
+    """The Tailored documents tab: what a prepared document was built from, and the refusal to reuse it.
+
+    The rule this tab exists for is that a document built from facts that have since changed is never
+    quietly reused. What a screenshot cannot show is that the refusal is real: that the row says which
+    fact moved, that asking to use the document opens the refusal rather than handing it over, that a
+    declined offer writes nothing at all, and that accepting it appends a new document while the old one
+    stays exactly as it was. Every fact, listing and strategy here is synthetic and local; nothing on
+    this tab sends anything anywhere.
+    """
+    import os  # noqa: PLC0415 - one check asks what this platform's file modes can express
+    import stat  # noqa: PLC0415 - and reads the mode of the file that was written
+
+    from career_agent.artifacts import ArtifactKind, capture_basis  # noqa: PLC0415 - only this workflow
+    from career_agent.core import (  # noqa: PLC0415 - the synthetic profile and listing
+        Availability, CandidateProfile, FactSource, JobListing,
+    )
+
+    workspace, results, policy = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.artifacts_tab)
+
+    listing = JobListing(
+        listing_id="acceptance-m1", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m1", employer_name="Example Employer",
+        role_title="GenAI Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India")
+    app.store.save_job(listing)
+    app.store.save_profile(
+        CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027,
+                         experience_years=1.0, work_authorization="citizen",
+                         skills=frozenset({"Python", "SQL"}),
+                         preferred_locations=frozenset({"Delhi"})),
+        source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name="acceptance-resume.docx")
+    strategy = app.store.create_role_strategy(
+        name="Applied AI roles", role_family="Applied AI engineering",
+        required_skills=frozenset({"Python", "Docker"}))
+    prepared = app.store.new_tailored_artifact(
+        listing_id=listing.listing_id, strategy=strategy, kind=ArtifactKind.TAILORED_RESUME,
+        content="A tailored resume built from the stored facts.\n", basis=capture_basis(app.store))
+
+    def row_of(artifact_id: str) -> dict:
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    with results.step("M1 the list names what each document was built from"):
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        cells = row_of(prepared.artifact_id)
+        require(cells["kind"] == "Tailored resume", f"the document is listed as {cells['kind']!r}")
+        require(cells["listing"] == listing.listing_id, f"it is listed for {cells['listing']!r}")
+        require(cells["cited"] == "acceptance-resume.docx",
+                f"the row does not cite the resume it was built from: {cells['cited']!r}")
+        require(cells["state"] == "Current", f"an untouched document reads as {cells['state']!r}")
+
+    with results.step("M2 a changed fact turns the row into a refusal that names the fact"):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE", graduation_year=2027,
+                             experience_years=3.0, work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(prepared.artifact_id)["state"]
+        require(state.startswith("Rebuild before use"), f"the row says {state!r}")
+        require("experience" in state, f"the row does not name the fact that moved: {state!r}")
+        require("need" in app.artifact_summary.get(),
+                f"the summary does not count what cannot be used: {app.artifact_summary.get()!r}")
+
+    with results.step("M3 asking to use it opens the refusal, and declining writes nothing"):
+        policy.reset()
+        policy.answers["This document is out of date"] = False
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.artifacts_tab, "Check before use", workspace.root)
+        require("This document is out of date" in policy.titles("askyesno"),
+                f"the refusal was not put in front of the person; dialogs: {policy.titles()!r}")
+        require("experience" in policy.said("This document is out of date"),
+                "the refusal does not say what moved")
+        require(app.store._connection.total_changes == before,
+                "a declined offer changed the database")
+        require(len(app.store.list_tailored_artifacts()) == 1,
+                "a declined offer wrote a document")
+        require("was not used" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("M4 accepting the offer appends a rebuild and keeps the old document"):
+        policy.reset()
+        policy.answers["This document is out of date"] = True
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        press(app.artifacts_tab, "Check before use", workspace.root)
+        stored = app.store.list_tailored_artifacts()
+        require(len(stored) == 2, f"after a rebuild the database holds {len(stored)} document(s)")
+        rebuilt = next(item for item in stored if item.artifact_id != prepared.artifact_id)
+        require(row_of(rebuilt.artifact_id)["state"] == "Current",
+                f"the rebuilt document reads as {row_of(rebuilt.artifact_id)['state']!r}")
+        require(row_of(prepared.artifact_id)["state"].startswith("Rebuild before use"),
+                "the document that was rebuilt from stopped being shown as out of date")
+        require(app.store.get_tailored_artifact(prepared.artifact_id).content
+                == prepared.content, "the old document was changed by the rebuild")
+        require("Docker" in app.status.get(),
+                f"the gap the document refused to invent was not reported: {app.status.get()!r}")
+
+    with results.step("M5 the rebuild control asks first, and a declined confirmation writes nothing"):
+        policy.reset()
+        policy.answers["Rebuild this document"] = False
+        app.artifacts_tree.selection_set(prepared.artifact_id)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.artifacts_tab, "Rebuild from current facts...", workspace.root)
+        require("Rebuild this document" in policy.titles("askyesno"),
+                f"the rebuild was not confirmed first; dialogs: {policy.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.list_tailored_artifacts()) == 2,
+                "a declined confirmation wrote a document")
+        require("cancelled" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    # ---- building a first document from the window, and writing it out -----------------------
+    #
+    # Everything above starts from a document this script put in the database itself. What follows is
+    # the path a person actually has: choose what it is for, read what would be used, store exactly
+    # that, then save a copy. The checks are about the places where that could quietly lie - a stored
+    # document that is not the one that was previewed, a second identical copy, an export landing on
+    # top of the résumé it was built from, and a stale document written out with nothing saying so.
+    second_listing = JobListing(
+        listing_id="acceptance-m2", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m2", employer_name="Second Employer",
+        role_title="Machine Learning Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python", "Kubernetes"}), location_text="Delhi, India")
+    app.store.save_job(second_listing)
+
+    def offered(box, identifier: str, what: str) -> str:
+        """The line in a chooser that carries this identifier, or a failure naming what was offered."""
+        values = [str(choice) for choice in box.cget("values")]
+        matching = [choice for choice in values if identifier in choice]
+        if len(matching) != 1:
+            raise SmokeFailure(
+                f"the {what} chooser offers {len(matching)} line(s) for {identifier}: {values!r}")
+        return matching[0]
+
+    with results.step("M6 the building controls offer what is stored, and a preview writes nothing"):
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require("Choose a listing" in app.artifact_build_note.get(),
+                f"the building controls say {app.artifact_build_note.get()!r}")
+        listing_choice = offered(app.artifact_listing_box, second_listing.listing_id, "listing")
+        strategy_choice = offered(app.artifact_strategy_box, strategy.strategy_id, "strategy")
+        require("Machine Learning Engineer" in listing_choice,
+                f"the listing is offered as {listing_choice!r}, which does not name the role")
+        require(f"version {strategy.version}" in strategy_choice,
+                f"the strategy is offered as {strategy_choice!r}, which does not name the version")
+        choose_in(app.artifacts_tab, app.artifact_listing_choice, str(listing_choice),
+                  what="the listing to build for")
+        choose_in(app.artifacts_tab, app.artifact_strategy_choice, str(strategy_choice),
+                  what="the strategy to build under")
+        choose_in(app.artifacts_tab, app.artifact_kind_choice, "Tailored resume",
+                  what="the kind of document")
+        before = app.store._connection.total_changes
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        shown = app.artifact_plan_box.get("1.0", "end")
+        require("acceptance-resume.docx" in shown,
+                f"the preview does not name the file the facts were read from: {shown!r}")
+        require(f"version {strategy.version}" in shown,
+                f"the preview does not name the strategy version: {shown!r}")
+        require("Kubernetes" in shown,
+                f"the listing's unstated requirement is missing from the preview: {shown!r}")
+        require("Skills for this role" in shown,
+                "the document the person is asked to approve is not shown to them")
+        require(app.store._connection.total_changes == before, "previewing changed the database")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "previewing stored a document")
+
+    with results.step("M7 building asks first, and a declined confirmation stores nothing"):
+        policy.reset()
+        policy.answers["Build this document"] = False
+        before = app.store._connection.total_changes
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require("Build this document" in policy.titles("askyesno"),
+                f"the build was not confirmed first; dialogs: {policy.titles()!r}")
+        said = policy.said("Build this document")
+        require("acceptance-resume.docx" in said,
+                "the confirmation does not repeat what the document would be built from")
+        require("not touched" in said, "the confirmation does not say the résumé file is left alone")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a declined confirmation stored a document")
+
+    with results.step("M8 accepting stores exactly the document that was previewed"):
+        policy.reset()
+        policy.answers["Build this document"] = True
+        previewed = app.artifact_plan_box.get("1.0", "end")
+        stored_before = {item.artifact_id for item in app.store.list_tailored_artifacts()}
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        built_ids = {item.artifact_id for item in app.store.list_tailored_artifacts()} - stored_before
+        require(len(built_ids) == 1, f"building wrote {len(built_ids)} document(s)")
+        built_id = built_ids.pop()
+        built = app.store.get_tailored_artifact(built_id)
+        require(built.listing_id == second_listing.listing_id,
+                f"the document was stored for {built.listing_id!r}")
+        require(built.strategy_version == strategy.version,
+                f"it was stored under version {built.strategy_version}")
+        require(built.basis.fact_documents.get("skills") == "acceptance-resume.docx",
+                f"it does not record the file its facts came from: {built.basis.fact_documents!r}")
+        require("Kubernetes" not in built.content,
+                "the document claims a skill the saved facts do not state")
+        require(built_id in app.status.get(),
+                f"the status line does not name the document: {app.status.get()!r}")
+        require("Kubernetes" in app.status.get(),
+                f"the gap the document refused to invent was not reported: {app.status.get()!r}")
+        require(row_of(built_id)["state"] == "Current",
+                f"the new document reads as {row_of(built_id)['state']!r}")
+        require(row_of(built_id)["cited"] == "acceptance-resume.docx",
+                f"the row does not cite the résumé: {row_of(built_id)['cited']!r}")
+        for word in ("Skills for this role", "Experience"):
+            require(word in previewed or word in built.content,
+                    f"the stored document does not match what was previewed ({word!r} missing)")
+
+    with results.step("M9 an identical document is reported, not stored a second time"):
+        policy.reset()
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        require(built_id in app.artifact_plan_box.get("1.0", "end"),
+                "the preview does not name the identical document already stored")
+        require(built_id in app.status.get(),
+                f"the status line does not name the existing document: {app.status.get()!r}")
+        require(str(app.build_artifact_button.cget("state")) == "disabled",
+                "the window still offers to store a second copy of the same document")
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a second identical document was stored anyway")
+
+    with results.step("M10 saving a copy writes one new file with its provenance, and nothing else"):
+        policy.reset()
+        decoy = workspace.folder / "acceptance-resume.docx"
+        decoy.write_bytes(b"the candidate's own resume file")
+        target = workspace.folder / "acceptance-tailored.txt"
+        app.artifacts_tree.selection_set(built_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "normal",
+                "a current document cannot be saved to a file")
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(target)],
+                         workspace.root)
+        require("Save a copy" in policy.titles("askyesno"),
+                f"the file was written without asking; dialogs: {policy.titles()!r}")
+        require(target.is_file(), "no file was written")
+        written = target.read_text(encoding="utf-8")
+        require(built_id in written, "the file does not say which document it is")
+        require(f"version {strategy.version}" in written,
+                "the file does not say which strategy version it was built under")
+        require("acceptance-resume.docx" in written,
+                "the file does not say which résumé the facts came from")
+        require("nothing was sent anywhere" in written,
+                "the file does not say that nothing was sent anywhere")
+        require(written.rstrip().endswith(built.content.rstrip()),
+                "the document itself is not in the file below its provenance")
+        require(decoy.read_bytes() == b"the candidate's own resume file",
+                "the résumé the document was built from was modified")
+        if os.name != "nt":
+            mode = stat.S_IMODE(target.stat().st_mode)
+            require(mode & 0o077 == 0, f"the saved document is readable by others: {mode:o}")
+
+    with results.step("M11 an existing file is refused rather than written over"):
+        policy.reset()
+        before = target.read_text(encoding="utf-8")
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(target)],
+                         workspace.root)
+        require("Document not saved" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("already exists" in policy.said("Document not saved"),
+                f"the refusal does not say why: {policy.said('Document not saved')!r}")
+        require(target.read_text(encoding="utf-8") == before, "the existing file was written over")
+
+    with results.step("M12 a document whose facts moved is not written out at all"):
+        policy.reset()
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=4.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        app.artifacts_tree.selection_set(built_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a document that is out of date is still offered for saving")
+        stale_target = workspace.folder / "acceptance-stale.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(stale_target)],
+                         workspace.root)
+        require("This document is out of date" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("experience" in policy.said("This document is out of date"),
+                "the refusal does not name what moved")
+        require(not stale_target.exists(), "a document that is out of date was written out anyway")
+        require("was not written out" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+
+    with results.step("M13 a listing edited after the preview refuses the build"):
+        policy.reset()
+        app.store.save_job(second_listing)  # put the facts back where M8 found them
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        choose_in(app.artifacts_tab, app.artifact_listing_choice, str(listing_choice),
+                  what="the listing to build for")
+        choose_in(app.artifacts_tab, app.artifact_kind_choice, "Cover letter",
+                  what="the kind of document")
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        require("Second Employer" in app.artifact_plan_box.get("1.0", "end"),
+                "the letter on screen does not name the employer it is addressed to")
+        stored_before = len(app.store.list_tailored_artifacts())
+        app.store.save_job(JobListing(
+            listing_id=second_listing.listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=second_listing.source_listing_url,
+            employer_name="Renamed Employer", role_title="Machine Learning Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Kubernetes"}), location_text="Delhi, India"))
+        policy.answers["Build this document"] = True
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require("Document not built" in policy.titles("showerror"),
+                f"the build was not refused; dialogs: {policy.titles()!r}")
+        require("the listing changed while" in policy.said("Document not built"),
+                f"the refusal does not say what moved: {policy.said('Document not built')!r}")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a document written for another employer was stored anyway")
+
+    # ---------------------------------------------------------------------------------------
+    # The listing a document was written for is part of its lineage (schema 16). Up to here the
+    # tab has been checked against facts and strategies that moved; what follows is the job
+    # itself moving - a renamed employer, a retitled role - and the third state the list has to
+    # be able to say out loud: a document stored before any of this was recorded, which nobody
+    # can check and which must therefore never read as current.
+    drift_listing = JobListing(
+        listing_id="acceptance-m3", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m3", employer_name="Third Employer",
+        role_title="Research Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python"}), location_text="Delhi, India")
+    app.store.save_job(drift_listing)
+
+    with results.step("M14 a listing edited after the document was stored makes the row stale"):
+        policy.reset()
+        for_drift = app.store.new_tailored_artifact(
+            listing_id=drift_listing.listing_id, strategy=strategy,
+            kind=ArtifactKind.COVER_LETTER,
+            content="Dear Third Employer,\n\nI am writing about the Research Engineer role.\n",
+            basis=capture_basis(app.store))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require(row_of(for_drift.artifact_id)["state"] == "Current",
+                f"a document nothing has touched reads as "
+                f"{row_of(for_drift.artifact_id)['state']!r}")
+        app.store.save_job(JobListing(
+            listing_id=drift_listing.listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=drift_listing.source_listing_url,
+            employer_name="Third Employer Renamed", role_title="Research Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python"}), location_text="Delhi, India"))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(for_drift.artifact_id)["state"]
+        require(state.startswith("Rebuild before use"), f"the row says {state!r}")
+        require("the employer is now 'Third Employer Renamed'" in state,
+                f"the row does not say which part of the listing moved: {state!r}")
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a letter addressed to the old employer is still offered for saving")
+        drift_target = workspace.folder / "acceptance-listing-drift.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(drift_target)],
+                         workspace.root)
+        require("This document is out of date" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require(not drift_target.exists(), "a document written for another employer was written out")
+
+    with results.step("M15 rebuilding after the listing moved writes the listing as it stands now"):
+        policy.reset()
+        policy.answers["Rebuild this document"] = True
+        before_rebuild = {stored.artifact_id for stored in app.store.list_tailored_artifacts()}
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        press(app.artifacts_tab, "Rebuild from current facts...", workspace.root)
+        appended = [stored for stored in app.store.list_tailored_artifacts()
+                    if stored.artifact_id not in before_rebuild]
+        require(len(appended) == 1, f"the rebuild appended {len(appended)} documents")
+        rebuilt = appended[0]
+        require("Third Employer Renamed" in rebuilt.content,
+                "the rebuilt letter is not addressed to the employer as it stands now")
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require(row_of(rebuilt.artifact_id)["state"] == "Current",
+                f"the rebuilt document reads as {row_of(rebuilt.artifact_id)['state']!r}")
+        require(row_of(for_drift.artifact_id)["state"].startswith("Rebuild before use"),
+                "the old document stopped being stale when the new one was built")
+        kept = app.store.get_tailored_artifact(for_drift.artifact_id)
+        require(kept.listing_fingerprint.employer == "Third Employer",
+                "the old document's record of what it was written for was rewritten")
+
+    with results.step("M16 a document stored before listings were recorded says it cannot be checked"):
+        policy.reset()
+        # The only way to have such a row on a database this script just created: write it the way
+        # schema 15 wrote it. A person upgrading a real file will have several.
+        with app.store._connection:
+            app.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=NULL WHERE artifact_id=?",
+                (for_drift.artifact_id,))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(for_drift.artifact_id)["state"]
+        require(state.startswith("Cannot be checked"), f"the row says {state!r}")
+        require(state != "Current", "a document nobody can check reads as current")
+        require("stored before the listing" in state,
+                f"the row does not say why it cannot be checked: {state!r}")
+        require("cannot be checked" in app.artifact_summary.get(),
+                f"the summary does not count it: {app.artifact_summary.get()!r}")
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a document nobody can check is still offered for saving")
+        unknown_target = workspace.folder / "acceptance-unknown-listing.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy,
+                         [str(unknown_target)], workspace.root)
+        require("This document cannot be checked" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("nobody can tell whether it still matches"
+                in policy.said("This document cannot be checked"),
+                "the refusal does not say what is unknown")
+        require(not unknown_target.exists(), "a document nobody can check was written out")
+
+    workspace.close_window(host, app)
+
+
+def workflow_n_permissions(run: Run) -> None:
+    """The Permissions & limits tab: nothing is authorised, nothing is written without a yes.
+
+    This is the tab where a person says what the application may do on their behalf, so the checks are
+    about the two properties that matter and cannot be seen in a screenshot: a declined dialog leaves
+    the database byte-for-byte as it was, and a granted permission still runs nothing, because every
+    source is disabled and no control here can enable one. Nothing in this workflow contacts anything:
+    the only writes are rows in a disposable local database, and the only "action" is the window
+    reporting what would be refused.
+    """
+    from career_agent.policy import ActionKind  # noqa: PLC0415 - only this workflow needs it
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.policy_tab)
+
+    with results.step("N1 a fresh database authorises nothing, and says so"):
+        press(app.policy_tab, "Refresh", workspace.root)
+        require("Nothing is authorised" in app.policy_summary.get(),
+                f"the summary says {app.policy_summary.get()!r}")
+        require(app.policy_tree.get_children() == (),
+                "a database with no permissions showed permissions")
+        require(app.store.policy_version_number() == 0,
+                "reading the tab wrote an authorisation")
+
+    with results.step("N2 authorising asks first, and declining writes nothing at all"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = False
+        app.policy_vars["source"].set("jobicy")
+        app.policy_vars["action"].set("look for jobs")
+        app.policy_vars["limit"].set("2")
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        require("Authorise this action" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require("does not switch anything on" in dialogs.said("Authorise this action"),
+                "the confirmation implies that permitting something starts it")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.policy_version_number() == 0, "a declined confirmation wrote a version")
+        require("cancelled" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("N3 accepting records one version, with the ceiling the person typed"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = True
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        require(app.store.policy_version_number() == 1,
+                f"the database holds version {app.store.policy_version_number()}")
+        stored = app.store.get_global_policy()
+        require(("jobicy", ActionKind.DISCOVERY) in stored.allowed,
+                f"the permission was not stored: {stored.allowed!r}")
+        require(stored.daily_limits[ActionKind.DISCOVERY] == 2,
+                f"the ceiling was stored as {stored.daily_limits.get(ActionKind.DISCOVERY)!r}")
+        rows = [app.policy_tree.item(item, "values") for item in app.policy_tree.get_children()]
+        require(len(rows) == 1 and rows[0][0] == "jobicy" and "2 per day" in rows[0][2],
+                f"the list shows {rows!r}")
+        require("nothing was started" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+
+    with results.step("N4 the tab answers 'what would happen now?' with the refusal, not a run"):
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "What would happen now?", workspace.root)
+        detail = app.policy_detail.get()
+        require("Refused" in detail or "refused" in detail,
+                f"an action nothing permits was not reported as refused: {detail!r}")
+        require("gate" in detail.lower(), f"the closed source gate was not named: {detail!r}")
+        require(app.store._connection.total_changes == before, "a question changed the database")
+
+    with results.step("N5 removing a permission asks first; a no writes nothing, a yes appends"):
+        dialogs.reset()
+        dialogs.answers["Remove this permission"] = False
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Remove the selected permission...", workspace.root)
+        require("Remove this permission" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined removal changed the database")
+        dialogs.reset()
+        dialogs.answers["Remove this permission"] = True
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        press(app.policy_tab, "Remove the selected permission...", workspace.root)
+        require(app.store.policy_version_number() == 2,
+                f"the removal is version {app.store.policy_version_number()}, not 2")
+        require(app.store.get_global_policy().allowed == frozenset(),
+                "the permission is still in force after being removed")
+        history = app.store.policy_versions()
+        require(("jobicy", ActionKind.DISCOVERY) in history[0][1].allowed,
+                "the earlier version stopped saying what it permitted")
+
+    with results.step("N6 withdrawing everything asks first, and keeps the history it withdraws"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = True
+        app.policy_vars["limit"].set("1")
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        dialogs.reset()
+        dialogs.answers["Withdraw all authorisation"] = False
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Withdraw all authorisation...", workspace.root)
+        require(app.store._connection.total_changes == before,
+                "a declined withdrawal changed the database")
+        require(app.store.get_global_policy().revoked_at is None,
+                "a declined withdrawal withdrew the authorisation")
+        dialogs.reset()
+        dialogs.answers["Withdraw all authorisation"] = True
+        press(app.policy_tab, "Withdraw all authorisation...", workspace.root)
+        current = app.store.get_global_policy()
+        require(current.revoked_at is not None, "the authorisation was not withdrawn")
+        require(("jobicy", ActionKind.DISCOVERY) in current.allowed,
+                "the withdrawal erased what it withdrew instead of recording it")
+        require("withdrawn" in app.policy_summary.get(),
+                f"the summary says {app.policy_summary.get()!r}")
+
+    with results.step("N7 conditions are editable here, and a declined question writes nothing"):
+        dialogs.reset()
+        dialogs.answers["Record these conditions"] = False
+        before_version = app.store.policy_version_number()
+        before = app.store._connection.total_changes
+        app.condition_vars["roles"].set("engineer")
+        app.condition_vars["quiet_from"].set("22:00")
+        app.condition_vars["quiet_until"].set("07:00")
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        asked = dialogs.said("Record these conditions")
+        require("roles must mention: nothing \u2192 engineer" in asked,
+                f"the confirmation does not say what changes: {asked!r}")
+        require("only narrow" in asked,
+                "the confirmation does not say that a condition cannot permit anything")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.policy_version_number() == before_version,
+                "a declined confirmation wrote a version")
+
+    with results.step("N8 a half-written quiet window is refused before the question is asked"):
+        dialogs.reset()
+        app.condition_vars["quiet_until"].set("")
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        require("Nothing was changed" in dialogs.titles("showerror"),
+                f"a half-written quiet window was not refused; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                "the window asked about something it was going to refuse")
+        require(app.store._connection.total_changes == before,
+                "a refused condition changed the database")
+
+    with results.step("N9 recorded conditions are stored, read back, and narrow nothing else"):
+        dialogs.reset()
+        dialogs.answers.pop("Record these conditions", None)
+        permitted = app.store.get_global_policy()
+        app.condition_vars["quiet_until"].set("07:00")
+        app.condition_vars["attachments"].set("pdf")
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        stored = app.store.get_global_policy()
+        require(stored.role_terms == frozenset({"engineer"}),
+                f"the role condition stored is {stored.role_terms!r}")
+        require(stored.quiet_hours == (22, 7), f"the quiet window stored is {stored.quiet_hours!r}")
+        require(stored.allowed_attachments == frozenset({".pdf"}),
+                f"the attachment rule stored is {stored.allowed_attachments!r}")
+        require(stored.allowed == permitted.allowed,
+                "recording a condition changed what is permitted")
+        require(stored.daily_limits == permitted.daily_limits,
+                "recording a condition changed a daily ceiling")
+        require(app.condition_vars["quiet_from"].get() == "22:00",
+                f"the box reads back {app.condition_vars['quiet_from'].get()!r}")
+        require("quiet from 22:00 to 07:00" in app.conditions_summary.get(),
+                f"the summary says {app.conditions_summary.get()!r}")
+        dialogs.reset()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Record these conditions...", workspace.root)
+        require("Nothing to change" in dialogs.titles("showinfo"),
+                "saving the conditions already recorded was treated as a change")
+        require(app.store._connection.total_changes == before,
+                "saving an unchanged condition wrote a version")
+
+    workspace.close_window(host, app)
+
+
+def workflow_o_whats_happening(run: Run) -> None:
+    """The What's happening tab: unresolved work first, evidence before a settlement, no sending.
+
+    The properties worth checking here are the ones a screenshot cannot show: an attempt nobody
+    settled is listed and blocks, settling it needs evidence and one explicit yes, a declined dialog
+    leaves the database byte-for-byte as it was, and the notification preference stores a choice
+    without this application gaining any way to reach the person. Nothing in this workflow sends,
+    fetches or submits anything - the only writes are rows in a disposable local database.
+    """
+    from career_agent.attempts import AttemptState  # noqa: PLC0415 - only this workflow needs it
+    from career_agent.notifications import Cadence  # noqa: PLC0415
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.report_tab)
+
+    with results.step("O1 the tab reports from the records, and says what it did not do"):
+        press(app.report_tab, "Refresh", workspace.root)
+        summary = app.report_summary.get()
+        require("need you" in summary or "needs you" in summary,
+                f"the summary says {summary!r}")
+        require(summary.count("need you") <= 1,
+                f"the summary counts the same records twice: {summary!r}")
+        require("nothing here was fetched" in app.report_text.get(),
+                "the report does not state that nothing was fetched, sent or submitted")
+        require("plans, not outcomes" in app.report_text.get(),
+                "the report does not say that scheduled work is not a thing that happened")
+
+    with results.step("O2 an unresolved attempt is listed, and says what it blocks"):
+        app.store.begin_attempt(operation_id="acceptance-op-1", identity_key="job:acceptance",
+                                action="email_send")
+        press(app.report_tab, "Refresh", workspace.root)
+        rows = [app.attempt_tree.item(item, "values")
+                for item in app.attempt_tree.get_children()]
+        require(len(rows) == 1 and rows[0][0] == "acceptance-op-1", f"the list shows {rows!r}")
+        require("outcome not established" in rows[0][4],
+                f"an unsettled attempt is described as {rows[0][4]!r}")
+        app.attempt_tree.selection_set("acceptance-op-1")
+        app._on_attempt_selection()
+        require("blocks any further attempt" in app.attempt_detail.get(),
+                "the detail does not say that an unresolved attempt blocks a retry")
+
+    with results.step("O3 settling without evidence is refused, and writes nothing"):
+        dialogs.reset()
+        before = app.store._connection.total_changes
+        app.attempt_evidence.set(" ")
+        press(app.report_tab, "Record what happened...", workspace.root)
+        require("Nothing was recorded" in dialogs.titles("showerror"),
+                f"no refusal was shown; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                f"a settlement with no evidence still asked the question: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a refused settlement changed the database")
+        require(len(app.store.unresolved_attempts()) == 1, "the attempt was settled anyway")
+
+    with results.step("O4 a declined confirmation leaves the attempt unresolved"):
+        dialogs.reset()
+        dialogs.answers["Record this outcome"] = False
+        app.attempt_evidence.set("checked the provider's own log")
+        before = app.store._connection.total_changes
+        press(app.report_tab, "Record what happened...", workspace.root)
+        require("Record this outcome" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.unresolved_attempts()) == 1,
+                "a declined confirmation settled the attempt")
+
+    with results.step("O5 accepting records the outcome with the evidence, and clears the block"):
+        dialogs.reset()
+        dialogs.answers["Record this outcome"] = True
+        app.attempt_outcome.set("It did happen")
+        app.attempt_evidence.set("checked the provider's own log")
+        press(app.report_tab, "Record what happened...", workspace.root)
+        stored = app.store.get_attempt("acceptance-op-1")
+        require(stored.state is AttemptState.PERFORMED,
+                f"the attempt was recorded as {stored.state!r}")
+        require("provider's own log" in stored.evidence,
+                f"the evidence stored is {stored.evidence!r}")
+        require(app.store.unresolved_attempts() == (), "the attempt is still listed as unresolved")
+        require(app.attempt_tree.get_children() == (), "the settled attempt is still on screen")
+        require(app.attempt_evidence.get() == "",
+                "the evidence box kept its text, which the next attempt could inherit")
+
+    with results.step("O6 a notification preference is stored, and still reaches nobody"):
+        dialogs.reset()
+        dialogs.answers["Save this preference"] = True
+        app.notification_vars["cadence"].set("Every day")
+        app.notification_vars["hour"].set("8")
+        press(app.report_tab, "Save this preference...", workspace.root)
+        preferences = app.store.get_notification_preferences()
+        require(preferences.cadence is Cadence.DAILY,
+                f"the cadence stored is {preferences.cadence!r}")
+        require(preferences.hour == 8, f"the hour stored is {preferences.hour!r}")
+        require("no email" in dialogs.said("Save this preference"),
+                "the confirmation does not say that nothing is sent anywhere")
+        require("Nothing is sent anywhere" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+
+    workspace.close_window(host, app)
+
+
+def workflow_p_sources_and_evidence(run: Run) -> None:
+    """The Sources & evidence tab: why nothing runs, and what recording evidence does not do.
+
+    The one property worth more than all the others here is negative: a person can record every
+    requirement for a route and *nothing opens*. The gates are decisions in this build's code, and
+    this workflow checks that they are still closed after the database says the evidence is in.
+    Nothing in this workflow fetches, sends or submits anything.
+    """
+    from career_agent import sources as source_rules  # noqa: PLC0415 - only this workflow needs it
+    from career_agent.acceptance_evidence import EvidenceKind  # noqa: PLC0415
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.evidence_tab)
+
+    with results.step("P1 every reviewed source is listed, with both gates closed"):
+        rows = [app.source_tree.item(item, "values") for item in app.source_tree.get_children()]
+        require(len(rows) == len(source_rules.SOURCE_DECISIONS),
+                f"the list shows {len(rows)} source(s) of {len(source_rules.SOURCE_DECISIONS)}")
+        closed = [row for row in rows if row[3] == "closed" and row[4] == "closed"]
+        require(len(closed) == len(rows), f"a source is shown as open: {rows!r}")
+        require("has not passed" in app.source_summary.get(),
+                f"the summary says {app.source_summary.get()!r}")
+
+    with results.step("P2 a selected source says what is holding it back, not just that it is off"):
+        first = app.source_tree.get_children()[0]
+        app.source_tree.selection_set(first)
+        app._on_source_selection()
+        detail = app.source_detail.get()
+        require("Discovery: closed - " in detail, "the detail gives no reason for discovery")
+        require("Submission: closed - " in detail, "the detail gives no reason for submission")
+        require(len(detail) > 120, f"the detail is too short to be a reason: {detail!r}")
+
+    with results.step("P3 evidence with nothing to check is refused before any question"):
+        dialogs.reset()
+        app.evidence_route_tree.selection_set("employer_site")
+        app.evidence_kind_tree.selection_set("terms_review")
+        app.evidence_reference.set("ok")
+        app.evidence_note.set("read their published terms in full")
+        before = app.store._connection.total_changes
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require("Nothing was recorded" in dialogs.titles("showerror"),
+                f"no refusal was shown; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                f"a refused record still asked the question: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a refused record changed the database")
+
+    with results.step("P4 a declined confirmation records nothing"):
+        dialogs.reset()
+        dialogs.answers["Record this evidence"] = False
+        app.evidence_reference.set("research/source-permission-decision-matrix-2026-10-14.md")
+        before = app.store._connection.total_changes
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require("Record this evidence" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require("switches nothing on" in dialogs.said("Record this evidence"),
+                "the confirmation does not say that recording evidence enables nothing")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.held_evidence_kinds("employer_site") == (),
+                "the evidence was recorded anyway")
+
+    with results.step("P5 a confirmed record is stored and read back, and opens no source"):
+        dialogs.reset()
+        dialogs.answers["Record this evidence"] = True
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require(app.store.held_evidence_kinds("employer_site") == (EvidenceKind.TERMS_REVIEW,),
+                f"what is held is {app.store.held_evidence_kinds('employer_site')!r}")
+        shown = {values[0]: values for values in
+                 (app.evidence_route_tree.item(item, "values")
+                  for item in app.evidence_route_tree.get_children())}
+        require(shown["employer_site"][2] == "1 of 9 recorded",
+                f"the route row reads {shown['employer_site']!r}")
+        require(source_rules.enabled_discovery_sources() == (),
+                "recording evidence switched a discovery source on")
+        require(not source_rules.SOURCE_QUALITY_GATE_PASSED,
+                "recording evidence opened the source-quality gate")
+        require(not source_rules.discovery_gate("jobicy").allowed,
+                "recording evidence opened a discovery gate")
+        require(app.evidence_reference.get() == "",
+                "the reference box kept its text, which the next record could inherit")
+
+    with results.step("P6 withdrawing needs a reason, and returns the route to missing"):
+        dialogs.reset()
+        dialogs.answers["Withdraw this evidence"] = True
+        app.evidence_route_tree.selection_set("employer_site")
+        app.evidence_kind_tree.selection_set("terms_review")
+        app.evidence_note.set("no")
+        press(app.evidence_tab, "Withdraw it...", workspace.root)
+        require("Nothing was changed" in dialogs.titles("showerror"),
+                f"a noteless withdrawal was not refused; dialogs: {dialogs.titles()!r}")
+        require(app.store.held_evidence_kinds("employer_site") == (EvidenceKind.TERMS_REVIEW,),
+                "the record was removed without a reason")
+        app.evidence_note.set("their terms changed this month")
+        press(app.evidence_tab, "Withdraw it...", workspace.root)
+        require(app.store.held_evidence_kinds("employer_site") == (),
+                "the record is still held after a confirmed withdrawal")
+        require("now misses it" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 def workflow_f_cleanup(run: Run) -> None:
     workspace, results = run.workspace, run.results
 
@@ -3941,8 +4856,8 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
                 siblings = [frame] + ([parent for parent in descendants(frame)] if frame else [])
                 labelled = any(
                     getattr(sibling, "winfo_class", None) is not None
-                    and sibling.winfo_class() in ("TLabel", "Label")
-                    and str(sibling.cget("text") or "").strip()
+                    and sibling.winfo_class() in ("TLabel", "Label", "TLabelframe", "Labelframe")
+                    and visible_text(sibling)
                     for sibling in siblings
                 )
                 if not labelled:
@@ -3962,6 +4877,9 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
 #: The reason this run types beside a mark. A person's own words about somebody, and the text that must
 #: never reach a dialog, a status line or an event: the run checks exactly that after storing it.
 SYNTHETIC_MARK_REASON = "synthetic note typed by the acceptance run"
+#: The note a removal is recorded with, in the same spirit: the person's own words, which the
+#: window stores and shows nowhere else.
+SYNTHETIC_LIFT_NOTE = "they wrote back and asked to hear from us (synthetic)"
 #: A second reason, typed beside the mark on the *other* contact, so that deleting one record can be shown
 #: to leave the other contact's mark - and the words written beside it - exactly where they were.
 SYNTHETIC_OTHER_MARK_REASON = "synthetic note about the contact the run does not delete"
@@ -4169,8 +5087,20 @@ def workflow_l_contact_import(run: Run) -> None:
         require(marked.suppressed, "the mark was not stored")
         require(marked.suppressed_note == SYNTHETIC_MARK_REASON,
                 f"the reason was not stored with the mark: {marked.suppressed_note!r}")
-        require(app.store._connection.total_changes - before == 1,
-                f"marking changed {app.store._connection.total_changes - before} row(s), not one")
+        # Two rows, and exactly two: the mark on the stored contact, and the address on the
+        # do-not-contact list this application checks before anything may be sent. One decision,
+        # recorded in both places it has to be, from one confirmation.
+        require(app.store._connection.total_changes - before == 2,
+                f"marking changed {app.store._connection.total_changes - before} row(s), not two")
+        require(app.store.is_suppressed(key),
+                "the mark did not reach the list the sending gate reads")
+        listed = [app.suppression_tree.item(item, "values")
+                  for item in app.suppression_tree.get_children()]
+        require(len(listed) == 1 and listed[0][0] == key, f"the panel shows {listed!r}")
+        require(listed[0][3] == "a note is recorded",
+                f"the panel does not say a note is kept: {listed!r}")
+        require(SYNTHETIC_MARK_REASON not in " ".join(str(value) for value in listed[0]),
+                "the note's own text was drawn in the list")
         row = app.stored_contacts_tree.item(str(marked.contact_id), "values")
         require("do not contact" in str(row[5]), f"the stored list does not show the mark: {row!r}")
         require("1 marked do-not-contact" in app.contacts_summary.get(),
@@ -4189,6 +5119,48 @@ def workflow_l_contact_import(run: Run) -> None:
         for value in (*SYNTHETIC_CONTACT_ROWS[0][:3], SYNTHETIC_MARK_REASON,
                       "synthetic-contacts.csv"):
             require(value not in written, f"{value!r} reached the activity log")
+
+    with results.step("L9b taking that mark off needs a note, and then clears both records"):
+        # The mark L9 made is on the enforced list, which will not give an address up without a note.
+        # The refusal has to come before the question, not after it.
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, " no ")
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        require("Nothing was changed" in policy.titles("showerror"),
+                f"a removal with no note was not refused; dialogs: {policy.titles()!r}")
+        require(policy.titles("askyesno") == [],
+                "the window asked a question it was going to refuse")
+        require(app.store._connection.total_changes == before,
+                "a refused removal wrote to the database")
+        require(app.store.is_suppressed(key), "a refused removal took the address off the list")
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_LIFT_NOTE)
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.contacts_tab, "Remove do-not-contact mark", workspace.root)
+        require(not app.store.is_suppressed(key),
+                "the address stayed on the list the sending gate reads")
+        require(not app.store.get_contact(key).suppressed, "the mark was left on the stored contact")
+        require(app.store._connection.total_changes - before == 2,
+                f"the removal changed {app.store._connection.total_changes - before} row(s), not two")
+        require(app.suppression_tree.get_children() == (),
+                "the panel still lists an address that is no longer on the list")
+        said = policy.said("Remove this contact's do-not-contact mark") + "\n" + app.status.get()
+        require(SYNTHETIC_LIFT_NOTE not in said, "the note's own text reached a dialog")
+        # Put the mark back the way a person would, because the steps after this one are about what
+        # an import, a review and a deletion do to a contact that carries one. Leaving it off here
+        # would quietly weaken four later checks rather than adding this one.
+        policy.reset()
+        app.contact_note_entry.delete(0, "end")
+        app.contact_note_entry.insert(0, SYNTHETIC_MARK_REASON)
+        workspace.root.update()
+        press(app.contacts_tab, "Mark do not contact", workspace.root)
+        require(app.store.get_contact(key).suppressed and app.store.is_suppressed(key),
+                "the mark was not put back, so the later steps would check a weaker state")
 
     contradicting_path = workspace.folder / "contradicting-contacts.csv"
     contradicting_path.write_text(
@@ -4619,6 +5591,46 @@ def workflow_l_contact_import(run: Run) -> None:
         for fragment in ("no-such-folder", str(missing)):
             require(fragment not in written, f"{fragment!r} reached the activity log")
 
+    with results.step("L21 an address nobody imported can be put on the do-not-contact list"):
+        from career_agent.suppression import SuppressionReason  # noqa: PLC0415
+
+        policy.reset()
+        policy.answers["Add to the do-not-contact list"] = True
+        stranger = "never.imported@example.invalid"
+        before_contacts = app.store.contact_record_counts()["contacts"]
+        app.suppression_address.set(stranger)
+        app.suppression_add_reason.set("they asked not to be contacted")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        entry = app.store.suppression_for(stranger)
+        require(entry is not None, "the address was not recorded on the do-not-contact list")
+        require(entry.reason is SuppressionReason.ASKED_TO_STOP,
+                f"the reason recorded is {entry.reason!r}")
+        require(app.store.contact_record_counts()["contacts"] == before_contacts,
+                "listing an address invented a contact row")
+        require("permanent in this application" in policy.said("Add to the do-not-contact list"),
+                "the confirmation does not say what this reason means")
+
+    with results.step("L22 an unusable address is refused, and a listed one keeps its first reason"):
+        policy.reset()
+        policy.answers["Add to the do-not-contact list"] = True
+        before = app.store._connection.total_changes
+        app.suppression_address.set("not an address")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        require("The do-not-contact list was not changed" in policy.titles("showerror"),
+                f"an unusable address was not refused; dialogs: {policy.titles()!r}")
+        require(policy.titles("askyesno") == [],
+                f"an unusable address still asked the question: {policy.titles()!r}")
+        policy.reset()
+        app.suppression_address.set("Never.Imported@example.invalid")
+        app.suppression_add_reason.set("our own decision")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        require("Already on the list" in policy.titles("showinfo"),
+                f"a repeat was not reported; dialogs: {policy.titles()!r}")
+        require(app.store.suppression_for("never.imported@example.invalid").reason.value
+                == "asked_to_stop", "a repeat overwrote the first reason recorded")
+        require(app.store._connection.total_changes == before,
+                "a refused and a repeated entry changed the database")
+
     workspace.close_window(host, app)
 
 
@@ -4638,6 +5650,11 @@ WORKFLOWS = (
     ("J - data safety: backup and restore", workflow_j_data_safety),
     ("K - layout, focus order and labelling, measured", workflow_k_layout_focus_labels),
     ("L - HR contact import: preview, refusal, cancel and confirm", workflow_l_contact_import),
+    ("M - tailored documents: lineage, refusal and rebuild", workflow_m_tailored_documents),
+    ("N - permissions: confirmation, withdrawal and the closed gate", workflow_n_permissions),
+    ("O - what's happening: unresolved work, evidence and notifications", workflow_o_whats_happening),
+    ("P - sources and acceptance evidence: closed gates, recorded and withdrawn",
+     workflow_p_sources_and_evidence),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 

@@ -37,8 +37,12 @@ def job(listing_id: str = "j1", *, url: str | None = None, employer: str = "Sand
                       work_mode="hybrid")
 
 
-class ImportTestCase(unittest.TestCase):
-    """A source database (exported from) and a target database (imported into), both disposable."""
+class ImportFixtureBase(unittest.TestCase):
+    """A source database (exported from) and a target database (imported into), both disposable.
+
+    Fixtures only, no tests of its own: every class that needs the workspace inherits it, and the
+    suite count stays the number of behaviours verified rather than multiplying them per subclass.
+    """
 
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
@@ -80,6 +84,10 @@ class ImportTestCase(unittest.TestCase):
             target = self.folder / name
             importer.write_export(store, target)
         return target, json.loads(target.read_text(encoding="utf-8"))
+
+
+class ImportTestCase(ImportFixtureBase):
+    """The export/import contract itself: the format, the refusals and the plan."""
 
     # ------------------------------------------------------------------ the format
     def test_the_export_carries_the_profile_the_listing_the_record_and_the_history(self):
@@ -813,6 +821,107 @@ class ImportTestCase(unittest.TestCase):
             self.assertEqual(
                 [(entry["kind"], entry["occurred_on"], entry["detail"]) for entry in before["activity"]],
                 [(entry["kind"], entry["occurred_on"], entry["detail"]) for entry in after["activity"]])
+
+
+class NonStandardNumberTests(ImportFixtureBase):
+    """Numbers this format must never carry: NaN/Infinity literals, overflows and booleans.
+
+    ``json.loads`` accepts the non-standard constants ``NaN``, ``Infinity`` and ``-Infinity`` by
+    default, ``float()`` turns the overflowing literal ``1e400`` into ``inf``, ``float(True)`` is
+    ``1.0`` and ``int(float("inf"))`` raises ``OverflowError`` - four ways a number no eligibility
+    check can use reaches a numeric field, or crashes an import mid-write. An export written by this
+    application never holds one (``validation.optional_float`` refuses them on the way in), so a file
+    that does was not written by this application, and the constant-bearing file is refused whole
+    while a merely overflowing or boolean value is dropped from its field like any other value the
+    coercion cannot read.
+    """
+
+    def tampered_file(self, document: dict, old: str, new: str, name: str) -> Path:
+        raw = json.dumps(document)
+        self.assertIn(old, raw)
+        target = self.folder / name
+        target.write_text(raw.replace(old, new), encoding="utf-8")
+        return target
+
+    def test_a_nan_literal_is_refused_and_nothing_is_read(self):
+        _, document = self.export_file()
+        target = self.tampered_file(document, '"experience_years": 3.0', '"experience_years": NaN',
+                                    "nan.json")
+        with self.assertRaises(importer.ImportRefused) as caught:
+            importer.read_export(target)
+        self.assertIn("NaN", str(caught.exception))
+        with self.target_store() as store:
+            self.assertIsNone(store.get_profile())
+
+    def test_infinity_and_negative_infinity_literals_are_refused(self):
+        _, document = self.export_file()
+        for constant in ("Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                target = self.tampered_file(
+                    document, '"experience_years": 3.0', f'"experience_years": {constant}',
+                    f"{constant.strip('-').lower()}.json")
+                with self.assertRaises(importer.ImportRefused) as caught:
+                    importer.read_export(target)
+                self.assertIn(constant, str(caught.exception))
+
+    def test_a_constant_anywhere_in_the_document_refuses_the_whole_file(self):
+        _, document = self.export_file()
+        target = self.tampered_file(document, '"minimum_experience_years": null',
+                                    '"minimum_experience_years": NaN', "nested-nan.json")
+        with self.assertRaises(importer.ImportRefused):
+            importer.read_export(target)
+
+    def test_an_overflowing_number_is_dropped_from_its_field_not_stored_as_infinity(self):
+        _, document = self.export_file()
+        target = self.tampered_file(document, '"experience_years": 3.0', '"experience_years": 1e400',
+                                    "overflow.json")
+        parsed = importer.read_export(target)
+        with self.target_store() as store:
+            importer.apply_import(store, parsed, source=str(target))
+            stored = store.get_profile()
+        self.assertIsNotNone(stored)
+        self.assertIsNone(stored.experience_years)
+        self.assertEqual(stored.candidate_country, "India")
+
+    def test_a_boolean_in_a_numeric_field_is_dropped_not_read_as_one(self):
+        _, document = self.export_file()
+        target = self.tampered_file(document, '"experience_years": 3.0', '"experience_years": true',
+                                    "boolean.json")
+        parsed = importer.read_export(target)
+        with self.target_store() as store:
+            importer.apply_import(store, parsed, source=str(target))
+            self.assertIsNone(store.get_profile().experience_years)
+
+    def test_an_overflowing_graduation_year_is_dropped_instead_of_crashing_the_import(self):
+        """``int(float("inf"))`` raises ``OverflowError``: before the fix this crashed mid-import."""
+        _, document = self.export_file()
+        document["profile"]["graduation_year"] = None
+        target = self.tampered_file(document, '"graduation_year": null', '"graduation_year": 1e400',
+                                    "overflow-year.json")
+        parsed = importer.read_export(target)
+        with self.target_store() as store:
+            importer.apply_import(store, parsed, source=str(target))
+            self.assertIsNone(store.get_profile().graduation_year)
+
+    def test_a_boolean_job_experience_bound_is_dropped_not_read_as_one(self):
+        _, document = self.export_file()
+        target = self.tampered_file(document, '"minimum_experience_years": null',
+                                    '"minimum_experience_years": true', "boolean-job.json")
+        parsed = importer.read_export(target)
+        with self.target_store() as store:
+            importer.apply_import(store, parsed, source=str(target))
+            self.assertIsNone(store.get_job("j1").minimum_experience_years)
+
+    def test_the_export_refuses_to_write_a_stored_non_finite_number(self):
+        """A file this app writes must be readable by this app: no poisoned backup."""
+        with self.source_store() as store:
+            store.save_profile(CandidateProfile(candidate_country="India",
+                                                experience_years=float("inf")))
+            target = self.folder / "poisoned.json"
+            with self.assertRaises(importer.PrivateWriteError) as caught:
+                importer.write_export(store, target)
+            self.assertIn("not a finite number", str(caught.exception))
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

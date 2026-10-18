@@ -40,6 +40,7 @@ it, and the command line prints it unless `--yes` is given.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -297,7 +298,18 @@ def write_export(store: CareerStore, path: str | Path) -> Path:
     never written through a symbolic link. Raises :class:`PrivateWriteError` with a message to show.
     """
     document = export_document(store)
-    text = json.dumps(document, indent=2, ensure_ascii=False)
+    try:
+        # ``allow_nan=False`` keeps the promise this module reads back under: a file this application
+        # writes is always strict JSON, so it can never hold a ``NaN``/``Infinity`` literal that its own
+        # importer refuses. A stored non-finite number can only come from a database damaged before this
+        # check existed, and refusing to write the file is honest where writing a poisoned backup is not.
+        text = json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        raise PrivateWriteError(
+            f"The export was not written: a stored value is not a finite number ({exc}). An export must "
+            "be readable by this application, and NaN/Infinity are not numbers any eligibility check can "
+            "use. Nothing was written."
+        ) from exc
     return write_private_text_file(path, text)
 
 
@@ -335,7 +347,18 @@ def read_export(path: str | Path) -> dict[str, Any]:
     except OSError as exc:
         raise ImportRefused(f"{target} could not be read: {exc.strerror or exc}.") from exc
     try:
-        document = json.loads(text)
+        # ``parse_constant`` closes the last way a number this format must never carry could get in:
+        # ``json.loads`` accepts the non-standard literals ``NaN``, ``Infinity`` and ``-Infinity`` by
+        # default, and a file holding one was not written by this application (its own writer refuses
+        # them, above). Refusing the whole file is right here - a document whose numbers include one no
+        # eligibility check can use is not a document to take any field from.
+        def refuse_constant(name: str, target: Path = target) -> float:
+            raise ImportRefused(
+                f"{target} holds {name}, which is not valid JSON and never appears in an export written "
+                "by this application. Nothing was read from it."
+            )
+
+        document = json.loads(text, parse_constant=refuse_constant)
     except json.JSONDecodeError as exc:
         raise ImportRefused(
             f"{target} is not valid JSON (line {exc.lineno}, column {exc.colno}: {exc.msg}). Nothing was "
@@ -937,14 +960,24 @@ def _year_list(value: Any) -> tuple[int, ...] | None:
 
 
 def _year(value: Any) -> int | None:
+    # A boolean is not a year (``int(True)`` is 1), and ``int(float("inf"))`` raises ``OverflowError``,
+    # which once crashed an import mid-write: an overflowing literal is dropped like any unreadable value.
+    if value is None or isinstance(value, bool):
+        return None
     try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
 def _number(value: Any) -> float | None:
-    try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
+    # ``float()`` accepts ``nan``, ``inf`` and ``1e400``, and ``float(True)`` is ``1.0``; none of those
+    # is a number this format carries, so a boolean or a non-finite value is dropped from its field -
+    # "not stated" - rather than stored as a value no eligibility comparison can use.
+    if value is None or isinstance(value, bool):
         return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None

@@ -1,8 +1,11 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 123 steps — at this revision **22 PASS, 101 BLOCKED, 0 FAIL, no box ticked** (the six
-newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
-BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 123 steps today, 101 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 179 steps — at this revision **22 PASS, 157 BLOCKED, 0 FAIL, no box ticked** (the newest
+steps are 173-179, for building a first tailored document from the window and saving a copy of it to a
+file, 170-172, for listing an address nobody imported, 164-169, for trying to send a follow-up
+through the guard, and 157-163, for the Sources & evidence tab; all sixteen are BLOCKED. Steps 151-156,
+for the conditions and the quiet window, 137-143, for the What's happening tab, and 144-150, for the
+do-not-contact list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1299,3 +1302,247 @@ second verification pass, after the first run was already green.
   window's questions and hints read clearly and its sentence about a blank staying unknown is understood;
   whether the confirmation that a save is about to record makes it clear that the answer becomes the person's own
   statement; and whether the whole panel looks like part of the profile tab rather than bolted on.
+
+124. [ ] Open the **Tailored documents** tab with at least one prepared document stored. Read the list: each row
+    must say what kind of document it is, which listing it was prepared for, which strategy version it was built
+    under, when it was built, **which file its facts were read from**, and whether it is still current. Judge
+    whether those six columns fit the tab at 1120x760 and at 900x600 without the list being cut off, and whether
+    the sentence above them makes it clear that nothing here is sent anywhere.
+    → **BLOCKED — no display and no Tkinter in the acceptance environment; the cell values are asserted through
+    the real window in acceptance check M1 and in the handler tests, but whether they read clearly and fit is a
+    person's judgement.**
+125. [ ] Change one saved fact (for example your years of experience) and come back to this tab. The row must
+    change by itself when you press **Refresh**, say *Rebuild before use* and **name the fact that moved**. Judge
+    whether somebody who has not read the code could tell, from that row alone, what happened and what to do.
+    → **BLOCKED — the state text and the named fact are asserted in acceptance check M2; whether the wording
+    explains itself to a person is not something a test can answer.**
+126. [ ] Select that row and press **Check before use**. The refusal must open as a dialog that lists what moved
+    and asks whether to rebuild. Choose **No** and confirm by reading the list again that nothing changed, then
+    check that the status line says the document was not used.
+    → **BLOCKED — acceptance check M3 asserts the dialog, its reasons and that a declined offer writes nothing;
+    whether the dialog is understandable and the choice feels safe is a person's check.**
+127. [ ] Press **Check before use** again and choose **Yes**. A new document must appear as *Current*, the old one
+    must still be listed and still say it needs rebuilding, and the status line must name both documents and any
+    requirement your facts do not state. Confirm the old document's text is unchanged by opening it from a backup
+    or export if you keep one.
+    → **BLOCKED — acceptance check M4 asserts the append, the kept content and the reported gap through the real
+    window; judging the wording and the sense of what just happened is a person's check.**
+128. [ ] Press **Rebuild from current facts...** on a document that is already current and choose **No** at the
+    confirmation. Nothing may change, and the status line must say so. Then judge whether the confirmation makes
+    clear that the document you have now is kept.
+    → **BLOCKED — acceptance check M5 asserts the confirmation and the zero-write decline; the wording is a
+    person's judgement.**
+129. [ ] Keyboard and screen reader: reach the list with **Tab**, move the selection with the arrow keys and use
+    both controls without a mouse. Check that the two controls are announced as disabled while nothing is
+    selected, and listen to what a screen reader makes of a row whose last cell is a sentence about what moved.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The disabled
+    state is asserted in the handler tests; everything about focus order, announcement and native feel is not.**
+130. [ ] Open **Permissions & limits** on a database you have never authorised anything in. Read the summary and
+    judge whether it is unmistakable that nothing is authorised, and that permitting something here still would
+    not make it run.
+    → **BLOCKED — acceptance check N1 asserts the summary and the empty list; whether a person reads it as
+    "nothing will happen without me" is a person's judgement.**
+131. [ ] Choose a source and an action, type a daily ceiling, press **Authorise this...** and choose **No**.
+    Nothing may be written: check the list is unchanged and the status line says the authorisation was cancelled.
+    → **BLOCKED — acceptance check N2 asserts the confirmation and that a declined dialog writes nothing at all;
+    the wording of the question is a person's check.**
+132. [ ] Press it again and choose **Yes**. The row must appear with the ceiling you typed, the summary must name
+    the version number, and the status line must say that nothing was started. Close the window, open it again
+    and confirm the permission is still there.
+    → **BLOCKED — acceptance check N3 and the handler tests assert the stored version, the row and the reopened
+    window; judging that the version number means something to you is yours.**
+133. [ ] Select the row and press **What would happen now?**. The answer must be a refusal that names the closed
+    source gate, not a run. Judge whether it is clear that the refusal comes from the build, not from a mistake
+    you made.
+    → **BLOCKED — acceptance check N4 asserts the refusal and the named gate; the clarity is a person's check.**
+134. [ ] Press **Remove the selected permission...** and choose **No**, then **Yes**. Confirm the declined one
+    changed nothing and the confirmed one removed the permission while the summary moved to a new version.
+    → **BLOCKED — acceptance check N5 asserts both halves against the database's own change counter.**
+135. [ ] Press **Stop everything now...**, then **Withdraw all authorisation...**, declining each the first time.
+    Confirm that a withdrawal does not erase what it withdrew: the rows stay visible, marked as withdrawn.
+    → **BLOCKED — acceptance check N6 asserts the confirmation, the zero-write decline and the kept history.**
+136. [ ] Keyboard and screen reader: reach the source and action choosers, the ceiling box and every button with
+    **Tab** alone, and operate them without a mouse. Listen to how a screen reader announces the confirmation
+    dialogs, which are the point at which something is written.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. Focus order
+    is counted in acceptance check K4 under a stand-in; announcement and native feel are not established.**
+
+## What's happening: the report, unsettled attempts and the notification preference (added 2026-10-18)
+
+137. [ ] Open **What's happening** on a database you have used for a while. Read the summary line and the
+    report under it. The summary must be the report's own headline and must not state a count the report
+    states again in different words; the report must name what it did not do — nothing fetched, sent or
+    submitted — and must describe scheduled work and queued runs as plans rather than outcomes.
+    → **BLOCKED — acceptance check O1 asserts the headline is used once and both caveats are present.**
+138. [ ] Switch the window chooser from **the last day** to **the last seven days** and press **Refresh**.
+    The report must change period and the dates-ahead section must widen with it, and nothing must be
+    written: the tab is a reader.
+    → **BLOCKED — the handler tests assert the window change and that no row is written; the visible
+    re-draw at a real window size is not established.**
+139. [ ] With an attempt whose outcome was never established in the database, confirm it is listed before
+    anything else, that its row says *outcome not established* rather than failed, and that selecting it
+    explains that it blocks any further attempt on the same job and action.
+    → **BLOCKED — acceptance check O2 asserts the row, its wording and the explanation.**
+140. [ ] Select it, leave the evidence box empty and press **Record what happened...**. The refusal must be a
+    dialog, no confirmation may be asked, and nothing may be written.
+    → **BLOCKED — acceptance check O3 asserts the refusal, the absent confirmation and the unchanged
+    database change counter.**
+141. [ ] Type what you checked, press the button and choose **No**. Then press it again and choose **Yes**.
+    The declined one must change nothing; the confirmed one must quote your note back, store it as the
+    evidence, take the row off the list and leave the evidence box empty for the next one.
+    → **BLOCKED — acceptance checks O4 and O5 assert both halves, the stored evidence and the cleared box.**
+142. [ ] Set a notification preference — every day, an hour, in this window — and confirm. Close the
+    application, wait past that hour and reopen it. Nothing may have been sent anywhere while it was closed,
+    and the tab must read back the preference you set.
+    → **BLOCKED — acceptance check O6 asserts the stored preference and the confirmation's wording; that
+    nothing arrived while the application was closed needs a machine to watch for a day.**
+143. [ ] Keyboard and screen reader: reach the window chooser, the attempt list, the outcome chooser, the
+    evidence box and both confirmation buttons with **Tab** alone, and operate them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## HR contacts: the do-not-contact list the sending gate reads (added 2026-10-18)
+
+144. [ ] Select a stored contact that carries no mark. Confirm the **Why** chooser offers exactly five
+    reasons and no blank entry, and that the note box is usable.
+    → **BLOCKED — acceptance check L9 reads the offered values off the real chooser under a stand-in;
+    what they look like at a real window size is not established.**
+145. [ ] Type a note, press **Mark do not contact** and read the confirmation before answering. It must
+    say that the address goes on the list this application checks before anything may be sent, and that
+    recording an address twice keeps the first reason. Answer **Yes**.
+    → **BLOCKED — acceptance check L9 asserts both sentences and both stored records.**
+146. [ ] Confirm the address now appears in the do-not-contact list under the stored contacts, with its
+    reason and the day, and that the note's own text appears nowhere — not in the list, not in the
+    dialog you just read, and not in `logs/application.log`.
+    → **BLOCKED — acceptance check L9 asserts the row, the "a note is recorded" cell and the log.**
+147. [ ] Press **Remove do-not-contact mark** with the note box empty. The refusal must be a dialog, no
+    confirmation may be asked, and both records must be unchanged.
+    → **BLOCKED — acceptance check L9b asserts the refusal, the absent question and the change counter.**
+148. [ ] Type why you are removing it, press the button again and answer **Yes**. The mark and the list
+    entry must both go, and the list above must be empty.
+    → **BLOCKED — acceptance check L9b asserts both records and the redrawn panel.**
+149. [ ] On a database marked with an older build (a contact whose row says *do not contact* while the
+    list below is empty), confirm the line above the list says how many marked contacts are not on it,
+    and that the state line for that contact says the same.
+    → **BLOCKED — the handler tests assert both sentences; a database carried over from an older build
+    on a real machine has not been opened here.**
+150. [ ] Keyboard and screen reader: reach the reason chooser, the note box and both mark controls with
+    **Tab** alone, and operate them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## Permissions & limits: the conditions and the quiet window (added 2026-10-18)
+
+151. [ ] Open **Permissions & limits** on a database with no conditions. The line above the boxes must
+    say that no role, place or follow-up condition is recorded, that no quiet hours are recorded, and
+    that with no attachment rule nothing may be attached at all.
+    → **BLOCKED — acceptance check N7 and the handler tests assert the sentence; it has not been read
+    on a screen.**
+152. [ ] Type a role term and a quiet window, press **Record these conditions...** and read the
+    confirmation. It must list each change in both directions, say that a condition can only narrow,
+    and name the version it is about to write. Answer **No**: nothing may be written.
+    → **BLOCKED — acceptance check N7 asserts the wording and the unchanged change counter.**
+153. [ ] Clear the *until* box and press the button again. The refusal must appear with no confirmation
+    asked, and nothing may be written.
+    → **BLOCKED — acceptance check N8 asserts the refusal and the absent question.**
+154. [ ] Put the hour back, add a file ending, and confirm. Re-open the tab: the boxes must read back
+    exactly what was stored, and pressing save again must report that there is nothing to change.
+    → **BLOCKED — acceptance check N9 asserts the stored value, the read-back and the no-op save.**
+155. [ ] With a permission already authorised, record a condition and confirm the permission and its
+    daily ceiling are untouched, and that the version number moved by exactly one.
+    → **BLOCKED — acceptance check N9 and the handler tests assert both; no display-backed run.**
+156. [ ] Keyboard and screen reader: reach all six boxes and the button with **Tab** alone, and operate
+    them without a mouse.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## Sources & evidence: the closed gates and the evidence you record (added 2026-10-18)
+
+157. [ ] Open **Sources & evidence** on any database. Read the source list and the summary above it and
+    judge whether it is unmistakable that nothing is being fetched *by decision* rather than by accident.
+    → **BLOCKED — acceptance check P1 asserts every source is listed with both gates closed and that the
+    summary says the quality gate has not passed; whether a person reads it as a decision is judgement.**
+158. [ ] Select a source and read the detail underneath. Check that the reason it is closed is a sentence
+    you could repeat to somebody else, and that the conditions from the review are visible.
+    → **BLOCKED — acceptance check P2 asserts both gate reasons and the length of the detail; whether the
+    reason is *understandable* is a person's judgement.**
+159. [ ] Choose a route and a requirement, type two characters in **Where to check it**, and press
+    **Record this evidence...**. Nothing may be written and no confirmation may appear.
+    → **BLOCKED — acceptance check P3 and two handler tests assert the refusal before the question and the
+    unchanged change counter; no display-backed run.**
+160. [ ] Fill both boxes properly, press **Record this evidence...** and choose **No**. Read the question
+    first: check it says, in words you believe, that recording this switches nothing on.
+    → **BLOCKED — acceptance check P4 asserts the question's wording and that a declined dialog writes
+    nothing; whether the sentence is convincing is a person's judgement.**
+161. [ ] Record the same requirement a second time. Check the window refuses rather than overwriting, and
+    that it tells you to withdraw the first record instead.
+    → **BLOCKED — the store test and the tab's disabled **Record** button assert this; no display-backed run.**
+162. [ ] Record every requirement for one route, then look at the source list again. Check that nothing
+    opened: no source changed, and no run started.
+    → **BLOCKED — acceptance check P5 and a handler test assert the gates are untouched after nine
+    recordings; the visual confirmation needs a window.**
+163. [ ] Keyboard and screen reader: reach both lists and the two buttons with **Tab** alone, move the
+    selection with the arrow keys, and check that **Withdraw it...** is announced as disabled while the
+    selected requirement is missing.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The
+    disabled state is asserted in the handler tests; focus order and announcement are not.**
+
+## Follow-ups: trying to send one, through the guard (added 2026-10-18)
+
+164. [ ] Open **Follow-ups** with no HR contacts stored. Check that the recipient box offers nothing,
+    and that pressing **Try to send this follow-up...** explains rather than acting.
+    → **BLOCKED — acceptance check H15 asserts the empty chooser and the refusal; no display-backed run.**
+165. [ ] Import a contact list, choose a recipient, and read the question before answering. Judge
+    whether the order of checks it describes is something you would be willing to rely on.
+    → **BLOCKED — acceptance check H16 asserts the question's content and that a declined dialog writes
+    nothing; whether it is convincing is a person's judgement.**
+166. [ ] Say yes. Check that nothing is sent, that the reason given is specific, and that the attempt
+    appears in your records on the **What's happening** tab.
+    → **BLOCKED — acceptance check H17 asserts the single refused attempt row and the untouched daily
+    allowance; reading it on the other tab needs a window.**
+167. [ ] Press it again with the same message. Check the window reports the earlier attempt rather than
+    writing a second one.
+    → **BLOCKED — acceptance check H18 and a ledger regression test assert this; no display-backed run.**
+168. [ ] Mark that contact do-not-contact on the **HR contacts** tab, come back, and check the address is
+    no longer offered as a recipient.
+    → **BLOCKED — acceptance check H19 asserts the withdrawal from the chooser; no display-backed run.**
+169. [ ] Keyboard and screen reader: reach the recipient box and the button with **Tab** alone, and
+    check the chooser is announced as a list you select from rather than a field you type into.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## HR contacts: listing an address nobody imported (added 2026-10-18)
+
+170. [ ] On the **HR contacts** tab, type an address that is not in your stored contacts, choose a
+    reason and confirm. Check it appears on the do-not-contact list and that no contact row appeared.
+    → **BLOCKED — acceptance check L21 and six handler tests assert both; no display-backed run.**
+171. [ ] Type something that is not an address. Check the window refuses before asking anything.
+    → **BLOCKED — acceptance check L22 asserts the refusal and the unasked question.**
+172. [ ] Add the same address again with a milder reason. Check the window reports it and keeps the
+    first reason recorded.
+    → **BLOCKED — acceptance check L22 asserts the report and the unchanged reason.**
+
+## Tailored documents: building a first one, and saving a copy (added 2026-10-18)
+
+173. [ ] On the **Tailored documents** tab with no profile saved, check the *Build one* panel says to
+    save your profile first and that *Show what would be used…* cannot be pressed.
+    → **BLOCKED — handler test `test_the_controls_say_what_is_missing_instead_of_offering_a_dead_button`
+    asserts both; no display-backed run.**
+174. [ ] Choose a listing, a strategy and *Tailored resume*, press **Show what would be used…**, and
+    read the preview: the facts, the file they were read from, the unconfirmed ones, and what is
+    missing. Check the list of stored documents has not changed.
+    → **BLOCKED — acceptance check M6 asserts the preview's contents and that the database did not
+    change.**
+175. [ ] Press **Build this document…** and say no. Check nothing was stored. Press it again, read the
+    confirmation (it repeats the preview), and say yes. Check the new row names the listing, the
+    strategy version and the résumé the facts came from.
+    → **BLOCKED — acceptance checks M7 and M8 assert the declined and accepted paths.**
+176. [ ] Press **Show what would be used…** again without changing anything. Check the window names the
+    document already stored and will not build a second copy.
+    → **BLOCKED — acceptance check M9 asserts the report and the disabled button.**
+177. [ ] Select the new row, press **Save a copy to a file…**, choose a name that is not in use, and
+    confirm. Open the file: it should start with which document it is, which listing and strategy
+    version, when it was built and which file the facts came from, then the document itself.
+    → **BLOCKED — acceptance check M10 asserts the header, the body and the owner-only file mode.**
+178. [ ] Press **Save a copy to a file…** again and choose the **same name**. Check the window refuses,
+    says the file already exists, and that the file on disk is unchanged.
+    → **BLOCKED — acceptance check M11 asserts the refusal and the untouched file.**
+179. [ ] Change a fact on the **Profile** tab, come back and press **Refresh**. Check the row now says
+    it must be rebuilt, that *Save a copy to a file…* is greyed out, and that no file was written.
+    → **BLOCKED — acceptance check M12 asserts the refusal, the named fact and the absent file.**

@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import dataclasses
 import sqlite3
 from datetime import date, datetime, time, timezone
 import platform
@@ -79,7 +80,10 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, contact_export, contacts, erasure, importer, preparation
+from . import (
+    acceptance_evidence, analytics, contact_export, contacts, erasure, importer, notifications,
+    preparation, reporting,
+)
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -194,6 +198,21 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Add up what the records hold: counts, rates with their denominators, then exit (read-only).",
     )
     actions.add_argument(
+        "--acceptance-evidence", action="store_true",
+        help=("What each job route would have to prove before it could ever be switched on, and "
+              "what is still outstanding. Reads nothing and enables nothing."),
+    )
+    actions.add_argument(
+        "--notifications", nargs="?", const="show", choices=("show", "off", "daily", "weekly"),
+        help=("Show when this application may tell you something, or set it: 'off', 'daily' or "
+              "'weekly'. Nothing is sent anywhere; a report is prepared for the window or a file."),
+    )
+    actions.add_argument(
+        "--report", action="store_true",
+        help="Report what the records say has been happening - unresolved first - then exit "
+             "(read-only). Add --weekly for seven days instead of one.",
+    )
+    actions.add_argument(
         "--history", action="store_true",
         help="List your recorded employment and education, most recent first, then exit (read-only).",
     )
@@ -242,6 +261,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--import-from", metavar="PATH",
         help="Show what importing a JSON export at PATH would do (add --yes to apply it).",
+    )
+    parser.add_argument(
+        "--weekly", action="store_true",
+        help="With --report: cover the last seven days and a fortnight of dates instead of one day.",
     )
     parser.add_argument(
         "--recipient", metavar="ADDRESS", default=None,
@@ -1074,6 +1097,135 @@ def run_analytics(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_acceptance_evidence(args: argparse.Namespace) -> int:
+    """Print what every named route would have to prove first, and what this file already holds.
+
+    Reads the database only if one is already there - the command answers on a machine where
+    nothing has been set up yet - and never creates or changes one. Touches no network.
+    """
+    print(f"AI Career Agent {__version__} · what a route would have to prove first")
+    print("")
+    held: dict[str, tuple[acceptance_evidence.EvidenceKind, ...]] | None = None
+    recorded = 0
+    database = _database_path(args)
+    if database.exists():
+        try:
+            store = CareerStore(database)
+        except (PrivateWriteError, sqlite3.Error) as exc:
+            print(f"The database at {database} could not be read ({exc}), so this lists the "
+                  f"requirements only.")
+            print("")
+        else:
+            try:
+                held = store.evidence_held_by_route()
+                recorded = sum(len(kinds) for kinds in held.values())
+            except (StoredRecordError, sqlite3.Error) as exc:
+                held, recorded = None, 0
+                print(f"The recorded evidence in {database} could not be read ({exc}), so this "
+                      f"lists the requirements only.")
+                print("")
+            finally:
+                store.close()
+    for line in acceptance_evidence.describe_all(held_by_route=held):
+        print(line)
+    print("")
+    if held is not None:
+        print(f"{recorded} piece(s) of evidence are recorded in {database}. Recorded evidence is "
+              f"what somebody wrote down here, not a permission granted by anyone outside.")
+    else:
+        print("No database was read, so this is the written requirement only - nothing recorded.")
+    print("Nothing here switches anything on. The source-quality gate is closed, every source is "
+          "disabled, and this list exists so that opening one later is a matter of producing "
+          "evidence rather than of being in a hurry.")
+    return EXIT_OK
+
+
+def run_notifications(args: argparse.Namespace) -> int:
+    """Show or set when this application may tell you something.
+
+    Setting a cadence stores a choice; it does not start anything. The honest part of this command
+    is the second half of what it prints: no email is sent, no push is registered, and nothing can
+    reach a person who is not looking at this machine.
+    """
+    choice = getattr(args, "notifications", None) or "show"
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · when this application may tell you something")
+    print("")
+    if not database.exists() or _empty_database_file(database):
+        if choice != "show":
+            print("There is no database yet, so there is nothing to store a preference in. Import "
+                  "or record something first.")
+            _say_an_empty_file_was_left_alone(database)
+            return EXIT_REFUSED
+        print(notifications.NotificationPreferences().describe())
+        _say_an_empty_file_was_left_alone(database)
+        return EXIT_OK
+    try:
+        with CareerStore(database) as store:
+            if choice != "show":
+                current = store.get_notification_preferences()
+                store.save_notification_preferences(dataclasses.replace(
+                    current, cadence=notifications.Cadence(choice)))
+            preferences = store.get_notification_preferences()
+            policy = store.get_global_policy()
+            report = reporting.daily_report(store)
+            decision = notifications.notification_due(
+                preferences, now=datetime.now(timezone.utc),
+                last_delivered_at=None, quiet_hours=getattr(policy, "quiet_hours", None),
+                attention_count=report.attention_count,
+                stopped=bool(policy.stop_all or policy.revoked_at))
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_database_problem(exc)
+    except (notifications.NotificationError, reporting.ReportError) as exc:
+        print(f"That preference was not stored: {exc}")
+        return EXIT_REFUSED
+    print(preferences.describe())
+    quiet = getattr(policy, "quiet_hours", None)
+    if quiet:
+        print(f"Quiet hours: {quiet[0]:02d}:00-{quiet[1]:02d}:00. Nothing is prepared inside them.")
+    print(decision.describe())
+    print("")
+    print("Nothing is sent anywhere: there is no email, no push and no system notification in this "
+          "build. A report is prepared for the window you open, or written to a file you choose, "
+          "and `--report` prints it whenever you ask.")
+    return EXIT_OK
+
+
+def run_report(args: argparse.Namespace) -> int:
+    """Report what the stored records say has been happening, with the unresolved parts first.
+
+    Read-only, and built by :mod:`career_agent.reporting` from rows that already exist - scheduled
+    runs, the tracker, attempts, the authorisation, the source gates. Nothing is fetched to produce
+    it, and nothing queued is counted as something that happened: that distinction is the report's
+    reason for existing.
+    """
+    database = _database_path(args)
+    weekly = bool(getattr(args, "weekly", False))
+    period = "last 7 days" if weekly else "last 24 hours"
+    heading = f"AI Career Agent {__version__} · what the records say ({period})"
+    if not database.exists() or _empty_database_file(database):
+        print(heading)
+        print("")
+        print("No database yet, so there is nothing to report. Nothing has run, and nothing has been "
+              "written down.")
+        _say_an_empty_file_was_left_alone(database)
+        return EXIT_OK
+    try:
+        with CareerStore(database) as store:
+            report = (reporting.weekly_report(store) if weekly else reporting.daily_report(store))
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_database_problem(exc)
+    except reporting.ReportError as exc:
+        print(f"The report was not produced: {exc}")
+        return EXIT_REFUSED
+    print(heading)
+    for line in report.describe()[1:]:
+        print(line)
+    print("")
+    print("This report is read-only; nothing was fetched, sent, submitted or changed.")
+    return EXIT_OK
+
+
 def run_history(args: argparse.Namespace) -> int:
     """List the candidate's own employment and education records, most recent first.
 
@@ -1729,6 +1881,12 @@ def main(argv: list[str] | None = None) -> int:
             return run_interviews(args)
         if args.analytics:
             return run_analytics(args)
+        if args.acceptance_evidence:
+            return run_acceptance_evidence(args)
+        if args.notifications:
+            return run_notifications(args)
+        if args.report:
+            return run_report(args)
         if args.history:
             return run_history(args)
         if args.add_role:

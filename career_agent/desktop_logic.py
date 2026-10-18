@@ -26,6 +26,15 @@ from .core import (
 # The résumé reviewer owns the profile vocabulary's user-facing names and the study-status choices, and
 # this module reads them from there rather than keeping a second copy: one label list, so the form, the
 # review screen and the confirmation table cannot call the same fact three different things.
+from .acceptance_evidence import (
+    EVIDENCE_LABELS, EVIDENCE_TITLES, ROUTE_REQUIREMENTS, get_route,
+)
+from .policy import ACTION_LABELS, ActionKind, GlobalPolicy, PolicyDecision
+from .suppression import PERMANENT_REASONS, REASON_LABELS
+from .sources import (
+    SOURCE_DECISIONS, SOURCE_QUALITY_GATE_PASSED, PermissionState, discovery_gate,
+    enabled_discovery_sources, get_source_decision, submission_gate,
+)
 from .resume import PROFILE_FIELD_LABELS, study_status_choices
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
@@ -672,3 +681,986 @@ def required_facts_to_confirm(profile: CandidateProfile | None,
     required = set(REQUIRED_PROFILE_FACTS)
     return tuple(row for row in profile_fact_review(profile, provenance)
                  if row.fact in required and not row.confirmed)
+
+
+# ---------------------------------------------------------------- tailored documents: what a row says
+
+#: What the list shows for a document whose basis names no file. It is not "unknown": a basis without a
+#: citation was built from values the person typed, or was stored before artifacts carried citations.
+ARTIFACT_NO_DOCUMENT = "no source document recorded"
+
+
+def artifact_citation_text(documents: Iterable[str]) -> str:
+    """The documents an artifact was built from, as one cell of the list."""
+    names = [name for name in documents if name]
+    return ", ".join(names) if names else ARTIFACT_NO_DOCUMENT
+
+
+def artifact_state_text(is_current: bool, reasons: Iterable[str], *, verifiable: bool = True) -> str:
+    """The state cell: current, why this must be rebuilt, or why it cannot be checked at all.
+
+    The reasons come from the lineage report, which always has at least one line, so a row never says
+    only "stale" - the point of the whole lineage is that the person is told what moved.
+
+    Three states, not two, and each is spelled out in the cell's own words rather than shown by a
+    colour: a person reading this list with a screen reader, on a monochrome display, or without
+    colour vision gets the same sentence everybody else gets. ``verifiable=False`` is the honest
+    reading for a document stored before the listing was recorded with it - "nobody can tell whether
+    this still matches" is a different thing from "this is out of date", and telling a person to
+    rebuild something that may be perfectly fine, as though it were known to be stale, would be this
+    window claiming knowledge it does not have.
+    """
+    if is_current:
+        return "Current"
+    if not verifiable:
+        return "Cannot be checked — " + "; ".join(reasons)
+    return "Rebuild before use — " + "; ".join(reasons)
+
+
+def artifact_summary_text(total: int, stale: int, unverifiable: int = 0) -> str:
+    """The line above the list: how many documents are stored, and how many cannot be used as they are.
+
+    ``unverifiable`` is counted separately and said separately. Those documents are inside ``stale``
+    - nothing that cannot be checked is offered for use - but "we cannot tell" is not "it is out of
+    date", and a summary that merged the two would overstate what this build knows.
+    """
+    if total == 0:
+        return ("No tailored document is stored yet. Documents are built from your saved facts under a "
+                "role strategy; nothing here is sent anywhere.")
+    documents = "1 tailored document" if total == 1 else f"{total} tailored documents"
+    if stale == 0:
+        return (f"{documents} stored; every one still matches the facts, the strategy and the listing "
+                "it was built from.")
+    needs = "1 needs" if stale == 1 else f"{stale} need"
+    line = (f"{documents} stored; {needs} rebuilding before use because what they were built from "
+            "moved on. Nothing is reused silently.")
+    if unverifiable:
+        counted = ("1 of those was stored" if unverifiable == 1
+                   else f"{unverifiable} of those were stored")
+        line += (f" {counted} before the listing was recorded with the document, so whether the "
+                 "listing still matches cannot be checked.")
+    return line
+
+
+def artifact_rebuild_text(artifact_id: str, replaced_id: str, gaps: Iterable[str]) -> str:
+    """What to say after a rebuild: the new document, the old one, and the gaps it refused to invent."""
+    missing = [gap for gap in gaps if gap]
+    line = (f"Rebuilt from your current facts as document {artifact_id}; {replaced_id} is kept as "
+            "history and was not changed.")
+    if missing:
+        line += (" Your saved facts do not state " + ", ".join(missing)
+                 + ", so the document does not claim them.")
+    return line
+
+
+# ---------------------------------------------------------------- tailored documents: building one
+#
+# The sentences for the path that makes a *first* document: pick what it is built from, read what
+# would be used, store exactly that, write a copy out. They are here rather than in the window for
+# the usual reason - what somebody reads before they press a button is part of the decision, and a
+# sentence only reachable through a dialog is a sentence nobody tests. None of them builds, stores
+# or writes anything; they describe a proposal or report what already happened.
+
+#: Offered as the thing to build. Screening answers are deliberately absent: the artifact layer
+#: refuses to generate them, because an invented answer to "why do you want this job" is exactly the
+#: kind of plausible sentence this application must never put in somebody's mouth.
+ARTIFACT_BUILD_KINDS = ("tailored_resume", "cover_letter")
+
+
+def artifact_listing_choices(listings: Iterable[object]) -> tuple[str, ...]:
+    """The listings offered to build a document for, newest-looking name first.
+
+    The identifier is carried in the line itself because the window needs it back from a combobox
+    that can only hold strings; :func:`artifact_id_from_choice` is the other half.
+    """
+    offered = []
+    for listing in listings:
+        listing_id = str(getattr(listing, "listing_id", "") or "").strip()
+        if not listing_id:
+            continue
+        role = str(getattr(listing, "role_title", "") or "").strip() or "untitled role"
+        employer = str(getattr(listing, "employer_name", "") or "").strip() or "unnamed employer"
+        offered.append(f"{role} — {employer} [{listing_id}]")
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def artifact_strategy_choices(strategies: Iterable[object]) -> tuple[str, ...]:
+    """The strategies offered to build under, each showing the version a document would be tied to."""
+    offered = []
+    for strategy in strategies:
+        strategy_id = str(getattr(strategy, "strategy_id", "") or "").strip()
+        if not strategy_id:
+            continue
+        name = str(getattr(strategy, "name", "") or "").strip() or "unnamed strategy"
+        version = getattr(strategy, "version", "")
+        offered.append(f"{name} (version {version}) [{strategy_id}]")
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def artifact_id_from_choice(choice: str) -> str:
+    """The identifier out of a ``... [id]`` line, or an empty string if the line has none."""
+    text = str(choice or "").strip()
+    if text.endswith("]") and "[" in text:
+        return text[text.rindex("[") + 1:-1].strip()
+    return ""
+
+
+def artifact_build_preamble(listings: int, strategies: int, has_profile: bool) -> str:
+    """What the building controls say before anything is chosen - including why they are unusable."""
+    if not has_profile:
+        return ("Save your profile first: a tailored document is written from your saved facts, and "
+                "there are none to read yet.")
+    if listings == 0 and strategies == 0:
+        return ("Add a job listing and a role strategy first. A document is built for one listing "
+                "under one strategy version, and neither is stored yet.")
+    if listings == 0:
+        return ("Add a job listing first. A document is built for one listing, and none is stored "
+                "yet.")
+    if strategies == 0:
+        return ("Add a role strategy first. A document is built under one strategy version, so "
+                "what it leads with can be traced back to a preference you set.")
+    return ("Choose a listing, a strategy and what to build, then read what would be used before "
+            "anything is stored. The document is written here, from your saved facts only.")
+
+
+def artifact_plan_text(lines: Iterable[str], content: str = "") -> str:
+    """The preview block: what the document would be built from, then the document itself.
+
+    The text is shown in full and unaltered, because "review it before it is stored" is not a
+    promise a summary can keep: the thing that gets stored is this, character for character.
+    """
+    body = "\n".join(line for line in lines if line)
+    document = str(content or "").strip()
+    if not body and not document:
+        return "Nothing to preview."
+    if not document:
+        return body
+    return (body + "\n\n" + ("-" * 60)
+            + "\nThe document itself, exactly as it would be stored:\n\n" + document)
+
+
+def artifact_build_question(lines: Iterable[str]) -> str:
+    """The confirmation shown before a previewed document is stored.
+
+    It repeats the preview rather than summarising it: the whole point of the pairing is that what
+    gets stored is what somebody read, so the last thing they see before saying yes is that text.
+    """
+    return ("Store the document shown in the window?\n\n"
+            + "\n".join(line for line in lines if line)
+            + "\n\nWhat gets stored is the text you are looking at, written from the facts above "
+              "and kept on this machine. Nothing is sent anywhere, and your original résumé file "
+              "is not touched.")
+
+
+def artifact_built_text(artifact_id: str, gaps: Iterable[str],
+                        listing_gaps: Iterable[str] = ()) -> str:
+    """What to say after a first document is stored: its identifier, and what it refused to claim.
+
+    The two kinds of gap are said separately because they mean different things to the person
+    reading: ``gaps`` is what the strategy asks for, ``listing_gaps`` is what this employer asks
+    for. Neither was written into the document, and the sentence says so rather than leaving the
+    silence to be read as a claim.
+    """
+    missing = [gap for gap in gaps if gap]
+    unstated = [gap for gap in listing_gaps if gap]
+    line = (f"Stored as document {artifact_id}. It is listed below with the listing, strategy "
+            "version and source file it was built from.")
+    if missing:
+        line += (" Your saved facts do not state " + ", ".join(missing)
+                 + ", so the document does not claim them.")
+    if unstated:
+        line += (" This listing also asks for " + ", ".join(unstated)
+                 + ", which your saved facts do not state either.")
+    return line
+
+
+def artifact_export_question(path: str, artifact_id: str) -> str:
+    """The confirmation before a stored document is written to a file the person named."""
+    return (f"Write document {artifact_id} to {path}?\n\n"
+            "The file gets a short header saying which listing, strategy version and source file "
+            "it came from, then the document itself. It is written for you to read only, and an "
+            "existing file is never written over - if that name is already taken, nothing happens "
+            "and you can choose another.")
+
+
+def artifact_export_text(path: str, characters: int) -> str:
+    """What to say after a document has been written out."""
+    size = "1 character" if characters == 1 else f"{characters} characters"
+    return (f"Written to {path} ({size}), readable only by you. The stored document is unchanged "
+            "and nothing was sent anywhere.")
+
+
+def artifact_export_refusal_text(artifact_id: str, reasons: Iterable[str], *,
+                                 verifiable: bool = True) -> str:
+    """Why a document was not written out: the lineage reasons, in the window's own words.
+
+    A document that *cannot be checked* is refused for a different reason than a document that is
+    known to be out of date, and says so: claiming the first is stale would be asserting something
+    this build does not know, and both refusals have to hold, because a file on a disk carries no
+    status with it.
+    """
+    moved = "; ".join(reason for reason in reasons if reason)
+    if not verifiable:
+        return (f"Document {artifact_id} was not written out: "
+                f"{moved or 'what it was written for cannot be established'}. Exporting it would "
+                "put a document in a folder with nothing to say that nobody can tell whether it "
+                "still matches the job it was written for. Rebuild it to get one that records the "
+                "listing it was written for.")
+    return (f"Document {artifact_id} was not written out: {moved or 'it is no longer current'}. "
+            "Exporting it would put a document in a folder with nothing to say it is out of date. "
+            "Rebuild it from your current facts first.")
+
+
+# ---------------------------------------------------------------- standing authorisation
+#
+# The window's words for the policy. They live here, Tk-free, for the same reason the artifact
+# sentences do: what a person is told before they agree to something is part of the decision, and a
+# sentence that is only reachable through a dialog is a sentence nobody tests. Every one of these is a
+# description of state or of a proposed change - none of them performs anything, and none of them can
+# enable a source, because a source is enabled by the gate and the gate is not here.
+
+
+def policy_summary_text(policy: GlobalPolicy, version: int) -> str:
+    """The line above the list: what is authorised right now, and what that does and does not mean."""
+    if version == 0 or policy.is_empty:
+        return ("Nothing is authorised. This application performs no discovery, no submission and no "
+                "email until you authorise it here, and authorising it here is still not enough on its "
+                "own — every source is also switched off in this build.")
+    if policy.revoked_at:
+        return (f"Authorisation version {version} is withdrawn, so nothing is permitted. What it used to "
+                f"cover is kept below so you can see what was withdrawn.")
+    if policy.stop_all:
+        return (f"Authorisation version {version} is in force but everything is stopped, so nothing is "
+                f"permitted until you allow actions again.")
+    pairs = "1 permission" if len(policy.allowed) == 1 else f"{len(policy.allowed)} permissions"
+    quiet = ""
+    if policy.quiet_hours:
+        start, end = policy.quiet_hours
+        quiet = f" Nothing runs between {start:02d}:00 and {end:02d}:00."
+    return (f"Authorisation version {version} holds {pairs}, each with a daily ceiling.{quiet} Every "
+            f"source is still switched off in this build, so nothing runs today whatever is listed here.")
+
+
+def policy_rows(policy: GlobalPolicy) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per authorised pair: the source, the action, its daily ceiling, and what applies now.
+
+    A pair with no recorded ceiling is shown as refused rather than unlimited, which is exactly what
+    :func:`career_agent.policy.evaluate_policy` does with it - the list and the decision agree.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for source_id, action in sorted(policy.allowed, key=lambda pair: (pair[0], pair[1].value)):
+        limit = policy.daily_limits.get(action)
+        if limit is None:
+            ceiling, state = "none recorded", "Refused: a permission without a daily ceiling is not acted on"
+        else:
+            ceiling = f"{limit} per day"
+            state = "Permitted by you"
+        if policy.revoked_at:
+            state = "Withdrawn"
+        elif policy.stop_all:
+            state = "Stopped"
+        rows.append((source_id, ACTION_LABELS[action], ceiling, state))
+    return tuple(rows)
+
+
+def policy_grant_question(source_id: str, action: ActionKind, limit: int) -> str:
+    """What a person is asked before a permission is written. States the limit and the limits of it."""
+    return (f"Authorise {ACTION_LABELS[action]} with {source_id}, at most {limit} time(s) a day?\n\n"
+            "This is written to your local database as a new version and can be withdrawn at any time. "
+            "It does not switch anything on by itself: every source in this build is disabled, so "
+            "nothing will run because of this.")
+
+
+def policy_removal_question(source_id: str, action: ActionKind) -> str:
+    """What a person is asked before a permission is taken away again."""
+    return (f"Remove your permission for {ACTION_LABELS[action]} with {source_id}?\n\n"
+            "A new version is written without it; the version that had it is kept, so what was "
+            "permitted when something ran stays readable.")
+
+
+def policy_revocation_question(pairs: int) -> str:
+    """What a person is asked before withdrawing everything at once."""
+    counted = "1 permission" if pairs == 1 else f"{pairs} permissions"
+    return (f"Withdraw all authorisation now? {counted} stop applying immediately.\n\n"
+            "Nothing is deleted: a new version records the withdrawal and the earlier versions stay "
+            "readable, so what was permitted at the time something ran can still be seen.")
+
+
+def policy_stop_question(stopping: bool) -> str:
+    """What a person is asked before the stop switch is moved, in whichever direction."""
+    if stopping:
+        return ("Stop everything now?\n\nWhile this is on, every permission below is refused, whatever "
+                "else it says. Your permissions are not deleted and you can allow actions again later.")
+    return ("Allow actions again?\n\nThe permissions below start applying again, within their daily "
+            "ceilings and quiet hours. Every source in this build is still disabled, so this does not "
+            "make anything run.")
+
+
+def policy_decision_text(decision: PolicyDecision, *, gate_reason: str) -> str:
+    """The answer to 'what would happen if I asked for this now?', including the gate's own answer."""
+    if decision.allowed:
+        return (f"{decision.describe()} The source gate also permits it, so this would run if you asked "
+                f"for it.")
+    return f"{decision.describe()}\n\nThe source gate says: {gate_reason}"
+
+
+# ---------------------------------------------------------------- what has been happening
+
+#: How an attempt's state is named on screen. The words matter: an attempt whose outcome was never
+#: established is "not established", never "failed", because the two call for different actions.
+ATTEMPT_STATE_LABELS: dict[str, str] = {
+    "unknown": "outcome not established",
+    "performed": "done",
+    "failed": "did not happen",
+    "refused": "refused by a rule",
+}
+
+#: What a person may record as the outcome of an attempt nobody could settle automatically.
+RECONCILIATION_CHOICES: tuple[tuple[str, str], ...] = (
+    ("performed", "It did happen"),
+    ("failed", "It did not happen"),
+    ("refused", "It was refused"),
+)
+
+
+def report_summary_text(headline: str, attention_count: int) -> str:
+    """The one line above the report: the report's own headline, and where to act on it.
+
+    The headline is used as the reporting module wrote it. Counting the same records again here would
+    be a second opinion about them, and the two sentences would eventually disagree - the first version
+    of this function did exactly that, and the window said "1 thing(s) from the last day need you. 1
+    thing from the last day need you." All this adds is where the things that need a person are.
+    """
+    headline = headline.strip()
+    if attention_count:
+        return f"{headline} What needs you is listed below, with what is known about each one."
+    return headline
+
+
+def attempt_rows(records: Iterable[object]) -> tuple[tuple[str, str, str, str, str], ...]:
+    """The unresolved-attempt list as rows: id, what was attempted, which job, when, and its state.
+
+    Shows the operation id because that is what a person types into a provider's own records to
+    find out what happened; the identity key because one job may be the same job on two boards.
+    """
+    rows = []
+    for record in records:
+        state = getattr(getattr(record, "state", None), "value", "")
+        rows.append((
+            str(getattr(record, "operation_id", "")),
+            str(getattr(record, "action", "")),
+            str(getattr(record, "identity_key", "")),
+            str(getattr(record, "started_at", "")),
+            ATTEMPT_STATE_LABELS.get(state, state or "unknown"),
+        ))
+    return tuple(rows)
+
+
+def attempt_detail_text(record: object) -> str:
+    """What one unresolved attempt says, and what would settle it."""
+    if record is None:
+        return ("Select an attempt to see what is known about it. An attempt is listed here when "
+                "nobody established what happened, which is the only state time cannot settle.")
+    state = getattr(getattr(record, "state", None), "value", "unknown")
+    detail = str(getattr(record, "detail", "") or "").strip()
+    lines = [
+        f"{getattr(record, 'operation_id', '')}: {getattr(record, 'action', '')} for "
+        f"{getattr(record, 'identity_key', '')}.",
+        f"Started {getattr(record, 'started_at', '')}, recorded as "
+        f"{ATTEMPT_STATE_LABELS.get(state, state)}.",
+    ]
+    if detail:
+        lines.append(f"What was recorded at the time: {detail}")
+    lines.append(
+        "Nothing here will settle it on its own: check the provider's own record, then write down "
+        "what you found. Until then this blocks any further attempt at the same job.")
+    return "\n".join(lines)
+
+
+def reconciliation_question(operation_id: str, outcome_label: str, evidence: str) -> str:
+    """What a person is asked before an unresolved attempt is settled by hand."""
+    return (f"Record this outcome?\n\n{operation_id} will be recorded as “{outcome_label}”, with "
+            f"your note as the evidence:\n\n{evidence.strip()}\n\nThis is how the block on further "
+            f"attempts for this job is lifted, so record what you actually found, not what you "
+            f"expect. It cannot be changed back by this application.")
+
+
+def reconciliation_refusal(evidence: str) -> str | None:
+    """Why a reconciliation cannot be recorded yet, or ``None`` when it can.
+
+    Evidence is required because the whole point of the unresolved state is that nobody knows what
+    happened; a settlement with no reason attached is a guess wearing a record's clothes.
+    """
+    if len(str(evidence or "").strip()) < 4:
+        return ("Write down what you found first - where you looked and what it said. An outcome "
+                "recorded without evidence cannot be told apart from a guess, so nothing was "
+                "changed.")
+    return None
+
+
+def notification_summary_text(description: str, decision_description: str,
+                              quiet_hours: tuple[int, int] | None) -> str:
+    """The notification panel's own summary: the preference, the quiet window, and what is due."""
+    lines = [description]
+    if quiet_hours:
+        lines.append(f"Quiet hours {quiet_hours[0]:02d}:00-{quiet_hours[1]:02d}:00 come from your "
+                     f"standing authorisation; nothing is prepared inside them.")
+    lines.append(decision_description)
+    return " ".join(lines)
+
+
+def notification_question(cadence_label: str, hour: int, channel_label: str) -> str:
+    """What a person is asked before a notification preference is stored."""
+    if cadence_label.casefold().startswith("no"):
+        return ("Stop preparing reports?\n\nNothing will be prepared for you. The report is still "
+                "there whenever you ask for it yourself.")
+    return (f"Save this preference?\n\n{cadence_label} from {hour:02d}:00, {channel_label}.\n\n"
+            f"Nothing is sent anywhere: this application has no email, no push and no system "
+            f"notification. It prepares a report where you can already see it.")
+
+
+def parse_notification_hour(value: str) -> int:
+    """The hour a person typed, or a refusal explaining itself. 0-23, whole numbers only."""
+    text = str(value or "").strip()
+    if text.endswith(":00"):
+        text = text[:-3]
+    if not text.isdigit():
+        raise ValueError("The hour is a whole number from 0 to 23, such as 9 for nine in the morning.")
+    hour = int(text)
+    if not 0 <= hour <= 23:
+        raise ValueError(f"{hour} is not an hour of the day; use a number from 0 to 23.")
+    return hour
+
+
+# ---------------------------------------------------------------------------------------------
+# The do-not-contact list, in the window
+#
+# Two marks existed before this: a column on the stored contact row, written by the HR contacts tab,
+# and the list in ``contact_suppression`` that ``guarded_dispatch`` checks before anything is sent.
+# A person who marks somebody "do not contact" means one thing by it, so the window now writes both -
+# and these helpers describe the list, including the disagreement a database marked before this build
+# will have, rather than hiding it behind a count that looks tidy.
+
+#: The reasons a suppression may carry, in the order the window offers them. The labels are the
+#: suppression module's own, so the window cannot invent a sixth reason or reword one of the five.
+def suppression_reason_choices() -> tuple[tuple[str, str], ...]:
+    """The stored reasons and their labels, in the module's own order."""
+    from .suppression import REASON_LABELS  # noqa: PLC0415 - avoids a cycle at import time
+
+    return tuple((reason.value, label) for reason, label in REASON_LABELS.items())
+
+
+def suppression_rows(entries: Iterable[object]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per suppressed address: the address, why, when, and whether a note is kept with it.
+
+    The note's text is never a column. A reason typed about somebody else is stored on the record and
+    shown nowhere else - not in a log, not in an event, not in a list a screen share would carry - and
+    "a note is recorded" is all a reader needs to know that one exists.
+    """
+    from .suppression import REASON_LABELS  # noqa: PLC0415
+
+    rows = []
+    for entry in entries:
+        reason = getattr(entry, "reason", None)
+        # Matched on the stored value rather than on the object: a row read back from a database
+        # written by a later build can carry a reason this one has no member for, and a list that
+        # raised rather than drawing it would hide an address somebody must not be written to.
+        value = getattr(reason, "value", reason)
+        label = next((text for member, text in REASON_LABELS.items() if member.value == value),
+                     str(value))
+        note = (getattr(entry, "note", "") or "").strip()
+        rows.append((
+            getattr(entry, "address", ""),
+            label,
+            format_stored_timestamp(getattr(entry, "recorded_at", "")),
+            "a note is recorded" if note else "no note",
+        ))
+    return tuple(rows)
+
+
+def suppression_summary_text(listed: int, marked_contacts: int, unlisted: int) -> str:
+    """The line above the list: what is enforced, what is only annotated, and whether they agree."""
+    sentence = (f"{listed} address(es) on the list this application checks before anything may be sent "
+                f"· {marked_contacts} stored contact(s) carry the mark.")
+    if unlisted:
+        return (f"{sentence} {unlisted} marked contact(s) are not on the list: they were marked before "
+                "this window wrote both, and marking them again puts them on it.")
+    return f"{sentence} Nothing in this build sends anything, either way."
+
+
+def suppression_lift_refusal(note: str) -> str | None:
+    """Why a lift cannot proceed, or ``None``. The store's rule, checked before anything is asked."""
+    if len(str(note or "").strip()) < 4:
+        return ("Taking a do-not-contact mark off needs a note saying why, of at least four "
+                "characters. An entry removed without one cannot be told apart from a mistake, so "
+                "nothing was changed.")
+    return None
+
+
+def suppression_mark_question(address_count: int, reason_label: str, permanent: bool) -> str:
+    """What the confirmation adds when a mark also goes on the enforced list."""
+    question = (f"This also records the address on the do-not-contact list this application checks "
+                f"before anything may be sent, as: {reason_label}. Recording an address twice keeps "
+                f"the first reason, so an earlier one is never overwritten.")
+    if permanent:
+        question += (" This reason is the one that is meant to be permanent: nothing expires it, and "
+                     "taking it off later needs a note saying why.")
+    if address_count:
+        question += f" {address_count} address(es) are on that list now."
+    return question
+
+
+def suppression_lift_question(address: str, reason_label: str | None, permanent: bool) -> str:
+    """What the confirmation adds when a removal also takes an address off the enforced list."""
+    if reason_label is None:
+        return ("That address is not on the do-not-contact list this application checks, so only the "
+                "mark on the stored contact is removed.")
+    question = (f"The address also comes off the do-not-contact list this application checks before "
+                f"anything may be sent, where it is recorded as: {reason_label}. Your note is kept "
+                f"with the removal.")
+    if permanent:
+        question += (" That reason says they asked not to be contacted. Removing it is yours to do in "
+                     "your own database, and it is not something time or an import may do.")
+    return question
+
+
+# ---------------------------------------------------------------------------------------------
+# Conditions on what may be acted on, and the quiet window
+#
+# The standing authorisation has carried role terms, places, attachment rules, a follow-up limit and
+# quiet hours since they were added: stored, enforced, round-tripped, and carried untouched through
+# every change the window made. None of them could be *edited* anywhere but Python. These helpers are
+# the reading half of putting them on the Permissions & limits tab - parsing what a person typed, and
+# saying what is stored - with no Tk and no database in sight.
+
+def parse_condition_terms(value: str, *, noun: str) -> tuple[str, ...]:
+    """Split a typed list of terms on commas. Empty means no condition, which means no narrowing.
+
+    Terms are not folded here: the policy value folds them once at its own edge, and a window that
+    folded them too would be a second place that decides what two terms are the same.
+    """
+    terms = [part.strip() for part in str(value or "").replace("\n", ",").split(",")]
+    kept = tuple(term for term in terms if term)
+    if len(set(term.casefold() for term in kept)) != len(kept):
+        raise ValueError(f"the same term is listed twice in the {noun}; list each one once")
+    return kept
+
+
+def parse_attachment_kinds(value: str) -> tuple[str, ...]:
+    """Split typed file endings, each one a suffix. ``pdf`` and ``.pdf`` mean the same ending.
+
+    An empty list is not "anything may be attached": with no rule, nothing may be attached at all,
+    which is what the policy already enforces and what the window says beside this box.
+    """
+    kinds = []
+    for term in parse_condition_terms(value, noun="attachment rules"):
+        ending = term if term.startswith(".") else f".{term}"
+        if ending.count(".") != 1 or len(ending) < 2 or any(ch.isspace() for ch in ending):
+            raise ValueError(
+                f"{term!r} is not a file ending; write endings like .pdf or .docx, separated by commas")
+        kinds.append(ending)
+    return tuple(kinds)
+
+
+def parse_follow_up_limit(value: str) -> int | None:
+    """A whole number of follow-ups per job, or ``None`` when the box is empty."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not text.isdigit():
+        raise ValueError(f"{text!r} is not a whole number of follow-ups per job")
+    return int(text)
+
+
+def parse_quiet_hours(start: str, end: str) -> tuple[int, int] | None:
+    """The quiet window as a pair of hours, or ``None`` when both boxes are empty.
+
+    One box filled and the other empty is refused rather than guessed: "quiet from 22" with no end
+    is either one hour or ten, and a window that picked one would be inventing a rule the person did
+    not state. Equal hours are refused for the same reason the policy refuses them.
+    """
+    first, second = str(start or "").strip(), str(end or "").strip()
+    if not first and not second:
+        return None
+    if not first or not second:
+        raise ValueError(
+            "quiet hours need both ends: say which hour they start and which hour they end, or "
+            "leave both empty for none")
+    hours = (parse_notification_hour(first), parse_notification_hour(second))
+    if hours[0] == hours[1]:
+        raise ValueError(
+            "quiet hours that start and end at the same hour say nothing; leave them empty for "
+            "none, or name two different hours")
+    return hours
+
+
+def condition_terms_text(terms: Iterable[str]) -> str:
+    """How a stored set of terms is written back into a box, so a re-save changes nothing."""
+    return ", ".join(sorted(str(term) for term in terms))
+
+
+def conditions_summary_text(role_terms: Iterable[str], locations: Iterable[str],
+                            attachments: Iterable[str], follow_up_limit: int | None,
+                            quiet_hours: tuple[int, int] | None) -> str:
+    """One line saying what is recorded now, in the words a refusal would use."""
+    parts = []
+    roles = sorted(role_terms)
+    places = sorted(locations)
+    endings = sorted(attachments)
+    parts.append(f"roles must mention: {', '.join(roles)}" if roles
+                 else "no role condition is recorded")
+    parts.append(f"places allowed: {', '.join(places)}" if places
+                 else "no place condition is recorded")
+    parts.append(f"attachments allowed: {', '.join(endings)}" if endings
+                 else "no attachment rule is recorded, so nothing may be attached")
+    parts.append(f"at most {follow_up_limit} follow-up(s) per job" if follow_up_limit is not None
+                 else "no follow-up limit is recorded")
+    parts.append(f"quiet from {quiet_hours[0]:02d}:00 to {quiet_hours[1]:02d}:00"
+                 if quiet_hours else "no quiet hours are recorded")
+    return " · ".join(parts) + "."
+
+
+def conditions_question(changes: Iterable[str], version: int) -> str:
+    """The one confirmation before conditions are stored, naming what changes and what does not."""
+    listed = list(changes)
+    body = "\n".join(f"  - {change}" for change in listed) if listed else "  - nothing changes"
+    return (
+        "Record these conditions on what may be acted on?\n\n"
+        f"{body}\n\n"
+        "Conditions only narrow what is already authorised: they can refuse something that is "
+        "otherwise allowed, and they can never permit something that is not. A condition that cannot "
+        "be checked - because nothing describes the job being acted on - refuses.\n\n"
+        f"This is stored as a new version of the standing authorisation (version {version + 1}); the "
+        "version you have now is kept. Nothing is switched on, and nothing runs: every source is "
+        "still disabled."
+    )
+
+
+def condition_changes(before: Mapping[str, object], after: Mapping[str, object]) -> tuple[str, ...]:
+    """What a save would change, in a person's words, for the confirmation to list."""
+    labels = {
+        "role_terms": "roles must mention",
+        "locations": "places allowed",
+        "allowed_attachments": "attachments allowed",
+        "follow_up_limit": "follow-ups per job",
+        "quiet_hours": "quiet hours",
+    }
+    def quiet_text(value: object) -> str:
+        if not value:
+            return "nothing"
+        start, end = tuple(value)  # type: ignore[arg-type]
+        return f"{start:02d}:00-{end:02d}:00"
+
+    changes = []
+    for key, label in labels.items():
+        old, new = before.get(key), after.get(key)
+        if key == "quiet_hours":
+            old_text, new_text = quiet_text(old), quiet_text(new)
+            if old_text != new_text:
+                changes.append(f"{label}: {old_text} → {new_text}")
+            continue
+        if isinstance(old, (set, frozenset, tuple, list)) or isinstance(new, (set, frozenset, tuple, list)):
+            old_text = condition_terms_text(old or ()) or "nothing"
+            new_text = condition_terms_text(new or ()) or "nothing"
+        else:
+            old_text = "nothing" if old is None else str(old)
+            new_text = "nothing" if new is None else str(new)
+        if old_text != new_text:
+            changes.append(f"{label}: {old_text} → {new_text}")
+    return tuple(changes)
+
+
+# ---------------------------------------------------------------------------------------------
+# Sources and acceptance evidence
+#
+# Two questions that are usually answered by a shrug - "why is nothing being fetched?" and "what
+# would it take?" - turned into text a person can read in the window. The first comes from the
+# reviewed source decisions and the gates that read them; the second from the written acceptance
+# requirements and whatever evidence somebody has recorded in their own database. Neither of these
+# functions can enable anything: they produce strings.
+
+
+def source_rows() -> tuple[tuple[str, str, str, str, str], ...]:
+    """One row per reviewed source: id, name, what the review decided, and each gate's answer."""
+    rows = []
+    for decision in SOURCE_DECISIONS:
+        discovery = discovery_gate(decision.source_id)
+        submission = submission_gate(decision.source_id)
+        rows.append((
+            decision.source_id,
+            decision.display_name,
+            decision.permission_state.value.replace("_", " "),
+            "open" if discovery.allowed else "closed",
+            "open" if submission.allowed else "closed",
+        ))
+    return tuple(rows)
+
+
+def source_summary_text() -> str:
+    """The standing answer to "is anything being fetched?", before any row is selected."""
+    total = len(SOURCE_DECISIONS)
+    approved = sum(1 for decision in SOURCE_DECISIONS
+                   if decision.permission_state is PermissionState.APPROVED)
+    open_now = sum(1 for decision in SOURCE_DECISIONS if discovery_gate(decision.source_id).allowed)
+    enabled = len(enabled_discovery_sources())
+    gate = "passed" if SOURCE_QUALITY_GATE_PASSED else "has not passed"
+    return (
+        f"{total} source(s) reviewed; {approved} approved in principle; {open_now} open for "
+        f"discovery right now; {enabled} switched on. The source-quality gate {gate}, and while it "
+        f"is closed every source stays closed with it - including the approved ones. Nothing on "
+        f"this tab fetches anything."
+    )
+
+
+def source_detail_text(source_id: str) -> str:
+    """One source in full: what was decided, on what date, and exactly what is holding it back."""
+    decision = get_source_decision(source_id)
+    if decision is None:
+        return "Select a source to see what was decided about it and why it is closed."
+    discovery = discovery_gate(decision.source_id)
+    submission = submission_gate(decision.source_id)
+    lines = [
+        f"{decision.display_name} ({decision.source_id})",
+        f"Reviewed {decision.reviewed_on or 'on no recorded date'}; "
+        f"{decision.permission_state.value.replace('_', ' ')}.",
+        decision.notes,
+        "",
+        f"Discovery: {'open' if discovery.allowed else 'closed'} - {discovery.reason}",
+        f"Submission: {'open' if submission.allowed else 'closed'} - {submission.reason}",
+    ]
+    if decision.discovery_conditions:
+        lines.append("")
+        lines.append("Conditions written into the review for reading it:")
+        lines.extend(f"  - {condition}" for condition in decision.discovery_conditions)
+    if decision.submission_conditions:
+        lines.append("")
+        lines.append("Conditions written into the review for submitting through it:")
+        lines.extend(f"  - {condition}" for condition in decision.submission_conditions)
+    if decision.evidence_ref:
+        lines.append("")
+        lines.append(f"The decision is recorded in {decision.evidence_ref}")
+    return "\n".join(lines)
+
+
+def evidence_route_rows(
+        held_by_route: Mapping[str, Iterable[object]]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per route: id, name, how much of its requirement is recorded, and whether it is met."""
+    rows = []
+    for route in ROUTE_REQUIREMENTS:
+        held = tuple(held_by_route.get(route.route_id, ()))
+        total = len(route.kinds)
+        rows.append((
+            route.route_id,
+            route.display_name,
+            f"{len(held)} of {total} recorded",
+            "every requirement recorded" if len(held) >= total else f"{total - len(held)} missing",
+        ))
+    return tuple(rows)
+
+
+def evidence_summary_text(held_by_route: Mapping[str, Iterable[object]]) -> str:
+    """The standing summary above the evidence list."""
+    total_kinds = sum(len(route.kinds) for route in ROUTE_REQUIREMENTS)
+    recorded = sum(len(tuple(held_by_route.get(route.route_id, ()))) for route in ROUTE_REQUIREMENTS)
+    complete = sum(1 for route in ROUTE_REQUIREMENTS
+                   if len(tuple(held_by_route.get(route.route_id, ()))) >= len(route.kinds))
+    return (
+        f"{recorded} of {total_kinds} written requirement(s) recorded across "
+        f"{len(ROUTE_REQUIREMENTS)} route(s); {complete} route(s) have all of theirs. Recording "
+        f"evidence here is a note to yourself and to whoever reads this later: it opens no source, "
+        f"sends nothing, and changes none of the gates above."
+    )
+
+
+def evidence_kind_rows(route_id: str, records: Iterable[object]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per requirement of one route: kind, title, held or missing, and when it was recorded."""
+    route = get_route(route_id)
+    if route is None:
+        return ()
+    by_kind = {record.kind: record for record in records}
+    rows = []
+    for kind in route.kinds:
+        record = by_kind.get(kind)
+        rows.append((
+            kind.value,
+            EVIDENCE_TITLES.get(kind, kind.value),
+            "held" if record is not None else "missing",
+            (record.recorded_at[:10] if record is not None and record.recorded_at else ""),
+        ))
+    return tuple(rows)
+
+
+def evidence_detail_text(route_id: str, kind: object, record: object | None) -> str:
+    """What one requirement means, and what - if anything - is recorded against it."""
+    route = get_route(route_id)
+    if route is None or kind is None:
+        return "Select a requirement to see what it means and what is recorded against it."
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    lines = [f"{title} - {route.display_name}", "", f"What this requires: {EVIDENCE_LABELS[kind]}."]
+    if record is None:
+        lines.extend([
+            "",
+            "Nothing is recorded against this requirement, so this route cannot be considered for "
+            "enabling. Missing is the honest state: it is not a failure, and it is not something "
+            "this application can produce on its own.",
+        ])
+    else:
+        lines.extend([
+            "",
+            f"Recorded {record.recorded_at}.",
+            f"Where to check it: {record.reference}",
+            f"What was checked: {record.note}",
+            "",
+            "Recorded evidence is somebody's written claim, kept so it can be checked and "
+            "withdrawn. It is not a permission granted by the route's owner.",
+        ])
+    return "\n".join(lines)
+
+
+def evidence_record_question(route_id: str, kind: object, reference: str, note: str) -> str:
+    """The one confirmation shown before a piece of evidence is written down."""
+    route = get_route(route_id)
+    name = route.display_name if route is not None else route_id
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    return (
+        f"Record \"{title}\" for {name}?\n\n"
+        f"Where to check it: {reference.strip()}\n"
+        f"What was checked: {note.strip()}\n\n"
+        "This is written to your database and to the event log as a route and a requirement - the "
+        "reference and the note stay in the database only.\n\n"
+        "It switches nothing on. The source-quality gate stays closed, every source stays "
+        "disabled, and discovery, submission, email and inbox reading each still need their own "
+        "decision. To change this record later you withdraw it, with a reason, and record it again."
+    )
+
+
+def evidence_withdraw_question(route_id: str, kind: object, note: str) -> str:
+    """The one confirmation shown before recorded evidence is removed."""
+    route = get_route(route_id)
+    name = route.display_name if route is not None else route_id
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    return (
+        f"Withdraw \"{title}\" for {name}?\n\n"
+        f"Your reason: {note.strip()}\n\n"
+        "The record is removed and this route goes back to missing that requirement. The reason "
+        "is kept in your database with nothing else; the event log records only the route and the "
+        "requirement. Nothing else changes: nothing was switched on by the record, so nothing is "
+        "switched off by removing it."
+    )
+
+
+
+def suppression_add_question(address: str, reason: object) -> str:
+    """The one confirmation before an address that is not a stored contact is put on the list."""
+    label = REASON_LABELS.get(reason, getattr(reason, "value", str(reason)))
+    permanence = ("This reason is permanent in this application: it is never lifted as part of "
+                  "anything else, and taking it off again needs a reason of your own."
+                  if reason in PERMANENT_REASONS else
+                  "Nothing on this list expires, and no import can clear it.")
+    return (
+        f"Add {address} to the do-not-contact list?\n\n"
+        f"Why: {label}\n\n"
+        f"{permanence}\n\n"
+        "This address does not have to be one of your stored contacts - the list is about "
+        "addresses. It is checked before any outbound action is attempted, and an attempt it "
+        "refuses is never recorded as something that happened."
+    )
+
+# ---------------------------------------------------------------------------------------------
+# Trying to send: the words around the one guarded path out of this machine
+#
+# The guard itself lives in ``integrations.guarded_dispatch`` and is not re-implemented here. These
+# functions are the sentences a person reads before and after it runs, and they exist so the window
+# can state the order the checks happen in rather than implying one.
+
+
+#: What the guard checks, in the order it checks it. Shown before anything is attempted, because a
+#: person agreeing to an attempt should know what stands between the press and the outside world.
+DISPATCH_CHECK_ORDER: tuple[str, ...] = (
+    "the do-not-contact list, which is checked before any attempt is written down at all",
+    "what is already recorded for this job - an earlier attempt that succeeded, or one whose "
+    "outcome nobody established, stops this one",
+    "your standing authorisation: the action, the source, the daily limit, the quiet hours and "
+    "every condition you set",
+    "the enabling gate for the route, which no authorisation can open",
+    "the integration itself, which in this build is the disabled one",
+)
+
+
+def dispatch_recipient_choices(contacts: Iterable[object],
+                               blocked: Iterable[str] = ()) -> tuple[str, ...]:
+    """The addresses offered as a recipient: stored contacts only, suppressed ones left out.
+
+    Typing an address into this window is deliberately not possible. Every address here came from a
+    list the person imported and reviewed, and one they have marked do-not-contact is not offered -
+    the guard would refuse it anyway, but offering it would be an invitation to find that out by
+    pressing the button.
+
+    ``blocked`` is the do-not-contact list, which is kept separately from the contact rows: a
+    marked contact row and a listed address are two different records, and either one is enough to
+    keep an address out of this list.
+    """
+    stopped = {str(address or "").strip().casefold() for address in blocked}
+    offered = []
+    for contact in contacts:
+        if getattr(contact, "suppressed", False):
+            continue
+        address = str(getattr(contact, "email", "") or "").strip()
+        if not address or address.casefold() in stopped:
+            continue
+        name = str(getattr(contact, "name", "") or "").strip()
+        offered.append(f"{name} <{address}>" if name else address)
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def address_from_choice(choice: str) -> str:
+    """The address out of a ``Name <address>`` line, or the line itself if it is a bare address."""
+    text = str(choice or "").strip()
+    if text.endswith(">") and "<" in text:
+        return text[text.rindex("<") + 1:-1].strip()
+    return text
+
+
+def dispatch_question(employer: str, role: str, recipient: str, *, integration_name: str) -> str:
+    """The one confirmation shown before the guarded path is entered."""
+    checks = "\n".join(f"  {index}. {check}"
+                       for index, check in enumerate(DISPATCH_CHECK_ORDER, start=1))
+    return (
+        f"Try to send this follow-up to {recipient}?\n\n"
+        f"About: {role} at {employer}.\n\n"
+        f"What happens when you say yes, in this order:\n{checks}\n\n"
+        "Before anything is attempted, the attempt is written into your records as having an "
+        "unknown outcome, so a crash halfway through leaves evidence rather than silence. What "
+        "actually happened is written over that - and a failure in flight stays unknown, because "
+        "nobody can tell from here whether it arrived.\n\n"
+        f"The integration this would go through is \"{integration_name}\". In this build that is "
+        "the disabled one: no mailbox has ever been authorised, so the honest expectation is a "
+        "refusal with a reason, not a message."
+    )
+
+
+def dispatch_result_text(outcome: str, performed: bool, message: str, *,
+                         integration_name: str) -> str:
+    """What to show afterwards: what the guard answered, and what that does and does not mean."""
+    heading = {
+        "completed": "The integration reported that it performed this.",
+        "duplicate": "The integration recognised this as something it had already done.",
+        "disabled": "Nothing was sent.",
+        "invalid": "Nothing was sent.",
+        "failed": "The attempt did not complete.",
+        "unknown": "Nothing could be established about what happened.",
+    }.get(str(outcome), "Nothing was sent.")
+    lines = [heading, "", message, ""]
+    if performed:
+        lines.append(
+            "This records that the integration accepted it - not that it was delivered, not that "
+            "it was read, and not that anybody replied. Delivery and replies would need a mailbox "
+            "this project has no authorisation for.")
+    else:
+        lines.append(
+            "Nothing left this machine. The attempt is written into your records with the reason, "
+            "so the refusal can be read later by somebody who was not here.")
+    lines.append(
+        f"Integration: {integration_name}. Discovery, submission, outbound email and inbox reading "
+        f"are separate permissions: this path is the email one and it opens none of the others.")
+    return "\n".join(lines)

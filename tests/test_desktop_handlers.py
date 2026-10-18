@@ -15,6 +15,7 @@ import io
 import json
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
 import types
@@ -31,6 +32,12 @@ from career_agent import (
 from career_agent.core import (ActivityKind, ApplicationActivity, FactSource, FactVerification,
                             InterviewOutcome, PreparationKind, PROFILE_FACTS, REQUIRED_PROFILE_FACTS,
                             missing_required_profile_facts)
+from career_agent import sources
+from career_agent import integrations as integrations_module
+from career_agent.identity import identity_key
+from career_agent.attempts import AttemptState
+from career_agent.suppression import SuppressionReason
+from career_agent.acceptance_evidence import ROUTE_REQUIREMENTS, EvidenceKind
 from career_agent import backup as backup_module
 from career_agent import contact_export
 from career_agent import contacts
@@ -39,6 +46,9 @@ from career_agent import analytics as career_agent_analytics
 from career_agent import resume
 from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
+from career_agent import desktop_logic as logic
+from career_agent.attempts import AttemptState
+from career_agent.notifications import Cadence, DeliveryChannel
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 
 # The acceptance harness owns the definitions the display-backed checks use - what counts as a scrolling
@@ -1151,8 +1161,17 @@ class HandlerTestCase(unittest.TestCase):
         app.contact_mark_state = StringVar(value="No stored contact is selected.")
         app.contact_note = StringVar()
         app.contact_note_entry = Entry(textvariable=app.contact_note, state="disabled")
+        app.contact_reason = StringVar(value="they asked not to be contacted")
+        app.contact_reason_box = RecordingCombobox(textvariable=app.contact_reason, state="disabled")
+        # Taken back out of the created list: that list is how tests assert which choosers a
+        # *handler* built, and a widget this fixture builds is not one a handler offered.
+        RecordingCombobox.created.remove(app.contact_reason_box)
         app.mark_contact_button = Button(text="Mark do not contact", state="disabled")
         app.clear_contact_button = Button(text="Remove do-not-contact mark", state="disabled")
+        # The enforced do-not-contact list, built the way the real tab builds it: a read-only list and
+        # the line above it, both re-read on every refresh.
+        app.suppression_tree = Tree()
+        app.suppression_summary = StringVar(value="Reading the do-not-contact list...")
         # The destructive control, built the way the real tab builds it: disabled until the list has a
         # selected row, so a test that presses it with nothing selected is pressing a greyed-out button.
         app.delete_contact_button = Button(text="Delete selected contact", state="disabled")
@@ -4953,6 +4972,701 @@ class ResumeImportHandlerTests(HandlerTestCase):
         self.assertEqual(self.store.get_profile(), PROFILE)
         self.assertIn("profile was not changed", app.status.get())
 
+class TailoredDocumentsTabTests(HandlerTestCase):
+    """The tab that makes the lineage rule visible: what a document was built from, and the refusal.
+
+    These tests build the real window against stub widgets and a real database, so a row's cells are
+    read back from the tree the person looks at, "nothing was written" is the connection's change
+    counter, and the refusal path is the store's own gate rather than a message typed in the handler.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "artifacts.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def seed(self, app, *, kind=None, document="resume-v1.docx"):
+        """One listing, one profile read out of a résumé, one strategy and one built document."""
+        from career_agent.artifacts import ArtifactKind, capture_basis
+
+        listing = JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="Example Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India")
+        app.store.save_job(listing)
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=1.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})),
+            source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name=document)
+        strategy = app.store.create_role_strategy(
+            name="Applied AI roles", role_family="Applied AI engineering",
+            required_skills=frozenset({"Python", "Docker"}))
+        artifact = app.store.new_tailored_artifact(
+            listing_id="j1", strategy=strategy, kind=kind or ArtifactKind.TAILORED_RESUME,
+            content="A tailored resume built from the stored facts.\n",
+            basis=capture_basis(app.store))
+        app._refresh_artifacts()
+        return artifact
+
+    def row(self, app, artifact_id):
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    def change_a_fact(self, app):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=3.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+
+    def test_the_list_says_what_each_document_was_built_from(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        row = self.row(app, artifact.artifact_id)
+        self.assertEqual(row["kind"], "Tailored resume")
+        self.assertEqual(row["listing"], "j1")
+        self.assertIn("v1", row["strategy"])
+        self.assertEqual(row["cited"], "resume-v1.docx")
+        self.assertEqual(row["state"], "Current")
+        self.assertIn("1 tailored document", app.artifact_summary.get())
+
+    def test_a_document_whose_facts_moved_is_shown_as_needing_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Rebuild before use"))
+        self.assertIn("experience", row["state"], "the row names the fact that moved")
+        self.assertIn("1 need", app.artifact_summary.get())
+
+    def test_the_controls_are_off_until_a_document_is_selected(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(())
+        app._on_artifact_selection()
+        self.assertTrue(app.check_artifact_button.instate(["disabled"]))
+        self.assertTrue(app.rebuild_artifact_button.instate(["disabled"]))
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+        self.assertFalse(app.check_artifact_button.instate(["disabled"]))
+        self.assertFalse(app.rebuild_artifact_button.instate(["disabled"]))
+
+    def test_checking_a_current_document_says_so_and_writes_nothing(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        before = app.store._connection.total_changes
+        app._check_selected_artifact()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(MESSAGES.titles(), [], "a current document needs no dialog")
+        self.assertIn("still matches your saved facts", app.status.get())
+        self.assertIn("sends nothing", app.status.get())
+
+    def test_checking_a_stale_document_names_the_reasons_and_offers_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["This document is out of date"] = False
+        before = app.store._connection.total_changes
+
+        app._check_selected_artifact()
+
+        self.assertIn("This document is out of date", MESSAGES.titles("askyesno"))
+        self.assertIn("experience", MESSAGES.text("askyesno"),
+                      "the offer says what moved, not just that something did")
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined rebuild writes nothing")
+        self.assertIn("was not used", app.status.get())
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_accepting_the_offer_rebuilds_and_keeps_the_old_document(self):
+        app = self.build_window()
+        stale = self.seed(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(stale.artifact_id)
+        CONFIG["This document is out of date"] = True
+
+        app._check_selected_artifact()
+
+        stored = app.store.list_tailored_artifacts()
+        self.assertEqual(len(stored), 2, "a rebuild appends; the old document is history")
+        rebuilt = next(item for item in stored if item.artifact_id != stale.artifact_id)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertEqual(self.row(app, stale.artifact_id)["state"][:18], "Rebuild before use")
+        self.assertIn(rebuilt.artifact_id, app.status.get())
+        self.assertIn(stale.artifact_id, app.status.get())
+        self.assertIn("Docker", app.status.get(),
+                      "the gap the document refused to invent is reported to the person")
+
+    def test_the_rebuild_button_asks_first_and_a_declined_confirmation_writes_nothing(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = False
+        before = app.store._connection.total_changes
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Rebuild this document", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIn("cancelled", app.status.get())
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_screening_answers_are_refused_rather_than_written_by_the_machine(self):
+        from career_agent.artifacts import ArtifactKind
+
+        app = self.build_window()
+        artifact = self.seed(app, kind=ArtifactKind.SCREENING_ANSWERS)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+        before = app.store._connection.total_changes
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Document not rebuilt", MESSAGES.titles("showerror"))
+        self.assertIn("written by the person", MESSAGES.text("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_nothing_on_the_tab_shows_or_logs_the_document_text(self):
+        from career_agent.event_log import log_path
+
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+        app._check_selected_artifact()
+        shown = " ".join([app.status.get(), app.artifact_detail.get(), app.artifact_summary.get(),
+                          *self.row(app, artifact.artifact_id).values()])
+        self.assertNotIn("A tailored resume built from the stored facts", shown)
+        written = log_path(Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertNotIn("A tailored resume built from the stored facts", written)
+
+    def rename_the_employer(self, app, name="Renamed Corp"):
+        """Edit the listing the way a person would after the employer rebranded."""
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name=name, role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+
+    def forget_the_listing_record(self, app, artifact_id):
+        """Put the row back the way schema 15 wrote it: no record of the listing it was built for."""
+        with app.store._connection:
+            app.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=NULL WHERE artifact_id=?",
+                (artifact_id,))
+
+    def test_a_document_whose_listing_moved_is_shown_as_needing_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.rename_the_employer(app)
+
+        app._refresh_artifacts()
+
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Rebuild before use"), f"the row says {row['state']!r}")
+        self.assertIn("the employer is now 'Renamed Corp', not 'Example Employer'", row["state"],
+                      "the row does not say which part of the listing moved")
+        self.assertIn("1 need", app.artifact_summary.get())
+
+    def test_a_document_with_no_record_of_its_listing_says_so_in_words(self):
+        """Not a colour, not a blank cell: the row says what is unknown and the summary counts it."""
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+
+        app._refresh_artifacts()
+
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Cannot be checked"), f"the row says {row['state']!r}")
+        self.assertNotEqual(row["state"], "Current")
+        self.assertIn("stored before the listing", row["state"])
+        self.assertIn("cannot be checked", app.artifact_summary.get())
+
+    def test_a_document_that_cannot_be_checked_is_not_offered_for_saving(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+
+        self.assertTrue(app.export_artifact_button.instate(["disabled"]),
+                        "a document nobody can check was offered for saving")
+        self.assertIn("cannot be used as it is", app.artifact_detail.get())
+        self.assertIn("records the listing it was written for", app.artifact_detail.get())
+
+        app._export_selected_artifact()
+
+        self.assertIn("This document cannot be checked", MESSAGES.titles("showerror"))
+        self.assertIn("nobody can tell whether it still matches",
+                      MESSAGES.text("showerror"))
+        self.assertIn("cannot be checked against its listing", app.status.get())
+
+    def test_checking_a_document_with_no_listing_record_offers_a_rebuild_that_records_one(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["This document cannot be checked"] = True
+
+        app._check_selected_artifact()
+
+        self.assertIn("This document cannot be checked", MESSAGES.titles("askyesno"))
+        stored = app.store.list_tailored_artifacts()
+        self.assertEqual(len(stored), 2, "the rebuild was not appended")
+        rebuilt = next(item for item in stored if item.artifact_id != artifact.artifact_id)
+        self.assertIsNotNone(rebuilt.listing_fingerprint)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertIsNone(
+            app.store.get_tailored_artifact(artifact.artifact_id).listing_fingerprint,
+            "the old row was given a listing record nobody wrote for it")
+
+    def test_rebuilding_a_document_whose_listing_moved_uses_the_listing_as_it_stands(self):
+        app = self.build_window()
+        from career_agent.artifacts import ArtifactKind
+
+        artifact = self.seed(app, kind=ArtifactKind.COVER_LETTER)
+        self.rename_the_employer(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+
+        app._rebuild_selected_artifact()
+
+        rebuilt = next(item for item in app.store.list_tailored_artifacts()
+                       if item.artifact_id != artifact.artifact_id)
+        self.assertEqual(rebuilt.listing_fingerprint.employer, "Renamed Corp")
+        self.assertIn("Renamed Corp", rebuilt.content)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertEqual(self.row(app, artifact.artifact_id)["state"][:18], "Rebuild before use")
+
+    def test_rebuilding_a_document_that_was_deleted_elsewhere_is_refused(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app.store.delete_tailored_artifact(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+
+        app._rebuild_selected_artifact()
+
+        self.assertIn("Document not rebuilt", MESSAGES.titles("showerror"))
+        self.assertIn("no artifact", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+
+
+class BuildingADocumentTests(HandlerTestCase):
+    """Building a *first* document from the window, and saving a copy of it to a file.
+
+    The tab above could only ever rebuild something Python had already put in the database. These
+    tests drive the path a person has: choose, preview, store exactly what was previewed, save a
+    copy. What is asserted is mostly what must *not* happen - a preview that writes, a build from a
+    plan nobody read, a second identical document, an export over an existing file, and a stale
+    document written out with nothing saying so.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "build.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def row(self, app, artifact_id):
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    def change_a_fact(self, app):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=3.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+
+    def prepare(self, app, *, listing_id="j1", kind="Tailored resume"):
+        """A window with facts, a listing and a strategy, and the building controls pointed at them."""
+        strategy = app.store.list_role_strategies()[0]
+        app._refresh_artifacts()
+        app.artifact_listing_choice.set(next(
+            choice for choice in app.artifact_listing_box.cget("values")
+            if listing_id in str(choice)))
+        app.artifact_strategy_choice.set(next(
+            choice for choice in app.artifact_strategy_box.cget("values")
+            if strategy.strategy_id in str(choice)))
+        app.artifact_kind_choice.set(kind)
+        return strategy
+
+    def seed_inputs(self, app, document="resume-v1.docx"):
+        """The same records :meth:`seed` makes, without the document it builds by hand."""
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="Example Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=1.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})),
+            source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name=document)
+        return app.store.create_role_strategy(
+            name="Applied AI roles", role_family="Applied AI engineering",
+            required_skills=frozenset({"Python", "Docker"}))
+
+    def build_one(self, app):
+        """Preview and store one document the way the window does, and return it."""
+        CONFIG["Build this document"] = True
+        app._preview_artifact_plan()
+        app._build_previewed_artifact()
+        return app.store.list_tailored_artifacts()[0]
+
+    def test_the_controls_say_what_is_missing_instead_of_offering_a_dead_button(self):
+        app = self.build_window()
+        app._refresh_artifacts()
+        self.assertIn("Save your profile first", app.artifact_build_note.get())
+        self.assertTrue(app.preview_artifact_button.instate(["disabled"]))
+        self.seed_inputs(app)
+        app._refresh_artifacts()
+        self.assertIn("Choose a listing", app.artifact_build_note.get())
+        self.assertFalse(app.preview_artifact_button.instate(["disabled"]))
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]),
+                        "the window offers to store a document nobody has previewed")
+
+    def test_a_preview_shows_the_inputs_and_writes_nothing(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        before = app.store._connection.total_changes
+
+        app._preview_artifact_plan()
+
+        shown = app.artifact_plan_box.get("1.0", "end")
+        self.assertIn("resume-v1.docx", shown)
+        self.assertIn(f"version {strategy.version}", shown)
+        self.assertIn("Docker", shown, "the preview hides what the facts do not state")
+        self.assertIn("Still unconfirmed", shown)
+        self.assertIn(app._artifact_plan.content.strip(), shown,
+                      "the document the person is asked to approve is not shown to them")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertFalse(app.build_artifact_button.instate(["disabled"]))
+
+    def test_building_asks_first_and_a_declined_confirmation_stores_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        CONFIG["Build this document"] = False
+        before = app.store._connection.total_changes
+
+        app._build_previewed_artifact()
+
+        self.assertIn("Build this document", MESSAGES.titles("askyesno"))
+        self.assertIn("resume-v1.docx", MESSAGES.text("askyesno"),
+                      "the confirmation does not repeat what was previewed")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+
+    def test_what_is_stored_is_the_document_that_was_previewed(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        previewed = app._artifact_plan.content
+
+        CONFIG["Build this document"] = True
+        app._build_previewed_artifact()
+
+        (stored,) = app.store.list_tailored_artifacts()
+        self.assertEqual(stored.content, previewed)
+        self.assertEqual(stored.listing_id, "j1")
+        self.assertEqual(stored.strategy_version, strategy.version)
+        self.assertEqual(stored.basis.fact_documents.get("skills"), "resume-v1.docx")
+        self.assertNotIn("Docker", stored.content)
+        self.assertIn(stored.artifact_id, app.status.get())
+        self.assertIn("do not state Docker", app.status.get())
+        self.assertEqual(self.row(app, stored.artifact_id)["state"], "Current")
+        self.assertIsNone(app._artifact_plan, "the plan survived the build it was used for")
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+
+    def test_pressing_build_twice_stores_one_document(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        CONFIG["Build this document"] = True
+        app._preview_artifact_plan()
+
+        app._build_previewed_artifact()
+        app._build_previewed_artifact()
+
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+        self.assertIn("Show what would be used first", app.status.get())
+
+    def test_building_without_a_preview_stores_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a document nobody had previewed")
+
+    def test_changing_the_choice_after_a_preview_refuses_the_build(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        app.store.save_job(JobListing(
+            listing_id="j2", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/2",
+            employer_name="Other Employer", role_title="ML Engineer",
+            availability_status=Availability.OPEN, location_text="Delhi, India"))
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.artifact_listing_choice.set(next(
+            choice for choice in app.artifact_listing_box.cget("values") if "j2" in str(choice)))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("changed after the preview", app.status.get())
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+
+    def test_changing_the_kind_after_a_preview_refuses_the_build(self):
+        """A résumé was previewed; the chooser now says cover letter. They are not the same text."""
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.artifact_kind_choice.set("Cover letter")
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("changed after the preview", app.status.get())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a document it was not going to store")
+
+    def test_a_strategy_revised_after_the_preview_refuses_the_build(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.store.revise_role_strategy(
+            strategy.strategy_id, name=strategy.name, role_family=strategy.role_family,
+            required_skills=frozenset({"Python", "Rust"}))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("Document not built", MESSAGES.titles("showerror"))
+        self.assertIn("moved to version 2", MESSAGES.text("showerror"))
+        self.assertIn("nothing was stored", app.status.get())
+
+    def test_a_listing_edited_after_the_preview_refuses_the_build(self):
+        """A cover letter writes the employer and the role into its first two lines."""
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app, kind="Cover letter")
+        app._preview_artifact_plan()
+        self.assertIn("Example Employer", app._artifact_plan.content)
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="A Different Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("Document not built", MESSAGES.titles("showerror"))
+        self.assertIn("the listing changed while", MESSAGES.text("showerror"))
+        self.assertIn("A Different Employer", MESSAGES.text("showerror"))
+        self.assertIn("nothing was stored", app.status.get())
+
+    def test_a_cover_letter_preview_names_what_it_could_not_claim(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app, kind="Cover letter")
+
+        app._preview_artifact_plan()
+
+        shown = app.artifact_plan_box.get("1.0", "end")
+        self.assertIn("do not state Docker", shown)
+        self.assertNotIn("Nothing the strategy asks for is missing", shown)
+        self.assertNotIn("Docker", app._artifact_plan.content)
+
+    def test_facts_changed_after_the_preview_refuse_the_build(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        self.change_a_fact(app)
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("facts changed while", MESSAGES.text("showerror"))
+
+    def test_an_identical_document_is_reported_rather_than_stored_again(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        first = self.build_one(app)
+
+        app._preview_artifact_plan()
+
+        self.assertIn(first.artifact_id, app.artifact_plan_box.get("1.0", "end"))
+        self.assertIn(first.artifact_id, app.status.get())
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+        app._build_previewed_artifact()
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_a_document_is_saved_to_a_file_with_its_provenance_and_nothing_else(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        app._on_artifact_selection()
+        self.assertFalse(app.export_artifact_button.instate(["disabled"]))
+        target = Path(self._directory.name) / "tailored.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+
+        app._export_selected_artifact()
+
+        written = target.read_text(encoding="utf-8")
+        self.assertIn(stored.artifact_id, written)
+        self.assertIn(f"version {strategy.version}", written)
+        self.assertIn("resume-v1.docx", written)
+        self.assertIn("nothing was sent anywhere", written)
+        self.assertTrue(written.rstrip().endswith(stored.content.rstrip()))
+        self.assertIn(str(target), app.status.get())
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode) & 0o077, 0)
+
+    def test_a_cancelled_or_declined_save_writes_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        FILEDIALOG.path = ""
+
+        app._export_selected_artifact()
+
+        self.assertIn("Nothing was written out", app.status.get())
+        target = Path(self._directory.name) / "declined.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = False
+
+        app._export_selected_artifact()
+
+        self.assertFalse(target.exists())
+        self.assertIn("Nothing was written out", app.status.get())
+
+    def test_an_existing_file_is_refused_rather_than_written_over(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        target = Path(self._directory.name) / "my-resume.txt"
+        target.write_text("the person's own resume", encoding="utf-8")
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+
+        app._export_selected_artifact()
+
+        self.assertIn("Document not saved", MESSAGES.titles("showerror"))
+        self.assertIn("already exists", MESSAGES.text("showerror"))
+        self.assertEqual(target.read_text(encoding="utf-8"), "the person's own resume")
+
+    def test_a_stale_document_is_not_offered_for_saving_and_is_refused_if_asked(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        app._on_artifact_selection()
+        self.assertTrue(app.export_artifact_button.instate(["disabled"]))
+        target = Path(self._directory.name) / "stale.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+        MESSAGES.reset()
+
+        app._export_selected_artifact()
+
+        self.assertIn("This document is out of date", MESSAGES.titles("showerror"))
+        self.assertIn("experience", MESSAGES.text("showerror"))
+        self.assertFalse(target.exists())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "a stale document opened a save dialog before refusing")
+        recorded = log_path(database_path=Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertIn("artifact.export.refused", recorded, "the refusal left no trace")
+
+    def test_saving_with_nothing_selected_asks_for_no_file_at_all(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        self.build_one(app)
+        app.artifacts_tree.selection_set(())
+        app._on_artifact_selection()
+        FILEDIALOG.path = str(Path(self._directory.name) / "nothing.txt")
+
+        app._export_selected_artifact()
+
+        self.assertIn("Select a document in the list first", app.status.get())
+        self.assertFalse((Path(self._directory.name) / "nothing.txt").exists())
+
+    def test_the_document_text_never_reaches_the_status_line_or_the_event_log(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        target = Path(self._directory.name) / "quiet.txt"
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+        app._export_selected_artifact()
+
+        body = stored.content.strip().splitlines()[0]
+        self.assertNotIn(body, app.status.get())
+        self.assertNotIn(body, app.artifact_detail.get())
+        recorded = log_path(database_path=Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertNotIn(body, recorded)
+        self.assertNotIn("Python, SQL", recorded)
+        self.assertNotIn(str(target), recorded, "the log names a file on the person's disk")
+        self.assertIn("artifact.exported", recorded, "the copy was written without a trace")
+        self.assertIn(stored.artifact_id, recorded)
+
+
 class WindowConstructionTests(HandlerTestCase):
     """Every widget the real window builds must accept the options it is given.
 
@@ -6529,15 +7243,20 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertIn("Selected contact 1 of 2", app.contact_mark_state.get())
         self.assertIn("Not marked do not contact", app.contact_mark_state.get())
 
-        # A marked contact: the other way round, and the reason box is off because the only action left is
-        # removing the mark - which removes the reason with it. The mark is made the way a person makes it.
+        # A marked contact: the other way round. The reason chooser goes off, because a removal is
+        # recorded against the reason already stored rather than rewriting it, and the note box stays
+        # on, because the enforced list will not give an address up without a note.
         app.contact_note.set(CONTACT_NOTE)
         app._mark_selected_contact()
         self.select(app, ids[CONTACT_EMAILS[0]])
         self.assertTrue(app.mark_contact_button.instate(["disabled"]))
         self.assertFalse(app.clear_contact_button.instate(["disabled"]))
-        self.assertTrue(app.contact_note_entry.instate(["disabled"]))
-        self.assertIn("Marked do not contact, and a reason is recorded with it",
+        self.assertTrue(app.contact_reason_box.instate(["disabled"]))
+        self.assertFalse(app.contact_note_entry.instate(["disabled"]),
+                         "a mark cannot be taken off without a note, so the note box must stay usable")
+        self.assertIn("Marked do not contact, a reason is recorded with it",
+                      app.contact_mark_state.get())
+        self.assertIn("on the do-not-contact list this application checks",
                       app.contact_mark_state.get())
 
     def test_marking_asks_first_and_stores_the_mark_with_the_reason_typed(self):
@@ -6554,11 +7273,16 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertIn("row 1 of 2 in the stored list", asked)
         self.assertIn("contacts.csv", asked, "the file the row came from is how a person tells rows apart")
         self.assertIn("no import can clear it", asked)
-        self.assertIn("The reason you typed is stored with the mark", asked)
+        self.assertIn("The note you typed is stored with the mark", asked)
         record = self.store.get_contact(CONTACT_EMAILS[0])
         self.assertTrue(record.suppressed)
         self.assertEqual(record.suppressed_note, CONTACT_NOTE)
-        self.assertEqual(self.changes() - before, 1, "one update and nothing else")
+        # Two rows, because one decision is now recorded in both places it has to be: the mark on the
+        # stored contact, and the address on the list the sending gate checks before anything is sent.
+        self.assertEqual(self.changes() - before, 2, "the mark and the enforced entry, and nothing else")
+        entry = self.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertIsNotNone(entry, "the mark did not reach the list this application checks")
+        self.assertTrue(self.store.is_suppressed(CONTACT_EMAILS[0]))
         self.assertIn("Do-not-contact mark updated", MESSAGES.titles("showinfo"))
         self.assertIn("marked do not contact", app.status.get())
         self.assertEqual(app.contact_note.get(), "", "the reason box is cleared with the mark it recorded")
@@ -6618,6 +7342,9 @@ class ContactMarkControlTests(ContactTabTestCase):
         marked = self.store.get_contact(CONTACT_EMAILS[0])
         MESSAGES.reset()
         CONFIG[CLEAR_TITLE] = False
+        # A removal needs a note of its own: the mark handler empties the box after it writes, and the
+        # enforced do-not-contact list will not give an address up without a reason written down.
+        app.contact_note.set(CONTACT_NOTE)
         before = self.changes()
 
         app._clear_selected_contact()
@@ -6759,7 +7486,7 @@ class ContactMarkControlTests(ContactTabTestCase):
         self.assertEqual(restored_record.suppressed_note, CONTACT_NOTE,
                          "the reason travels with the mark in a backup and a restore")
         self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
-        self.assertIn("Marked do not contact, and a reason is recorded with it",
+        self.assertIn("Marked do not contact, a reason is recorded with it",
                       app.contact_mark_state.get())
 
     def test_no_contact_value_or_reason_reaches_a_dialog_the_status_line_or_the_log(self):
@@ -6769,6 +7496,10 @@ class ContactMarkControlTests(ContactTabTestCase):
         app.contact_note.set(CONTACT_NOTE)
 
         app._mark_selected_contact()
+        # The note the mark used is cleared by the handler, and a removal is refused without one, so a
+        # person types their reason again - which is also the value this test follows into every dialog,
+        # the status line and the log.
+        app.contact_note.set(CONTACT_NOTE)
         app._clear_selected_contact()
 
         said = MESSAGES.text() + "\n" + app.status.get()
@@ -8392,3 +9123,1275 @@ class ProfileSetupTests(HandlerTestCase):
         self.assertEqual(setup.confirm_vars, {})
         self.assertIn("nothing to fill in here", setup.summary.get().casefold())
         self.assertEqual(setup.save_button.options["state"], "disabled")
+
+
+class PermissionsTabTests(HandlerTestCase):
+    """The tab that holds the standing authorisation, exercised through the real window.
+
+    The two properties worth testing here cannot be seen by looking at the screen: a declined dialog
+    leaves the database untouched (asserted against the connection's own change counter, not against a
+    re-read), and a granted permission still starts nothing, because the gate it would have to pass is
+    closed and no control on this tab can open one.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "policy.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def grant(self, app, *, source="jobicy", action="look for jobs", limit="3", answer=True):
+        CONFIG["Authorise this action"] = answer
+        app.policy_vars["source"].set(source)
+        app.policy_vars["action"].set(action)
+        app.policy_vars["limit"].set(limit)
+        app._grant_policy_permission()
+
+    def rows(self, app):
+        return [app.policy_tree.item(item, "values") for item in app.policy_tree.get_children()]
+
+    def test_a_new_database_shows_that_nothing_is_authorised(self):
+        app = self.build_window()
+        self.assertIn("Nothing is authorised", app.policy_summary.get())
+        self.assertEqual(self.rows(app), [])
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_granting_asks_first_and_a_refusal_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        self.grant(app, answer=False)
+        self.assertIn("Authorise this action", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+        self.assertIn("cancelled", app.status.get())
+
+    def test_the_question_says_that_permitting_is_not_enabling(self):
+        app = self.build_window()
+        self.grant(app, answer=False)
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("does not switch anything on", asked)
+        self.assertIn("at most 3 time(s) a day", asked)
+
+    def test_a_change_here_keeps_conditions_this_tab_does_not_show(self):
+        """Regression: the tab rebuilt the policy field by field and dropped the conditions.
+
+        Role, place, attachment and follow-up conditions have no control on this tab yet. A grant,
+        a removal or the stop switch must carry them through untouched - quietly dropping one would
+        *loosen* a restriction the person wrote down, which is the one kind of silent change an
+        authorisation screen must never make.
+        """
+        from career_agent.policy import ActionKind as PermissionKind
+        from career_agent.policy import GlobalPolicy
+
+        app = self.build_window()
+        app.store.save_global_policy(GlobalPolicy(
+            allowed=frozenset({("remotive", PermissionKind.DISCOVERY)}),
+            daily_limits={PermissionKind.DISCOVERY: 1},
+            role_terms={"engineer"}, locations={"india"}, allowed_attachments={".pdf"},
+            follow_up_limit=1))
+        app._refresh_policy()
+
+        self.grant(app, limit="2")
+        after_grant = app.store.get_global_policy()
+        self.assertEqual(after_grant.role_terms, frozenset({"engineer"}))
+        self.assertEqual(after_grant.locations, frozenset({"india"}))
+        self.assertEqual(after_grant.allowed_attachments, frozenset({".pdf"}))
+        self.assertEqual(after_grant.follow_up_limit, 1)
+
+        CONFIG["Stop everything"] = True
+        app._toggle_policy_stop()
+        after_stop = app.store.get_global_policy()
+        self.assertTrue(after_stop.stop_all)
+        self.assertEqual(after_stop.role_terms, frozenset({"engineer"}),
+                         "stopping everything must not quietly widen what is permitted afterwards")
+        self.assertEqual(after_stop.follow_up_limit, 1)
+
+    def test_a_granted_permission_is_stored_as_a_version_and_listed(self):
+        app = self.build_window()
+        self.grant(app, limit="2")
+        from career_agent.policy import ActionKind as PermissionKind
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertIn(("jobicy", PermissionKind.DISCOVERY), stored.allowed)
+        self.assertEqual(stored.daily_limits[PermissionKind.DISCOVERY], 2)
+        self.assertEqual(self.rows(app)[0][:3], ("jobicy", "look for jobs", "2 per day"))
+        self.assertIn("nothing was started", app.status.get())
+
+    def test_a_ceiling_that_is_not_a_number_is_refused_and_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        self.grant(app, limit="as often as you like")
+        self.assertIn("Permission not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_a_ceiling_of_zero_is_refused_rather_than_stored_as_a_permission(self):
+        app = self.build_window()
+        self.grant(app, limit="0")
+        self.assertIn("Permission not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_granting_the_same_permission_twice_writes_one_version(self):
+        app = self.build_window()
+        self.grant(app)
+        self.grant(app)
+        self.assertEqual(app.store.policy_version_number(), 1,
+                         "a repeat of what is already permitted is not a new decision")
+
+    def test_removal_asks_first_and_a_refusal_writes_nothing(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        CONFIG["Remove this permission"] = False
+        before = app.store._connection.total_changes
+        app._remove_policy_permission()
+        self.assertIn("Remove this permission", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.get_global_policy().allowed), 1)
+
+    def test_a_confirmed_removal_appends_a_version_and_keeps_the_old_one(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        CONFIG["Remove this permission"] = True
+        app._remove_policy_permission()
+        self.assertEqual(app.store.policy_version_number(), 2)
+        self.assertEqual(app.store.get_global_policy().allowed, frozenset())
+        self.assertEqual(len(app.store.policy_versions()[0][1].allowed), 1,
+                         "the version that permitted it stopped saying so")
+        self.assertEqual(self.rows(app), [])
+
+    def test_the_removal_control_is_off_until_a_row_is_selected(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set(())
+        app._on_policy_selection()
+        self.assertTrue(app.remove_policy_button.instate(["disabled"]))
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        self.assertFalse(app.remove_policy_button.instate(["disabled"]))
+
+    def test_the_stop_switch_asks_first_and_refuses_everything_while_it_is_on(self):
+        app = self.build_window()
+        self.grant(app)
+        CONFIG["Stop everything"] = False
+        before = app.store._connection.total_changes
+        app._toggle_policy_stop()
+        self.assertEqual(app.store._connection.total_changes, before)
+        CONFIG["Stop everything"] = True
+        app._toggle_policy_stop()
+        self.assertTrue(app.store.get_global_policy().stop_all)
+        self.assertIn("everything is stopped", app.policy_summary.get().casefold())
+        self.assertEqual(self.rows(app)[0][3], "Stopped")
+
+    def test_withdrawing_asks_first_keeps_the_history_and_refuses_afterwards(self):
+        app = self.build_window()
+        self.grant(app)
+        CONFIG["Withdraw all authorisation"] = False
+        before = app.store._connection.total_changes
+        app._revoke_policy()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIsNone(app.store.get_global_policy().revoked_at)
+        CONFIG["Withdraw all authorisation"] = True
+        app._revoke_policy()
+        current = app.store.get_global_policy()
+        self.assertIsNotNone(current.revoked_at)
+        self.assertEqual(len(current.allowed), 1, "the withdrawal erased what it withdrew")
+        self.assertIn("withdrawn", app.policy_summary.get())
+        self.assertEqual(self.rows(app)[0][3], "Withdrawn")
+
+    def test_withdrawing_nothing_says_so_instead_of_writing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        app._revoke_policy()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(MESSAGES.titles("askyesno"), [])
+        self.assertIn("nothing is authorised", app.status.get().casefold())
+
+    def test_the_tab_reports_the_refusal_a_permitted_action_would_still_meet(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        before = app.store._connection.total_changes
+        app._explain_policy_row()
+        detail = app.policy_detail.get()
+        self.assertIn("gate", detail.lower())
+        self.assertIn("refused", detail.lower())
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "asking what would happen changed the database")
+
+    def test_the_permission_survives_closing_and_reopening_the_window(self):
+        app = self.build_window()
+        self.grant(app, limit="4")
+        app.close()
+        second = self.build_window()
+        self.assertEqual(self.rows(second)[0][2], "4 per day")
+        self.assertIn("version 1", second.policy_summary.get())
+
+    def test_nothing_on_this_tab_can_open_a_gate(self):
+        app = self.build_window()
+        self.grant(app)
+        from career_agent.sources import SOURCE_DECISIONS, discovery_gate, enabled_discovery_sources
+
+        self.assertEqual(enabled_discovery_sources(), ())
+        for decision in SOURCE_DECISIONS:
+            self.assertFalse(discovery_gate(decision.source_id).allowed)
+        source = inspect.getsource(desktop.CareerAgentApp._grant_policy_permission)
+        self.assertNotIn("SOURCE_QUALITY_GATE_PASSED", source)
+
+
+class WhatsHappeningTabTests(HandlerTestCase):
+    """The tab that answers "what has this been doing, and what needs me?", through the real window.
+
+    Three properties are worth more than what the screen says: an unresolved attempt cannot be
+    settled without evidence, a declined confirmation writes nothing at all (asserted against the
+    connection's own change counter), and what the tab shows afterwards is re-read from the database
+    rather than assembled from what was typed.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root,
+                                     database_path=Path(self._directory.name) / "report.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def unresolved(self, app, *, operation_id="op-1", identity="job:1", action="email_send"):
+        app.store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action)
+        app._refresh_report()
+        app.attempt_tree.selection_set(operation_id)
+        app._on_attempt_selection()
+        return operation_id
+
+    def settle(self, app, *, outcome="It did happen", evidence="checked the sent folder",
+               answer=True):
+        CONFIG["Record this outcome"] = answer
+        app.attempt_outcome.set(outcome)
+        app.attempt_evidence.set(evidence)
+        app._reconcile_selected_attempt()
+
+    def test_an_empty_database_says_nothing_needs_you_and_lists_no_attempt(self):
+        app = self.build_window()
+        self.assertIn("Nothing from the last day needs you", app.report_summary.get())
+        self.assertEqual(len(app.attempt_tree.get_children()), 0)
+        self.assertEqual(app.attempt_settle_button.options["state"], "disabled")
+        self.assertIn("Select an attempt", app.attempt_detail.get())
+
+    def test_an_unresolved_attempt_is_listed_with_what_it_blocks(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.assertEqual(len(app.attempt_tree.get_children()), 1)
+        self.assertIn("outcome not established", app.attempt_detail.get())
+        self.assertIn("blocks any further attempt", app.attempt_detail.get())
+        self.assertEqual(app.attempt_settle_button.options["state"], "normal")
+        self.assertIn("need you", app.report_summary.get())
+
+    def test_settling_without_evidence_is_refused_and_writes_nothing(self):
+        app = self.build_window()
+        self.unresolved(app)
+        before = app.store._connection.total_changes
+        self.settle(app, evidence="  ")
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.unresolved_attempts()), 1)
+        self.assertNotIn("Record this outcome", MESSAGES.titles("askyesno"),
+                         "a refusal must not even ask the question")
+
+    def test_a_declined_confirmation_writes_nothing_at_all(self):
+        app = self.build_window()
+        self.unresolved(app)
+        before = app.store._connection.total_changes
+        self.settle(app, answer=False)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.unresolved_attempts()), 1)
+        self.assertIn("still unresolved", app.status.get())
+
+    def test_a_settled_attempt_leaves_the_list_and_the_evidence_is_kept(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.settle(app, evidence="the provider's own log shows it was delivered")
+        self.assertEqual(app.store.unresolved_attempts(), (),
+                         "the list is re-read from the database, not from what was typed")
+        stored = app.store.get_attempt("op-1")
+        self.assertIs(stored.state, AttemptState.PERFORMED)
+        self.assertIn("provider's own log", stored.evidence)
+        self.assertEqual(len(app.attempt_tree.get_children()), 0)
+        self.assertEqual(app.attempt_evidence.get(), "",
+                         "the evidence box is cleared so the next attempt cannot inherit it")
+        self.assertIn("no longer blocked", app.status.get())
+
+    def test_the_question_says_what_will_be_recorded_and_that_it_lifts_the_block(self):
+        app = self.build_window()
+        self.unresolved(app)
+        self.settle(app, outcome="It did not happen", evidence="nothing in the sent folder",
+                    answer=False)
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("It did not happen", asked)
+        self.assertIn("nothing in the sent folder", asked)
+        self.assertIn("how the block on further attempts", asked)
+
+    def test_the_weekly_window_is_read_back_from_the_database(self):
+        app = self.build_window()
+        app.report_window.set("the last seven days")
+        app._refresh_report()
+        self.assertIn("the last 7 days", app.report_summary.get())
+        self.assertIn("next 14 day(s)", app.report_text.get())
+
+    def test_the_report_text_never_calls_queued_work_done(self):
+        from career_agent.tasks import build_task
+
+        app = self.build_window()
+        app.store.save_scheduled_task(build_task("daily-backup", "Nightly backup",
+                                                 "backup.snapshot", times=("07:00",),
+                                                 timezone="UTC"))
+        app._refresh_report()
+        text = app.report_text.get()
+        self.assertIn("Scheduled is not done", text,
+                      "a scheduled task must reach the window labelled as a plan")
+        self.assertIn("plans, not outcomes", text)
+
+    def test_a_notification_preference_is_saved_and_read_back(self):
+        app = self.build_window()
+        CONFIG["Save this preference"] = True
+        app.notification_vars["cadence"].set("Once a week")
+        app.notification_vars["hour"].set("7")
+        app.notification_vars["channel"].set("written to a file on this machine")
+        app.notification_vars["only_attention"].set(False)
+        app._save_notification_preference()
+
+        stored = app.store.get_notification_preferences()
+        self.assertIs(stored.cadence, Cadence.WEEKLY)
+        self.assertEqual(stored.hour, 7)
+        self.assertIs(stored.channel, DeliveryChannel.FILE)
+        self.assertFalse(stored.only_when_attention)
+        self.assertIn("once a week", app.notification_summary.get())
+        self.assertIn("Nothing is sent anywhere", app.status.get())
+
+    def test_a_declined_preference_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        CONFIG["Save this preference"] = False
+        app.notification_vars["cadence"].set("Every day")
+        app._save_notification_preference()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertTrue(app.store.get_notification_preferences().is_off)
+
+    def test_an_hour_that_is_not_one_is_refused_before_anything_is_asked(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        app.notification_vars["cadence"].set("Every day")
+        app.notification_vars["hour"].set("half past nine")
+        app._save_notification_preference()
+        self.assertIn("Preference not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertNotIn("Save this preference", MESSAGES.titles("askyesno"))
+
+    def test_the_tab_states_what_it_cannot_do(self):
+        app = self.build_window()
+        texts = " ".join(str(label.options.get("text", "")) for label in RecordingLabel.created)
+        self.assertIn("no email, no push and no system notification", texts)
+        self.assertIn("Nothing here fetches anything, sends anything or submits anything", texts)
+
+
+class DoNotContactListPanelTests(ContactTabTestCase):
+    """The list the sending gate reads, in the window beside the mark that writes it.
+
+    Before this panel the window wrote a column nothing enforced, while the list ``guarded_dispatch``
+    checks before any outbound action was reachable only from Python. These tests drive the tab's own
+    handlers against a real store, so "it reached the list" is the stored entry and "nothing was
+    written" is the connection's change counter.
+    """
+
+    def marked(self, app, note: str = CONTACT_NOTE, reason: str | None = None):
+        """Mark the first synthetic contact the way a person does, through the tab's handlers."""
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+        if reason is not None:
+            app.contact_reason.set(reason)
+        app.contact_note.set(note)
+        app._mark_selected_contact()
+
+    def test_the_panel_shows_the_list_the_sending_gate_reads(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+        self.assertIn("0 address(es)", app.suppression_summary.get())
+
+        self.marked(app)
+
+        rows = [app.suppression_tree.item(item, "values")
+                for item in app.suppression_tree.get_children()]
+        self.assertEqual(len(rows), 1, f"the list shows {rows!r}")
+        self.assertEqual(rows[0][0], CONTACT_EMAILS[0])
+        self.assertEqual(rows[0][1], "they asked not to be contacted")
+        self.assertEqual(rows[0][3], "a note is recorded")
+        self.assertIn("1 address(es)", app.suppression_summary.get())
+
+    def test_the_note_itself_is_never_a_column_a_dialog_or_a_log_line(self):
+        app = self.make_app()
+        self.import_two(app)
+
+        self.marked(app)
+
+        drawn = " ".join(" ".join(app.suppression_tree.item(item, "values"))
+                         for item in app.suppression_tree.get_children())
+        self.assertNotIn(CONTACT_NOTE, drawn, "the note's text was drawn in the list")
+        self.assertNotIn(CONTACT_NOTE, MESSAGES.text(), "the note's text reached a dialog")
+        self.assertNotIn(CONTACT_NOTE, app.status.get())
+        written = self.log_text()
+        self.assertIn("event=suppression.recorded", written)
+        self.assertNotIn(CONTACT_NOTE, written, "the note's text reached the activity log")
+        self.assertNotIn(CONTACT_EMAILS[0], written, "an address reached the activity log")
+
+    def real_window(self):
+        """A whole window over the stand-in widgets, so the panel's own labels exist to be read."""
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "suppression.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def test_the_reason_offered_is_recorded_and_the_window_invents_none(self):
+        window = self.real_window()
+        self.assertEqual(window.contact_reason_box.offered,
+                         [label for _value, label in logic.suppression_reason_choices()],
+                         "the window offers a set of reasons the suppression module does not define")
+
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app, reason="this was not the right person")
+
+        entry = app.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertEqual(entry.reason.value, "wrong_person")
+        self.assertEqual(app.contact_reason.get(), "this was not the right person")
+
+    def test_marking_twice_keeps_the_first_reason(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app, reason="they asked not to be contacted")
+        first = app.store.suppression_for(CONTACT_EMAILS[0])
+        # Taking the mark off and putting it back with a different reason: the list keeps the earliest
+        # one, because the first record of somebody asking to stop is the truest one.
+        app.contact_note.set("checked with them again (synthetic)")
+        app._clear_selected_contact()
+        app.store.suppress_contact(CONTACT_EMAILS[0], reason=SuppressionReason.ASKED_TO_STOP,
+                                   note="first (synthetic)")
+        self.marked(app, note="second (synthetic)", reason="you decided not to write to them")
+
+        entry = app.store.suppression_for(CONTACT_EMAILS[0])
+        self.assertEqual(entry.reason, SuppressionReason.ASKED_TO_STOP,
+                         "a later mark overwrote the earlier reason")
+        self.assertNotEqual(entry.recorded_at, "", "the entry lost the day it was recorded")
+        self.assertNotEqual(first, None)
+
+    def test_taking_a_mark_off_without_a_note_is_refused_before_anything_is_asked(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        app.contact_note.set(" no ")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked a question it was going to refuse")
+        self.assertEqual(self.changes(), before, "a refused removal wrote to the database")
+        self.assertTrue(app.store.is_suppressed(CONTACT_EMAILS[0]))
+        self.assertTrue(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+
+    def test_a_confirmed_removal_takes_the_address_off_the_list_too(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        app.contact_note.set("they wrote back asking us to (synthetic)")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertIn(CLEAR_TITLE, MESSAGES.titles("askyesno"))
+        self.assertFalse(app.store.is_suppressed(CONTACT_EMAILS[0]),
+                         "the address stayed on the list the sending gate reads")
+        self.assertFalse(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertEqual(self.changes() - before, 2,
+                         "the mark and the enforced entry, and nothing else")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_a_declined_removal_leaves_both_records_exactly_as_they_were(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+        CONFIG[CLEAR_TITLE] = False
+        app.contact_note.set("thinking about it (synthetic)")
+        before = self.changes()
+
+        app._clear_selected_contact()
+
+        self.assertEqual(self.changes(), before, "a declined removal wrote to the database")
+        self.assertTrue(app.store.is_suppressed(CONTACT_EMAILS[0]))
+        self.assertTrue(app.store.get_contact(CONTACT_EMAILS[0]).suppressed)
+        self.assertEqual(len(app.suppression_tree.get_children()), 1)
+
+    def test_a_mark_made_before_this_window_is_reported_as_not_on_the_list(self):
+        app = self.make_app()
+        self.import_two(app)
+        # The state a database carries from an earlier build: the column is set and the enforced list
+        # knows nothing about the address.
+        app.store.set_contact_suppression(CONTACT_EMAILS[0], note=CONTACT_NOTE)
+        app._refresh_contacts()
+        self.select(app, self.ids_of(app)[CONTACT_EMAILS[0]])
+
+        self.assertIn("1 marked contact(s) are not on the list", app.suppression_summary.get())
+        self.assertIn("NOT on the list this application checks", app.contact_mark_state.get())
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_the_confirmation_says_the_mark_reaches_the_sending_gate(self):
+        app = self.make_app()
+        self.import_two(app)
+
+        self.marked(app)
+
+        asked = MESSAGES.said(MARK_TITLE) if hasattr(MESSAGES, "said") else MESSAGES.text("askyesno")
+        self.assertIn("do-not-contact list this application checks", asked)
+        self.assertIn("keeps the first reason", asked)
+        self.assertIn("permanent", asked,
+                      "the permanent reason's confirmation does not say that it is permanent")
+
+    def test_the_panel_says_what_the_list_is_and_what_it_cannot_do(self):
+        RecordingLabel.created = []
+        app = self.real_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("checked before any outbound action is attempted", said)
+        self.assertIn("Nothing on it expires", said)
+        self.assertIn("never shown here, logged or put in an event", said)
+        self.assertIsNotNone(app.suppression_summary.get())
+
+    def test_an_unreadable_record_is_reported_and_the_panel_draws_nothing(self):
+        app = self.make_app()
+        self.import_two(app)
+        self.marked(app)
+        MESSAGES.reset()
+
+        def unreadable():
+            raise StoredRecordError("do-not-contact entry", "the stored row could not be read")
+
+        app.store.list_suppressions = unreadable
+        app._refresh_suppressions()
+
+        self.assertTrue(MESSAGES.titles("showerror"), "an unreadable entry was not reported")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+    def test_a_database_that_cannot_be_read_is_reported_rather_than_drawn(self):
+        app = self.make_app()
+        self.import_two(app)
+        MESSAGES.reset()
+
+        def unavailable():
+            raise sqlite3.OperationalError("database is locked (synthetic)")
+
+        app.store.list_suppressions = unavailable
+        app._refresh_suppressions()
+
+        self.assertTrue(MESSAGES.titles("showerror"), "an unavailable database was not reported")
+        self.assertEqual(len(app.suppression_tree.get_children()), 0)
+
+
+class PolicyConditionsTabTests(HandlerTestCase):
+    """Editing the conditions and the quiet window, through the real window.
+
+    The conditions were stored, enforced and carried untouched through every change this tab made
+    since they were added, and could only be set from Python. These tests drive the tab's own
+    handlers against a real store: "nothing was written" is the connection's change counter and the
+    stored version number, and what the boxes show is read back from the authorisation.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "conditions.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def typed(self, app, *, roles="", places="", attachments="", follow_ups="",
+              quiet_from="", quiet_until=""):
+        app.condition_vars["roles"].set(roles)
+        app.condition_vars["places"].set(places)
+        app.condition_vars["attachments"].set(attachments)
+        app.condition_vars["follow_ups"].set(follow_ups)
+        app.condition_vars["quiet_from"].set(quiet_from)
+        app.condition_vars["quiet_until"].set(quiet_until)
+
+    def test_a_fresh_database_records_no_condition_and_says_what_that_means(self):
+        app = self.build_window()
+        summary = app.conditions_summary.get()
+        self.assertIn("no role condition is recorded", summary)
+        self.assertIn("no attachment rule is recorded, so nothing may be attached", summary)
+        self.assertIn("no quiet hours are recorded", summary)
+        self.assertEqual(app.condition_vars["roles"].get(), "")
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_saving_conditions_asks_first_and_a_declined_question_writes_nothing(self):
+        app = self.build_window()
+        CONFIG["Record these conditions"] = False
+        self.typed(app, roles="engineer", quiet_from="22:00", quiet_until="07:00")
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("roles must mention: nothing → engineer", asked)
+        self.assertIn("quiet hours: nothing → 22:00-07:00", asked)
+        self.assertIn("only narrow", asked)
+        self.assertIn("nothing runs", asked)
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined confirmation changed the database")
+        self.assertEqual(app.store.policy_version_number(), 0)
+        self.assertIn("Cancelled", app.status.get())
+
+    def test_a_confirmed_save_stores_every_condition_and_one_new_version(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer, Data", places="Remote, Delhi",
+                   attachments="pdf, .docx", follow_ups="2",
+                   quiet_from="22:00", quiet_until="7")
+
+        app._save_policy_conditions()
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(stored.role_terms, frozenset({"engineer", "data"}))
+        self.assertEqual(stored.locations, frozenset({"remote", "delhi"}))
+        self.assertEqual(stored.allowed_attachments, frozenset({".pdf", ".docx"}))
+        self.assertEqual(stored.follow_up_limit, 2)
+        self.assertEqual(stored.quiet_hours, (22, 7))
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertIn("conditions were recorded", app.status.get())
+        self.assertIn("nothing was started", app.status.get())
+
+    def test_the_boxes_read_back_what_is_stored_and_a_resave_writes_no_version(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer", attachments=".pdf", quiet_from="22", quiet_until="7")
+        app._save_policy_conditions()
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertEqual(app.condition_vars["quiet_from"].get(), "22:00")
+        self.assertEqual(app.condition_vars["attachments"].get(), ".pdf")
+        MESSAGES.reset()
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing to change", MESSAGES.titles("showinfo"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a change it had already decided was none")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 1)
+
+    def test_a_half_written_quiet_window_is_refused_before_anything_is_asked(self):
+        app = self.build_window()
+        self.typed(app, quiet_from="22")
+        before = app.store._connection.total_changes
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(MESSAGES.titles("askyesno"), [])
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_quiet_hours_that_start_and_end_together_are_refused(self):
+        app = self.build_window()
+        self.typed(app, quiet_from="9", quiet_until="09:00")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("say nothing", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_something_that_is_not_a_file_ending_is_refused(self):
+        app = self.build_window()
+        self.typed(app, attachments="my resume.pdf")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("not a file ending", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_a_follow_up_limit_that_is_not_a_number_is_refused(self):
+        app = self.build_window()
+        self.typed(app, follow_ups="a few")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_recording_a_condition_leaves_the_permissions_it_narrows_alone(self):
+        app = self.build_window()
+        CONFIG["Authorise this action"] = True
+        app.policy_vars["source"].set("jobicy")
+        app.policy_vars["action"].set("look for jobs")
+        app.policy_vars["limit"].set("3")
+        app._grant_policy_permission()
+        granted = app.store.get_global_policy()
+
+        self.typed(app, roles="engineer")
+        app._save_policy_conditions()
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(stored.allowed, granted.allowed, "a condition changed what is permitted")
+        self.assertEqual(stored.daily_limits, granted.daily_limits,
+                         "a condition changed a daily ceiling")
+        self.assertEqual(stored.role_terms, frozenset({"engineer"}))
+        self.assertEqual(app.store.policy_version_number(), 2)
+
+    def test_clearing_a_condition_is_a_change_a_person_sees_described(self):
+        app = self.build_window()
+        self.typed(app, roles="engineer", places="remote")
+        app._save_policy_conditions()
+        MESSAGES.reset()
+        self.typed(app, places="remote")
+
+        app._save_policy_conditions()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("roles must mention: engineer → nothing", asked)
+        self.assertEqual(app.store.get_global_policy().role_terms, frozenset())
+        self.assertEqual(app.store.get_global_policy().locations, frozenset({"remote"}))
+
+    def test_a_condition_a_person_typed_twice_is_refused_rather_than_folded_quietly(self):
+        app = self.build_window()
+        self.typed(app, roles="Engineer, engineer")
+
+        app._save_policy_conditions()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("listed twice", MESSAGES.text("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_the_tab_says_what_an_empty_attachment_rule_means(self):
+        RecordingLabel.created = []
+        app = self.build_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("with no attachment rule, nothing may be attached at all", said)
+        self.assertIn("every failed condition is reported together", said)
+        self.assertIn("may wrap past midnight", said)
+        self.assertIsNotNone(app.conditions_summary.get())
+
+
+class SourcesAndEvidenceTabTests(HandlerTestCase):
+    """The tab that explains why nothing is being fetched, and records what would change that.
+
+    Until now the source decisions and the written acceptance requirements existed in code and in
+    two command-line reports, and the window said nothing about either: a person looking at an
+    empty jobs list had no way to learn that every source is closed, let alone what would open one.
+    These tests drive the tab's own handlers against a real store - "nothing was recorded" is the
+    connection's change counter, and what is held is read back from the database.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "evidence.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def choose(self, app, route="ats_provider", kind="terms_review"):
+        app.evidence_route_tree.selection_set(route)
+        app.evidence_kind_tree.selection_set(kind)
+
+    def typed(self, app, *, reference="", note=""):
+        app.evidence_reference.set(reference)
+        app.evidence_note.set(note)
+
+    def test_every_reviewed_source_is_listed_with_both_gates_closed(self):
+        app = self.build_window()
+        listed = {row[0]: row for row in app.source_tree.inserted}
+        self.assertEqual(set(listed), {decision.source_id for decision in sources.SOURCE_DECISIONS})
+        for source_id, (_iid, values) in listed.items():
+            with self.subTest(source=source_id):
+                self.assertEqual(values[3], "closed")
+                self.assertEqual(values[4], "closed")
+        summary = app.source_summary.get()
+        self.assertIn("0 switched on", summary)
+        self.assertIn("has not passed", summary)
+
+    def test_selecting_a_source_explains_what_is_holding_it_back(self):
+        app = self.build_window()
+        app.source_tree.selection_set("jobicy")
+        detail = app.source_detail.get()
+        self.assertIn("Jobicy", detail)
+        self.assertIn("source-quality gate", detail)
+        self.assertIn("Discovery: closed", detail)
+        self.assertIn("Submission: closed", detail)
+
+    def test_every_route_is_listed_with_nothing_recorded_on_a_fresh_database(self):
+        app = self.build_window()
+        listed = {row[0]: row[1] for row in app.evidence_route_tree.inserted}
+        self.assertEqual(set(listed), {route.route_id for route in ROUTE_REQUIREMENTS})
+        self.assertEqual(listed["linkedin"][2], "0 of 9 recorded")
+        self.assertIn("0 of 54", app.evidence_summary.get())
+
+    def test_choosing_a_route_lists_its_requirements_and_each_one_reads_missing(self):
+        app = self.build_window()
+        app.evidence_route_tree.selection_set("unstop")
+        rows = {row[0]: row[1] for row in app.evidence_kind_tree.inserted}
+        self.assertEqual(set(rows), {kind.value for kind in EvidenceKind})
+        for kind, values in rows.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(values[2], "missing")
+                self.assertEqual(values[3], "")
+
+    def test_a_missing_requirement_offers_recording_and_not_withdrawing(self):
+        app = self.build_window()
+        self.choose(app)
+        self.assertEqual(app.evidence_record_button.options["state"], "normal")
+        self.assertEqual(app.evidence_withdraw_button.options["state"], "disabled")
+        self.assertIn("Nothing is recorded against this requirement", app.evidence_detail.get())
+
+    def test_recording_asks_first_and_a_declined_question_writes_nothing(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = False
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="read the automation clauses in full")
+        before = app.store._connection.total_changes
+
+        app._record_selected_evidence()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("Terms and robots review", asked)
+        self.assertIn("switches nothing on", asked)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+
+    def test_a_confirmed_record_is_stored_read_back_and_switches_nothing_on(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="read the automation clauses in full")
+
+        app._record_selected_evidence()
+
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+        held = {row[0]: row[1] for row in app.evidence_route_tree.inserted}["ats_provider"]
+        self.assertEqual(held[2], "1 of 9 recorded")
+        self.assertEqual(app.evidence_reference.get(), "")
+        self.assertIn("nothing was switched on", app.status.get())
+        self.assertFalse(sources.SOURCE_QUALITY_GATE_PASSED)
+        self.assertEqual(sources.enabled_discovery_sources(), ())
+
+    def test_evidence_with_nothing_to_check_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="ok", note="read the automation clauses in full")
+        before = app.store._connection.total_changes
+
+        app._record_selected_evidence()
+
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertIn("go and check", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+
+    def test_evidence_with_no_note_of_what_was_checked_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="fine")
+
+        app._record_selected_evidence()
+
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertIn("what you actually checked", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+
+    def test_a_held_requirement_offers_withdrawing_and_not_recording_over_it(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+
+        self.choose(app)
+        self.assertEqual(app.evidence_record_button.options["state"], "disabled")
+        self.assertEqual(app.evidence_withdraw_button.options["state"], "normal")
+        detail = app.evidence_detail.get()
+        self.assertIn("Where to check it: research/matrix.md", detail)
+        self.assertIn("not a permission granted by the route's owner", detail)
+
+    def test_withdrawing_without_a_reason_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        MESSAGES.reset()
+        self.choose(app)
+        self.typed(app, note="no")
+
+        app._withdraw_selected_evidence()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("short reason", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+
+    def test_a_confirmed_withdrawal_removes_the_record_and_says_the_route_misses_it(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        CONFIG["Withdraw this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        self.choose(app)
+        self.typed(app, note="their terms changed this month")
+
+        app._withdraw_selected_evidence()
+
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+        self.assertIn("now misses it", app.status.get())
+        self.assertEqual(app.evidence_note.get(), "")
+
+    def test_a_declined_withdrawal_keeps_the_record(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        CONFIG["Withdraw this evidence"] = False
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        self.choose(app)
+        self.typed(app, note="actually I am not sure")
+        before = app.store._connection.total_changes
+
+        app._withdraw_selected_evidence()
+
+        self.assertIn("Withdraw \"Terms and robots review\"", MESSAGES.text("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+
+    def test_recording_every_requirement_reads_as_complete_and_still_opens_no_source(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        for index, kind in enumerate(EvidenceKind):
+            self.choose(app, route="employer_site", kind=kind.value)
+            self.typed(app, reference=f"research/evidence-{index}.md",
+                       note=f"checked requirement {index} against their published terms")
+            app._record_selected_evidence()
+
+        row = {row[0]: row[1] for row in app.evidence_route_tree.inserted}["employer_site"]
+        self.assertEqual(row[2], "9 of 9 recorded")
+        self.assertEqual(row[3], "every requirement recorded")
+        self.assertIn("1 route(s) have all of theirs", app.evidence_summary.get())
+        self.assertIn("0 switched on", app.source_summary.get())
+        for source_id in ("jobicy", "remotive", "linkedin"):
+            with self.subTest(source=source_id):
+                self.assertFalse(sources.discovery_gate(source_id).allowed)
+
+    def test_the_tab_says_in_plain_words_that_recording_evidence_enables_nothing(self):
+        RecordingLabel.created = []
+        app = self.build_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("recording evidence is a note for whoever decides, not the decision", said)
+        self.assertIn("evidence for one of them opens none of the others", said)
+        self.assertIn("an already-recorded requirement is never written over", said)
+        self.assertIsNotNone(app.evidence_summary.get())
+
+
+class FollowUpDispatchTests(HandlerTestCase):
+    """The first in-application caller of the central dispatch guard.
+
+    ``guarded_dispatch`` has carried the whole order - do-not-contact, what is already recorded,
+    the authorisation, the enabling gate, the integration - since it was written, and nothing a
+    person could press reached it: the follow-up tab stopped at a read-only draft. These tests
+    drive the button that now does, and the property they care about most is that there is no way
+    through it: even with a full authorisation and an integration that would happily accept the
+    message, the window refuses, because the route's gate is closed in this build.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "dispatch.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def with_a_follow_up(self, app, *, address="hr.one@example.invalid", name="Sample Person One"):
+        job = JobListing(
+            listing_id="job-dispatch", source_id="manual", source_name="Typed in",
+            source_listing_url="https://example.invalid/jobs/dispatch",
+            employer_name="Sample Employer One", role_title="AI Engineer")
+        app.store.save_job(job)
+        app.store.save_tracker(ApplicationTracker(
+            listing_id="job-dispatch", status=ApplicationStatus.DISCOVERED,
+            follow_up_on=date.today(), follow_up_note="checking in"))
+        csv_path = Path(self._directory.name) / "dispatch-contacts.csv"
+        csv_path.write_bytes(
+            (CONTACT_HEADER + f"{address},{name},Sample Employer One,1,\r\n").encode("utf-8"))
+        app.store.import_contacts(contacts_module.read_contact_csv(csv_path))
+        app._refresh_follow_ups()
+        app.follow_up_tree.selection_set("job-dispatch")
+        app.follow_up_recipient.set(f"{name} <{address}>")
+        return job
+
+    def test_the_recipients_offered_are_stored_contacts_and_never_a_typed_address(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        self.assertEqual(app.follow_up_recipient_box.options["values"],
+                         ("Sample Person One <hr.one@example.invalid>",))
+        self.assertEqual(app.follow_up_recipient_box.options["state"], "readonly")
+
+    def test_nothing_is_attempted_without_a_recipient(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.follow_up_recipient.set("")
+        before = app.store._connection.total_changes
+
+        app._send_follow_up_email()
+
+        self.assertIn("Nothing was sent", MESSAGES.titles("showerror"))
+        self.assertIn("stored HR contacts", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_attempts(), ())
+
+    def test_the_question_states_the_order_the_guard_checks_things_in(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = False
+        before = app.store._connection.total_changes
+
+        app._send_follow_up_email()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("hr.one@example.invalid", asked)
+        self.assertIn("do-not-contact list, which is checked before any attempt is written", asked)
+        self.assertIn("unknown outcome", asked)
+        self.assertIn("disabled", asked)
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined confirmation changed the database")
+        self.assertEqual(app.store.list_attempts(), ())
+
+    def test_a_confirmed_attempt_is_refused_recorded_and_explained(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        attempts = app.store.list_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertIs(attempts[0].state, AttemptState.REFUSED)
+        self.assertEqual(attempts[0].action, "email_send")
+        self.assertEqual(app.store.unresolved_attempts(), ())
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("Nothing was sent", shown)
+        self.assertIn("Nothing left this machine", shown)
+        self.assertIn("recorded as operation", app.status.get())
+
+    def test_a_refusal_does_not_spend_the_daily_allowance(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        self.assertEqual(
+            app.store.actions_done_today("email_send",
+                                         now=datetime.now(timezone.utc)), 0)
+
+    def test_an_address_on_the_do_not_contact_list_is_neither_offered_nor_attempted(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.store.suppress_contact("hr.one@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP, note="they asked")
+        app._refresh_follow_ups()
+        self.assertEqual(app.follow_up_recipient_box.options["values"], ())
+
+        # Forced past the chooser, the guard still refuses - and before any attempt is recorded.
+        app.follow_up_tree.selection_set("job-dispatch")
+        app.follow_up_recipient.set("Sample Person One <hr.one@example.invalid>")
+        CONFIG["Try to send this follow-up"] = True
+        app._send_follow_up_email()
+
+        self.assertEqual(app.store.list_attempts(), ())
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("do-not-contact", shown.casefold())
+
+    def test_the_same_message_twice_is_reported_rather_than_attempted_again(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+        app._send_follow_up_email()
+        RecordingLabel.created = []
+
+        app._send_follow_up_email()
+
+        self.assertEqual(len(app.store.list_attempts()), 1)
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("already attempted", shown)
+        self.assertIn("recorded as refused", shown)
+
+    def test_an_unresolved_attempt_at_the_same_job_blocks_the_next_one(self):
+        app = self.build_window()
+        job = self.with_a_follow_up(app)
+        app.store.begin_attempt(operation_id="earlier-attempt",
+                                identity_key=identity_key(job), action="email_send")
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        self.assertEqual(len(app.store.list_attempts()), 1,
+                         "a new attempt row was written while an outcome was unresolved")
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("earlier-attempt", shown)
+
+    def test_even_a_full_authorisation_and_a_working_integration_cannot_send(self):
+        """The gate is closed in code for this route, and no authorisation opens a gate."""
+        from career_agent.policy import ActionKind as PermissionKind  # noqa: PLC0415
+        from career_agent.policy import GlobalPolicy  # noqa: PLC0415
+
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.store.save_global_policy(GlobalPolicy(
+            allowed=frozenset({("manual", PermissionKind.EMAIL_SEND)}),
+            daily_limits={PermissionKind.EMAIL_SEND: 5}))
+        working = integrations_module.LocalMockIntegration()
+        CONFIG["Try to send this follow-up"] = True
+
+        with mock.patch.object(integrations_module, "default_integration",
+                               return_value=working):
+            app._send_follow_up_email()
+
+        self.assertFalse(working.attempts, "the integration was reached despite the closed gate")
+        attempts = app.store.list_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertIs(attempts[0].state, AttemptState.REFUSED)
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("Nothing was sent", shown)
+        self.assertIn("gate", shown.casefold())
+
+
+class AddressNotInYourContactsTests(HandlerTestCase):
+    """Putting an address on the do-not-contact list without it being a stored contact.
+
+    The list is about addresses; the stored contacts are rows in a file somebody imported. Until
+    now the only way onto the list was through one of those rows, which meant the person most
+    likely to have asked to stop - somebody who replied from an address that was never in the file
+    - was the one person the list could not record.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "stoplist.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def typed(self, app, address, reason="they asked not to be contacted"):
+        app.suppression_address.set(address)
+        app.suppression_add_reason.set(reason)
+
+    def test_an_address_nobody_imported_can_be_listed_after_one_confirmation(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "  Someone.Else@Example.Invalid ")
+
+        app._add_suppression()
+
+        entry = app.store.suppression_for("someone.else@example.invalid")
+        self.assertIsNotNone(entry)
+        self.assertIs(entry.reason, SuppressionReason.ASKED_TO_STOP)
+        self.assertTrue(app.store.is_suppressed("SOMEONE.ELSE@EXAMPLE.INVALID"))
+        self.assertEqual(app.store.contact_record_counts()["contacts"], 0,
+                         "listing an address invented a contact row")
+        self.assertEqual(app.suppression_address.get(), "")
+        self.assertIn("do-not-contact list", app.status.get())
+
+    def test_the_question_names_the_address_the_reason_and_what_it_does_not_expire(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = False
+        self.typed(app, "someone.else@example.invalid")
+        before = app.store._connection.total_changes
+
+        app._add_suppression()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("someone.else@example.invalid", asked)
+        self.assertIn("they asked not to be contacted", asked)
+        self.assertIn("permanent in this application", asked)
+        self.assertIn("does not have to be one of your stored contacts", asked)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_suppressions(), ())
+
+    def test_an_unusable_address_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        for address in ("", "   ", "not an address", "someone@", "@example.invalid"):
+            with self.subTest(address=address):
+                MESSAGES.reset()
+                self.typed(app, address)
+                app._add_suppression()
+                self.assertIn("The do-not-contact list was not changed",
+                              MESSAGES.titles("showerror"))
+                self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.list_suppressions(), ())
+
+    def test_an_address_already_listed_keeps_its_first_reason_and_asks_nothing(self):
+        app = self.build_window()
+        app.store.suppress_contact("someone.else@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP, note="they asked")
+        CONFIG["Add to the do-not-contact list"] = True
+        MESSAGES.reset()
+        self.typed(app, "Someone.Else@example.invalid", reason="our own decision")
+        before = app.store._connection.total_changes
+
+        app._add_suppression()
+
+        self.assertIn("Already on the list", MESSAGES.titles("showinfo"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIs(app.store.suppression_for("someone.else@example.invalid").reason,
+                      SuppressionReason.ASKED_TO_STOP)
+
+    def test_a_listed_address_is_shown_in_the_list_and_blocks_a_follow_up(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "someone.else@example.invalid")
+
+        app._add_suppression()
+
+        listed = {row[0] for row in app.suppression_tree.inserted}
+        self.assertIn("someone.else@example.invalid", listed)
+        self.assertNotIn("someone.else@example.invalid",
+                         " ".join(str(value) for value in app.follow_up_recipient_box.options.get(
+                             "values", ())))
+
+    def test_the_note_a_person_never_typed_is_not_invented(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "someone.else@example.invalid")
+
+        app._add_suppression()
+
+        self.assertEqual(app.store.suppression_for("someone.else@example.invalid").note, "")

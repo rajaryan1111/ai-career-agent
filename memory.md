@@ -3765,3 +3765,450 @@ tests all passed. The repository suite then ran 2082 tests with 1 skip; `compile
 `git diff --check` passed; the real-window desktop smoke and acceptance harnesses reported 14 and 113
 checks passed. The limitation remains explicit: this is a DTD/entity boundary, not a general malware
 scanner. Human GUI acceptance remains separate and blocked.
+
+
+## 2026-10-18 — JSON import/export number boundary closed
+
+The reliability audit reproduced four real holes at the version-2 format boundary before fixing them:
+`json.loads` accepted `NaN`/`Infinity`/`-Infinity` literals whole; an overflowing `1e400` crashed an
+import mid-write with an uncaught `OverflowError` from `_year`; booleans coerced to `1.0`/`1` in numeric
+fields; and `write_export` could emit non-standard JSON a strict reader (including this app's own
+importer) refuses. `read_export` now refuses a constant-bearing document whole with a `parse_constant`
+hook; `_year`/`_number` drop booleans and non-finite values like any unreadable value; `write_export`
+passes `allow_nan=False` and reports a stored non-finite number as a refused write with nothing left on
+disk. Evidence: 8 new tests in `tests/test_importer.py::NonStandardNumberTests` (all failing pre-fix),
+focused run 51 OK, full local suite **2090 tests OK (skipped=13)**, `compileall` and `git diff --check`
+clean; schema stays **8**, export version stays **2**, all external-action gates unchanged. Note:
+[import number boundary](research/import-number-boundary-2026-10-18.md).
+
+
+## 2026-10-18 — Versioned role strategies: model and append-only store (P7, part 1)
+
+Schema **9** adds `role_strategy_version(strategy_id, version, payload, created_at)` through the
+existing migration runner; `career_agent/strategies.py` owns an industry-agnostic `RoleStrategy`
+(role family, title synonyms, seniority, locations, work modes, employment types, currency-bearing
+compensation bounds, required skills, exclusions, preferred skills) with the same numeric boundary as
+the JSON import. The store's promise: rows are append-only, a no-change revision writes no version,
+`content_key()` recognises the same statement across identity and set order, damaged rows are
+reported through the doctor's decoder, events carry the generated identifier and version and never
+the strategy's content, backup/restore carries every version, and the JSON export stays at version 2
+with the pin that says adding them is a deliberate bump. Evidence: 27 tests in
+`tests/test_strategies.py`, 2 migration tests in `tests/test_store.py`, full local suite **2119 tests
+OK (skipped=13)**; schema **9** re-pinned in both pinning tests. Deliberately next: matching/eligibility
+consumption, artifact lineage, invalidation, UI. Note:
+[role strategies: model and store](research/role-strategies-versioned-store-2026-10-18.md).
+
+
+## 2026-10-18 — Tailored artifacts with checkable lineage (P7, part 2)
+
+Schema **10** adds `tailored_artifact`, and `career_agent/artifacts.py` owns the rules: builders only
+restate stored facts (a required skill the profile does not state is a reported **gap**, never a
+sentence); every artifact stores the basis it was built from - rendered profile facts, which were
+unconfirmed, and the work/education records without row bookkeeping, so a delete-and-retype is not a
+changed history; `lineage_status` reports facts changed, facts confirmed since, work/education
+changed, and a newer strategy version, and `is_current` is true only when nothing moved. Rows are
+append-only; the listing and strategy-version references are validated **at write time**; deleting a
+strategy that artifacts reference is refused so a lineage chain is never broken; deleting a listing
+cascades its artifacts. Events carry identifier/kind/version only; the JSON export stays at version 2
+with no strategy or artifact trace - the backup carries those. Evidence: 30 tests in
+`tests/test_artifacts.py`, migration and refusal tests in `tests/test_store.py`, extended export pin
+in `tests/test_strategies.py`; focused run 605 OK, full local suite **2151 tests OK (skipped=13)**,
+desktop smoke BLOCKED by construction here. Next: strategy-aware matching/eligibility consumption,
+then artifact invalidation surfaced through a window. Note:
+[tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).
+
+
+## 2026-10-18 — Strategy-aware matching (P7, part 3)
+
+`matching.assess_for_strategy(profile, listing, strategy)` applies a role strategy the only two ways
+the model supports, kept separate: hard statements **gate before ranking** (excluded employer/title
+matched as phrases, required skills checked against the profile with silence-is-not-a-pass, every
+block's note naming the person's own statement) and preferences **rank explainably** (locations, work
+mode, preferred skills as factors; listing silence is unknown; an unstated preference is
+not-applicable and weightless, so a bare strategy changes no score). Compensation bounds and
+employment types stay recorded-but-not-compared. The recommendation ladder was extracted into
+`_recommendation_for` so plain `assess` and the strategy path cannot disagree; the plain path is
+pinned unchanged by test. Fail-first tests caught three real defects while building (normalized
+spelling leaking into explanations, unnamed block reasons, NOT_APPLICABLE coverage penalty).
+Evidence: 19 tests in `tests/test_strategy_matching.py`, full local suite **2170 tests OK
+(skipped=13)**; gates stay closed. Note:
+[strategy-aware matching](research/strategy-aware-matching-2026-10-18.md).
+
+
+**Artifact use gate, 2026-10-18:** `artifacts.require_current_artifact` refuses to hand out an
+artifact whose fact basis or strategy version has moved on (`StaleArtifactError` carries the lineage
+report and names what changed); reading history back is untouched. 5 tests; suite **2175 tests OK
+(skipped=13)**.
+
+
+**Artifact source citation, 2026-10-18:** a tailored artifact now names the document its facts were
+read from. `ArtifactBasis.fact_documents` copies the per-fact document name out of provenance
+(schema 8) at capture time — never invented, never a path — `source_documents`/`describe()` report
+it, and `lineage_status` adds `documents_changed`, so an artifact whose facts no longer come from the
+résumé it cites is refused by `require_current_artifact` even when the values are unchanged. No
+schema change: the citation rides in the existing `fact_basis` JSON and a missing key reads as "cites
+nothing", so artifacts stored before today stay readable and current. 10 tests; suite **2185 tests OK
+(skipped=13)**. Note:
+[tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).
+
+
+**The invalidation window, 2026-10-18:** the **Tailored documents** tab surfaces the lineage rule:
+each row names the listing, strategy version, build time and the file its facts were read from, and
+says `Rebuild before use` with every reason when the sources moved. **Check before use** calls
+`artifacts.require_current_artifact`, so the window cannot have a second opinion; a refusal lists
+what moved and offers a rebuild, and `artifacts.rebuild_artifact` appends a new document under the
+strategy's newest version while the stale one stays stored untouched. Screening answers are refused -
+a person writes those. Building this found a real defect: `store.revise_role_strategy` constructed
+the new version from its arguments alone, so a partial revision would have silently emptied the
+exclusions and required skills that act as gates in matching; a revision now merges onto the current
+version and refuses unknown field names. Evidence: 8 rebuild tests, 5 revision tests, 10 handler
+tests through the real window, 7 text tests, acceptance workflow **M** (M1-M5, stand-in run only -
+no display-backed run yet), manual steps 124-129 all BLOCKED, suite **2215 tests OK (skipped=13)**.
+Note: [the invalidation window](research/artifact-invalidation-window-2026-10-18.md).
+
+
+**The central policy gate, 2026-10-18:** `career_agent/policy.py` is P8's standing authorisation as
+a value plus a decision: `(source_id, action)` pairs over four independently gated actions, a
+**required** daily limit per action, quiet hours that may wrap midnight, `stop_all` and
+`revoked_at`. `evaluate_policy` takes the source's own gate answer as an argument and refuses when
+it is closed, so the policy authorises but never enables - a test composes a policy naming every
+action with the real (closed) `discovery_gate` and asserts every action is still refused. Refusals
+carry every reason, not the first, and anything unnamed fails closed (unknown action, naive clock,
+no recorded limit). Not yet stored, shown or called - there is no external side effect to call it
+from. 24 tests; suite **2239 tests OK (skipped=13)**. Note:
+[the central policy gate](research/global-policy-gate-2026-10-18.md).
+
+**The standing authorisation, stored and consulted, 2026-10-18:** the policy stopped being a value in
+memory. Schema **11** adds `policy_version(version, payload, created_at)`, append-only: a change appends
+a version, a withdrawal appends a version that *keeps* the pairs it withdraws with `revoked_at` set, a
+revision whose `content_key()` matches writes nothing at all, and a file with no row authorises nothing
+rather than everything. A row that cannot be decoded raises and is reported by the doctor instead of
+reading as permissive, and the JSON export deliberately does not carry it (a permission belongs to this
+machine; it travels in a whole-database backup). The two places that can act now ask:
+`AdapterRegistry.execute` takes `policy=`/`done_today=` and decides immediately before `call_adapter`,
+composed with the gate's own answer so an authorisation can never open a closed gate, and
+`integrations.authorised_dispatch(...)` is a new door rather than a change to `dispatch_with_retry`,
+whose retry arithmetic the existing tests rely on with the local stand-in. Both fail closed twice over:
+no policy refuses, and a policy without today's count refuses rather than assuming zero, because a daily
+ceiling cannot be honoured against a number this layer would invent. The **Permissions & limits** tab is
+where a person meets it - grant, remove, stop everything, withdraw everything, and *What would happen
+now?*, which answers with the refusal and names the closed gate rather than running anything. Every
+write is behind one confirmation and every decline is asserted against the connection's own change
+counter. Evidence: 16 persistence tests, 21 wiring tests, 16 handler tests, 11 text tests, acceptance
+workflow **N** (stand-in: 124 checks, 0 failed, still `RESULT: BLOCKED`), manual steps 130-136 added as
+BLOCKED, suite **2303 OK (skipped=13)**. Still not true, and said plainly: nothing counts a day's
+actions from durable records, quiet hours are not editable in the window, there are no job/role/location
+or attachment constraints yet, and every source remains disabled - so nothing runs today whatever the
+tab lists. Note: `research/standing-authorisation-stored-and-enforced-2026-10-18.md`.
+
+**Identity, idempotency and the unknown outcome, 2026-10-18:** P8 item 3. Three questions that look
+like one. *Is this the same job?* - `career_agent/identity.py` answers with three verdicts, and the
+third is the point: a requisition id or a shared employer page proves a match, different employers or
+two requisition ids prove a difference, and everything else - including the same title at the same
+employer, and two spellings of one id - is **unknown**, kept apart and handed to a person through
+`possible_duplicates()`. A missed merge costs somebody seeing a job twice; a wrong merge costs them a
+job they never applied for, so the asymmetry is deliberate and `identity_key()` folds case but not
+punctuation. *Has this already been done?* - schema **12** adds `action_attempt`, keyed by identity
+rather than by listing id, so one vacancy found on two sources cannot be applied to twice, with
+`operation_id` as the primary key so idempotency lives in the schema rather than in a caller's memory.
+*Did it actually happen?* - the attempt is written **before** the act in state `unknown`, and a
+*failed* dispatch settles as `UNKNOWN`, not `FAILED`, because a failure mid-flight may still have
+arrived. An unknown attempt blocks every further attempt at that job and action until a person
+reconciles it with evidence in words; age never resolves anything, it only puts a row on the list of
+things to check. `integrations.guarded_dispatch` composes it with the policy door. Evidence: 22
+identity tests, 43 attempt tests, suite **2368 OK (skipped=13)**. Still not true: nothing in the window
+shows unresolved attempts or duplicate pairs, there is no submission path to guard, and no provider is
+enabled. Note: `research/job-identity-and-unknown-outcomes-2026-10-18.md`.
+
+**The audit, and the report it produced, 2026-10-18:** P8 item 1 asked for a reconciliation of what
+already exists before adding abstractions, and doing it in that order paid: the schedule, the worker
+and its lease, the three handlers, the tracker/activity/interview tables, the event log and the
+disabled integrations were all already there and were re-verified by running them, so nothing was
+rebuilt. Remote-worker status, from evidence: `--worker` is a foreground local process, there is no
+service unit, no OS scheduler registration, no remote storage boundary, and `WorkerLease` is
+single-machine crash recovery rather than a distributed lock - laptop-off operation is not available
+and not claimed, which is what the README already said. The one genuine gap was operational reporting:
+`analytics.py` answers "how is the search going?", and nothing answered "what has this thing been
+doing, and what needs me?". `career_agent/reporting.py` does, through `--report` / `--report --weekly`,
+from stored rows only, under three rules its tests pin: queued is not done (scheduled tasks, pending
+runs and prepared applications are plans); unknown leads (unresolved attempts, timed-out runs and
+unverified submissions are the only things counted as needing a person, and age settles nothing); a
+refusal is not a failure (a refused discovery run is the permission rule working, and a report that
+calls it an error teaches people to ignore reports). The sources section quotes each gate's own reason
+so it cannot drift. 21 tests, suite **2389 OK (skipped=13)**. Not built: delivery of any kind - no
+notification, no schedule, no window tab. Notes:
+`research/operational-reconciliation-2026-10-18.md`.
+
+**Quiet by default, and controls read back rather than believed, 2026-10-18:** notifications are the
+only feature here that acts on a person without being asked at that moment, so the default is OFF and
+a missing preference row reads as "no permission to interrupt" - and a damaged row raises instead of
+falling back to a default, because silently replacing somebody's choice is how an application ends up
+waking them at three in the morning. Schema 13 is one small table (`app_preference`). The decision
+reports all six of its refusals together rather than the first: not asked for, everything stopped or
+withdrawn, inside the quiet hours from the standing authorisation, before the chosen hour, already
+prepared for this period, nothing needing them. The channel limit is stated in the preference itself
+and printed every run: the window you open and a file on your machine, no email, no push, no system
+notification - and delivery is not built at all, which the note says plainly. The second half was the
+more interesting discipline: five tests that separate a control from its effect - a pause asserted on
+the task re-read from the database rather than on the value passed in, a paused task not claimed by a
+worker that was never told, a resume that schedules the next occurrence and leaves the run list empty,
+a worker status read from rows, and stop-all/withdrawal re-read from the stored authorisation,
+refusing an otherwise-allowed decision and silencing the notification in the same breath. 33 tests,
+suite **2422 OK (skipped=13)**. Note:
+`research/notification-preferences-and-read-back-controls-2026-10-18.md`.
+
+**Conditions, the counter, and two quiet defects, 2026-10-18:** closing P8 item 2 meant adding what
+the authorisation could not yet say - which roles, which places, what may be attached, how many
+follow-ups - and the counter the daily limit never had. `PolicySubject` is deliberately a separate
+value from the policy: a caller that cannot describe what it is acting on gets a refusal rather than
+an exemption, and an attachment with no rule recorded is refused outright, because "nothing may be
+attached until something says what may" is the only safe default. `actions_done_today` counts from
+the durable attempt rows under two rules worth remembering - a refusal does not spend the allowance
+it protected, and an unknown outcome does, since assuming it did not is how a limit silently doubles.
+The day boundary follows the person's timezone, not UTC's. Two defects surfaced while wiring it: (1)
+attempts were stored as the literal text "ActionKind.DISCOVERY", so a caller holding "discovery"
+could never find them - the duplicate block was failing quietly for anyone holding the other
+spelling; (2) the permissions tab rebuilt the policy field by field, so any change there would have
+dropped the new conditions - a silent *loosening* of a restriction somebody wrote down, the worst
+direction for an authorisation screen to be wrong in. The habit that found the second one: after
+adding a field to a frozen value, ask what else constructs that value. 2457 OK (skipped=13). Note:
+`research/conditions-on-what-may-be-acted-on-2026-10-18.md`.
+
+**Refusals written down in advance, 2026-10-18:** P8 item 6 and the documentation half of item 8 are
+both the same kind of work - deciding, while nobody is in a hurry, what would have to be true before
+a gate could open. `acceptance_evidence.py` names six routes (LinkedIn, Unstop, Internshala, Naukri,
+an employer's own careers page, an ATS/provider API) and nine requirements each; a route may add
+requirements and cannot drop one, `held_evidence()` returns nothing for every route, and a test
+pins that all six are outstanding on all nine. The three labels that carry old arguments: a
+permission basis is never an inference from silence, human verification is a person's account of a
+real run and not a passing test suite, and no-circumvention is a requirement to rule out rather than
+a hope. The README now states the sync hazard plainly (a SQLite file two machines reach through a
+sync service can be corrupted by it; the lease is single-machine crash recovery, not a distributed
+lock) and refuses the always-on claim while listing the evidence such a claim would need. The
+credential promise is checked against the software rather than the prose - no credential-shaped
+column, no credential store imported, no credential-shaped literal - and the README assertions run
+against a whitespace-normalised copy, because a documentation test that punishes re-wrapping is one
+people route around. 23 tests, suite **2480 OK (skipped=13)**. Note:
+`research/acceptance-evidence-and-the-boundary-2026-10-18.md`.
+
+**A record kept for somebody who is not the user, 2026-10-18:** the do-not-contact list (schema 14)
+is deliberately built *before* sending exists, because a suppression list added at the same time as
+sending is written by somebody who wants the sending to work. Its rules are each a failure that must
+not happen: stored so a no survives a restart; matched on the normalised address so capitalisation
+cannot walk around it; folded for case and whitespace only, never dot-stripping or plus-tags, since
+guessing two addresses are one person suppresses somebody who never asked; the first reason wins so
+"they asked us to stop" cannot soften into "our own decision"; nothing expires, because an
+application deciding a person's no has run out is not a feature; lifting needs a note and is never a
+side effect of an import, retry or cleanup; an unreadable reason still blocks; the check sits inside
+guarded_dispatch *before* the attempt row is written, so a blocked message leaves no record claiming
+something was attempted; and the event log gets a count, never the address. P8 item 7 stays open:
+mailbox authorisation, delivery and reply evidence need a real mailbox, and the honest tested
+statement is only that nothing stores a credential anywhere. 20 tests, suite **2500 OK
+(skipped=13)**. Note: `research/the-do-not-contact-list-2026-10-18.md`.
+
+**The window finally says what has been happening, 2026-10-18:** a twelfth tab, *What's happening*,
+puts the operations report, the attempts nobody settled and the notification preference in front of
+the person, because two of those three are not reports: an attempt whose outcome was never
+established blocks the next attempt on the same job and action, and only a person can clear it, while
+a notification preference nobody can see is a claim rather than a setting. The rules it keeps are the
+ones that stop a window from quietly disagreeing with its own data. The report is the reporting
+module's text, headline included — the first draft composed a count of its own, appended the
+headline, and the development acceptance run printed "1 thing(s) from the last day need you. 1 thing
+from the last day need you.", which is exactly the drift a single reporting module exists to prevent;
+the summary is now the headline plus where to act on it, pinned by a test that counts the phrase
+rather than matching a sentence. Settling an attempt needs evidence of at least four characters and
+one explicit yes that quotes the note back and says the block is lifted; the only outcomes offered
+are the three the store accepts, and "still unknown" is deliberately absent because recording it
+would clear nothing and only make the list look handled. Nothing on the tab fetches, sends or
+submits, the preference confirmation says plainly that there is no email, no push and no system
+notification, and quiet hours are shown but edited where the rest of the standing authorisation
+lives. 22 tests (12 handler, 10 text) plus acceptance workflow O's six checks; the stand-in run is
+130 checks, 0 failed, and is still not a window — seven manual steps (137-143) are recorded BLOCKED,
+taking that checklist to 143 steps: 22 PASS, 121 BLOCKED, 0 FAIL. Note:
+`research/what-has-been-happening-in-the-window-2026-10-18.md`.
+
+**One mark, not two, 2026-10-18:** the HR contacts tab wrote a column called "do not contact" that
+nothing enforced, while the list `guarded_dispatch` actually checks before any outbound action was
+reachable only from Python - so a person could mark somebody, watch the row change, and leave the one
+check that matters knowing nothing about it. Nothing in this build sends anything, so no message went
+anywhere it should not have; that is luck about the order the work was done in, not a property of the
+design, and the gap would have closed itself on the day sending arrived in the worst possible way.
+Marking now writes both records from one confirmation, with a reason chosen from the suppression
+module's own five labels and no sixth, and the confirmation says the address goes on the list checked
+before anything may be sent and that recording it twice keeps the first reason. Taking a mark off
+needs a note of at least four characters whenever the address is on that list, refused *before* the
+question is asked rather than after, because a window should not ask something it is about to refuse.
+The panel shows every suppressed address with its reason and day and whether a note exists - never the
+note's text, which stays out of columns, dialogs, events and the log - and a contact marked by an
+older build is reported as "not on the list" rather than quietly counted as protected. Two decisions
+recorded: the note is required exactly where the store requires it, so a legacy column-only mark can
+still be cleared without one rather than the window inventing a stricter rule; and a removal offers no
+reason chooser, because a chooser would imply the stored reason could be rewritten, which is what
+"the first reason wins" exists to prevent. 18 tests (12 handler, 6 text) plus acceptance L9's new
+assertions and a new L9b; the acceptance check that read "marking changed 1 row" now reads 2, and the
+old number was the defect written down. Suite 2540 OK (skipped=13). Note:
+`research/one-mark-not-two-2026-10-18.md`.
+
+**Conditions you can actually set, 2026-10-18:** role terms, places, attachment rules, the follow-up
+limit and the quiet window have been stored, validated, folded at the value's own edge, part of
+`content_key()`, round-tripped, enforced and reported together since the day they were added - and
+settable only from a Python prompt, which for a person using the application means they did not
+exist. They are now a panel on the Permissions & limits tab, under the permissions they narrow.
+Reading what was typed is its own Tk-free module and refuses rather than guesses: `my resume.pdf` is
+not a file ending, `a few` is not a number of follow-ups, the same term listed twice is refused
+instead of quietly folded, and half a quiet window is refused because "quiet from 22" with no end is
+either one hour or ten. Terms are not folded in the window - the policy value folds once, and a
+second folder would be a second opinion about what two terms are the same. The confirmation lists
+each change in both directions, because clearing a condition is a change a person should see
+described rather than an empty box that silently stops protecting them; it says a condition can only
+narrow, and names the version it is about to write. The boxes are rewritten from the stored value on
+every refresh, so saving again reports "nothing to change" instead of writing a version that records
+nothing, and the write uses `dataclasses.replace` - the discipline this tab was corrected into after
+it once lost the conditions by rebuilding the value field by field. 20 tests (12 handler, 8 text) and
+acceptance N7-N9; stand-in run 134 checks, 0 failed, still not a window. Suite 2560 OK (skipped=13).
+Six manual steps (151-156) BLOCKED, checklist now 156: 22 PASS, 134 BLOCKED, 0 FAIL. Note:
+`research/conditions-you-can-actually-set-2026-10-18.md`.
+
+## Acceptance evidence you can record, and sources that say why they are closed, 2026-10-18
+
+Two statements this project was proud of lived where nobody using it could see them. The six routes'
+acceptance requirements were a pure module whose `held_evidence()` returned nothing *by construction* -
+there was no table to hold an answer - and the reviewed source decisions, with the closed quality gate
+that keeps even the approved one shut, were printed by `--sources` and by nothing in the window. A
+person looking at an empty jobs list had no way to learn that the emptiness is a decision.
+
+Schema 15 adds `route_evidence(route_id, kind, recorded_at, reference, note)`, keyed per route *and*
+per requirement, because "we read their terms" and "we have their rate limit in writing" are different
+claims. Recording needs a reference somebody else can open and a note of at least eight characters
+saying what was checked; an already-recorded requirement is never written over, only withdrawn with a
+reason and recorded again; and a stored kind this build cannot read raises on listing and counts for
+nothing towards readiness - fail closed, or a row typed in by hand could make a route look ready. The
+pure requirements module learned an optional `held=` argument, so every existing caller still answers
+the old question: what *this project* holds in its code, which is nothing.
+
+The new **Sources & evidence** tab puts both halves on one screen: every reviewed source with the
+gate's own sentence for reading and for submitting, then the six routes with their nine requirements as
+held or missing. The negative is what the tests are really for - 23 store tests, 15 handler tests, 9
+text tests and acceptance **P1-P6** all end by checking that recording evidence left
+`SOURCE_QUALITY_GATE_PASSED` false, `enabled_discovery_sources()` empty and every gate closed. Writing
+down that a requirement is met is a note for whoever decides; it is not the decision.
+
+Stand-in acceptance run 140 checks, 0 failed, still not a window. Suite 2611 OK (skipped=13). Four
+deliberate re-pins came with the schema bump and the new tab: the version literals in `test_store.py`
+and `test_store_tasks.py`, the documented workflow letters in `test_desktop_acceptance.py` and
+`.github/workflows/tests.yml`, and the expected tabs/trees/summaries in `scripts/desktop_smoke_test.py`.
+Note: `research/acceptance-evidence-you-can-record-2026-10-18.md`.
+
+## The guard gets a caller, 2026-10-18
+
+`guarded_dispatch` has held the whole outbound order since it was written and nothing a person could
+press reached it: the follow-up tab stopped at a read-only draft with no recipient. A guard with no
+caller is a claim. The Follow-ups tab now has a recipient chooser - stored HR contacts only, never a
+typed address, and anybody on the do-not-contact list is simply not offered - and a **Try to send this
+follow-up...** button whose confirmation states the five checks in the order the guard applies them.
+
+Giving it a caller found a real defect at once: the operation id is derived from the message's content
+on purpose, so pressing twice rebuilt the same id, found its write-ahead row already settled, and the
+store refused to re-settle it - an `AttemptError` out of a button press. Fixed in the guard: a settled
+operation id is answered with a result naming the recorded outcome, nothing sent, no second row; an
+*unknown* one is still blocked by `may_attempt`. The content-derived id means a message refused today
+cannot be retried after the authorisation changes without changing the message; that is written down in
+the research note as a decision for the day a mailbox exists, not guessed at now.
+
+The test that matters most: with a full standing authorisation **and** a working `LocalMockIntegration`
+patched in, the window still sends nothing, because the route's gate is closed in code and no
+authorisation opens a gate. 9 handler tests, 7 text tests, 4 ledger regressions, acceptance H15-H19
+(145 checks, 0 failed), suite 2631 OK (skipped=13). Note:
+`research/the-guard-gets-a-caller-2026-10-18.md`.
+
+## An address you never imported, 2026-10-18
+
+The do-not-contact list is the one record here that exists for somebody who is not the user, and until
+today it could only be written through a stored contact row - so the person most likely to have asked
+to stop, the one who replied from an address that was never in the imported file, was the one person it
+could not record. The HR contacts tab now takes an address directly, with the same reason chooser and
+one confirmation that says what the reason means. No contact row is invented, surrounding whitespace is
+trimmed (this box stops messages rather than addressing one), an address already listed keeps its first
+reason and writes nothing, and the Follow-ups recipient chooser drops the address at once. 6 handler
+tests, 3 text tests, acceptance L21-L22 (147 checks, 0 failed), suite 2640 OK (skipped=13). Note:
+`research/an-address-you-never-imported-2026-10-18.md`.
+
+## A document nobody could make, 2026-10-18
+
+The lineage rules were enforced on objects the application could not create. `tailored_resume_document`
+and `cover_letter_document` had two callers between them: `rebuild_artifact`, which needs a document to
+already exist, and the acceptance script, which manufactured one through the store so workflow M would
+have a row to test refusals on. The tab offered *Check before use* and *Rebuild…* in front of a list a
+real user could only ever see empty.
+
+Now there is one path: choose a listing, a strategy and a kind; **Show what would be used…** (writes
+nothing) lists the facts, the file they were read from, the unconfirmed ones and what is missing - the
+strategy's requirements and, separately, the listing's; **Build this document…** stores *exactly* the
+plan that was read, refusing if the strategy version moved, the facts moved, the listing went away, the
+choices changed after the preview, or an identical document already exists (named, not duplicated);
+**Save a copy to a file…** writes a provenance header above the document through the owner-only
+`create_private_file(..., exclusive=True)`. An existing file is refused outright with no replace prompt:
+the file most likely to be chosen by accident is the résumé this was built from. A stale document cannot
+be exported at all.
+
+Two things fell out of actually using it. `cover_letter_document` had always written "My profile states
+1.0 of experience." - harmless while nothing could build one, the first sentence a reader sees now; the
+fact is years, so it says years. And acceptance K5 read labels with `cget("text")`, which is empty for a
+label bound to a `textvariable`, so a perfectly readable label counted as no label; `visible_text()` now
+falls back to the variable.
+
+23 artifact tests, 16 handler tests, 11 text tests, acceptance M6-M12 (154 checks, 0 failed, still
+BLOCKED because a stand-in is not a display), suite 2690 OK (skipped=13). Note:
+`research/the-first-tailored-document-2026-10-18.md`.
+
+## The audit of the same day, 2026-10-18
+
+Re-read the morning's work instead of trusting its report, and re-traced the whole path against a
+throwaway database. The trace held everywhere it was checked - preview writes nothing, the stored
+text is byte-identical to the reviewed text, the export is `0o600` with its provenance, the résumé
+is untouched, the journal holds no candidate text and no path. Two things did not hold.
+
+A cover letter reported no gaps, so the screen above it said "nothing the strategy asks for is
+missing" while the strategy asked for Docker and the profile never mentioned it: the letter builder
+had simply never filled in `gaps`, which nobody could see while no screen could build a letter. And
+the listing could be edited between the preview and the confirmation - a letter addressed to one
+employer stored against a listing now naming another. The plan now carries the listing and the write
+refuses when the employer, the role or the required skills moved; fields no document reads are
+deliberately not compared, because a refusal nobody can act on is noise.
+
+Also pinned what was working but untested: a symbolic link as the export destination (live and
+dangling), the singular experience sentence, a kind changed after a preview, and `visible_text()` -
+the K5 fix that decides what a display-backed run even means.
+
+Left open on purpose: `lineage_status` still cannot see a listing edited *after* a document is
+stored, because the artifact row keeps the listing's id and not the fields it used. That needs a
+column and a migration, which is a task, not an audit fix. 2706 OK (skipped=13), acceptance 155
+checks, 0 failed, CI has still never run on this branch.
+
+## The job a document was written for, 2026-10-18
+
+The thing left open by the audit, closed the same day. A document is written for a job, and the row
+kept only the job's identifier - so renaming the employer left a letter addressed to somebody else
+reading as "Current", with the export button enabled. Schema 16 adds one nullable column to
+`tailored_artifact`: the employer, the role title and the required skills as they were when the
+document was written, with a sha256 of those three values beside them. Step 16 of the same
+`_MIGRATIONS` table, `ALTER TABLE ... ADD COLUMN`, re-runnable, nothing rewritten.
+
+The decision that took the longest was what to do with the rows already out there, and the answer
+was: nothing. `NULL`, and a third state in the window - "Cannot be checked" - rather than
+back-filling from the listing as it reads today, which would have quietly declared every old
+document verified. Not current, not exportable, and a rebuild gives you one that can be checked. The
+same honesty runs through the wording: a document nobody can check is not told it is out of date,
+because that is a claim this build cannot make.
+
+Three fields, not twenty-two: a document reads the employer, the role and the skills, so editing a
+source URL or an availability flag moves nothing. The comparison that refuses a build when the
+listing changes mid-preview is now literally the same code as the staleness check, so the two cannot
+drift apart.
+
+On the way, a real fault: a column step run on a file whose recorded version runs ahead of its
+tables raised, and a step that raises leaves a database nobody can open. Step 4 had carried that
+hole since schema 4. Both steps now check the table is there first.
+
+2733 tests OK (skipped=13), acceptance 158 checks 0 failed - still `RESULT: BLOCKED`, because a
+stand-in Tk is not a desktop. CI has still never run on this branch.

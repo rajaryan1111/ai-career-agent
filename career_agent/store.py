@@ -19,6 +19,10 @@ import uuid
 from pathlib import Path
 
 from .contacts import ContactImport, ContactRow, Flag, normalise_email_key
+from .artifacts import (
+    ArtifactBasis, ArtifactError, ArtifactKind, ListingFingerprint, TailoredArtifact,
+    new_artifact_id,
+)
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
@@ -29,12 +33,30 @@ from .core import (
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
 )
+from .acceptance_evidence import (
+    EVIDENCE_TITLES, ROUTE_REQUIREMENTS, EvidenceError, EvidenceKind, RouteEvidence,
+    get_route,
+)
+from .attempts import AttemptError, AttemptRecord, AttemptState
+from .suppression import (
+    SuppressionEntry, SuppressionError, SuppressionReason, normalise_address,
+)
+from .notifications import (
+    NotificationError, NotificationPreferences, preferences_from_payload, preferences_payload,
+)
+from .policy import (
+    ActionKind, GlobalPolicy, PolicyError, no_authorisation, policy_from_payload, policy_payload,
+)
+from .strategies import (
+    CONTENT_FIELDS, RoleStrategy, StrategyError, new_strategy_id, strategy_from_payload,
+    strategy_payload,
+)
 from .tasks import (
     RunState, ScheduledTask, TaskRun, TaskValidationError, WorkerLease, WorkerLeaseHeld,
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 16
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -61,6 +83,49 @@ SCHEMA_TABLES_BY_VERSION = {
         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
         "interview_round", "job_listings", "profile_fact_provenance", "scheduled_task", "task_run",
         "worker_lease"),
+    9: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+        "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+        "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
+        "scheduled_task", "task_run", "worker_lease"),
+    10: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
+         "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    11: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    12: ("action_attempt", "application_activity", "application_preparation", "application_tracker",
+         "candidate_education", "candidate_profile", "candidate_work_history", "hr_contact",
+         "hr_contact_conflict", "interview_round", "job_listings", "policy_version",
+         "profile_fact_provenance", "role_strategy_version", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
+    14: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run",
+         "worker_lease"),
+    15: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "route_evidence", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
+    13: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "hr_contact", "hr_contact_conflict", "interview_round",
+         "job_listings", "policy_version", "profile_fact_provenance", "role_strategy_version",
+         "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    # Schema 16 adds a column to ``tailored_artifact``, not a table, so its list is 15's list. The
+    # entry is written out anyway: the newest key must name the current version, and a version this
+    # build can open with no entry here would be a version ``career_agent.backup`` cannot check.
+    16: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "route_evidence", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -825,6 +890,25 @@ def _migration_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    """Whether this database actually has ``name``, whatever version it claims to be.
+
+    A step that adds a *column* has to ask. ``CREATE TABLE IF NOT EXISTS`` is safe on any file, but
+    ``ALTER TABLE ... ADD COLUMN`` on a table that is not there fails, and a failing step makes the
+    database refuse to open at all - a far worse outcome than the inconsistency it tripped over.
+
+    Files like that are real: a ``user_version`` set by hand or by a tool, a file assembled by a
+    harness, a copy restored from somewhere odd. The recorded version then runs ahead of the
+    structure, the earlier steps are skipped because the file says they already ran, and the table a
+    later step wants was never created. A column step's job is to add a column to a table that
+    exists; where the table does not, there is nothing for it to do, and inventing the table here
+    would be this step quietly standing in for the one that was skipped.
+    """
+    found = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,)).fetchone()
+    return found is not None
+
+
 def _migration_to_v4(connection: sqlite3.Connection) -> None:
     """Schema 4: two nullable columns recording the day a person plans to follow an application up.
 
@@ -844,6 +928,8 @@ def _migration_to_v4(connection: sqlite3.Connection) -> None:
     step that was interrupted after its first statement. Running the step twice must never fail, because
     a failed step leaves a database that cannot be opened at all.
     """
+    if not _table_exists(connection, "application_tracker"):  # see ``_table_exists``: nothing to alter
+        return
     existing = {row["name"] for row in connection.execute("PRAGMA table_info(application_tracker)")}
     if "follow_up_on" not in existing:
         connection.execute("ALTER TABLE application_tracker ADD COLUMN follow_up_on TEXT")
@@ -1066,6 +1152,182 @@ def _migration_to_v8(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v9(connection: sqlite3.Connection) -> None:
+    """Schema 9: the versioned role strategies.
+
+    One new table, additive and empty. A strategy is append-only: one row per ``(strategy_id,
+    version)``, the payload holding the content and the columns holding the identity, so a version's
+    meaning never changes after it is written and an artifact can reference the exact statement of
+    intent it was made under. ``IF NOT EXISTS`` keeps the step re-runnable, like every other step.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS role_strategy_version (
+               strategy_id TEXT NOT NULL,
+               version INTEGER NOT NULL,
+               payload TEXT NOT NULL,
+               created_at TEXT NOT NULL,
+               PRIMARY KEY (strategy_id, version)
+           )"""
+    )
+
+
+def _migration_to_v10(connection: sqlite3.Connection) -> None:
+    """Schema 10: tailored artifacts, each with the basis it was built from.
+
+    One new table, additive and empty. Rows are append-only and immutable: a tailored document is
+    evidence of what was prepared, for which listing, under which strategy version, from which facts
+    - so nothing updates it, and the ``fact_basis`` JSON beside the content is what makes its lineage
+    checkable later (``career_agent.artifacts.lineage_status``). The listing reference is declared
+    with the same ``ON DELETE CASCADE`` every per-listing table carries; the strategy reference is a
+    plain pair of columns on purpose - a strategy that artifacts still reference cannot be deleted,
+    which the delete method refuses, so the lineage chain is never broken by a cascade.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS tailored_artifact (
+               artifact_id TEXT PRIMARY KEY,
+               listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               strategy_id TEXT NOT NULL,
+               strategy_version INTEGER NOT NULL,
+               artifact_kind TEXT NOT NULL,
+               content TEXT NOT NULL,
+               fact_basis TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+
+
+def _migration_to_v11(connection: sqlite3.Connection) -> None:
+    """Schema 11: the standing authorisation, versioned the way a decision with consequences has to be.
+
+    One new table, additive and empty. A policy is append-only: one row per version, the payload
+    holding the authorisation and the version column holding its place in the sequence, so "what was
+    I authorised to do on the day that ran?" has an answer, and a revocation is a new version rather
+    than an erased one. An empty table means *nothing is authorised* - the absence of a row is the
+    safe state, not an unknown one.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS policy_version (
+               version INTEGER PRIMARY KEY,
+               payload TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+
+
+def _migration_to_v12(connection: sqlite3.Connection) -> None:
+    """Schema 12: attempts at acts with consequences, written before the act and never guessed at.
+
+    One new table, additive and empty. A row is written *before* an action is performed, in the state
+    ``unknown``, so a crash between the write and the act leaves evidence instead of silence; the
+    outcome is written afterwards only from what was observed. ``operation_id`` is unique, which is
+    the idempotency rule in the schema rather than in a caller's memory: the same operation cannot be
+    started twice. ``identity_key`` is the cross-source job identity, so the same job found on two
+    sources cannot be applied to twice.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS action_attempt (
+               operation_id TEXT PRIMARY KEY,
+               identity_key TEXT NOT NULL,
+               action TEXT NOT NULL,
+               state TEXT NOT NULL,
+               started_at TEXT NOT NULL,
+               settled_at TEXT,
+               detail TEXT NOT NULL DEFAULT '',
+               evidence TEXT NOT NULL DEFAULT ''
+           )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS action_attempt_identity "
+        "ON action_attempt (identity_key, action)"
+    )
+
+
+def _migration_to_v13(connection: sqlite3.Connection) -> None:
+    """Schema 13: the person's own settings, one row per named choice.
+
+    One small table, additive and empty, holding choices rather than records - today the
+    notification preferences and the time the last report was prepared. An absent row means the
+    person has not chosen, which is why the defaults in :mod:`career_agent.notifications` are the
+    quiet ones: a missing preference must never read as permission to interrupt somebody.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS app_preference (
+               name TEXT PRIMARY KEY,
+               value TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+
+
+def _migration_to_v14(connection: sqlite3.Connection) -> None:
+    """Schema 14: the do-not-contact list.
+
+    Additive and empty. One row per normalised address, with the reason and when it was recorded,
+    because a suppression that loses its reason cannot be judged later - "they asked us to stop" and
+    "the address bounced" are the same silence with very different meanings.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS contact_suppression (
+               address TEXT PRIMARY KEY,
+               reason TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               note TEXT NOT NULL DEFAULT ''
+           )"""
+    )
+
+
+def _migration_to_v15(connection: sqlite3.Connection) -> None:
+    """Schema 15: the acceptance evidence a person has recorded for a route.
+
+    Additive and empty. One row per (route, kind of evidence), because the requirements are written
+    per route and per kind: "we reviewed the terms" is a different claim from "we have a rate limit
+    in writing", and a single "approved" flag would let one of them stand in for the other. The
+    reference is where the evidence lives - a URL, a document, a message id - so a claim recorded
+    here can be checked by somebody who was not in the room.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS route_evidence (
+               route_id TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               reference TEXT NOT NULL,
+               note TEXT NOT NULL DEFAULT '',
+               PRIMARY KEY (route_id, kind)
+           )"""
+    )
+
+
+def _migration_to_v16(connection: sqlite3.Connection) -> None:
+    """Schema 16: the listing each tailored document was written from, recorded with the document.
+
+    One nullable column, added with ``ALTER TABLE ... ADD COLUMN``: additive, no table rewritten, no
+    existing row touched. It holds the employer, the role title and the required skills as they were
+    when the document was written, with a digest of those three values beside them
+    (``career_agent.artifacts.ListingFingerprint``).
+
+    Why this had to be stored rather than derived: an artifact row already names its listing, but a
+    listing is editable, so "which listing" was never the same question as "what did that listing
+    say when this letter was addressed to it". Without this column a cover letter written to one
+    employer still read as current after the employer was renamed - the one thing the lineage exists
+    to prevent.
+
+    Existing rows get ``NULL``, and that is the only honest value for them: this build has no record
+    of what those listings said when those documents were written, so it reports them as *not
+    checkable* rather than inventing a baseline that would make them look verified. Nothing is
+    back-filled from the listing as it stands today - that would quietly declare every old document
+    current, which is the failure this step was written to remove.
+
+    SQLite has no ``ADD COLUMN IF NOT EXISTS``, so the check is explicit, exactly as
+    :func:`_migration_to_v4` does it: running the step twice must never fail, because a step that
+    fails half way leaves a database that cannot be opened at all.
+    """
+    if not _table_exists(connection, "tailored_artifact"):  # see ``_table_exists``: nothing to alter
+        return
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(tailored_artifact)")}
+    if "listing_fingerprint" not in existing:
+        connection.execute("ALTER TABLE tailored_artifact ADD COLUMN listing_fingerprint TEXT")
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1079,6 +1341,14 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (6, "add the candidate's own employment history and education", _migration_to_v6),
     (7, "add the imported HR contact list and the disagreements found in it", _migration_to_v7),
     (8, "add where each stored profile fact came from, and whether it was confirmed", _migration_to_v8),
+    (9, "add the versioned role strategies", _migration_to_v9),
+    (10, "add the tailored artifacts and the basis each was built from", _migration_to_v10),
+    (11, "add the versioned standing authorisation", _migration_to_v11),
+    (12, "add the record of attempts and their outcomes", _migration_to_v12),
+    (13, "add the person's own settings", _migration_to_v13),
+    (14, "add the do-not-contact list", _migration_to_v14),
+    (15, "add the acceptance evidence recorded for each route", _migration_to_v15),
+    (16, "record the listing each tailored document was written from", _migration_to_v16),
 )
 
 
@@ -2726,6 +2996,9 @@ class CareerStore:
         One transaction covers the read and the write, so two workers calling this at the same moment
         cannot both take the same occurrence: the second one's insert violates the uniqueness of
         ``(task, slot, attempt)`` and is answered with ``None`` - "nothing was claimed", not "a run
+        exists", which is the distinction a calls calling this at the same moment
+        cannot both take the same occurrence: the second one's insert violates the uniqueness of
+        ``(task, slot, attempt)`` and is answered with ``None`` - "nothing was claimed", not "a run
         exists", which is the distinction a caller needs to decide whether to keep looking.
 
         The task's bookkeeping is deliberately *not* advanced here. It is advanced when the attempt
@@ -3693,6 +3966,973 @@ class CareerStore:
             observed_at=str(row["observed_at"] or ""),
         )
 
+    # ---------------------------------------------------------------------------- role strategies
+    #
+    # A strategy is the person's statement of intent about the roles they are pursuing
+    # (``career_agent.strategies`` owns the model and its validation). The store keeps the promise that
+    # makes the versions worth having: rows are **append-only**, one per ``(strategy_id, version)``, and
+    # nothing here updates or replaces a written version - so a document generated under version 2 can
+    # always be traced to exactly what version 2 said, even after version 3 exists.
+    #
+    # The strategy's *content* is the person's own data (a name, places, employers they rule out), so
+    # the events carry the generated identifier and the version number, and nothing else.
+
+    # ------------------------------------------------------------ the standing authorisation
+
+    def get_global_policy(self) -> GlobalPolicy:
+        """The authorisation in force now, or the empty one when nothing has been authorised.
+
+        A file with no policy row authorises **nothing**: the absence of a decision is the safe
+        answer, never an unknown one, so this returns :func:`~career_agent.policy.no_authorisation`
+        rather than ``None`` and a caller cannot forget to handle the missing case.
+        """
+        if not self._schema_records_policy():
+            return no_authorisation()
+        row = self._connection.execute(
+            "SELECT version, payload FROM policy_version ORDER BY version DESC LIMIT 1").fetchone()
+        if row is None:
+            return no_authorisation()
+        return self._decode_policy_version(row)
+
+    def policy_version_number(self) -> int:
+        """Which version of the authorisation is in force; ``0`` when none has ever been given."""
+        if not self._schema_records_policy():
+            return 0
+        row = self._connection.execute(
+            "SELECT version FROM policy_version ORDER BY version DESC LIMIT 1").fetchone()
+        return 0 if row is None else int(row["version"])
+
+    def policy_versions(self) -> tuple[tuple[int, GlobalPolicy], ...]:
+        """Every authorisation ever given, oldest first: the history of what was permitted when."""
+        if not self._schema_records_policy():
+            return ()
+        rows = self._connection.execute(
+            "SELECT version, payload FROM policy_version ORDER BY version ASC").fetchall()
+        return tuple((int(row["version"]), self._decode_policy_version(row)) for row in rows)
+
+    def save_global_policy(self, policy: GlobalPolicy) -> int:
+        """Append the next version of the authorisation, or keep the current one when nothing changes.
+
+        Append-only, for the same reason strategy versions are: an action that ran yesterday was
+        authorised by the policy of yesterday, and rewriting the row would erase what the person had
+        actually agreed to. A policy identical to the one in force writes **no row** and returns the
+        version already in force - a new version would claim a decision that was never made.
+        """
+        if not isinstance(policy, GlobalPolicy):
+            raise PolicyError("a standing authorisation is a GlobalPolicy")
+        if not self._schema_records_policy():
+            raise PolicyError(
+                "this file records a schema older than the one that keeps the standing "
+                "authorisation, so there is nowhere to put it. Open the application on this file to "
+                "update it.")
+        current_version = self.policy_version_number()
+        if current_version:
+            current = self.get_global_policy()
+            if current.content_key() == policy.content_key():
+                return current_version
+        version = current_version + 1
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO policy_version (version, payload, created_at) VALUES (?, ?, ?)",
+                (version, policy_payload(policy), _now()),
+            )
+        # Counts and switches only: which sources and actions a person authorised is their decision,
+        # and the detail here stays small enough to read in a log without describing them.
+        self._record("policy.saved",
+                     f"version={version} pairs={len(policy.allowed)} "
+                     f"stop_all={str(policy.stop_all).lower()} "
+                     f"revoked={'yes' if policy.revoked_at else 'no'}")
+        return version
+
+    def revoke_global_policy(self, *, revoked_at: str | None = None) -> int:
+        """Append a version that authorises nothing, keeping the history of what was authorised.
+
+        Revoking is not deleting: the versions that were in force stay readable, because an action
+        taken last week was taken under one of them. The new version carries the same pairs and
+        limits with ``revoked_at`` set, so a reader can see *what* was withdrawn, and
+        :func:`~career_agent.policy.evaluate_policy` refuses everything while it is in force.
+        """
+        current = self.get_global_policy()
+        if current.revoked_at:
+            return self.policy_version_number()
+        moment = revoked_at or _now()
+        version = self.save_global_policy(replace(current, revoked_at=moment))
+        self._record("policy.revoked", f"version={version}")
+        return version
+
+    def actions_done_today(self, action: object, *, now: datetime | None = None) -> int:
+        """How many attempts at ``action`` were made on the calendar day of ``now``.
+
+        This is the count a daily limit needs, taken from durable rows rather than from a counter
+        somebody keeps in memory and loses on restart. Two decisions are deliberate:
+
+        * **A refusal does not consume quota.** A refused attempt never left this machine, so
+          counting it would let the permission rules spend the allowance they just protected.
+        * **An unknown outcome does.** If this application may have acted and nobody established
+          what happened, the honest assumption is that it did - the alternative silently doubles a
+          limit every time an outcome goes unconfirmed.
+
+        The day is the calendar day of ``now`` in ``now``'s own timezone, so a limit resets at the
+        person's midnight rather than at UTC's.
+        """
+        moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            raise ValueError("Counting a day's actions needs a moment that carries its timezone.")
+        name = self._action_name(action)
+        if not name:
+            raise ValueError("Counting a day's actions needs the action to count.")
+        today = moment.date()
+        counted = 0
+        for record in self.list_attempts(action=name):
+            if record.state is AttemptState.REFUSED:
+                continue
+            try:
+                started = datetime.fromisoformat(record.started_at)
+            except ValueError:
+                raise StoredRecordError(
+                    "attempt", f"{record.operation_id} records a start time that cannot be read, "
+                               f"so today's actions cannot be counted") from None
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if started.astimezone(moment.tzinfo).date() == today:
+                counted += 1
+        return counted
+
+    # ------------------------------------------------------------------ the do-not-contact list
+
+    def _schema_records_suppressions(self) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_suppression'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_suppression(row: sqlite3.Row) -> SuppressionEntry:
+        try:
+            reason = SuppressionReason(str(row["reason"]))
+        except ValueError as exc:
+            raise StoredRecordError(
+                "suppression",
+                f"{row['address']} records a reason this build does not know ({row['reason']!r}), "
+                f"so it cannot be judged; it still blocks") from exc
+        return SuppressionEntry(address=str(row["address"]), reason=reason,
+                                recorded_at=str(row["recorded_at"]), note=str(row["note"] or ""))
+
+    def suppress_contact(self, address: str, *, reason: SuppressionReason, note: str = "",
+                         now: str | None = None) -> SuppressionEntry:
+        """Record that an address must not be written to. Recording it twice keeps the first.
+
+        The first record wins because the earliest reason is the truest one: an address suppressed
+        because somebody asked to stop must not quietly become "our own decision" later, which reads
+        as something this application could undo on its own.
+        """
+        key = normalise_address(address)
+        if not self._schema_records_suppressions():
+            raise SuppressionError(
+                "this file records a schema older than the one that keeps the do-not-contact list. "
+                "Open the application on this file to update it.")
+        existing = self.suppression_for(key)
+        if existing is not None:
+            return existing
+        entry = SuppressionEntry(address=key, reason=reason, recorded_at=now or _now(),
+                                 note=str(note or "").strip())
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO contact_suppression (address, reason, recorded_at, note) "
+                "VALUES (?, ?, ?, ?)",
+                (entry.address, entry.reason.value, entry.recorded_at, entry.note))
+        self._record("suppression.recorded", f"reason={entry.reason.value}")
+        return entry
+
+    def suppression_for(self, address: str) -> SuppressionEntry | None:
+        """The suppression for an address, or ``None``. Matching is on the normalised address."""
+        if not self._schema_records_suppressions():
+            return None
+        key = normalise_address(address)
+        row = self._connection.execute(
+            "SELECT * FROM contact_suppression WHERE address = ?", (key,)).fetchone()
+        return None if row is None else self._decode_suppression(row)
+
+    def is_suppressed(self, address: str) -> bool:
+        """Whether this address must not be written to. An unreadable row still blocks."""
+        if not self._schema_records_suppressions():
+            return False
+        key = normalise_address(address)
+        return self._connection.execute(
+            "SELECT 1 FROM contact_suppression WHERE address = ?", (key,)).fetchone() is not None
+
+    def list_suppressions(self) -> tuple[SuppressionEntry, ...]:
+        """Every suppression, oldest first."""
+        if not self._schema_records_suppressions():
+            return ()
+        rows = self._connection.execute(
+            "SELECT * FROM contact_suppression ORDER BY recorded_at, address").fetchall()
+        return tuple(self._decode_suppression(row) for row in rows)
+
+    def lift_suppression(self, address: str, *, note: str) -> bool:
+        """Remove a suppression, which is a deliberate act and needs a reason written down.
+
+        Returns whether a row was removed. A suppression recorded because somebody asked to stop is
+        still removable **by a person** - this is their database - but never without a note, and
+        never as a side effect of anything else: no import, no retry and no cleanup calls this.
+        """
+        key = normalise_address(address)
+        reason = str(note or "").strip()
+        if len(reason) < 4:
+            raise SuppressionError(
+                "lifting a do-not-contact entry needs a note saying why; an entry removed without "
+                "one cannot be told apart from a mistake")
+        if not self._schema_records_suppressions():
+            return False
+        with self._connection:
+            removed = self._connection.execute(
+                "DELETE FROM contact_suppression WHERE address = ?", (key,)).rowcount
+        if removed:
+            self._record("suppression.lifted", "count=1")
+        return bool(removed)
+
+    # --------------------------------------------------------------- recorded acceptance evidence
+
+    def _schema_records_evidence(self) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='route_evidence'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _checked_route(route_id: str) -> str:
+        key = str(route_id or "").strip()
+        if get_route(key) is None:
+            raise EvidenceError(
+                f"{route_id!r} is not a route this project has written requirements for.")
+        return key
+
+    @staticmethod
+    def _checked_kind(route_id: str, kind: object) -> EvidenceKind:
+        try:
+            value = kind if isinstance(kind, EvidenceKind) else EvidenceKind(str(kind))
+        except ValueError:
+            raise EvidenceError(
+                f"{kind!r} is not a kind of acceptance evidence this build knows about.") from None
+        route = get_route(route_id)
+        if route is not None and value not in route.kinds:
+            raise EvidenceError(
+                f"{route.display_name} does not list {value.value!r} among its requirements, so "
+                f"recording it would prove nothing about this route.")
+        return value
+
+    def record_route_evidence(self, route_id: str, kind: object, *, reference: str, note: str,
+                              now: str | None = None) -> RouteEvidence:
+        """Record that one requirement of one route has been met, and where the proof lives.
+
+        Three refusals are deliberate. Evidence needs a **reference** - something another person can
+        open - because an unreferenced claim is an opinion. It needs a **note** of at least eight
+        characters saying what was actually checked. And a requirement that is already held is never
+        quietly overwritten: withdraw it first, with a reason, so the history shows that somebody
+        changed their mind rather than that the record always said this.
+
+        Recording evidence switches nothing on. The source-quality gate, the discovery sources and
+        every outbound capability are separate decisions in code, and none of them reads this table.
+        """
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            raise EvidenceError(
+                "this file records a schema older than the one that keeps acceptance evidence. "
+                "Open the application on this file to update it.")
+        where = str(reference or "").strip()
+        if len(where) < 4:
+            raise EvidenceError(
+                "Evidence needs a reference - a link, a file name, a message id - that somebody "
+                "else can go and check.")
+        written = str(note or "").strip()
+        if len(written) < 8:
+            raise EvidenceError(
+                "Evidence needs a short note saying what was actually checked, of at least eight "
+                "characters.")
+        existing = self.route_evidence_for(route, value)
+        if existing is not None:
+            raise EvidenceError(
+                f"{EVIDENCE_TITLES[value]} is already recorded for this route, from "
+                f"{existing.recorded_at}. Withdraw that record first, with a reason, rather than "
+                f"writing over it.")
+        entry = RouteEvidence(route_id=route, kind=value, recorded_at=now or _now(),
+                              reference=where, note=written)
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO route_evidence (route_id, kind, recorded_at, reference, note) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (entry.route_id, entry.kind.value, entry.recorded_at, entry.reference, entry.note))
+        self._record("evidence.recorded", f"route={entry.route_id} kind={entry.kind.value}")
+        return entry
+
+    def withdraw_route_evidence(self, route_id: str, kind: object, *, note: str) -> bool:
+        """Remove one recorded piece of evidence. Returns whether a row was removed.
+
+        A note is required for the same reason a lifted suppression needs one: withdrawing evidence
+        makes a route less ready than it looked a minute ago, and the next person needs to know why.
+        """
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            return False
+        if len(str(note or "").strip()) < 4:
+            raise EvidenceError(
+                "Withdrawing evidence needs a short reason, of at least four characters.")
+        with self._connection:
+            removed = self._connection.execute(
+                "DELETE FROM route_evidence WHERE route_id = ? AND kind = ?",
+                (route, value.value)).rowcount
+        if removed:
+            self._record("evidence.withdrawn", f"route={route} kind={value.value}")
+        return bool(removed)
+
+    def route_evidence_for(self, route_id: str, kind: object) -> RouteEvidence | None:
+        """One recorded piece of evidence, or ``None``."""
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            return None
+        row = self._connection.execute(
+            "SELECT * FROM route_evidence WHERE route_id = ? AND kind = ?",
+            (route, value.value)).fetchone()
+        return None if row is None else self._decode_evidence(row)
+
+    @staticmethod
+    def _decode_evidence(row: sqlite3.Row) -> RouteEvidence:
+        try:
+            kind = EvidenceKind(str(row["kind"]))
+        except ValueError as exc:
+            raise StoredRecordError(
+                "route evidence",
+                f"{row['route_id']} records a kind of evidence this build does not know "
+                f"({row['kind']!r}), so it cannot be judged; it counts for nothing") from exc
+        return RouteEvidence(route_id=str(row["route_id"]), kind=kind,
+                             recorded_at=str(row["recorded_at"]), reference=str(row["reference"]),
+                             note=str(row["note"] or ""))
+
+    def list_route_evidence(self, route_id: str | None = None) -> tuple[RouteEvidence, ...]:
+        """Recorded evidence, oldest first. Raises if a row cannot be read."""
+        if not self._schema_records_evidence():
+            return ()
+        if route_id is None:
+            rows = self._connection.execute(
+                "SELECT * FROM route_evidence ORDER BY recorded_at, route_id, kind").fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT * FROM route_evidence WHERE route_id = ? ORDER BY recorded_at, kind",
+                (self._checked_route(route_id),)).fetchall()
+        return tuple(self._decode_evidence(row) for row in rows)
+
+    def held_evidence_kinds(self, route_id: str) -> tuple[EvidenceKind, ...]:
+        """What this file holds for a route, in the route's own requirement order.
+
+        A stored kind this build does not know is **not** counted: it cannot be matched against a
+        written requirement, so counting it would make a route look readier than the evidence
+        supports. :meth:`list_route_evidence` still reports that the row exists.
+        """
+        route = get_route(self._checked_route(route_id))
+        if route is None or not self._schema_records_evidence():
+            return ()
+        stored = {str(row["kind"]) for row in self._connection.execute(
+            "SELECT kind FROM route_evidence WHERE route_id = ?", (route.route_id,)).fetchall()}
+        return tuple(kind for kind in route.kinds if kind.value in stored)
+
+    def evidence_held_by_route(self) -> dict[str, tuple[EvidenceKind, ...]]:
+        """Every route this build knows, with what this file holds for it."""
+        return {route.route_id: self.held_evidence_kinds(route.route_id)
+                for route in ROUTE_REQUIREMENTS}
+
+    # ------------------------------------------------------------------ the person's settings
+
+    #: The stored names this build knows. A name outside this set is refused rather than kept, so a
+    #: typo cannot become a silent setting nothing ever reads.
+    PREFERENCE_NAMES = ("notifications", "notification_last_prepared_at")
+
+    def _schema_records_preferences(self) -> bool:
+        """Whether this file is new enough to hold the person's settings (schema 13)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_preference'"
+        ).fetchone() is not None
+
+    def _get_preference(self, name: str) -> str | None:
+        if name not in self.PREFERENCE_NAMES:
+            raise ValueError(f"{name!r} is not a setting this build stores.")
+        if not self._schema_records_preferences():
+            return None
+        row = self._connection.execute(
+            "SELECT value FROM app_preference WHERE name = ?", (name,)).fetchone()
+        return None if row is None else str(row["value"])
+
+    def _set_preference(self, name: str, value: str) -> None:
+        if name not in self.PREFERENCE_NAMES:
+            raise ValueError(f"{name!r} is not a setting this build stores.")
+        if not self._schema_records_preferences():
+            raise NotificationError(
+                "this file records a schema older than the one that keeps your settings. Open the "
+                "application on this file to update it.")
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO app_preference (name, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (name, value, _now()))
+
+    def get_notification_preferences(self) -> NotificationPreferences:
+        """What the person asked to be told, or the quiet default when they have not said.
+
+        The default is :attr:`~career_agent.notifications.Cadence.OFF`: an application that has not
+        been asked to interrupt somebody has not been given permission to.
+        """
+        stored = self._get_preference("notifications")
+        if stored is None:
+            return NotificationPreferences()
+        try:
+            return preferences_from_payload(stored)
+        except NotificationError as exc:
+            raise StoredRecordError("notification preferences", str(exc)) from exc
+
+    def save_notification_preferences(self, preferences: NotificationPreferences) -> None:
+        """Store the person's choice. Writing the same choice again writes nothing."""
+        payload = preferences_payload(preferences)
+        if self._get_preference("notifications") == payload:
+            return
+        self._set_preference("notifications", payload)
+        self._record("notifications.saved",
+                     f"cadence={preferences.cadence.value} channel={preferences.channel.value} "
+                     f"hour={preferences.hour}")
+
+    def notification_prepared_at(self) -> str | None:
+        """When a report was last prepared for this person, or ``None``. Never inferred."""
+        return self._get_preference("notification_last_prepared_at")
+
+    def record_notification_prepared(self, *, at: str | None = None) -> str:
+        """Record that a report was prepared, so the same period is not prepared twice."""
+        moment = at or _now()
+        self._set_preference("notification_last_prepared_at", moment)
+        self._record("notifications.prepared", "report=1")
+        return moment
+
+    # ------------------------------------------------------------------ attempts and outcomes
+
+    def begin_attempt(self, *, operation_id: str, identity_key: str, action: str,
+                      now: str | None = None) -> AttemptRecord:
+        """Record that an attempt is about to be made, before it is made. Idempotent by operation id.
+
+        The row is written first and written as ``unknown``, which is the only honest state for an
+        act that has not finished: a process that dies between this write and the act leaves a record
+        somebody can reconcile, where a row written afterwards would leave nothing at all. Starting
+        the same ``operation_id`` twice returns the record that already exists rather than writing a
+        second one - that is the idempotency rule, kept in the schema's primary key rather than in a
+        caller's memory - and raises if the same id is reused for a different job or action, because
+        the two cannot be the same attempt.
+        """
+        identity = str(identity_key or "").strip()
+        name = self._action_name(action)
+        key = str(operation_id or "").strip()
+        if not key or not identity or not name:
+            raise AttemptError(
+                "An attempt needs an operation id, a job identity and the action it attempts.")
+        if not self._schema_records_attempts():
+            raise AttemptError(
+                "this file records a schema older than the one that keeps attempts, so an attempt "
+                "cannot be recorded before it is made. Open the application on this file to update "
+                "it.")
+        existing = self.get_attempt(key)
+        if existing is not None:
+            if existing.identity_key != identity or existing.action != name:
+                raise AttemptError(
+                    f"The operation id {key} already records a different attempt "
+                    f"({existing.action} for {existing.identity_key}), so it cannot be reused.")
+            return existing
+        started = now or _now()
+        record = AttemptRecord(operation_id=key, identity_key=identity, action=name,
+                               state=AttemptState.UNKNOWN, started_at=started)
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO action_attempt (operation_id, identity_key, action, state, started_at, "
+                "settled_at, detail, evidence) VALUES (?, ?, ?, ?, ?, NULL, '', '')",
+                (key, identity, name, AttemptState.UNKNOWN.value, started),
+            )
+        self._record("attempt.started", f"action={name} state=unknown")
+        return record
+
+    def settle_attempt(self, operation_id: str, *, state: AttemptState, detail: str = "",
+                       now: str | None = None) -> AttemptRecord:
+        """Record what became of an attempt, from what was observed rather than from what is hoped.
+
+        Only an unresolved attempt may be settled: an attempt that is already recorded as performed,
+        failed or refused is a fact about the past, and overwriting it would erase the evidence a
+        reconciliation rests on. Settling to ``unknown`` is allowed and is not a settlement - it
+        records what was seen (a timeout, a dropped connection) and leaves the attempt blocking.
+        """
+        if not isinstance(state, AttemptState):
+            raise AttemptError(f"An attempt state must be an AttemptState, not {state!r}.")
+        record = self.get_attempt(operation_id)
+        if record is None:
+            raise AttemptError(
+                f"No attempt is recorded as {operation_id}, so there is nothing to settle. An "
+                f"attempt is recorded before it is made, not after.")
+        if not record.is_unresolved:
+            raise AttemptError(
+                f"The attempt {operation_id} is already recorded as {record.state.value}; a settled "
+                f"outcome is not rewritten.")
+        if state is AttemptState.UNKNOWN:
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE action_attempt SET detail=? WHERE operation_id=?",
+                    (str(detail or ""), record.operation_id))
+            self._record("attempt.unresolved", f"action={record.action} state=unknown")
+            return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                                 action=record.action, state=AttemptState.UNKNOWN,
+                                 started_at=record.started_at, detail=str(detail or ""))
+        settled = now or _now()
+        with self._connection:
+            self._connection.execute(
+                "UPDATE action_attempt SET state=?, settled_at=?, detail=? WHERE operation_id=?",
+                (state.value, settled, str(detail or ""), record.operation_id))
+        self._record("attempt.settled", f"action={record.action} state={state.value}")
+        return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                             action=record.action, state=state, started_at=record.started_at,
+                             settled_at=settled, detail=str(detail or ""))
+
+    def reconcile_attempt(self, operation_id: str, *, state: AttemptState, evidence: str,
+                          now: str | None = None) -> AttemptRecord:
+        """Settle an unknown attempt from what a person actually checked, with their evidence kept.
+
+        Reconciliation is the only way out of ``unknown``, and it requires evidence in words - the
+        sent-items folder, the employer's portal, a reply - because the whole point of the unknown
+        state is that this machine cannot establish the answer. Blank evidence is refused rather than
+        stored as a confident-looking record of nothing.
+        """
+        written = str(evidence or "").strip()
+        if len(written) < 4:
+            raise AttemptError(
+                "Reconciling an unknown outcome needs a note of what you checked; this application "
+                "cannot establish it, and a record without evidence would look like one that could.")
+        if state is AttemptState.UNKNOWN:
+            raise AttemptError("Reconciling an attempt means establishing what happened to it.")
+        record = self.settle_attempt(operation_id, state=state, detail=written, now=now)
+        with self._connection:
+            self._connection.execute(
+                "UPDATE action_attempt SET evidence=? WHERE operation_id=?",
+                (written, record.operation_id))
+        self._record("attempt.reconciled", f"action={record.action} state={state.value}")
+        return AttemptRecord(operation_id=record.operation_id, identity_key=record.identity_key,
+                             action=record.action, state=record.state,
+                             started_at=record.started_at, settled_at=record.settled_at,
+                             detail=record.detail, evidence=written)
+
+    def get_attempt(self, operation_id: str) -> AttemptRecord | None:
+        """One attempt by its operation id, or ``None``. Raises if the row cannot be read."""
+        if not self._schema_records_attempts():
+            return None
+        row = self._connection.execute(
+            "SELECT * FROM action_attempt WHERE operation_id = ?",
+            (str(operation_id or "").strip(),)).fetchone()
+        return None if row is None else self._decode_attempt(row)
+
+    def list_attempts(self, *, identity_key: str | None = None,
+                      action: str | None = None) -> tuple[AttemptRecord, ...]:
+        """Every recorded attempt, oldest first, optionally for one job identity and action."""
+        if not self._schema_records_attempts():
+            return ()
+        query = "SELECT * FROM action_attempt"
+        clauses: list[str] = []
+        values: list[str] = []
+        if identity_key is not None:
+            clauses.append("identity_key = ?")
+            values.append(str(identity_key).strip())
+        if action is not None:
+            clauses.append("action = ?")
+            values.append(self._action_name(action))
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY started_at, operation_id"
+        return tuple(self._decode_attempt(row)
+                     for row in self._connection.execute(query, values).fetchall())
+
+    def unresolved_attempts(self) -> tuple[AttemptRecord, ...]:
+        """Attempts whose outcome was never established. These are what block further attempts."""
+        return tuple(record for record in self.list_attempts() if record.is_unresolved)
+
+    @staticmethod
+    def _action_name(action: object) -> str:
+        """The one spelling of an action name, whether an enum or a string was handed over.
+
+        ``str(ActionKind.DISCOVERY)`` is ``"ActionKind.DISCOVERY"``, which is not what anybody else
+        calls that action. Storing it would mean an attempt recorded by a caller holding the enum
+        could never be found by a caller holding the string ``"discovery"`` - and the whole point of
+        the attempt record is that the *next* caller finds it before acting again.
+        """
+        if isinstance(action, Enum):
+            return str(action.value).strip()
+        return str(action or "").strip()
+
+    def _schema_records_attempts(self) -> bool:
+        """Whether this file is new enough to hold attempt records (schema 12)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='action_attempt'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_attempt(row: sqlite3.Row) -> AttemptRecord:
+        """One stored attempt, or :class:`StoredRecordError` naming what cannot be read.
+
+        An unreadable attempt is never read as "nothing was attempted": that is the reading that
+        would permit a blind retry, which is the one outcome this table exists to prevent.
+        """
+        noun = "attempt record"
+        raw_state = str(row["state"] or "").strip()
+        try:
+            state = AttemptState(raw_state)
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its outcome is recorded as {raw_state!r}, which is not a state this "
+                      f"application knows") from exc
+        try:
+            return AttemptRecord(
+                operation_id=str(row["operation_id"] or ""),
+                identity_key=str(row["identity_key"] or ""),
+                action=str(row["action"] or ""),
+                state=state,
+                started_at=str(row["started_at"] or ""),
+                settled_at=(str(row["settled_at"]) if row["settled_at"] else None),
+                detail=str(row["detail"] or ""),
+                evidence=str(row["evidence"] or ""),
+            )
+        except AttemptError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
+    def _schema_records_policy(self) -> bool:
+        """Whether this file is new enough to hold the standing authorisation (schema 11)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_version'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _decode_policy_version(row: sqlite3.Row) -> GlobalPolicy:
+        """One stored authorisation, or :class:`StoredRecordError` naming what cannot be read.
+
+        A policy that cannot be decoded is **never** read as "no restrictions": the error travels, and
+        the caller refuses, because the one thing worse than an unreadable authorisation is a
+        permissive guess about it.
+        """
+        noun = "standing authorisation"
+        version = _stored_int(row["version"], noun, "version")
+        if version < 1:
+            raise StoredRecordError(noun, f"its version {version} is not a version number")
+        try:
+            return policy_from_payload(str(row["payload"] or ""))
+        except PolicyError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
+    def create_role_strategy(self, **content: object) -> RoleStrategy:
+        """Store a new strategy as version 1 under a freshly generated identifier.
+
+        ``content`` is the strategy's own fields (see ``strategies.CONTENT_FIELDS``); every one is
+        validated by the :class:`~career_agent.strategies.RoleStrategy` constructor before anything is
+        written, so a refused strategy leaves the database exactly as it was.
+        """
+        strategy = RoleStrategy(strategy_id=new_strategy_id(), version=1, **content)  # type: ignore[arg-type]
+        self._write_strategy_row(strategy)
+        self._record("strategy.created", f"id={strategy.strategy_id} version=1")
+        return strategy
+
+    def revise_role_strategy(self, strategy_id: str, **content: object) -> RoleStrategy:
+        """Append the next version of a stored strategy, or return the current one when nothing changes.
+
+        A revision **states what changes**: the fields named here replace the current version's, and
+        every field not named is carried forward. Building the new version out of the arguments alone
+        would mean a caller that renames a strategy also deletes the exclusions and required skills it
+        did not repeat - and those are *gates* in matching, so a version that lost them would silently
+        unblock work the person said no to, permanently, because versions are append-only. Clearing a
+        field stays possible by naming it with an empty value.
+
+        A revision whose content matches the current version byte-for-byte writes **no row** and
+        returns the stored version as it is: a version that changed nothing would be a claim that
+        something did, and an artifact's lineage is only worth what the version numbers mean.
+        """
+        latest = self.get_role_strategy(strategy_id)
+        if latest is None:
+            raise StrategyError(
+                f"no strategy with the identifier {strategy_id!r} is stored, so there is nothing to revise")
+        unknown = sorted(set(content) - set(CONTENT_FIELDS))
+        if unknown:
+            # A misspelled field would otherwise be dropped on the floor and the revision would read
+            # as "nothing changed", which is the quietest possible way to lose somebody's edit.
+            raise StrategyError(
+                f"a strategy has no {', '.join(unknown)} to revise; its fields are "
+                f"{', '.join(CONTENT_FIELDS)}")
+        merged: dict[str, object] = {name: getattr(latest, name) for name in CONTENT_FIELDS}
+        merged.update(content)
+        candidate = RoleStrategy(strategy_id=strategy_id, version=latest.version,
+                                 **merged)  # type: ignore[arg-type]
+        if candidate.content_key() == latest.content_key():
+            return latest
+        revised = RoleStrategy(strategy_id=strategy_id, version=latest.version + 1,
+                               **merged)  # type: ignore[arg-type]
+        self._write_strategy_row(revised)
+        self._record("strategy.revised", f"id={strategy_id} version={revised.version}")
+        return revised
+
+    def _write_strategy_row(self, strategy: RoleStrategy) -> None:
+        """One append-only insert. A (strategy_id, version) that exists is a bug, not an upsert."""
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO role_strategy_version (strategy_id, version, payload, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (strategy.strategy_id, strategy.version, strategy_payload(strategy), _now()),
+            )
+
+    def get_role_strategy(self, strategy_id: str, version: int | None = None) -> RoleStrategy | None:
+        """One strategy: a specific version, or the newest one. ``None`` when nothing is stored.
+
+        A row this build cannot read raises :class:`StoredRecordError` rather than being passed over:
+        a strategy that exists but cannot be interpreted is a damaged record, and silently reading it
+        as absent would strand every artifact that references it.
+        """
+        if version is None:
+            row = self._connection.execute(
+                """SELECT strategy_id, version, payload FROM role_strategy_version
+                   WHERE strategy_id=? ORDER BY version DESC LIMIT 1""",
+                (strategy_id,),
+            ).fetchone()
+        else:
+            row = self._connection.execute(
+                """SELECT strategy_id, version, payload FROM role_strategy_version
+                   WHERE strategy_id=? AND version=?""",
+                (strategy_id, version),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._decode_role_strategy(row)
+
+    def list_role_strategies(self) -> tuple[RoleStrategy, ...]:
+        """The newest version of every stored strategy, by name and then identifier.
+
+        Sorted by what the person reads (the name) so two runs over one database show one order;
+        the identifier breaks a tie between two strategies with the same name.
+        """
+        rows = self._connection.execute(
+            """SELECT s.strategy_id, s.version, s.payload FROM role_strategy_version s
+               JOIN (SELECT strategy_id, MAX(version) AS newest FROM role_strategy_version
+                     GROUP BY strategy_id) m
+                 ON s.strategy_id = m.strategy_id AND s.version = m.newest"""
+        ).fetchall()
+        strategies = tuple(self._decode_role_strategy(row) for row in rows)
+        return tuple(sorted(strategies, key=lambda item: (item.name, item.strategy_id)))
+
+    def role_strategy_versions(self, strategy_id: str) -> tuple[RoleStrategy, ...]:
+        """Every version of one strategy, oldest first: the edit history a lineage report reads."""
+        rows = self._connection.execute(
+            """SELECT strategy_id, version, payload FROM role_strategy_version
+               WHERE strategy_id=? ORDER BY version ASC""",
+            (strategy_id,),
+        ).fetchall()
+        return tuple(self._decode_role_strategy(row) for row in rows)
+
+    def delete_role_strategy(self, strategy_id: str) -> int:
+        """Remove a strategy and every version of it, as one transaction; returns the rows removed.
+
+        Deletion is whole by design: versions are the history of one statement of intent, and keeping
+        some of them would keep a lineage that points at a strategy the person deleted. Returns 0 -
+        and writes nothing, records nothing - when no such strategy is stored, because deleting
+        nothing is not a change to report.
+
+        A strategy that tailored artifacts still reference is **refused**, not deleted: each artifact
+        carries the strategy version it was built under, and removing that would leave a document
+        whose "why" can no longer be read. Delete the artifacts first; the refusal names how many
+        there are. (The count is asked only of a database whose recorded schema has the table: a file
+        deliberately held at an older version cannot have stored artifacts under it.)
+        """
+        if int(self._connection.execute("PRAGMA user_version").fetchone()[0]) >= 10:
+            referenced = self._connection.execute(
+                "SELECT COUNT(*) FROM tailored_artifact WHERE strategy_id=?",
+                (strategy_id,)).fetchone()[0]
+        else:
+            referenced = 0
+        if referenced:
+            raise StrategyError(
+                f"{referenced} tailored artifact(s) were built under this strategy, so deleting it "
+                "would leave them with no readable lineage. Delete those artifacts first.")
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM role_strategy_version WHERE strategy_id=?", (strategy_id,))
+            removed = cursor.rowcount
+        if removed > 0:
+            self._record("strategy.deleted", f"id={strategy_id} versions={removed}")
+        return removed
+
+    @staticmethod
+    def _decode_role_strategy(row: sqlite3.Row) -> RoleStrategy:
+        noun = "role strategy"
+        strategy_id = str(row["strategy_id"] or "")
+        if not strategy_id.strip():
+            raise StoredRecordError(noun, "it has no identifier, so no version can be referenced")
+        version = _stored_int(row["version"], noun, "version")
+        try:
+            return strategy_from_payload(strategy_id, version, row["payload"])
+        except StrategyError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
+    # ---------------------------------------------------------------------------- tailored artifacts
+    #
+    # An artifact is evidence: this document, for this listing, under this strategy version, from
+    # these facts. That is why rows are append-only and immutable here - nothing updates content or
+    # basis - and why saving one validates its lineage *at write time*: a document whose strategy
+    # version is not stored, or whose listing is gone, must never enter the ledger, because an
+    # artifact that cannot explain itself is not evidence of anything.
+    #
+    # The content and the basis hold the person's own facts and writing, so the events carry the
+    # artifact's generated identifier and its shape (kind, strategy version) - never text from the
+    # document, the listing's employer or role, or any fact value.
+
+    def save_tailored_artifact(self, artifact: TailoredArtifact) -> None:
+        """Append one artifact, refusing a lineage that does not resolve as the row is written."""
+        listing = self.get_job(artifact.listing_id)
+        if listing is None:
+            raise ArtifactError(
+                f"no listing with the identifier {artifact.listing_id!r} is stored, so an artifact "
+                "cannot be filed under it")
+        if self.get_role_strategy(artifact.strategy_id, artifact.strategy_version) is None:
+            raise ArtifactError(
+                f"no strategy version {artifact.strategy_version} under {artifact.strategy_id!r} is "
+                "stored, so the artifact's lineage could never be read; build it under a stored "
+                "strategy version")
+        # The listing is fingerprinted here, from the row that was just read, because here is the
+        # only moment this method can tell the truth about: what the listing said as the document
+        # entered the ledger. A caller that brought its own fingerprint is checked against it rather
+        # than believed - a document written for one employer must not be filed under another, and
+        # that refusal belongs in the store, where every path to a row passes.
+        written_for = ListingFingerprint.from_listing(listing)
+        if artifact.listing_fingerprint is not None:
+            moved = artifact.listing_fingerprint.changes_against(written_for)
+            if moved:
+                raise ArtifactError(
+                    f"the listing {artifact.listing_id!r} is not what this document was written for "
+                    f"({'; '.join(moved)}), so filing it under that listing would record a document "
+                    "nobody prepared for it")
+        try:
+            with self._connection:
+                self._connection.execute(
+                    """INSERT INTO tailored_artifact
+                           (artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                            content, fact_basis, created_at, listing_fingerprint)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (artifact.artifact_id, artifact.listing_id, artifact.strategy_id,
+                     artifact.strategy_version, artifact.kind.value, artifact.content,
+                     json.dumps(artifact.basis.to_json(), sort_keys=True, ensure_ascii=False),
+                     artifact.created_at or _now(),
+                     json.dumps(written_for.to_json(), sort_keys=True, ensure_ascii=False)),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ArtifactError(
+                f"an artifact with the identifier {artifact.artifact_id!r} is already stored; "
+                "artifacts are append-only and are never overwritten") from exc
+        self._record("artifact.saved",
+                     f"id={artifact.artifact_id} kind={artifact.kind.value} "
+                     f"strategy_version={artifact.strategy_version}")
+
+    def new_tailored_artifact(self, *, listing_id: str, strategy: RoleStrategy,
+                              kind: ArtifactKind, content: str,
+                              basis: ArtifactBasis) -> TailoredArtifact:
+        """Build a record with a fresh identifier and store it: one call, one append-only row."""
+        # The record is stamped once, here, so the object a caller holds is byte-identical to the
+        # row that was stored - a returned artifact that disagrees with its own row would be a
+        # second version of the truth. That now includes the listing it was written for: the
+        # fingerprint is taken from the stored listing, and ``save_tailored_artifact`` refuses the
+        # row if the listing moved between these two lines.
+        listing = self.get_job(listing_id)
+        artifact = TailoredArtifact(
+            artifact_id=new_artifact_id(), listing_id=listing_id, strategy_id=strategy.strategy_id,
+            strategy_version=strategy.version, kind=kind, content=content, basis=basis,
+            created_at=_now(),
+            listing_fingerprint=None if listing is None else ListingFingerprint.from_listing(listing))
+        self.save_tailored_artifact(artifact)
+        return artifact
+
+    def get_tailored_artifact(self, artifact_id: str) -> TailoredArtifact | None:
+        """One artifact by identifier, or ``None``. A damaged row raises rather than reading as absent."""
+        row = self._connection.execute(
+            """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                      content, fact_basis, created_at, listing_fingerprint
+               FROM tailored_artifact WHERE artifact_id=?""", (artifact_id,)).fetchone()
+        if row is None:
+            return None
+        return self._decode_tailored_artifact(row)
+
+    def list_tailored_artifacts(self, *, listing_id: str | None = None,
+                                strategy_id: str | None = None,
+                                kind: ArtifactKind | None = None) -> tuple[TailoredArtifact, ...]:
+        """Stored artifacts, newest first, filtered by any of listing, strategy or kind.
+
+        Every artifact ever written for the filters is returned: the history of what was prepared is
+        the point, and a caller that wants "the latest one" reads the first row.
+        """
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if listing_id is not None:
+            clauses.append("listing_id=?")
+            parameters.append(listing_id)
+        if strategy_id is not None:
+            clauses.append("strategy_id=?")
+            parameters.append(strategy_id)
+        if kind is not None:
+            clauses.append("artifact_kind=?")
+            parameters.append(kind.value)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._connection.execute(
+            """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                      content, fact_basis, created_at, listing_fingerprint
+               FROM tailored_artifact""" + where + " ORDER BY created_at DESC, rowid DESC",
+            tuple(parameters),
+        ).fetchall()
+        return tuple(self._decode_tailored_artifact(row) for row in rows)
+
+    def delete_tailored_artifact(self, artifact_id: str) -> int:
+        """Remove one artifact; returns the rows removed, 0 when nothing was stored under the id."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM tailored_artifact WHERE artifact_id=?", (artifact_id,))
+            removed = cursor.rowcount
+        if removed > 0:
+            self._record("artifact.deleted", f"id={artifact_id}")
+        return removed
+
+    @staticmethod
+    def _decode_tailored_artifact(row: sqlite3.Row) -> TailoredArtifact:
+        noun = "tailored artifact"
+        artifact_id = str(row["artifact_id"] or "")
+        if not artifact_id.strip():
+            raise StoredRecordError(noun, "it has no identifier")
+        try:
+            kind = ArtifactKind(str(row["artifact_kind"] or ""))
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its kind {row['artifact_kind']!r} is not one this version recognises") from exc
+        version = _stored_int(row["strategy_version"], noun, "strategy version")
+        # The column arrived with schema 16, and the read-only doctor reads files at the version
+        # they were written at - so "this row has no such column" and "this row left it empty" are
+        # both read as *no recorded listing*, which is what an artifact from an older build is.
+        # A fingerprint that is present but unreadable is damage, and is reported as damage below:
+        # absent is not the same as corrupt, and only one of the two is a row nobody should trust.
+        stored_fingerprint = row["listing_fingerprint"] if "listing_fingerprint" in row.keys() else None
+        try:
+            basis_payload = json.loads(row["fact_basis"])
+            basis = ArtifactBasis.from_json(basis_payload)
+            written_for = None
+            if stored_fingerprint is not None and str(stored_fingerprint).strip():
+                written_for = ListingFingerprint.from_json(json.loads(stored_fingerprint))
+            return TailoredArtifact(
+                artifact_id=artifact_id, listing_id=str(row["listing_id"] or ""),
+                strategy_id=str(row["strategy_id"] or ""), strategy_version=version, kind=kind,
+                content=str(row["content"] or ""), basis=basis,
+                created_at=str(row["created_at"] or ""), listing_fingerprint=written_for)
+        except ArtifactError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise StoredRecordError(
+                noun, f"its stored basis is not readable JSON ({exc.msg})") from exc
+
 
 # ---------------------------------------------------------------- reading a file without opening it
 #
@@ -3718,6 +4958,14 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     # discovered later by a screen that cannot render it.
     ("hr_contact", "contact_id", CareerStore._decode_contact),
     ("hr_contact_conflict", "conflict_id", CareerStore._decode_contact_conflict),
+    ("role_strategy_version", "strategy_id", CareerStore._decode_role_strategy),
+    # The authorisation is read by the doctor through its own decoder for the reason the decoder
+    # exists: a row that cannot be read must be reported, never taken for "nothing was restricted".
+    ("policy_version", "version", CareerStore._decode_policy_version),
+    # An attempt that cannot be read must be reported too: the reading that would be convenient -
+    # "nothing was attempted" - is the one that permits a blind retry.
+    ("action_attempt", "operation_id", CareerStore._decode_attempt),
+    ("tailored_artifact", "artifact_id", CareerStore._decode_tailored_artifact),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
     ("worker_lease", "worker_id", CareerStore._decode_worker_lease),

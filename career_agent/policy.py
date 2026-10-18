@@ -1,0 +1,439 @@
+"""The one standing authorisation, checked immediately before anything leaves this machine.
+
+P8 asks for a global policy a person gives **once** and can revoke: which source may be used for
+which action, how many of each may run in a day, when the application must stay quiet, and a way to
+stop everything at once. This module is that policy and the decision made from it. Three rules shape
+everything here:
+
+* **It authorises, it never enables.** A policy is one half of a conjunction; the other half is the
+  source's own permission and quality gate (:mod:`career_agent.sources`), which is closed today. A
+  decision is *allowed* only when both say so, so a policy that names every source and every action
+  still opens nothing. The composition is the caller's: it passes the gate's answer in, and this
+  module refuses outright if that answer is no.
+* **It fails closed, and it says why.** Anything not named is refused: an unknown source, an action
+  the policy does not list, an action with no recorded daily limit, a clock without a timezone. A
+  refusal carries every reason, not the first one found, because a person fixing one condition
+  should not discover the next one by trying again.
+* **It performs nothing.** There is no network, no mail, no process and no database here - only a
+  value and a decision about it. What a caller does with the decision is the caller's business, and
+  where the policy is stored is the store's.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Mapping
+
+
+class PolicyError(ValueError):
+    """A policy, or a question asked of one, that this application refuses to interpret."""
+
+
+class ActionKind(str, Enum):
+    """The external actions this application can be authorised to take.
+
+    One member per independently gated capability in the roadmap, so an authorisation for one can
+    never read as an authorisation for another: reading job listings is not submitting an
+    application, and sending an email is not reading a mailbox.
+    """
+
+    DISCOVERY = "discovery"
+    SUBMISSION = "submission"
+    EMAIL_SEND = "email_send"
+    INBOX_READ = "inbox_read"
+
+
+#: How each action reads in a sentence meant for a person.
+ACTION_LABELS: dict[ActionKind, str] = {
+    ActionKind.DISCOVERY: "look for jobs",
+    ActionKind.SUBMISSION: "submit an application",
+    ActionKind.EMAIL_SEND: "send an email",
+    ActionKind.INBOX_READ: "read your mailbox",
+}
+
+
+def _as_action(value: object) -> ActionKind:
+    """``value`` as a known action, or a refusal naming what was asked for."""
+    if isinstance(value, ActionKind):
+        return value
+    try:
+        return ActionKind(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError) as exc:
+        raise PolicyError(
+            f"{value!r} is not an action this application can be authorised to take; the actions are "
+            f"{', '.join(kind.value for kind in ActionKind)}") from exc
+
+
+@dataclass(frozen=True)
+class PolicySubject:
+    """What one action is *about*, when the authorisation puts conditions on that.
+
+    A policy that says "only engineering roles, only in India, never attach anything but a PDF"
+    cannot be checked against the action alone - something has to describe the job being acted on.
+    This is that description, and it is deliberately separate from the policy: a caller that cannot
+    describe its subject gets a refusal rather than an exemption.
+    """
+
+    role_title: str | None = None
+    location: str | None = None
+    attachments: tuple[str, ...] = ()
+    #: How many follow-ups have already gone to this job, counted from durable records.
+    follow_ups_so_far: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attachments",
+                           tuple(str(name).strip() for name in self.attachments if str(name).strip()))
+        if self.follow_ups_so_far is not None:
+            count = self.follow_ups_so_far
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise PolicyError(
+                    f"how many follow-ups have already gone is a whole number, not {count!r}")
+
+
+def _folded_terms(values: object, *, noun: str) -> frozenset[str]:
+    """A set of comparison terms, folded once at the edge so comparisons stay boring."""
+    if values is None:
+        return frozenset()
+    if isinstance(values, str):
+        raise PolicyError(f"{noun} are a collection of terms, not one string")
+    terms = set()
+    for value in values:
+        text = str(value or "").strip().casefold()
+        if not text:
+            raise PolicyError(f"{noun} cannot contain an empty term")
+        terms.add(text)
+    return frozenset(terms)
+
+
+@dataclass(frozen=True)
+class GlobalPolicy:
+    """What the person has standing-authorised, as one value.
+
+    ``allowed`` holds ``(source_id, action)`` pairs - the pair is the unit, because "this board, for
+    looking only" is a different permission from "this board, for applying". ``daily_limits`` is per
+    action and is **required** for any action that is allowed: an authorisation without a ceiling is
+    how an automated system runs away with somebody's name on it. ``quiet_hours`` is a pair of local
+    hours ``(from, until)`` and may wrap past midnight. ``stop_all`` and ``revoked_at`` are the two
+    ways to switch everything off, and both are checked before anything else.
+    """
+
+    allowed: frozenset[tuple[str, ActionKind]] = field(default_factory=frozenset)
+    daily_limits: Mapping[ActionKind, int] = field(default_factory=dict)
+    quiet_hours: tuple[int, int] | None = None
+    stop_all: bool = False
+    revoked_at: str | None = None
+    #: Terms that must appear in a role's title before it may be acted on. Empty means no condition.
+    role_terms: frozenset[str] = field(default_factory=frozenset)
+    #: Places a role may be in. Empty means no condition; a named place must appear in the location.
+    locations: frozenset[str] = field(default_factory=frozenset)
+    #: File endings that may be attached (``{".pdf"}``). Empty means *nothing* may be attached.
+    allowed_attachments: frozenset[str] = field(default_factory=frozenset)
+    #: How many follow-ups one job may receive in total. ``None`` means no condition is recorded.
+    follow_up_limit: int | None = None
+
+    def __post_init__(self) -> None:
+        pairs: set[tuple[str, ActionKind]] = set()
+        for pair in self.allowed:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise PolicyError(
+                    "an authorisation is a (source, action) pair: a source on its own authorises "
+                    "nothing, because reading and applying are different permissions")
+            source_id, action = pair
+            if not isinstance(source_id, str) or not source_id.strip():
+                raise PolicyError("an authorisation names the source it is for")
+            pairs.add((source_id, _as_action(action)))
+        object.__setattr__(self, "allowed", frozenset(pairs))
+
+        limits: dict[ActionKind, int] = {}
+        for action, limit in dict(self.daily_limits).items():
+            kind = _as_action(action)
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                raise PolicyError(
+                    f"the daily limit for {kind.value} must be a whole number of actions, not "
+                    f"{limit!r}")
+            limits[kind] = limit
+        object.__setattr__(self, "daily_limits", limits)
+
+        if self.quiet_hours is not None:
+            hours = tuple(self.quiet_hours)
+            if len(hours) != 2:
+                raise PolicyError("quiet hours are a pair of hours, from and until")
+            for hour in hours:
+                if isinstance(hour, bool) or not isinstance(hour, int) or not 0 <= hour <= 23:
+                    raise PolicyError(f"{hour!r} is not an hour of the day (0-23)")
+            if hours[0] == hours[1]:
+                # "From 9 until 9" is either no quiet hours or every hour of the day, and guessing
+                # which one somebody meant is exactly the kind of guess this module does not make.
+                raise PolicyError(
+                    "quiet hours that start and end at the same hour say nothing; leave them unset "
+                    "for none, or name the two hours")
+            object.__setattr__(self, "quiet_hours", (int(hours[0]), int(hours[1])))
+
+        if self.revoked_at is not None and not str(self.revoked_at).strip():
+            raise PolicyError("a revoked policy records when it was revoked")
+
+        object.__setattr__(self, "role_terms",
+                           _folded_terms(self.role_terms, noun="role conditions"))
+        object.__setattr__(self, "locations",
+                           _folded_terms(self.locations, noun="location conditions"))
+        endings = _folded_terms(self.allowed_attachments, noun="attachment rules")
+        object.__setattr__(self, "allowed_attachments",
+                           frozenset(e if e.startswith(".") else f".{e}" for e in endings))
+        if self.follow_up_limit is not None:
+            limit = self.follow_up_limit
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                raise PolicyError(
+                    f"a follow-up limit is a whole number of messages per job, not {limit!r}")
+
+    def content_key(self) -> str:
+        """A stable rendering of the authorisation itself, so "nothing changed" can be recognised.
+
+        Pairs and limits are sorted and the JSON is key-sorted: the same authorisation said twice
+        always produces the same text, which is what lets a revision that changes nothing write no
+        row. The version number is deliberately absent - it is identity, not content.
+        """
+        return json.dumps(
+            {
+                "allowed": sorted([source_id, action.value] for source_id, action in self.allowed),
+                "daily_limits": {kind.value: limit
+                                 for kind, limit in sorted(self.daily_limits.items(),
+                                                           key=lambda item: item[0].value)},
+                "quiet_hours": list(self.quiet_hours) if self.quiet_hours else None,
+                "stop_all": self.stop_all,
+                "revoked_at": self.revoked_at,
+                "role_terms": sorted(self.role_terms),
+                "locations": sorted(self.locations),
+                "allowed_attachments": sorted(self.allowed_attachments),
+                "follow_up_limit": self.follow_up_limit,
+            },
+            sort_keys=True, ensure_ascii=False,
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this policy authorises nothing at all."""
+        return not self.allowed
+
+    def authorises(self, source_id: str, action: object) -> bool:
+        """Whether this policy names this exact ``(source, action)`` pair. Not a decision on its own."""
+        return (source_id, _as_action(action)) in self.allowed
+
+
+def no_authorisation() -> GlobalPolicy:
+    """The policy a person has not given yet: nothing is authorised. The starting state, always."""
+    return GlobalPolicy()
+
+
+@dataclass(frozen=True)
+class PolicyDecision:
+    """Whether one action may run now, and every reason it may not.
+
+    ``refusals`` is empty exactly when ``allowed`` is true. It carries *all* the reasons rather than
+    the first: somebody who turns off quiet hours should be told in the same breath that the daily
+    limit is also reached, instead of finding out by trying again an hour later.
+    """
+
+    allowed: bool
+    source_id: str
+    action: ActionKind
+    refusals: tuple[str, ...] = ()
+
+    def describe(self) -> str:
+        """One line for a person or a log. Carries ids and reasons only - never candidate data."""
+        what = f"{ACTION_LABELS[self.action]} ({self.action.value}) with '{self.source_id}'"
+        if self.allowed:
+            return (f"Permission to {what} is authorised: the standing policy allows it, the source's "
+                    "own gate is open, it is not quiet hours and today's limit is not reached.")
+        return f"Refused permission to {what}: " + "; ".join(self.refusals)
+
+
+def _in_quiet_hours(moment: datetime, quiet_hours: tuple[int, int]) -> bool:
+    """Whether ``moment`` falls inside quiet hours, including a pair that wraps past midnight."""
+    start, until = quiet_hours
+    hour = moment.hour
+    if start < until:
+        return start <= hour < until
+    return hour >= start or hour < until
+
+
+def _condition_refusals(policy: GlobalPolicy, subject: PolicySubject | None) -> list[str]:
+    """Every way the thing being acted on fails the conditions the person wrote down.
+
+    Fails closed in both directions: a condition with nothing to check it against refuses, and an
+    attachment with no rule permitting it refuses. The alternative - acting because the caller
+    forgot to describe what it was acting on - is the failure mode this whole module exists to
+    prevent.
+    """
+    refusals: list[str] = []
+    has_conditions = bool(policy.role_terms or policy.locations or policy.allowed_attachments
+                          or policy.follow_up_limit is not None)
+    if not has_conditions:
+        return refusals
+    if subject is None:
+        return ["the standing authorisation puts conditions on which jobs may be acted on, and "
+                "nothing described the job this action is about"]
+    if policy.role_terms:
+        title = (subject.role_title or "").strip().casefold()
+        if not title:
+            refusals.append("the authorisation names which roles may be acted on, and this action "
+                            "carries no role title to check")
+        elif not any(term in title for term in policy.role_terms):
+            refusals.append(
+                f"'{subject.role_title}' matches none of the roles you authorised "
+                f"({', '.join(sorted(policy.role_terms))})")
+    if policy.locations:
+        where = (subject.location or "").strip().casefold()
+        if not where:
+            refusals.append("the authorisation names where roles may be, and this action carries "
+                            "no location to check")
+        elif not any(place in where for place in policy.locations):
+            refusals.append(
+                f"'{subject.location}' is not one of the places you authorised "
+                f"({', '.join(sorted(policy.locations))})")
+    for name in subject.attachments:
+        ending = name[name.rfind("."):].casefold() if "." in name else ""
+        if not policy.allowed_attachments:
+            refusals.append(f"nothing may be attached: no attachment rule is recorded, and "
+                            f"'{name}' would be the first")
+        elif ending not in policy.allowed_attachments:
+            refusals.append(
+                f"'{name}' is not a kind of file you authorised attaching "
+                f"({', '.join(sorted(policy.allowed_attachments))})")
+    if policy.follow_up_limit is not None:
+        sent = subject.follow_ups_so_far
+        if sent is None:
+            refusals.append("a follow-up limit is recorded, and nobody counted how many have "
+                            "already gone to this job")
+        elif sent >= policy.follow_up_limit:
+            refusals.append(
+                f"this job has already had {sent} follow-up(s), and you allowed "
+                f"{policy.follow_up_limit}")
+    return refusals
+
+
+def evaluate_policy(policy: GlobalPolicy, *, source_id: str, action: object, now: datetime,
+                    done_today: int, source_gate_allows: bool,
+                    subject: PolicySubject | None = None) -> PolicyDecision:
+    """Decide whether one external action may run **now**, failing closed on anything unnamed.
+
+    ``source_gate_allows`` is the answer from the source's own permission and quality gate
+    (:func:`career_agent.sources.discovery_gate` or :func:`~career_agent.sources.submission_gate`,
+    or the equivalent authorisation for mail). It is passed in rather than read here so that this
+    module cannot be the place where a gate is accidentally bypassed, and a ``False`` refuses the
+    action whatever the policy says. ``done_today`` is what the caller has counted from durable
+    records - this module counts nothing and remembers nothing between calls.
+    """
+    kind = _as_action(action)
+    if not isinstance(source_id, str) or not source_id.strip():
+        raise PolicyError("a decision is about a named source")
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise PolicyError(
+            "a decision needs an instant that knows its own zone: quiet hours on a clock with no "
+            "zone would be somebody else's quiet hours")
+    if isinstance(done_today, bool) or not isinstance(done_today, int) or done_today < 0:
+        raise PolicyError(
+            f"how many of these already ran today is a whole number from the records, not {done_today!r}")
+
+    refusals: list[str] = []
+    if policy.revoked_at:
+        refusals.append(f"the standing authorisation was revoked at {policy.revoked_at}")
+    if policy.stop_all:
+        refusals.append("everything is stopped by the standing policy's stop switch")
+    if policy.is_empty:
+        refusals.append("there is no standing authorisation for anything yet")
+    elif not policy.authorises(source_id, kind):
+        refusals.append(
+            f"the standing authorisation does not cover '{source_id}' for {ACTION_LABELS[kind]} "
+            f"({kind.value})")
+    if not source_gate_allows:
+        refusals.append(
+            f"the source's own gate for '{source_id}' is closed, and a standing authorisation "
+            "cannot open it")
+    if policy.quiet_hours is not None and _in_quiet_hours(now, policy.quiet_hours):
+        start, until = policy.quiet_hours
+        refusals.append(f"it is quiet hours ({start:02d}:00 until {until:02d}:00)")
+    limit = policy.daily_limits.get(kind)
+    if limit is None:
+        refusals.append(
+            f"no daily limit is recorded for {ACTION_LABELS[kind]} ({kind.value}), and an "
+            "authorisation without a ceiling is not one this application will act on")
+    elif done_today >= limit:
+        refusals.append(
+            f"today's limit of {limit} for {ACTION_LABELS[kind]} ({kind.value}) is already reached "
+            f"({done_today} so far)")
+    refusals.extend(_condition_refusals(policy, subject))
+    return PolicyDecision(allowed=not refusals, source_id=source_id, action=kind,
+                          refusals=tuple(refusals))
+
+
+# ---------------------------------------------------------------- the stored form
+
+def policy_payload(policy: GlobalPolicy) -> str:
+    """One policy as the text the database stores: the authorisation, without its version number.
+
+    The version is a column, not payload, so two stored versions differ exactly when the
+    authorisations do - which is what makes a comparison over stored rows mean the same thing as one
+    over fresh values.
+    """
+    return policy.content_key()
+
+
+def policy_from_payload(payload: str) -> GlobalPolicy:
+    """A stored row back into a policy, refusing what this build cannot read as one.
+
+    Raises :class:`PolicyError` (never a bare ``KeyError`` or ``TypeError``) so the store can report a
+    damaged row as a damaged row instead of crashing a read - and so a policy that cannot be read is
+    never quietly treated as "no restrictions".
+    """
+    try:
+        content = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise PolicyError(f"a stored policy is not readable JSON ({exc.msg})") from exc
+    if not isinstance(content, dict):
+        raise PolicyError(f"a stored policy is a JSON object, not {type(content).__name__}")
+    unknown = sorted(set(content) - {"allowed", "daily_limits", "quiet_hours", "stop_all",
+                                     "revoked_at", "role_terms", "locations",
+                                     "allowed_attachments", "follow_up_limit"})
+    if unknown:
+        raise PolicyError(
+            f"a stored policy holds field(s) this version does not know: {', '.join(unknown)}")
+    pairs = content.get("allowed", [])
+    if not isinstance(pairs, list):
+        raise PolicyError("a stored policy carries its authorisations as a list of pairs")
+    allowed = set()
+    for pair in pairs:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise PolicyError("a stored authorisation is a [source, action] pair")
+        allowed.add((str(pair[0]), _as_action(pair[1])))
+    limits = content.get("daily_limits", {})
+    if not isinstance(limits, dict):
+        raise PolicyError("a stored policy carries its daily limits as an object")
+    quiet = content.get("quiet_hours")
+    if quiet is not None:
+        if not isinstance(quiet, list) or len(quiet) != 2:
+            raise PolicyError("stored quiet hours are a pair of hours")
+        quiet = (quiet[0], quiet[1])
+    stop_all = content.get("stop_all", False)
+    if not isinstance(stop_all, bool):
+        raise PolicyError("a stored policy's stop switch is true or false")
+    revoked_at = content.get("revoked_at")
+    if revoked_at is not None and not isinstance(revoked_at, str):
+        raise PolicyError("a stored policy records its revocation as a timestamp")
+    conditions: dict[str, object] = {}
+    for name in ("role_terms", "locations", "allowed_attachments"):
+        stored = content.get(name, [])
+        if not isinstance(stored, list):
+            raise PolicyError(f"a stored policy carries {name.replace('_', ' ')} as a list")
+        conditions[name] = frozenset(str(term) for term in stored)
+    follow_up_limit = content.get("follow_up_limit")
+    if follow_up_limit is not None and (isinstance(follow_up_limit, bool)
+                                        or not isinstance(follow_up_limit, int)):
+        raise PolicyError("a stored follow-up limit is a whole number of messages per job")
+    return GlobalPolicy(
+        allowed=frozenset(allowed),
+        daily_limits={_as_action(name): limit for name, limit in limits.items()},
+        quiet_hours=quiet, stop_all=stop_all, revoked_at=revoked_at,
+        follow_up_limit=follow_up_limit, **conditions,
+    )

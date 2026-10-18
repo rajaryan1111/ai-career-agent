@@ -5,6 +5,7 @@ Domain rules, validation, and form mapping live in ``core.py``, ``store.py``,
 ``validation.py``, and ``desktop_logic.py``; this module only wires them to widgets.
 """
 from __future__ import annotations
+import dataclasses
 import json
 import sqlite3
 import uuid
@@ -44,11 +45,54 @@ from .preparation import (
 from .store import PrivateWriteError, write_private_text_file
 from .worker import worker_status
 from .desktop_logic import (
-    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, JobSaveMode, activity_form_values, build_activity,
-    build_candidate_profile,
+    ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, ATTEMPT_STATE_LABELS, JobSaveMode,
+    RECONCILIATION_CHOICES, activity_form_values,
+    ARTIFACT_BUILD_KINDS, artifact_build_preamble, artifact_build_question, artifact_built_text,
+    artifact_citation_text, artifact_export_question, artifact_export_refusal_text,
+    artifact_export_text, artifact_id_from_choice, artifact_listing_choices, artifact_plan_text,
+    artifact_rebuild_text, artifact_state_text, artifact_strategy_choices, artifact_summary_text,
+    attempt_detail_text, attempt_rows, build_activity, build_candidate_profile,
     fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
-    plan_job_save, profile_fact_review, profile_fields_not_matching, profile_form_values,
+    notification_question, notification_summary_text, parse_notification_hour,
+    plan_job_save, policy_decision_text, policy_grant_question, policy_removal_question,
+    policy_revocation_question, policy_rows, policy_stop_question, policy_summary_text,
+    profile_fact_review, profile_fields_not_matching, profile_form_values,
+    condition_changes, condition_terms_text, conditions_question, conditions_summary_text,
+    parse_attachment_kinds, parse_condition_terms, parse_follow_up_limit, parse_quiet_hours,
+    reconciliation_question, reconciliation_refusal, report_summary_text,
     required_fact_questions, required_facts_to_confirm,
+    suppression_lift_question, suppression_lift_refusal, suppression_mark_question,
+    suppression_add_question, suppression_reason_choices, suppression_rows,
+    suppression_summary_text,
+    evidence_detail_text, evidence_kind_rows, evidence_record_question, evidence_route_rows,
+    evidence_summary_text, evidence_withdraw_question, source_detail_text, source_rows,
+    source_summary_text,
+    DISPATCH_CHECK_ORDER, address_from_choice, dispatch_question, dispatch_recipient_choices,
+    dispatch_result_text,
+)
+from .acceptance_evidence import EVIDENCE_TITLES, EvidenceError, EvidenceKind, get_route
+# Aliased on import: this module already has an ActionKind - the next-actions vocabulary - and the two
+# are about different things. A permission is not a to-do item, and conflating the names would be the
+# first step to conflating the ideas.
+from .policy import (
+    ACTION_LABELS as PERMISSION_LABELS, ActionKind as PermissionKind, GlobalPolicy, PolicyError,
+    evaluate_policy, no_authorisation,
+)
+from .sources import SOURCE_DECISIONS, discovery_gate, submission_gate
+from . import reporting
+from .attempts import AttemptError, AttemptState
+from .identity import identity_key
+from .suppression import (
+    PERMANENT_REASONS, REASON_LABELS, SuppressionError, SuppressionReason, normalise_address,
+)
+from .notifications import (
+    CHANNEL_LIMITS, Cadence, DeliveryChannel, NotificationError, NotificationPreferences,
+    notification_due,
+)
+from .artifacts import (
+    KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, ArtifactKind, StaleArtifactError,
+    export_artifact, lineage_status, plan_artifact, rebuild_artifact, require_current_artifact,
+    store_planned_artifact,
 )
 from . import contact_export, resume
 from .diagnostics import describe_startup_failure, record_startup_failure
@@ -104,6 +148,19 @@ def stored_status_text(row: dict | None) -> str:
 #: label standing in a narrow row beside a control is not part of this policy - it is wrapped to the width of
 #: the row it shares, which is smaller than any tab.
 _TAB_TEXT_WRAP = 780
+
+#: How a notification cadence is named on screen, and how the screen's words map back to the value.
+_CADENCE_LABELS = {
+    Cadence.OFF: "No report, thanks",
+    Cadence.DAILY: "Every day",
+    Cadence.WEEKLY: "Once a week",
+}
+
+#: Where a report may appear, each named with what it cannot do.
+_CHANNEL_LABELS = {
+    DeliveryChannel.IN_APP: "shown in this window",
+    DeliveryChannel.FILE: "written to a file on this machine",
+}
 
 #: How many recorded disagreements the review panel lists at once. The table behind it is bounded only by how
 #: many contradictory files a person imports, so the screen is not. The list keeps the store's own order
@@ -274,6 +331,10 @@ class CareerAgentApp:
         self.actions_tab = ttk.Frame(self.tabs, padding=12)
         self.history_tab = ttk.Frame(self.tabs, padding=12)
         self.contacts_tab = ttk.Frame(self.tabs, padding=12)
+        self.artifacts_tab = ttk.Frame(self.tabs, padding=12)
+        self.policy_tab = ttk.Frame(self.tabs, padding=12)
+        self.report_tab = ttk.Frame(self.tabs, padding=12)
+        self.evidence_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -283,6 +344,10 @@ class CareerAgentApp:
         self.tabs.add(self.data_tab, text="Data safety")
         self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.tabs.add(self.contacts_tab, text="HR contacts")
+        self.tabs.add(self.artifacts_tab, text="Tailored documents")
+        self.tabs.add(self.policy_tab, text="Permissions & limits")
+        self.tabs.add(self.report_tab, text="What's happening")
+        self.tabs.add(self.evidence_tab, text="Sources & evidence")
         # Whatever a person did in another tab, or a second window did to this database, the contacts tab
         # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
         # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
@@ -298,6 +363,10 @@ class CareerAgentApp:
         self._build_follow_ups()
         self._build_data_safety()
         self._build_scheduler()
+        self._build_artifacts()
+        self._build_policy()
+        self._build_report()
+        self._build_evidence()
         self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
@@ -310,6 +379,10 @@ class CareerAgentApp:
         self._refresh_actions()
         self._refresh_scheduler()
         self._refresh_contacts()
+        self._refresh_artifacts()
+        self._refresh_policy()
+        self._refresh_report()
+        self._refresh_evidence()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -664,6 +737,586 @@ class CareerAgentApp:
     # once before anything is written. There is no sending here and no matching to jobs: this increment
     # stores a reviewed list and nothing else.
 
+    def _build_report(self):
+        """The tab that answers "what has this been doing, and what needs me?".
+
+        Three panels, in the order a person needs them: what is unresolved (the only thing here
+        that cannot settle itself), the report built from the stored rows, and when this
+        application may tell them something. Everything is read from the database each time it is
+        drawn; nothing on this tab fetches, sends or submits.
+        """
+        body = self._scrollable_body(self.report_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Everything below is read from what is already written down in this database - "
+                "scheduled runs, your applications, attempts at outside actions, your permissions "
+                "and the source gates. Nothing here fetches anything, sends anything or submits "
+                "anything. Work that is queued is shown as a plan, never as something that "
+                "happened, and an attempt whose outcome nobody established stays unresolved until "
+                "you establish it: time does not settle one."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.report_summary = tk.StringVar(value="Reading what the records say...")
+        ttk.Label(body, textvariable=self.report_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+
+        controls = ttk.Frame(body)
+        controls.grid(row=2, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        self.report_window = tk.StringVar(value="the last day")
+        ttk.Label(controls, text="Covering").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        ttk.Combobox(controls, textvariable=self.report_window, state="readonly", width=18,
+                     values=("the last day", "the last seven days")).grid(row=0, column=1, sticky=W)
+        ttk.Button(controls, text="Refresh",
+                   command=self._refresh_report).grid(row=0, column=2, sticky=W, padx=(8, 0))
+
+        unresolved = ttk.Frame(body)
+        unresolved.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 8))
+        ttk.Label(unresolved, text="Attempts nobody has settled",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        ttk.Label(
+            unresolved,
+            text=("An attempt is listed here when this application may have done something outside "
+                  "this machine and nobody established what happened. It blocks any further attempt "
+                  "at the same job until you record what you found - which is the point, because a "
+                  "blind retry is how one application becomes two."),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        columns = ("operation", "action", "identity", "started", "state")
+        self.attempt_tree = ttk.Treeview(unresolved, columns=columns, show="headings", height=5)
+        for column, heading, width in (
+            ("operation", "Operation id", 230), ("action", "What was attempted", 150),
+            ("identity", "Which job", 230), ("started", "Started", 180),
+            ("state", "Recorded as", 170),
+        ):
+            self.attempt_tree.heading(column, text=heading)
+            self.attempt_tree.column(column, width=width, anchor=W)
+        self.attempt_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.attempt_tree.bind("<<TreeviewSelect>>", self._on_attempt_selection)
+        self.attempt_detail = tk.StringVar(value=attempt_detail_text(None))
+        ttk.Label(unresolved, textvariable=self.attempt_detail, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=3, column=0, columnspan=4, sticky=W, pady=(6, 6))
+        settle = ttk.Frame(unresolved)
+        settle.grid(row=4, column=0, columnspan=4, sticky=W)
+        ttk.Label(settle, text="What actually happened").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.attempt_outcome = tk.StringVar(value=RECONCILIATION_CHOICES[0][1])
+        ttk.Combobox(settle, textvariable=self.attempt_outcome, state="readonly", width=20,
+                     values=[label for _value, label in RECONCILIATION_CHOICES]).grid(
+                         row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(settle, text="What you found").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.attempt_evidence = tk.StringVar(value="")
+        ttk.Entry(settle, textvariable=self.attempt_evidence, width=46).grid(
+            row=0, column=3, sticky=W, padx=(0, 12))
+        self.attempt_settle_button = ttk.Button(
+            settle, text="Record what happened...", state="disabled",
+            command=self._reconcile_selected_attempt)
+        self.attempt_settle_button.grid(row=0, column=4, sticky=W)
+
+        report = ttk.Frame(body)
+        report.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+        ttk.Label(report, text="What the records say",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, sticky=W, pady=(0, 4))
+        self.report_text = tk.StringVar(value="Reading...")
+        ttk.Label(report, textvariable=self.report_text, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT, font=("TkFixedFont", 9)).grid(row=1, column=0, sticky=W)
+
+        notify = ttk.Frame(body)
+        notify.grid(row=5, column=0, columnspan=4, sticky="ew")
+        ttk.Label(notify, text="When this application may tell you something",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=6, sticky=W)
+        self.notification_summary = tk.StringVar(value="Reading your preference...")
+        ttk.Label(notify, textvariable=self.notification_summary,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=1, column=0, columnspan=6, sticky=W, pady=(0, 6))
+        self.notification_vars = {}
+        ttk.Label(notify, text="How often").grid(row=2, column=0, sticky=W, padx=(0, 5))
+        self.notification_vars["cadence"] = tk.StringVar(value=_CADENCE_LABELS[Cadence.OFF])
+        ttk.Combobox(notify, textvariable=self.notification_vars["cadence"], state="readonly",
+                     width=18, values=list(_CADENCE_LABELS.values())).grid(
+                         row=2, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(notify, text="From").grid(row=2, column=2, sticky=W, padx=(0, 5))
+        self.notification_vars["hour"] = tk.StringVar(value="9")
+        ttk.Entry(notify, textvariable=self.notification_vars["hour"], width=5).grid(
+            row=2, column=3, sticky=W, padx=(0, 12))
+        ttk.Label(notify, text="Where").grid(row=2, column=4, sticky=W, padx=(0, 5))
+        self.notification_vars["channel"] = tk.StringVar(
+            value=_CHANNEL_LABELS[DeliveryChannel.IN_APP])
+        ttk.Combobox(notify, textvariable=self.notification_vars["channel"], state="readonly",
+                     width=30, values=list(_CHANNEL_LABELS.values())).grid(
+                         row=2, column=5, sticky=W)
+        self.notification_vars["only_attention"] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(notify, text="Only when something needs me",
+                        variable=self.notification_vars["only_attention"]).grid(
+                            row=3, column=0, columnspan=3, sticky=W, pady=(6, 0))
+        ttk.Button(notify, text="Save this preference...",
+                   command=self._save_notification_preference).grid(
+                       row=3, column=5, sticky=W, pady=(6, 0))
+        ttk.Label(
+            notify,
+            text=("There is no email, no push and no system notification in this build: a report is "
+                  "prepared where you can already see it, and nothing reaches you while this window "
+                  "is closed."),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=4, column=0, columnspan=6, sticky=W, pady=(6, 0))
+        body.columnconfigure(0, weight=1)
+        #: The unresolved attempts the list was drawn from, so a control acts on what is on screen.
+        self._attempts_shown: dict[str, object] = {}
+
+    def _refresh_report(self):
+        """Re-read everything this tab shows. Reads only; never writes and never opens a dialog."""
+        if not hasattr(self, "attempt_tree"):
+            return
+        weekly = self.report_window.get().strip().casefold().endswith("seven days")
+        try:
+            report = (reporting.weekly_report(self.store) if weekly
+                      else reporting.daily_report(self.store))
+            unresolved = self.store.unresolved_attempts()
+            preferences = self.store.get_notification_preferences()
+            policy = self.store.get_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except (reporting.ReportError, NotificationError) as exc:
+            self.report_summary.set(f"This tab could not be drawn: {exc}")
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_attempt_id()
+        self._clear_tree(self.attempt_tree)
+        self._attempts_shown = {record.operation_id: record for record in unresolved}
+        for row in attempt_rows(unresolved):
+            self.attempt_tree.insert("", END, iid=row[0], values=row)
+        self.report_summary.set(
+            report_summary_text(report.headline(), report.attention_count))
+        self.report_text.set("\n".join(report.describe()[1:]))
+        quiet = getattr(policy, "quiet_hours", None)
+        try:
+            decision = notification_due(
+                preferences, now=datetime.now(timezone.utc), last_delivered_at=None,
+                quiet_hours=quiet, attention_count=report.attention_count,
+                stopped=bool(policy.stop_all or policy.revoked_at))
+            decision_text = decision.describe()
+        except NotificationError as exc:
+            decision_text = f"Whether a report is due could not be decided: {exc}"
+        self.notification_summary.set(
+            notification_summary_text(preferences.describe(), decision_text, quiet))
+        self.notification_vars["cadence"].set(_CADENCE_LABELS[preferences.cadence])
+        self.notification_vars["hour"].set(str(preferences.hour))
+        self.notification_vars["channel"].set(_CHANNEL_LABELS[preferences.channel])
+        self.notification_vars["only_attention"].set(preferences.only_when_attention)
+        if selected in self._attempts_shown:  # the row the person was looking at is still unsettled
+            self.attempt_tree.selection_set(selected)
+        self._on_attempt_selection()
+
+    def _selected_attempt_id(self) -> str | None:
+        """The operation id selected in the list, or ``None``. Reads the screen, not the database."""
+        if not hasattr(self, "attempt_tree"):
+            return None
+        selection = self.attempt_tree.selection()
+        return str(selection[0]) if selection else None
+
+    def _on_attempt_selection(self, _event=None) -> None:
+        """Describe the selected attempt, and only offer to settle one when one is selected."""
+        selected = self._selected_attempt_id()
+        record = self._attempts_shown.get(selected) if selected else None
+        self.attempt_detail.set(attempt_detail_text(record))
+        self.attempt_settle_button.configure(state="normal" if record is not None else "disabled")
+
+    def _reconcile_selected_attempt(self) -> None:
+        """Settle one unresolved attempt by hand, with evidence, after one explicit yes."""
+        selected = self._selected_attempt_id()
+        record = self._attempts_shown.get(selected) if selected else None
+        if record is None:
+            self.status.set("Select an attempt in the list first; nothing was changed.")
+            return
+        evidence = self.attempt_evidence.get()
+        refusal = reconciliation_refusal(evidence)
+        if refusal is not None:
+            messagebox.showerror("Nothing was recorded", refusal, parent=self.root)
+            self.status.set("Nothing was recorded; an outcome needs the evidence for it.")
+            return
+        label = self.attempt_outcome.get().strip()
+        chosen = next((value for value, text in RECONCILIATION_CHOICES if text == label), None)
+        if chosen is None:
+            self.status.set("Choose what actually happened first; nothing was changed.")
+            return
+        if not messagebox.askyesno("Record this outcome",
+                                   reconciliation_question(record.operation_id, label, evidence),
+                                   parent=self.root):
+            self.status.set("Nothing was recorded; the attempt is still unresolved.")
+            return
+        try:
+            self.store.reconcile_attempt(record.operation_id, state=AttemptState(chosen),
+                                         evidence=evidence.strip())
+        except AttemptError as exc:
+            messagebox.showerror("Nothing was recorded", str(exc), parent=self.root)
+            self.status.set("Nothing was recorded; the attempt is still unresolved.")
+            self._refresh_report()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.attempt_evidence.set("")
+        self._refresh_report()
+        self.status.set(
+            f"{record.operation_id} is recorded as “{label}” with your evidence. Further attempts "
+            f"at this job are no longer blocked by it.")
+
+    def _save_notification_preference(self) -> None:
+        """Store when this application may tell the person something, after one explicit yes."""
+        cadence_label = self.notification_vars["cadence"].get().strip()
+        cadence = next((kind for kind, text in _CADENCE_LABELS.items() if text == cadence_label),
+                       None)
+        channel_label = self.notification_vars["channel"].get().strip()
+        channel = next((kind for kind, text in _CHANNEL_LABELS.items() if text == channel_label),
+                       None)
+        if cadence is None or channel is None:
+            self.status.set("Choose how often and where first; nothing was changed.")
+            return
+        try:
+            hour = parse_notification_hour(self.notification_vars["hour"].get())
+            preferences = NotificationPreferences(
+                cadence=cadence, hour=hour, channel=channel,
+                only_when_attention=bool(self.notification_vars["only_attention"].get()))
+        except (ValueError, NotificationError) as exc:
+            messagebox.showerror("Preference not saved", str(exc), parent=self.root)
+            self.status.set("Your notification preference was not changed.")
+            return
+        if not messagebox.askyesno("Save this preference",
+                                   notification_question(cadence_label, hour, channel_label),
+                                   parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        try:
+            self.store.save_notification_preferences(preferences)
+        except (NotificationError, StoredRecordError) as exc:
+            messagebox.showerror("Preference not saved", str(exc), parent=self.root)
+            self.status.set("Your notification preference was not changed.")
+            self._refresh_report()
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_report()
+        self.status.set("Saved. Nothing is sent anywhere; a report is prepared where you can see it.")
+
+    def _build_evidence(self):
+        """The tab that answers "why is nothing being fetched, and what would change that?".
+
+        Two panels. The first is the reviewed source decisions with each gate's own answer, so the
+        reason a source is closed is a sentence rather than a silence. The second is the written
+        acceptance requirements per route, with whatever evidence has been recorded in this
+        database against them - held, missing, and what each one means.
+
+        Nothing on this tab fetches, sends or submits, and nothing on it switches anything on.
+        Recording evidence writes a row and changes no gate: enabling a source remains a separate,
+        deliberate change made by somebody who has read what is recorded here.
+        """
+        body = self._scrollable_body(self.evidence_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Two different questions live on this tab. Above: the sources this project "
+                "reviewed, what was decided about each one, and exactly what is holding it closed "
+                "today. Below: what each application route would have to prove before anybody "
+                "could sensibly open it, and what you have written down so far. The second does "
+                "not unlock the first - recording evidence is a note for whoever decides, not the "
+                "decision."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+
+        sources_panel = ttk.Frame(body)
+        sources_panel.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        ttk.Label(sources_panel, text="Where jobs could come from, and why they do not",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        self.source_summary = tk.StringVar(value=source_summary_text())
+        ttk.Label(sources_panel, textvariable=self.source_summary,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=1, column=0, columnspan=4, sticky=W, pady=(2, 6))
+        columns = ("source", "name", "decision", "discovery", "submission")
+        self.source_tree = ttk.Treeview(sources_panel, columns=columns, show="headings", height=6)
+        for column, heading, width in (
+            ("source", "Source id", 150), ("name", "What it is", 300),
+            ("decision", "The review decided", 170), ("discovery", "Reading", 90),
+            ("submission", "Submitting", 100),
+        ):
+            self.source_tree.heading(column, text=heading)
+            self.source_tree.column(column, width=width, anchor=W)
+        self.source_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.source_tree.bind("<<TreeviewSelect>>", self._on_source_selection)
+        self.source_detail = tk.StringVar(value=source_detail_text(""))
+        ttk.Label(sources_panel, textvariable=self.source_detail,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=3, column=0, columnspan=4, sticky=W, pady=(6, 0))
+
+        evidence = ttk.Frame(body)
+        evidence.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(4, 8))
+        ttk.Label(evidence, text="What a route would have to prove first",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        self.evidence_summary = tk.StringVar(value="Reading what is recorded...")
+        ttk.Label(evidence, textvariable=self.evidence_summary, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(2, 6))
+        columns = ("route", "name", "recorded", "state")
+        self.evidence_route_tree = ttk.Treeview(evidence, columns=columns, show="headings",
+                                                height=6)
+        for column, heading, width in (
+            ("route", "Route id", 150), ("name", "Where it would apply", 300),
+            ("recorded", "Recorded", 150), ("state", "Standing", 220),
+        ):
+            self.evidence_route_tree.heading(column, text=heading)
+            self.evidence_route_tree.column(column, width=width, anchor=W)
+        self.evidence_route_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.evidence_route_tree.bind("<<TreeviewSelect>>", self._on_evidence_route_selection)
+        columns = ("kind", "title", "held", "recorded")
+        self.evidence_kind_tree = ttk.Treeview(evidence, columns=columns, show="headings", height=9)
+        for column, heading, width in (
+            ("kind", "Requirement", 180), ("title", "In short", 300),
+            ("held", "Held or missing", 130), ("recorded", "Recorded on", 120),
+        ):
+            self.evidence_kind_tree.heading(column, text=heading)
+            self.evidence_kind_tree.column(column, width=width, anchor=W)
+        self.evidence_kind_tree.grid(row=3, column=0, columnspan=4, sticky="nsew", pady=(8, 0))
+        self.evidence_kind_tree.bind("<<TreeviewSelect>>", self._on_evidence_kind_selection)
+        self.evidence_detail = tk.StringVar(value=evidence_detail_text("", None, None))
+        ttk.Label(evidence, textvariable=self.evidence_detail, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=4, column=0, columnspan=4, sticky=W, pady=(6, 6))
+
+        controls = ttk.Frame(evidence)
+        controls.grid(row=5, column=0, columnspan=4, sticky=W)
+        ttk.Label(controls, text="Where to check it").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.evidence_reference = tk.StringVar(value="")
+        ttk.Entry(controls, textvariable=self.evidence_reference, width=40).grid(
+            row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(controls, text="What you checked").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.evidence_note = tk.StringVar(value="")
+        ttk.Entry(controls, textvariable=self.evidence_note, width=44).grid(
+            row=0, column=3, sticky=W, padx=(0, 12))
+        self.evidence_record_button = ttk.Button(
+            controls, text="Record this evidence...", state="disabled",
+            command=self._record_selected_evidence)
+        self.evidence_record_button.grid(row=0, column=4, sticky=W, padx=(0, 8))
+        self.evidence_withdraw_button = ttk.Button(
+            controls, text="Withdraw it...", state="disabled",
+            command=self._withdraw_selected_evidence)
+        self.evidence_withdraw_button.grid(row=0, column=5, sticky=W)
+        ttk.Label(
+            evidence,
+            text=(
+                "A reference is anything another person could open - a link, a file in this "
+                "repository, a message id. A note says what you actually checked. Both are "
+                "required, an already-recorded requirement is never written over, and withdrawing "
+                "one needs a reason in the same box. The event log keeps the route and the "
+                "requirement only: what you type stays in this database."
+            ),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=6, column=0, columnspan=4, sticky=W, pady=(8, 0))
+
+        ttk.Label(
+            body,
+            text=(
+                "Nothing on this tab switches anything on. The source-quality gate is a decision "
+                "in this build's code, not a row in your database, and discovery, submission, "
+                "outbound email and inbox reading are gated separately: evidence for one of them "
+                "opens none of the others."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=3, column=0, columnspan=4, sticky=W, pady=(6, 0))
+
+    def _refresh_evidence(self):
+        """Re-read the sources and the recorded evidence. Reads only; never opens a dialog."""
+        if not hasattr(self, "evidence_route_tree"):
+            return
+        self._clear_tree(self.source_tree)
+        for row in source_rows():
+            self.source_tree.insert("", END, iid=row[0], values=row)
+        self.source_summary.set(source_summary_text())
+        try:
+            held = self.store.evidence_held_by_route()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected_route = self._selected_evidence_route()
+        selected_kind = self._selected_evidence_kind()
+        self._clear_tree(self.evidence_route_tree)
+        for row in evidence_route_rows(held):
+            self.evidence_route_tree.insert("", END, iid=row[0], values=row)
+        self.evidence_summary.set(evidence_summary_text(held))
+        if selected_route is not None and get_route(selected_route) is not None:
+            self.evidence_route_tree.selection_set(selected_route)
+        self._on_evidence_route_selection(restore=selected_kind)
+        self._on_source_selection()
+
+    def _selected_source_id(self) -> str | None:
+        """The source id selected in the list, or ``None``. Reads the screen, not the database."""
+        if not hasattr(self, "source_tree"):
+            return None
+        chosen = self.source_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _on_source_selection(self, _event=None) -> None:
+        """Describe the selected source: what was decided, and what each gate answers today."""
+        self.source_detail.set(source_detail_text(self._selected_source_id() or ""))
+
+    def _selected_evidence_route(self) -> str | None:
+        """The route id selected in the list, or ``None``."""
+        if not hasattr(self, "evidence_route_tree"):
+            return None
+        chosen = self.evidence_route_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _selected_evidence_kind(self) -> str | None:
+        """The requirement selected in the list, or ``None``."""
+        if not hasattr(self, "evidence_kind_tree"):
+            return None
+        chosen = self.evidence_kind_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _evidence_records(self, route_id: str) -> tuple:
+        """What is recorded for one route, or an empty list if a row cannot be read."""
+        try:
+            return self.store.list_route_evidence(route_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return ()
+        except (EvidenceError, sqlite3.Error):
+            return ()
+
+    def _on_evidence_route_selection(self, _event=None, *, restore: str | None = None) -> None:
+        """Redraw the requirement list for the selected route, keeping the requirement in view."""
+        route_id = self._selected_evidence_route()
+        self._clear_tree(self.evidence_kind_tree)
+        self._evidence_shown = {}
+        if route_id is not None:
+            records = self._evidence_records(route_id)
+            self._evidence_shown = {record.kind.value: record for record in records}
+            for row in evidence_kind_rows(route_id, records):
+                self.evidence_kind_tree.insert("", END, iid=row[0], values=row)
+            route = get_route(route_id)
+            known = route is not None and any(kind.value == restore for kind in route.kinds)
+            if restore and known:  # keep the requirement the person was reading in view
+                self.evidence_kind_tree.selection_set(restore)
+        self._on_evidence_kind_selection()
+
+    def _on_evidence_kind_selection(self, _event=None) -> None:
+        """Describe the selected requirement, and offer only the action that makes sense for it."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        kind = None
+        if kind_value is not None:
+            try:
+                kind = EvidenceKind(kind_value)
+            except ValueError:
+                kind = None
+        record = getattr(self, "_evidence_shown", {}).get(kind_value) if kind_value else None
+        self.evidence_detail.set(evidence_detail_text(route_id or "", kind, record))
+        has_requirement = route_id is not None and kind is not None
+        self.evidence_record_button.configure(
+            state="normal" if has_requirement and record is None else "disabled")
+        self.evidence_withdraw_button.configure(
+            state="normal" if has_requirement and record is not None else "disabled")
+
+    def _record_selected_evidence(self) -> None:
+        """Write down one piece of acceptance evidence, after one explicit yes. Enables nothing."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        if route_id is None or kind_value is None:
+            self.status.set("Select a route and a requirement first; nothing was recorded.")
+            return
+        try:
+            kind = EvidenceKind(kind_value)
+        except ValueError:
+            self.status.set("That requirement is not one this build knows; nothing was recorded.")
+            return
+        reference, note = self.evidence_reference.get(), self.evidence_note.get()
+        if len(reference.strip()) < 4:
+            messagebox.showerror(
+                "Nothing was recorded",
+                "Evidence needs a reference - a link, a file name, a message id - that somebody "
+                "else can go and check. Nothing was recorded.", parent=self.root)
+            self.status.set("Nothing was recorded; evidence needs something to check.")
+            return
+        if len(note.strip()) < 8:
+            messagebox.showerror(
+                "Nothing was recorded",
+                "Evidence needs a short note saying what you actually checked, of at least eight "
+                "characters. Nothing was recorded.", parent=self.root)
+            self.status.set("Nothing was recorded; evidence needs a note of what you checked.")
+            return
+        if not messagebox.askyesno(
+                "Record this evidence",
+                evidence_record_question(route_id, kind, reference, note), parent=self.root):
+            self.status.set("Nothing was recorded.")
+            return
+        try:
+            self.store.record_route_evidence(route_id, kind, reference=reference, note=note)
+        except EvidenceError as exc:
+            messagebox.showerror("Nothing was recorded", str(exc), parent=self.root)
+            self.status.set("Nothing was recorded.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.evidence_reference.set("")
+        self.evidence_note.set("")
+        self._refresh_evidence()
+        self.status.set(
+            f"Recorded {EVIDENCE_TITLES[kind].lower()} for {route_id}; nothing was switched on.")
+
+    def _withdraw_selected_evidence(self) -> None:
+        """Remove one recorded piece of evidence, with a reason, after one explicit yes."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        if route_id is None or kind_value is None:
+            self.status.set("Select a route and a requirement first; nothing was changed.")
+            return
+        try:
+            kind = EvidenceKind(kind_value)
+        except ValueError:
+            self.status.set("That requirement is not one this build knows; nothing was changed.")
+            return
+        note = self.evidence_note.get()
+        if len(note.strip()) < 4:
+            messagebox.showerror(
+                "Nothing was changed",
+                "Withdrawing evidence needs a short reason, of at least four characters, in the "
+                "box marked 'What you checked'. Nothing was changed.", parent=self.root)
+            self.status.set("Nothing was changed; withdrawing evidence needs a reason.")
+            return
+        if not messagebox.askyesno(
+                "Withdraw this evidence",
+                evidence_withdraw_question(route_id, kind, note), parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        try:
+            removed = self.store.withdraw_route_evidence(route_id, kind, note=note)
+        except EvidenceError as exc:
+            messagebox.showerror("Nothing was changed", str(exc), parent=self.root)
+            self.status.set("Nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.evidence_note.set("")
+        self._refresh_evidence()
+        self.status.set(
+            f"Withdrew {EVIDENCE_TITLES[kind].lower()} for {route_id}; that route now misses it."
+            if removed else "There was nothing recorded to withdraw; nothing was changed.")
+
     def _build_contacts(self):
         """The tab about the contact list: what the chosen file holds, and what storing it would do.
 
@@ -742,7 +1395,18 @@ class CareerAgentApp:
         # the platforms whose default font is not this one, and Tk clips rather than wrapping a row.
         note_row = ttk.Frame(body)
         note_row.grid(row=11, column=0, columnspan=2, sticky=W, pady=(4, 0))
-        ttk.Label(note_row, text="Reason (optional):").pack(side="left")
+        # The chooser carries the suppression module's own five reasons and no sixth: this window may
+        # not invent a reason the rest of the application has no rule for.
+        ttk.Label(note_row, text="Why:").pack(side="left")
+        self.contact_reason = tk.StringVar(value=REASON_LABELS[SuppressionReason.ASKED_TO_STOP])
+        self.contact_reason_box = ttk.Combobox(
+            note_row, textvariable=self.contact_reason, state="disabled", width=30,
+            values=[label for _value, label in suppression_reason_choices()])
+        self.contact_reason_box.pack(side="left", padx=(4, 10))
+        # The note is needed in both directions now: it is stored with a mark, and a removal will not
+        # happen without one, because an entry taken off this list with no note cannot be told apart
+        # from a mistake. So the box is enabled whenever a stored contact is selected.
+        ttk.Label(note_row, text="Note (needed to take a mark off):").pack(side="left")
         self.contact_note = tk.StringVar()
         self.contact_note_entry = ttk.Entry(note_row, textvariable=self.contact_note, width=24,
                                             state="disabled")
@@ -763,12 +1427,56 @@ class CareerAgentApp:
                 "already recorded with it."
             ),
         ).grid(row=13, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        # The list the sending gate actually reads, in the window for the first time. It is shown here,
+        # beside the mark that writes it, because a person who marks somebody "do not contact" means one
+        # thing by it - and until this panel existed the window wrote a column nothing enforced while the
+        # list ``guarded_dispatch`` checks was reachable only from Python.
+        self.suppression_summary = tk.StringVar(value="Reading the do-not-contact list...")
+        ttk.Label(body, text="The do-not-contact list this application checks before anything is sent").grid(
+            row=14, column=0, columnspan=2, sticky=W, pady=(12, 2))
+        ttk.Label(body, textvariable=self.suppression_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=15, column=0, columnspan=2, sticky=W, pady=(0, 4))
+        self.suppression_tree = ttk.Treeview(
+            body, columns=("address", "reason", "recorded", "note"), show="headings", height=5)
+        for column, heading, width in (("address", "Address", 240), ("reason", "Why", 240),
+                                       ("recorded", "Recorded", 150), ("note", "Note", 140)):
+            self.suppression_tree.heading(column, text=heading)
+            self.suppression_tree.column(column, width=width, anchor=W)
+        self.suppression_tree.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        # Somebody can ask to stop without ever having been in a file you imported - a reply, a call, a
+        # message to a different address than the one on the list. Until now the only way onto the list
+        # was through a stored contact row, which meant the one person whose wishes this list exists for
+        # could be the one person it could not record.
+        add_stop = ttk.Frame(body)
+        add_stop.grid(row=17, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ttk.Label(add_stop, text="Add an address that is not in your contacts").grid(
+            row=0, column=0, sticky=W, padx=(0, 5))
+        self.suppression_address = tk.StringVar(value="")
+        ttk.Entry(add_stop, textvariable=self.suppression_address, width=34).grid(
+            row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(add_stop, text="Why").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.suppression_add_reason = tk.StringVar(value=suppression_reason_choices()[0][1])
+        ttk.Combobox(add_stop, textvariable=self.suppression_add_reason, state="readonly", width=26,
+                     values=[label for _value, label in suppression_reason_choices()]).grid(
+                         row=0, column=3, sticky=W, padx=(0, 12))
+        ttk.Button(add_stop, text="Add to the do-not-contact list...",
+                   command=self._add_suppression).grid(row=0, column=4, sticky=W)
+        ttk.Label(
+            body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+            text=(
+                "This list is checked before any outbound action is attempted, and a refused one is "
+                "never recorded as an attempt. Nothing on it expires, no import can clear it, and the "
+                "text of a note is never shown here, logged or put in an event - only that one exists. "
+                "An address can be on this list without being in the stored contacts above: the list is "
+                "about addresses, not about rows in a file you imported."
+            ),
+        ).grid(row=18, column=0, columnspan=2, sticky=W, pady=(4, 0))
         # The one destructive action on this tab, on its own row and under its own sentence. It is not
         # beside the mark controls for two reasons: erasing a record is not another way of annotating one,
         # and a row holding these three labels plus this button is wider than the narrowest page this tab
         # can be given - Tk clips a row rather than wrapping it.
         delete_row = ttk.Frame(body)
-        delete_row.grid(row=14, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        delete_row.grid(row=19, column=0, columnspan=2, sticky=W, pady=(10, 0))
         # Built disabled and enabled only while a stored row is selected, like the two mark controls: a
         # destructive button that cannot act is better off greyed out than offering something it will refuse.
         self.delete_contact_button = ttk.Button(
@@ -786,7 +1494,7 @@ class CareerAgentApp:
             "way, and the delete key in this window never removes a contact file."
         ))
         ttk.Label(body, textvariable=self.contact_delete_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=15, column=0, columnspan=2, sticky=W, pady=(4, 0))
+                  justify=LEFT).grid(row=20, column=0, columnspan=2, sticky=W, pady=(4, 0))
         ttk.Label(
             body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=(
@@ -796,9 +1504,9 @@ class CareerAgentApp:
                 "where the file says, or whether this list may be used for outreach at all. A stored "
                 "contact is never written to, and no send button exists in this build."
             ),
-        ).grid(row=16, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        ).grid(row=21, column=0, columnspan=2, sticky=W, pady=(10, 0))
         ttk.Label(body, text="Recorded disagreements (nothing here is merged or changed)").grid(
-            row=17, column=0, columnspan=2, sticky=W, pady=(12, 2))
+            row=22, column=0, columnspan=2, sticky=W, pady=(12, 2))
         # One disagreement per row, oldest first, in the store's own order. The columns carry the compact
         # facts and the panel below carries the two values in full: a list cell is one line and Tk clips it,
         # and a name that disagrees with another name is exactly the thing that must not be clipped.
@@ -812,13 +1520,13 @@ class CareerAgentApp:
                 ("recorded_at", "Recorded at", 150)):
             self.contact_conflicts_tree.heading(column, text=heading)
             self.contact_conflicts_tree.column(column, width=width, anchor=W)
-        self.contact_conflicts_tree.grid(row=18, column=0, columnspan=2, sticky="nsew")
+        self.contact_conflicts_tree.grid(row=23, column=0, columnspan=2, sticky="nsew")
         self.contact_conflicts_tree.bind("<<TreeviewSelect>>", self._on_conflict_selection)
         self.contact_conflict_note = tk.StringVar(value="Reading the recorded disagreements...")
         ttk.Label(body, textvariable=self.contact_conflict_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=19, column=0, columnspan=2, sticky=W, pady=(6, 0))
+                  justify=LEFT).grid(row=24, column=0, columnspan=2, sticky=W, pady=(6, 0))
         self.contact_conflict_text = tk.Text(body, height=8, wrap="word", state="disabled")
-        self.contact_conflict_text.grid(row=20, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.contact_conflict_text.grid(row=25, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         # The sentence this panel exists to make unnecessary to guess at: what it does, what it refuses to
         # do, and why the database is the thing that decides which value it keeps.
         ttk.Label(
@@ -831,16 +1539,16 @@ class CareerAgentApp:
                 "shows them, changes nothing, and cannot dismiss a disagreement. Select a row above to read "
                 "both sides in full."
             ),
-        ).grid(row=21, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ).grid(row=26, column=0, columnspan=2, sticky=W, pady=(6, 0))
         # The export lives at the bottom of this tab, under its own heading and its own sentence, because
         # it is the one control here that writes a file outside the database. The sentence is a variable
         # rather than a literal so what the window claims about the file - including the part it cannot do
         # - is read back by a test rather than only drawn, and the part about the mark comes from the
         # format module, so the window and the command line cannot describe it differently.
         ttk.Label(body, text="Take a copy of the stored list (a CSV file you choose)").grid(
-            row=22, column=0, columnspan=2, sticky=W, pady=(12, 2))
+            row=26, column=0, columnspan=2, sticky=W, pady=(12, 2))
         export_row = ttk.Frame(body)
-        export_row.grid(row=23, column=0, columnspan=2, sticky=W)
+        export_row.grid(row=27, column=0, columnspan=2, sticky=W)
         self.export_contacts_button = ttk.Button(export_row, text="Export the stored list...",
                                                  command=self._export_contacts)
         self.export_contacts_button.pack(side="left")
@@ -854,7 +1562,7 @@ class CareerAgentApp:
             "exporting changes nothing in this database."
         ))
         ttk.Label(body, textvariable=self.contact_export_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=24, column=0, columnspan=2, sticky=W, pady=(4, 0))
+                  justify=LEFT).grid(row=28, column=0, columnspan=2, sticky=W, pady=(4, 0))
         body.columnconfigure(0, weight=1)
 
     def _choose_contact_csv(self):
@@ -1002,6 +1710,10 @@ class CareerAgentApp:
             f"do-not-contact · {counts['with_review_flags']} carrying a review flag · "
             f"{counts['conflicts']} disagreement(s) kept for review. Nothing here has been contacted.")
         self._sync_contact_actions()
+        # The enforced list is part of the same read, for the same reason: a window that showed a mark
+        # on a contact row beside a stale list of the addresses the sending gate refuses would be the
+        # worse half of both.
+        self._refresh_suppressions()
         # The disagreements are part of the same read: a screen that showed a new conflict count beside a
         # stale list of them would be the worse half of both.
         self._refresh_contact_conflicts()
@@ -1058,6 +1770,7 @@ class CareerAgentApp:
             self.mark_contact_button.state(["disabled"])
             self.clear_contact_button.state(["disabled"])
             self.contact_note_entry.state(["disabled"])
+            self.contact_reason_box.state(["disabled"])
             self.delete_contact_button.state(["disabled"])
             self.contact_mark_state.set(
                 "No stored contact is selected. Select a row in the list above to mark it, to clear the "
@@ -1066,7 +1779,14 @@ class CareerAgentApp:
             return
         self.mark_contact_button.state(["disabled"] if chosen.suppressed else ["!disabled"])
         self.clear_contact_button.state(["!disabled"] if chosen.suppressed else ["disabled"])
-        self.contact_note_entry.state(["disabled"] if chosen.suppressed else ["!disabled"])
+        # The note is enabled in both directions: it is stored with a mark, and a removal is refused
+        # without one. It used to be disabled the moment a contact carried a mark, which left the only
+        # control that can take the address off the enforced list with nowhere to type the note that
+        # list requires.
+        self.contact_note_entry.state(["!disabled"])
+        # The reason belongs to the mark, not to the removal: a removal is recorded against whatever
+        # reason is already stored, and offering a chooser there would imply it could be rewritten.
+        self.contact_reason_box.state(["disabled"] if chosen.suppressed else ["!disabled"])
         # Deleting applies to any selected record, marked or not: the mark is a reason to be careful about
         # contacting somebody, never a reason to keep their record, and this window does not decide which
         # records a person is allowed to remove from their own database.
@@ -1074,12 +1794,133 @@ class CareerAgentApp:
         position = [record.contact_id for record in records].index(chosen.contact_id) + 1
         if chosen.suppressed:
             reason = "a reason is recorded with it" if chosen.suppressed_note else "no reason is recorded with it"
-            state = f"Marked do not contact, and {reason}."
+            listed = self._suppression_entry_for(chosen.email)
+            where = ("and the address is on the do-not-contact list this application checks"
+                     if listed is not None else
+                     "and the address is NOT on the list this application checks, because it was marked "
+                     "before this window wrote both; marking it again puts it on the list")
+            state = f"Marked do not contact, {reason}, {where}."
         else:
-            state = ("Not marked do not contact. A reason typed below is recorded with the mark when you "
-                     "press the mark button.")
+            state = ("Not marked do not contact. The reason you choose and the note you type are recorded "
+                     "with the mark, and the address goes on the list this application checks before "
+                     "anything may be sent.")
         self.contact_mark_state.set(
             f"Selected contact {position} of {len(records)} in the stored list: {state}")
+
+    def _suppression_entries(self):
+        """Every address on the enforced do-not-contact list, oldest first. Reads only."""
+        try:
+            return self.store.list_suppressions()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+        return ()
+
+    def _suppression_entry_for(self, address: str):
+        """The enforced entry for one address, or ``None``. Never raises at a caller that is drawing."""
+        try:
+            return self.store.suppression_for(address)
+        except (StoredRecordError, sqlite3.Error):
+            # A damaged or unavailable row is reported by the refresh that owns the panel; a control
+            # deciding what to offer must not open a second dialog about the same fault.
+            return None
+
+    def _chosen_suppression_reason(self) -> SuppressionReason:
+        """The reason the chooser is showing, as the stored value the suppression module defines."""
+        label = self.contact_reason.get().strip()
+        for reason, text in REASON_LABELS.items():
+            if text == label:
+                return reason
+        # The chooser is read-only in the window, so this is reachable only if a label was set in code.
+        # Falling back to the permanent reason would overstate what somebody asked for; the mildest
+        # reason is the honest default, and the chooser shows what was recorded afterwards.
+        return SuppressionReason.OUR_OWN_DECISION
+
+    def _add_suppression(self) -> None:
+        """Put an address on the do-not-contact list without it being one of your stored contacts.
+
+        The list is about addresses, not about rows in a file somebody imported, and the person most
+        likely to have asked to stop is exactly the one whose address is not in that file. The
+        address is checked the same way every other address in this application is - the window
+        refuses an unusable one rather than storing something the sending gate could never match -
+        and a second record for an address already listed keeps the first reason, because the
+        earliest reason is the truest one.
+        """
+        # Surrounding spaces are trimmed before the address is checked, unlike a recipient typed for
+        # a draft: this box adds an address to a list that *stops* messages, so a pasted address with
+        # a stray space is worth accepting rather than arguing with. Every other rule still applies.
+        typed = self.suppression_address.get().strip()
+        try:
+            address = integrations.validate_email_address(typed)
+        except ValueError as exc:
+            messagebox.showerror(
+                "The do-not-contact list was not changed",
+                f"{exc} Nothing was changed.", parent=self.root)
+            self.status.set("The do-not-contact list was not changed; that address cannot be used.")
+            return
+        label = self.suppression_add_reason.get().strip()
+        chosen = next((value for value, text in suppression_reason_choices() if text == label), "")
+        try:
+            # The chooser carries the stored values, not the enum members; a label this build does
+            # not know would otherwise become a reason nobody chose.
+            reason = SuppressionReason(chosen)
+        except ValueError:
+            reason = SuppressionReason.OUR_OWN_DECISION
+        key = normalise_address(address)
+        try:
+            existing = self.store.suppression_for(key)
+        except (SuppressionError, StoredRecordError):
+            existing = None
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if existing is not None:
+            messagebox.showinfo(
+                "Already on the list",
+                f"{key} is already on the do-not-contact list, recorded "
+                f"{existing.recorded_at}. The first reason recorded is kept: an address somebody "
+                f"asked to be left alone at must not quietly become something milder.",
+                parent=self.root)
+            self.status.set("Nothing was changed; that address is already on the list.")
+            return
+        if not messagebox.askyesno(
+                "Add to the do-not-contact list",
+                suppression_add_question(key, reason), parent=self.root):
+            self.status.set("The do-not-contact list was not changed.")
+            return
+        try:
+            self.store.suppress_contact(key, reason=reason)
+        except (SuppressionError, StoredRecordError) as exc:
+            messagebox.showerror("The do-not-contact list was not changed", str(exc),
+                                 parent=self.root)
+            self.status.set("The do-not-contact list was not changed.")
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.suppression_address.set("")
+        self._refresh_contacts()
+        self._refresh_follow_up_recipients()
+        self.status.set(
+            f"{key} is on the do-not-contact list; nothing was sent and nothing else changed.")
+
+    def _refresh_suppressions(self):
+        """Re-draw the enforced do-not-contact list and the line above it. Read-only."""
+        if not hasattr(self, "suppression_tree"):
+            return
+        entries = self._suppression_entries()
+        try:
+            marked = [record for record in self.store.list_contacts() if record.suppressed]
+        except (StoredRecordError, sqlite3.Error):
+            marked = []
+        listed_keys = {normalise_address(entry.address) for entry in entries}
+        unlisted = sum(1 for record in marked if normalise_address(record.email) not in listed_keys)
+        self._clear_tree(self.suppression_tree)
+        for entry, row in zip(entries, suppression_rows(entries)):
+            self.suppression_tree.insert("", END, iid=normalise_address(entry.address), values=row)
+        self.suppression_summary.set(
+            suppression_summary_text(len(entries), len(marked), unlisted))
 
     def _mark_selected_contact(self):
         """Mark the selected stored contact as do not contact, after one confirmation."""
@@ -1138,7 +1979,17 @@ class CareerAgentApp:
             self.status.set("That contact's mark is already what was asked for; nothing was changed.")
             self._refresh_contacts()
             return
-        note = self.contact_note.get().strip() if suppressed else ""
+        note = self.contact_note.get().strip()
+        listed = self._suppression_entry_for(chosen.email)
+        listed_label = None if listed is None else REASON_LABELS.get(listed.reason, listed.reason.value)
+        if not suppressed:
+            # The enforced list will not give up an entry without a note, and the window asks nothing it
+            # would then have to refuse: the refusal happens before the confirmation, not after it.
+            refusal = suppression_lift_refusal(note) if listed is not None else None
+            if refusal is not None:
+                messagebox.showerror("Nothing was changed", refusal, parent=self.root)
+                self.status.set("The do-not-contact mark was not changed; nothing was written.")
+                return
         position = [record.contact_id for record in records].index(chosen.contact_id) + 1
         where = f"row {position} of {len(records)} in the stored list"
         origin = f"from {chosen.source_file!r}" if chosen.source_file else "whose source file is not recorded"
@@ -1151,7 +2002,11 @@ class CareerAgentApp:
                 "records your decision."
             )
             if note:
-                question += "\n\nThe reason you typed is stored with the mark."
+                question += "\n\nThe note you typed is stored with the mark."
+            chosen_reason = self._chosen_suppression_reason()
+            question += "\n\n" + suppression_mark_question(
+                len(self._suppression_entries()), REASON_LABELS[chosen_reason],
+                chosen_reason in PERMANENT_REASONS)
         else:
             title = "Remove this contact's do-not-contact mark"
             question = (
@@ -1159,11 +2014,29 @@ class CareerAgentApp:
                 "The stored reason and the day the mark was made are removed with it, and the contact can "
                 "be marked again later. Nothing is sent either way."
             )
+            question += "\n\n" + suppression_lift_question(
+                chosen.email, listed_label,
+                listed is not None and listed.reason in PERMANENT_REASONS)
         if not messagebox.askyesno(title, question + "\n\nDo this now?", parent=self.root):
             self.status.set("Cancelled; nothing was changed.")
             return
         try:
             stored = self.store.set_contact_suppression(chosen.email_key, suppressed, note=note or None)
+            # The second half of the same decision. A mark the sending gate cannot see is an opinion
+            # about a row; this is what makes it a rule. Recording an address twice keeps the first
+            # reason, so pressing mark again on a listed address changes nothing on the list.
+            if suppressed:
+                self.store.suppress_contact(chosen.email, reason=self._chosen_suppression_reason(),
+                                            note=note)
+            elif listed is not None:
+                self.store.lift_suppression(chosen.email, note=note)
+        except SuppressionError as exc:
+            # The list's own refusal, in its own words. The contact row may already have been written,
+            # so the window re-reads rather than claiming either state.
+            messagebox.showerror("The do-not-contact list was not changed", str(exc), parent=self.root)
+            self.status.set("The do-not-contact list was not changed; the stored list was re-read.")
+            self._refresh_contacts()
+            return
         except ValueError as exc:
             # The store's own refusal, with its own sentence: the address it was asked about has no record
             # here, which is what happens when the list changed under this window. Nothing was written.
@@ -1188,9 +2061,11 @@ class CareerAgentApp:
         messagebox.showinfo(
             "Do-not-contact mark updated",
             f"Row {position} of the stored list is now {said}.\n\n"
-            + ("A later feature must respect this mark; nothing in this build contacts anybody."
+            + ("The address is on the do-not-contact list this application checks before anything may "
+               "be sent, and nothing in this build contacts anybody."
                if stored.suppressed else
-               "The contact stays in the list, with no reason recorded against it."),
+               "The contact stays in the list, with no reason recorded against it, and the address is "
+               "off the list this application checks."),
             parent=self.root,
         )
 
@@ -1515,6 +2390,872 @@ class CareerAgentApp:
         """Empty a list before refilling it, so it can never show a row the database no longer holds."""
         for item in tree.get_children():
             tree.delete(item)
+
+    def _build_artifacts(self):
+        """The tab about prepared documents: what each was built from, and what to do when it moved on.
+
+        This is where the lineage rule becomes visible. A tailored résumé or cover letter is built from
+        the facts the person has saved, under one version of a role strategy, for one listing; when any
+        of that changes the document is **not** quietly reused - the row says so, the controls refuse to
+        hand it over, and the only way forward is a rebuild, which writes a new document and keeps the
+        old one as history. Nothing on this tab sends anything anywhere.
+        """
+        body = self._scrollable_body(self.artifacts_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Tailored résumés and cover letters are built only from facts you have saved: a "
+                "requirement your profile does not state is reported as a gap, never written into the "
+                "document. Each one records the listing, the strategy version, when it was built and "
+                "the file its facts were read from. A document whose facts or strategy have changed "
+                "since is never used as it is - rebuild it, and the old one stays as history."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.artifact_summary = tk.StringVar(value="Reading the stored documents...")
+        ttk.Label(body, textvariable=self.artifact_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        build = ttk.LabelFrame(body, text="Build one")
+        build.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        build.columnconfigure(1, weight=1)
+        self.artifact_build_note = tk.StringVar(value="Reading what there is to build from...")
+        ttk.Label(build, textvariable=self.artifact_build_note, wraplength=_TAB_TEXT_WRAP - 20,
+                  justify=LEFT).grid(row=0, column=0, columnspan=4, sticky=W, padx=6, pady=(4, 8))
+        self.artifact_listing_choice = tk.StringVar()
+        self.artifact_strategy_choice = tk.StringVar()
+        self.artifact_kind_choice = tk.StringVar(
+            value=ARTIFACT_KIND_LABELS[ArtifactKind(ARTIFACT_BUILD_KINDS[0])])
+        ttk.Label(build, text="For listing").grid(row=1, column=0, sticky=W, padx=6, pady=2)
+        self.artifact_listing_box = ttk.Combobox(
+            build, textvariable=self.artifact_listing_choice, state="readonly", width=52, values=())
+        self.artifact_listing_box.grid(row=1, column=1, columnspan=3, sticky=W, pady=2)
+        ttk.Label(build, text="Under strategy").grid(row=2, column=0, sticky=W, padx=6, pady=2)
+        self.artifact_strategy_box = ttk.Combobox(
+            build, textvariable=self.artifact_strategy_choice, state="readonly", width=52, values=())
+        self.artifact_strategy_box.grid(row=2, column=1, columnspan=3, sticky=W, pady=2)
+        ttk.Label(build, text="Document").grid(row=3, column=0, sticky=W, padx=6, pady=2)
+        ttk.Combobox(
+            build, textvariable=self.artifact_kind_choice, state="readonly", width=30,
+            values=[ARTIFACT_KIND_LABELS[ArtifactKind(kind)] for kind in ARTIFACT_BUILD_KINDS],
+        ).grid(row=3, column=1, sticky=W, pady=2)
+        self.preview_artifact_button = ttk.Button(
+            build, text="Show what would be used...", command=self._preview_artifact_plan)
+        self.preview_artifact_button.grid(row=4, column=0, columnspan=2, sticky=W, padx=6, pady=(8, 4))
+        self.build_artifact_button = ttk.Button(
+            build, text="Build this document...", command=self._build_previewed_artifact,
+            state="disabled")
+        self.build_artifact_button.grid(row=4, column=2, sticky=W, pady=(8, 4))
+        self.artifact_plan_box = tk.Text(build, height=10, wrap="word", state="disabled")
+        self.artifact_plan_box.grid(row=5, column=0, columnspan=4, sticky="ew", padx=6, pady=(0, 6))
+        #: The plan a person has actually read, kept so that "Build this document" stores that one
+        #: rather than quietly re-planning against whatever the database holds by the time they press
+        #: it. A plan built for choices that have since changed is refused rather than reused.
+        self._artifact_plan = None
+        self._set_artifact_plan(None)
+        self.check_artifact_button = ttk.Button(
+            body, text="Check before use", command=self._check_selected_artifact, state="disabled")
+        self.check_artifact_button.grid(row=3, column=0, sticky=W, pady=4)
+        self.rebuild_artifact_button = ttk.Button(
+            body, text="Rebuild from current facts...", command=self._rebuild_selected_artifact,
+            state="disabled")
+        self.rebuild_artifact_button.grid(row=3, column=1, sticky=W, padx=(8, 0), pady=4)
+        self.export_artifact_button = ttk.Button(
+            body, text="Save a copy to a file...", command=self._export_selected_artifact,
+            state="disabled")
+        self.export_artifact_button.grid(row=3, column=2, sticky=W, padx=(8, 0), pady=4)
+        ttk.Button(body, text="Refresh",
+                   command=self._refresh_artifacts).grid(row=3, column=3, sticky=W, padx=(8, 0), pady=4)
+        columns = ("kind", "listing", "strategy", "built", "cited", "state")
+        self.artifacts_tree = ttk.Treeview(body, columns=columns, show="headings", height=8)
+        for column, heading, width in (
+            ("kind", "Document", 140), ("listing", "Prepared for", 120),
+            ("strategy", "Strategy version", 150), ("built", "Built", 170),
+            ("cited", "Built from", 200), ("state", "State", 360),
+        ):
+            self.artifacts_tree.heading(column, text=heading)
+            self.artifacts_tree.column(column, width=width, anchor=W)
+        self.artifacts_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
+        self.artifacts_tree.bind("<<TreeviewSelect>>", self._on_artifact_selection)
+        self.artifact_detail = tk.StringVar(
+            value="Select a document to see what it was built from.")
+        ttk.Label(body, textvariable=self.artifact_detail, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=5, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        body.columnconfigure(0, weight=1)
+        #: The lineage report for each row currently drawn, so the detail line and the controls describe
+        #: the same reading the list was filled from rather than asking the database again on every click.
+        self._artifact_reports: dict[str, object] = {}
+
+    def _refresh_artifacts(self):
+        """Re-read every stored document and what its lineage says now. Reads only, never a dialog."""
+        if not hasattr(self, "artifacts_tree"):
+            return
+        try:
+            artifacts = self.store.list_tailored_artifacts()
+            reports = {artifact.artifact_id: lineage_status(self.store, artifact)
+                       for artifact in artifacts}
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_artifact_id()
+        self._clear_tree(self.artifacts_tree)
+        for artifact in artifacts:
+            report = reports[artifact.artifact_id]
+            self.artifacts_tree.insert(
+                "", END, iid=artifact.artifact_id,
+                values=(
+                    ARTIFACT_KIND_LABELS[artifact.kind], artifact.listing_id,
+                    f"{artifact.strategy_id} v{artifact.strategy_version}",
+                    format_stored_timestamp(artifact.created_at),
+                    artifact_citation_text(artifact.source_documents),
+                    artifact_state_text(report.is_current, report.summary(),
+                                        verifiable=report.listing_verifiable),
+                ),
+            )
+        self._artifact_reports = reports
+        stale = sum(1 for report in reports.values() if not report.is_current)
+        unverifiable = sum(1 for report in reports.values() if not report.listing_verifiable)
+        self.artifact_summary.set(artifact_summary_text(len(artifacts), stale, unverifiable))
+        self._refresh_artifact_choices()
+        if selected in reports:  # the row the person was looking at is still there
+            self.artifacts_tree.selection_set(selected)
+        self._on_artifact_selection()
+
+    def _refresh_artifact_choices(self) -> None:
+        """Fill the building controls from what is stored, and say so when there is nothing to build.
+
+        Reads only. A listing or strategy that is not stored is not offered, which is the first half
+        of the promise that a document can only be built from records the person already has; the
+        other half is in :func:`~career_agent.artifacts.plan_artifact`, which refuses anything else.
+        """
+        if not hasattr(self, "artifact_listing_box"):
+            return
+        try:
+            listings = self.store.list_jobs()
+            strategies = self.store.list_role_strategies()
+            has_profile = self.store.get_profile() is not None
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        listing_choices = artifact_listing_choices(listings)
+        strategy_choices = artifact_strategy_choices(strategies)
+        self.artifact_listing_box.configure(values=list(listing_choices))
+        self.artifact_strategy_box.configure(values=list(strategy_choices))
+        if self.artifact_listing_choice.get() not in listing_choices:
+            self.artifact_listing_choice.set(listing_choices[0] if listing_choices else "")
+        if self.artifact_strategy_choice.get() not in strategy_choices:
+            self.artifact_strategy_choice.set(strategy_choices[0] if strategy_choices else "")
+        ready = bool(listing_choices and strategy_choices and has_profile)
+        self.preview_artifact_button.configure(state="normal" if ready else "disabled")
+        if not ready:
+            self._set_artifact_plan(None)
+        self.artifact_build_note.set(
+            artifact_build_preamble(len(listing_choices), len(strategy_choices), has_profile))
+
+    def _chosen_artifact_kind(self) -> ArtifactKind:
+        """The document kind chosen in the window, as the artifact layer's own value."""
+        chosen = self.artifact_kind_choice.get().strip()
+        for kind in ARTIFACT_BUILD_KINDS:
+            if ARTIFACT_KIND_LABELS[ArtifactKind(kind)] == chosen:
+                return ArtifactKind(kind)
+        return ArtifactKind(ARTIFACT_BUILD_KINDS[0])
+
+    def _set_artifact_plan(self, plan) -> None:
+        """Hold (or drop) the plan that was read, and offer the build button only while one is held."""
+        self._artifact_plan = plan
+        lines = plan.describe() if plan is not None else ()
+        self.artifact_plan_box.configure(state="normal")
+        self.artifact_plan_box.delete("1.0", END)
+        self.artifact_plan_box.insert(
+            "1.0",
+            artifact_plan_text(lines, plan.content) if plan is not None
+            else "Nothing previewed yet. Choose a listing and a strategy, then show what would be "
+                 "used.")
+        self.artifact_plan_box.configure(state="disabled")
+        buildable = plan is not None and plan.duplicate_of is None
+        self.build_artifact_button.configure(state="normal" if buildable else "disabled")
+
+    def _preview_artifact_plan(self) -> None:
+        """Work out what a document would be built from and show it. Stores nothing, writes nothing."""
+        listing_id = artifact_id_from_choice(self.artifact_listing_choice.get())
+        strategy_id = artifact_id_from_choice(self.artifact_strategy_choice.get())
+        if not listing_id or not strategy_id:
+            self.status.set("Choose a listing and a strategy first; nothing was changed.")
+            return
+        try:
+            plan = plan_artifact(self.store, listing_id=listing_id, strategy_id=strategy_id,
+                                 kind=self._chosen_artifact_kind())
+        except ArtifactError as exc:
+            self._set_artifact_plan(None)
+            messagebox.showerror("Nothing to build from", str(exc), parent=self.root)
+            self.status.set("That document was not previewed; nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._set_artifact_plan(plan)
+        if plan.duplicate_of is not None:
+            self.status.set(
+                f"An identical document is already stored as {plan.duplicate_of}, so there is "
+                "nothing to build; nothing was changed.")
+        else:
+            self.status.set(
+                "This is what the document would be built from. Nothing is stored until you say so.")
+
+    def _build_previewed_artifact(self) -> None:
+        """Store exactly the document that was previewed, after one confirmation showing that text.
+
+        The plan is not recomputed here. If any of the three choices has moved since the preview, or
+        the facts or the strategy version moved underneath it, the build is refused and the person is
+        sent back to look again - a document stored from a plan nobody read is the one thing this
+        pairing exists to prevent.
+        """
+        plan = self._artifact_plan
+        if plan is None:
+            self.status.set("Show what would be used first; nothing was changed.")
+            return
+        chosen = (artifact_id_from_choice(self.artifact_listing_choice.get()),
+                  artifact_id_from_choice(self.artifact_strategy_choice.get()),
+                  self._chosen_artifact_kind())
+        if chosen != (plan.listing_id, plan.strategy.strategy_id, plan.kind):
+            self._set_artifact_plan(None)
+            self.status.set(
+                "What you chose changed after the preview, so nothing was built. Show what would "
+                "be used again.")
+            return
+        if not messagebox.askyesno("Build this document", artifact_build_question(plan.describe()),
+                                   parent=self.root):
+            self.status.set("Nothing was built; nothing was changed.")
+            return
+        try:
+            artifact = store_planned_artifact(self.store, plan)
+        except ArtifactError as exc:
+            self._set_artifact_plan(None)
+            messagebox.showerror("Document not built", str(exc), parent=self.root)
+            self.status.set("That document was not built; nothing was stored.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._set_artifact_plan(None)
+        self._refresh_artifacts()
+        if artifact.artifact_id in self._artifact_reports:
+            self.artifacts_tree.selection_set(artifact.artifact_id)
+            self._on_artifact_selection()
+        self.status.set(artifact_built_text(artifact.artifact_id, plan.gaps, plan.listing_gaps))
+
+    def _export_selected_artifact(self) -> None:
+        """Write the selected document to a file the person names, with its provenance above it.
+
+        Three things this deliberately does not do: overwrite anything (an existing name is refused
+        outright, because the file most likely to be named by mistake is the résumé the document was
+        built from), export a document whose facts or strategy have moved on, and send anything
+        anywhere - the file is written on this machine, readable only by its owner.
+        """
+        artifact_id = self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        report = self._artifact_reports.get(artifact_id)
+        if report is not None and not report.is_current:
+            checkable = report.listing_verifiable
+            self._record("artifact.export.refused",
+                         f"id={artifact_id} reason={'stale' if checkable else 'unverifiable'}")
+            messagebox.showerror(
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                artifact_export_refusal_text(artifact_id, report.summary(), verifiable=checkable),
+                parent=self.root)
+            self.status.set(
+                f"{artifact_id} is out of date and was not written out." if checkable else
+                f"{artifact_id} cannot be checked against its listing and was not written out.")
+            return
+        chosen = filedialog.asksaveasfilename(
+            parent=self.root, title="Save a copy of this document",
+            defaultextension=".txt", initialfile=f"{artifact_id}.txt",
+            filetypes=[("Text file", "*.txt"), ("All files", "*.*")])
+        if not chosen:
+            self.status.set("Nothing was written out; nothing was changed.")
+            return
+        if not messagebox.askyesno("Save a copy", artifact_export_question(chosen, artifact_id),
+                                   parent=self.root):
+            self.status.set("Nothing was written out; nothing was changed.")
+            return
+        try:
+            export = export_artifact(self.store, artifact_id, chosen)
+        except StaleArtifactError as exc:
+            checkable = exc.report.listing_verifiable
+            self._record("artifact.export.refused",
+                         f"id={artifact_id} reason={'stale' if checkable else 'unverifiable'}")
+            messagebox.showerror(
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                artifact_export_refusal_text(artifact_id, exc.report.summary(),
+                                             verifiable=checkable),
+                parent=self.root)
+            self.status.set(
+                f"{artifact_id} is out of date and was not written out." if checkable else
+                f"{artifact_id} cannot be checked against its listing and was not written out.")
+            self._refresh_artifacts()
+            return
+        except ArtifactError as exc:
+            self._record("artifact.export.refused", f"id={artifact_id} reason=refused")
+            messagebox.showerror("Document not saved", str(exc), parent=self.root)
+            self.status.set("That document was not written out; nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._record("artifact.exported", f"id={artifact_id} characters={export.characters}")
+        self.status.set(artifact_export_text(export.path, export.characters))
+
+    def _selected_artifact_id(self) -> str | None:
+        """The document selected in the list, or ``None``. Does no database lookup on purpose."""
+        if not hasattr(self, "artifacts_tree"):
+            return None
+        selection = self.artifacts_tree.selection()
+        return selection[0] if selection else None
+
+    def _on_artifact_selection(self, _event=None) -> None:
+        """Describe the selected document under the list, and offer only the controls that apply."""
+        artifact_id = self._selected_artifact_id()
+        report = self._artifact_reports.get(artifact_id) if artifact_id else None
+        for button in (self.check_artifact_button, self.rebuild_artifact_button):
+            button.configure(state="normal" if report is not None else "disabled")
+        # Saving a copy is offered only for a document that is still current: a stale one is refused
+        # by the export anyway, and a live button that always refuses is a worse answer than a dead
+        # one next to a row that says why.
+        self.export_artifact_button.configure(
+            state="normal" if report is not None and report.is_current else "disabled")
+        if report is None:
+            self.artifact_detail.set("Select a document to see what it was built from.")
+            return
+        lines = "; ".join(report.summary())
+        if report.is_current:
+            self.artifact_detail.set(f"{artifact_id}: {lines}.")
+        elif not report.listing_verifiable:
+            self.artifact_detail.set(
+                f"{artifact_id} cannot be used as it is: {lines}. Rebuilding writes a new document "
+                "that records the listing it was written for, and keeps this one as history.")
+        else:
+            self.artifact_detail.set(
+                f"{artifact_id} cannot be used as it is: {lines}. Rebuilding writes a new document "
+                "from your current facts and keeps this one as history.")
+
+    def _check_selected_artifact(self) -> None:
+        """Ask the same gate any use of a document must pass, and show the answer in the person's words.
+
+        Nothing is attached or sent here - this application sends nothing. What the check is for is the
+        honest answer to 'can I use this one?', and when the answer is no, the reasons the lineage
+        report gives and the offer to rebuild.
+        """
+        artifact_id = self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        try:
+            require_current_artifact(self.store, artifact_id)
+        except StaleArtifactError as exc:
+            reasons = "\n".join(f"- {line}" for line in exc.report.summary())
+            self.status.set(
+                f"{artifact_id} was not used: it is no longer built on what is stored.")
+            checkable = exc.report.listing_verifiable
+            if messagebox.askyesno(
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                (f"{artifact_id} was built from facts, a strategy version or a listing that have "
+                 f"changed:\n\n{reasons}\n\nRebuild it from your current facts now? The old "
+                 "document is kept." if checkable else
+                 f"{artifact_id} cannot be checked against what it was written for:\n\n{reasons}"
+                 "\n\nRebuild it from your current facts and the listing as it stands now? The "
+                 "old document is kept."),
+                parent=self.root,
+            ):
+                self._rebuild_selected_artifact(artifact_id=artifact_id, confirmed=True)
+            else:
+                self.status.set(
+                    f"{artifact_id} is out of date and was not used; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except ArtifactError as exc:
+            messagebox.showerror("Document not checked", str(exc), parent=self.root)
+            self.status.set("That document could not be checked; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.status.set(
+            f"{artifact_id} still matches your saved facts and its strategy version, so it can be "
+            "attached by hand. This application sends nothing.")
+
+    def _rebuild_selected_artifact(self, *, artifact_id: str | None = None,
+                                   confirmed: bool = False) -> None:
+        """Build the selected document again from the current facts, as a new row, after one confirmation."""
+        artifact_id = artifact_id or self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        if not confirmed and not messagebox.askyesno(
+            "Rebuild this document",
+            f"Build {artifact_id} again from the facts you have saved now, under the strategy's "
+            "newest version?\n\nThe document you have now is kept as history and is not changed.",
+            parent=self.root,
+        ):
+            self.status.set("Rebuild cancelled; nothing was changed.")
+            return
+        try:
+            rebuilt = rebuild_artifact(self.store, artifact_id)
+        except ArtifactError as exc:
+            messagebox.showerror("Document not rebuilt", str(exc), parent=self.root)
+            self.status.set("That document was not rebuilt; nothing was changed.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_artifacts()
+        if rebuilt.artifact.artifact_id in self._artifact_reports:
+            self.artifacts_tree.selection_set(rebuilt.artifact.artifact_id)
+            self._on_artifact_selection()
+        self.status.set(artifact_rebuild_text(rebuilt.artifact.artifact_id,
+                                              rebuilt.replaced_artifact_id, rebuilt.gaps))
+
+    # ------------------------------------------------------------- permissions and limits
+    #
+    # This tab is where a person says what this application may do on their behalf, and it is written
+    # to be unable to do more than that. Three properties are deliberate and are pinned by tests:
+    #
+    # * nothing is written without an explicit yes - every control asks first, and a declined dialog
+    #   leaves the database byte-for-byte as it was;
+    # * granting a permission switches nothing on. A source runs only when its own gate is open, and
+    #   no control here can open one. The tab says so in its own words rather than implying otherwise;
+    # * a withdrawal is a new version, not an erasure, because the question "what was permitted when
+    #   that ran?" has to stay answerable afterwards.
+
+    def _build_policy(self):
+        """The tab that holds the standing authorisation: what is permitted, and how often."""
+        body = self._scrollable_body(self.policy_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Nothing in this application contacts anyone, looks for jobs or sends an email unless "
+                "you have said it may, here, and said how often. Your answer is stored on this machine "
+                "as a numbered version, so what you permitted at the time something ran stays "
+                "readable, and you can withdraw it at any moment. Permission on its own is not enough: "
+                "every source in this build is switched off, and nothing here can switch one on."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.policy_summary = tk.StringVar(value="Reading your permissions...")
+        ttk.Label(body, textvariable=self.policy_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        form = ttk.Frame(body)
+        form.grid(row=2, column=0, columnspan=4, sticky=W)
+        self.policy_vars = {}
+        ttk.Label(form, text="Source").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.policy_vars["source"] = tk.StringVar(value=SOURCE_DECISIONS[0].source_id)
+        ttk.Combobox(form, textvariable=self.policy_vars["source"], state="readonly", width=22,
+                     values=[decision.source_id for decision in SOURCE_DECISIONS]).grid(
+                         row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(form, text="Action").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.policy_vars["action"] = tk.StringVar(value=PERMISSION_LABELS[PermissionKind.DISCOVERY])
+        ttk.Combobox(form, textvariable=self.policy_vars["action"], state="readonly", width=24,
+                     values=[PERMISSION_LABELS[kind] for kind in PermissionKind]).grid(
+                         row=0, column=3, sticky=W, padx=(0, 12))
+        ttk.Label(form, text="At most, per day").grid(row=0, column=4, sticky=W, padx=(0, 5))
+        self.policy_vars["limit"] = tk.StringVar(value="3")
+        ttk.Entry(form, textvariable=self.policy_vars["limit"], width=6).grid(
+            row=0, column=5, sticky=W)
+        controls = ttk.Frame(body)
+        controls.grid(row=3, column=0, columnspan=4, sticky=W, pady=(8, 4))
+        ttk.Button(controls, text="Authorise this...",
+                   command=self._grant_policy_permission).grid(row=0, column=0, sticky=W)
+        self.remove_policy_button = ttk.Button(
+            controls, text="Remove the selected permission...", state="disabled",
+            command=self._remove_policy_permission)
+        self.remove_policy_button.grid(row=0, column=1, sticky=W, padx=(8, 0))
+        self.policy_stop_button = ttk.Button(
+            controls, text="Stop everything now...", command=self._toggle_policy_stop)
+        self.policy_stop_button.grid(row=0, column=2, sticky=W, padx=(8, 0))
+        ttk.Button(controls, text="Withdraw all authorisation...",
+                   command=self._revoke_policy).grid(row=0, column=3, sticky=W, padx=(8, 0))
+        ttk.Button(controls, text="Refresh",
+                   command=self._refresh_policy).grid(row=0, column=4, sticky=W, padx=(8, 0))
+        columns = ("source", "action", "limit", "state")
+        self.policy_tree = ttk.Treeview(body, columns=columns, show="headings", height=7)
+        for column, heading, width in (
+            ("source", "Source", 150), ("action", "What it may do", 200),
+            ("limit", "Daily ceiling", 130), ("state", "Applies now", 330),
+        ):
+            self.policy_tree.heading(column, text=heading)
+            self.policy_tree.column(column, width=width, anchor=W)
+        self.policy_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
+        self.policy_tree.bind("<<TreeviewSelect>>", self._on_policy_selection)
+        self.policy_detail = tk.StringVar(
+            value="Select a permission to see what would happen if it were asked for now.")
+        ttk.Label(body, textvariable=self.policy_detail, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=5, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        ttk.Button(body, text="What would happen now?",
+                   command=self._explain_policy_row).grid(row=6, column=0, sticky=W, pady=(6, 0))
+        ttk.Label(
+            body,
+            text=(
+                "Withdrawing does not delete anything: a new version records it and the earlier "
+                "versions stay readable. Every action is also refused outright while a source's own "
+                "gate is closed, which is the state of every source in this build."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=7, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        # The conditions. They have been stored, enforced and carried untouched through every change
+        # this tab makes since they were added, and until now the only way to set one was Python. They
+        # live under the permissions because they are not permissions: they narrow what an existing
+        # permission may be used for, and can never widen it.
+        ttk.Label(body, text="Conditions on what may be acted on").grid(
+            row=8, column=0, columnspan=4, sticky=W, pady=(14, 2))
+        self.conditions_summary = tk.StringVar(value="Reading the conditions...")
+        ttk.Label(body, textvariable=self.conditions_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=9, column=0, columnspan=4, sticky=W, pady=(0, 6))
+        conditions = ttk.Frame(body)
+        conditions.grid(row=10, column=0, columnspan=4, sticky=W)
+        self.condition_vars = {
+            "roles": tk.StringVar(),
+            "places": tk.StringVar(),
+            "attachments": tk.StringVar(),
+            "follow_ups": tk.StringVar(),
+            "quiet_from": tk.StringVar(),
+            "quiet_until": tk.StringVar(),
+        }
+        for row, (key, label, width) in enumerate((
+                ("roles", "A role's title must mention (any of, comma separated)", 34),
+                ("places", "The place must be one of (comma separated)", 34),
+                ("attachments", "Only these file endings may ever be attached", 34))):
+            ttk.Label(conditions, text=label).grid(row=row, column=0, sticky=W, pady=(2, 0))
+            ttk.Entry(conditions, textvariable=self.condition_vars[key], width=width).grid(
+                row=row, column=1, sticky=W, padx=(8, 0), pady=(2, 0))
+        ttk.Label(conditions, text="At most this many follow-ups per job").grid(
+            row=3, column=0, sticky=W, pady=(2, 0))
+        ttk.Entry(conditions, textvariable=self.condition_vars["follow_ups"], width=6).grid(
+            row=3, column=1, sticky=W, padx=(8, 0), pady=(2, 0))
+        quiet = ttk.Frame(conditions)
+        quiet.grid(row=4, column=0, columnspan=2, sticky=W, pady=(2, 0))
+        ttk.Label(quiet, text="Quiet hours, local, from").pack(side="left")
+        ttk.Entry(quiet, textvariable=self.condition_vars["quiet_from"], width=6).pack(
+            side="left", padx=(6, 6))
+        ttk.Label(quiet, text="until").pack(side="left")
+        ttk.Entry(quiet, textvariable=self.condition_vars["quiet_until"], width=6).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(body, text="Record these conditions...",
+                   command=self._save_policy_conditions).grid(row=11, column=0, sticky=W, pady=(8, 0))
+        ttk.Label(
+            body,
+            text=(
+                "Empty means no condition of that kind, with one exception said plainly: with no "
+                "attachment rule, nothing may be attached at all. A condition that cannot be checked "
+                "- because nothing describes the job being acted on - refuses, and every failed "
+                "condition is reported together rather than one per attempt. Quiet hours may wrap "
+                "past midnight; nothing acts and nothing is prepared inside them. Saving records a "
+                "new version of the standing authorisation and starts nothing."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=12, column=0, columnspan=4, sticky=W, pady=(6, 0))
+        body.columnconfigure(0, weight=1)
+        #: The authorisation the list was drawn from, so a control acts on what the person is looking
+        #: at and a refusal can be explained without reading the database again mid-click.
+        self._policy_shown = no_authorisation()
+        self._policy_version_shown = 0
+
+    def _refresh_policy(self):
+        """Re-read the stored authorisation and redraw the tab. Reads only; never a dialog."""
+        if not hasattr(self, "policy_tree"):
+            return
+        try:
+            policy = self.store.get_global_policy()
+            version = self.store.policy_version_number()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_policy_pair()
+        self._clear_tree(self.policy_tree)
+        drawn = []
+        for source_id, action_label, limit, state in policy_rows(policy):
+            row_id = f"{source_id}|{action_label}"
+            drawn.append(row_id)
+            self.policy_tree.insert("", END, iid=row_id,
+                                    values=(source_id, action_label, limit, state))
+        self.policy_summary.set(policy_summary_text(policy, version))
+        self.policy_stop_button.configure(
+            text="Allow actions again..." if policy.stop_all else "Stop everything now...")
+        self._policy_shown = policy
+        self._policy_version_shown = version
+        self._show_policy_conditions(policy)
+        if selected in drawn:  # the row the person was looking at is still permitted
+            self.policy_tree.selection_set(selected)
+        self._on_policy_selection()
+
+    def _selected_policy_pair(self) -> str | None:
+        """The row selected in the list, or ``None``. Reads the screen, never the database."""
+        if not hasattr(self, "policy_tree"):
+            return None
+        selection = self.policy_tree.selection()
+        return selection[0] if selection else None
+
+    def _selected_policy_permission(self) -> tuple[str, PermissionKind] | None:
+        """The selected row as the pair the authorisation is written in, or ``None``."""
+        selected = self._selected_policy_pair()
+        if not selected or "|" not in selected:
+            return None
+        source_id, label = selected.split("|", 1)
+        for kind in PermissionKind:
+            if PERMISSION_LABELS[kind] == label:
+                return source_id, kind
+        return None
+
+    def _on_policy_selection(self, _event=None) -> None:
+        """Offer the removal control only when a row is selected. Writes nothing."""
+        permission = self._selected_policy_permission()
+        self.remove_policy_button.configure(state="normal" if permission else "disabled")
+        if permission is None:
+            self.policy_detail.set(
+                "Select a permission to see what would happen if it were asked for now.")
+
+    def _chosen_policy_action(self) -> PermissionKind | None:
+        """The action chosen in the form, by the label a person reads rather than by position."""
+        wanted = self.policy_vars["action"].get().strip()
+        for kind in PermissionKind:
+            if PERMISSION_LABELS[kind] == wanted:
+                return kind
+        return None
+
+    def _save_policy(self, policy: GlobalPolicy, *, done: str) -> None:
+        """Write one new version, report it, and redraw. The only writing path on this tab."""
+        try:
+            version = self.store.save_global_policy(policy)
+        except PolicyError as exc:
+            messagebox.showerror("Permission not saved", str(exc), parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            self._refresh_policy()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_policy()
+        self.status.set(f"{done} Saved as authorisation version {version}; nothing was started.")
+
+    def _show_policy_conditions(self, policy: GlobalPolicy) -> None:
+        """Write the stored conditions into the boxes and the line above them. Reads only.
+
+        The boxes are set from the stored value on every refresh, so what a person sees is what is
+        recorded rather than what they last typed - and saving again without editing anything writes
+        no new version, because the authorisation's content key is unchanged.
+        """
+        if not hasattr(self, "condition_vars"):
+            return
+        quiet = policy.quiet_hours
+        self.condition_vars["roles"].set(condition_terms_text(policy.role_terms))
+        self.condition_vars["places"].set(condition_terms_text(policy.locations))
+        self.condition_vars["attachments"].set(condition_terms_text(policy.allowed_attachments))
+        self.condition_vars["follow_ups"].set(
+            "" if policy.follow_up_limit is None else str(policy.follow_up_limit))
+        self.condition_vars["quiet_from"].set("" if quiet is None else f"{quiet[0]:02d}:00")
+        self.condition_vars["quiet_until"].set("" if quiet is None else f"{quiet[1]:02d}:00")
+        self.conditions_summary.set(conditions_summary_text(
+            policy.role_terms, policy.locations, policy.allowed_attachments,
+            policy.follow_up_limit, quiet))
+
+    def _save_policy_conditions(self) -> None:
+        """Record the conditions typed into the boxes, after one confirmation. Writes one version."""
+        policy = self._policy_shown
+        try:
+            roles = parse_condition_terms(self.condition_vars["roles"].get(),
+                                          noun="role conditions")
+            places = parse_condition_terms(self.condition_vars["places"].get(),
+                                           noun="place conditions")
+            attachments = parse_attachment_kinds(self.condition_vars["attachments"].get())
+            follow_ups = parse_follow_up_limit(self.condition_vars["follow_ups"].get())
+            quiet = parse_quiet_hours(self.condition_vars["quiet_from"].get(),
+                                      self.condition_vars["quiet_until"].get())
+        except ValueError as exc:
+            # Refused before the question is asked: a window should not ask about something it is
+            # about to reject, and nothing has been written at this point.
+            messagebox.showerror("Nothing was changed", str(exc), parent=self.root)
+            self.status.set("The conditions were not changed; nothing was written.")
+            return
+        changes = condition_changes(
+            {
+                "role_terms": policy.role_terms, "locations": policy.locations,
+                "allowed_attachments": policy.allowed_attachments,
+                "follow_up_limit": policy.follow_up_limit, "quiet_hours": policy.quiet_hours,
+            },
+            {
+                "role_terms": roles, "locations": places, "allowed_attachments": attachments,
+                "follow_up_limit": follow_ups, "quiet_hours": quiet,
+            },
+        )
+        if not changes:
+            messagebox.showinfo(
+                "Nothing to change",
+                "The conditions in the boxes are the ones already recorded, so there is nothing to "
+                "save and no new version was written.", parent=self.root)
+            self.status.set("The conditions already say that; nothing was written.")
+            return
+        if not messagebox.askyesno("Record these conditions",
+                                   conditions_question(changes, self._policy_version_shown),
+                                   parent=self.root):
+            self.status.set("Cancelled; the conditions were not changed.")
+            return
+        # ``replace`` rather than a fresh value built field by field: a condition that was added to
+        # this value and forgotten in one of these handlers would be a silent loosening of somebody's
+        # own rule, which is exactly how this tab lost the conditions once before.
+        updated = dataclasses.replace(
+            policy, role_terms=frozenset(roles), locations=frozenset(places),
+            allowed_attachments=frozenset(attachments), follow_up_limit=follow_ups,
+            quiet_hours=quiet)
+        self._save_policy(updated, done="Your conditions were recorded.")
+
+    def _grant_policy_permission(self) -> None:
+        """Add one permission, after one explicit yes. A no writes nothing at all."""
+        source_id = self.policy_vars["source"].get().strip()
+        action = self._chosen_policy_action()
+        raw_limit = self.policy_vars["limit"].get().strip()
+        if not source_id or action is None:
+            self.status.set("Choose a source and an action first; nothing was changed.")
+            return
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            messagebox.showerror(
+                "Permission not saved",
+                "A permission needs a daily ceiling as a whole number, so there is a number to stop "
+                "at. Nothing was changed.", parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            return
+        if limit < 1:
+            messagebox.showerror(
+                "Permission not saved",
+                "A daily ceiling of zero or less would permit nothing, so it is not written as a "
+                "permission. Remove the permission instead. Nothing was changed.", parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            return
+        if not messagebox.askyesno("Authorise this action",
+                                   policy_grant_question(source_id, action, limit),
+                                   parent=self.root):
+            self.status.set("Authorisation cancelled; nothing was changed.")
+            return
+        current = self._policy_shown
+        limits = dict(current.daily_limits)
+        limits[action] = limit
+        # Rebuilt by replacement, never field by field: a condition this window does not show yet
+        # (which roles, which places, what may be attached, how many follow-ups) must survive a
+        # change made here. Dropping one would loosen a restriction the person wrote down, which is
+        # the one kind of silent change an authorisation screen must never make.
+        updated = dataclasses.replace(
+            current, allowed=frozenset(current.allowed | {(source_id, action)}),
+            daily_limits=limits, revoked_at=None)
+        self._save_policy(updated,
+                          done=f"{PERMISSION_LABELS[action]} with {source_id} is permitted "
+                               f"at most {limit} time(s) a day.")
+
+    def _remove_policy_permission(self) -> None:
+        """Take one permission away, after one explicit yes. A no writes nothing at all."""
+        permission = self._selected_policy_permission()
+        if permission is None:
+            self.status.set("Select a permission in the list first; nothing was changed.")
+            return
+        source_id, action = permission
+        if not messagebox.askyesno("Remove this permission",
+                                   policy_removal_question(source_id, action), parent=self.root):
+            self.status.set("Removal cancelled; nothing was changed.")
+            return
+        current = self._policy_shown
+        remaining = frozenset(pair for pair in current.allowed if pair != (source_id, action))
+        still_used = {kind for _source, kind in remaining}
+        limits = {kind: value for kind, value in current.daily_limits.items() if kind in still_used}
+        updated = dataclasses.replace(current, allowed=remaining, daily_limits=limits)
+        self._save_policy(updated,
+                          done=f"{PERMISSION_LABELS[action]} with {source_id} is no longer permitted.")
+
+    def _toggle_policy_stop(self) -> None:
+        """Move the stop switch, after one explicit yes. A no writes nothing at all."""
+        current = self._policy_shown
+        stopping = not current.stop_all
+        title = "Stop everything" if stopping else "Allow actions again"
+        if not messagebox.askyesno(title, policy_stop_question(stopping), parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        updated = dataclasses.replace(current, stop_all=stopping)
+        self._save_policy(updated,
+                          done="Everything is stopped." if stopping
+                               else "Your permissions apply again.")
+
+    def _revoke_policy(self) -> None:
+        """Withdraw the whole authorisation, after one explicit yes. A no writes nothing at all."""
+        current = self._policy_shown
+        if self._policy_version_shown == 0:
+            self.status.set("There is nothing to withdraw: nothing is authorised.")
+            return
+        if current.revoked_at:
+            self.status.set("Your authorisation is already withdrawn; nothing was changed.")
+            return
+        if not messagebox.askyesno("Withdraw all authorisation",
+                                   policy_revocation_question(len(current.allowed)),
+                                   parent=self.root):
+            self.status.set("Withdrawal cancelled; nothing was changed.")
+            return
+        try:
+            version = self.store.revoke_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_policy()
+        self.status.set(
+            f"Your authorisation is withdrawn, recorded as version {version}. Nothing is permitted, "
+            "and the earlier versions are kept so what was permitted before stays readable.")
+
+    def _explain_policy_row(self) -> None:
+        """Answer 'what would happen now?' for the selected row, honestly, without doing it."""
+        permission = self._selected_policy_permission()
+        if permission is None:
+            self.status.set("Select a permission in the list first; nothing was changed.")
+            return
+        source_id, action = permission
+        gate = (submission_gate(source_id) if action is PermissionKind.SUBMISSION
+                else discovery_gate(source_id))
+        decision = evaluate_policy(
+            self._policy_shown, source_id=source_id, action=action,
+            now=datetime.now(timezone.utc), done_today=0, source_gate_allows=gate.allowed)
+        self.policy_detail.set(policy_decision_text(decision, gate_reason=gate.reason))
+        self.status.set("Checked what would happen; nothing was started and nothing was changed.")
 
     def _build_data_safety(self):
         ttk.Label(
@@ -2489,6 +4230,15 @@ class CareerAgentApp:
                    command=self._draft_follow_up_email).pack(side="left", padx=8)
         ttk.Button(actions_row_two, text="Export to a calendar file",
                    command=self._export_follow_ups).pack(side="left", padx=8)
+        sending = ttk.Frame(actions)
+        sending.pack(fill=X, pady=(6, 0))
+        ttk.Label(sending, text="Send to (a stored HR contact)").pack(side="left")
+        self.follow_up_recipient = tk.StringVar(value="")
+        self.follow_up_recipient_box = ttk.Combobox(
+            sending, textvariable=self.follow_up_recipient, state="readonly", width=44, values=())
+        self.follow_up_recipient_box.pack(side="left", padx=(4, 8))
+        ttk.Button(sending, text="Try to send this follow-up...",
+                   command=self._send_follow_up_email).pack(side="left", padx=8)
         ttk.Label(
             self.follow_up_tab, wraplength=_TAB_TEXT_WRAP,
             text=("A follow-up is a day you plan to act on, not a status: setting one never moves the "
@@ -2620,6 +4370,30 @@ class CareerAgentApp:
             self.follow_up_summary.set(
                 f"{summary(found)} {missing} record(s) have a day but no stored listing any more; "
                 "they are not listed here.")
+        self._refresh_follow_up_recipients()
+
+    def _refresh_follow_up_recipients(self) -> None:
+        """Offer the stored HR contacts as recipients, minus anybody marked do-not-contact.
+
+        Read from the same rows the contacts tab shows, every time the list is drawn: an address
+        marked do-not-contact in another tab stops being offered here without this window being
+        reopened. The guard checks the list again anyway - this only keeps the window from inviting
+        a press whose answer is already known.
+        """
+        if not hasattr(self, "follow_up_recipient_box"):
+            return
+        try:
+            contacts = self.store.list_contacts()
+            blocked = [entry.address for entry in self.store.list_suppressions()]
+        except (StoredRecordError, SuppressionError, sqlite3.Error):
+            # A contact list that cannot be read is not a reason to break the reminders list, and a
+            # do-not-contact list that cannot be read must not quietly become an empty one: with no
+            # choices offered, nothing here can be attempted at all.
+            contacts, blocked = (), ()
+        choices = dispatch_recipient_choices(contacts, blocked)
+        self.follow_up_recipient_box.configure(values=choices)
+        if self.follow_up_recipient.get() not in choices:
+            self.follow_up_recipient.set("")
 
     def _follow_up_when(self, reminder) -> str:
         """How far away a reminder's day is, in words, from the day this window is being used."""
@@ -2831,6 +4605,113 @@ class CareerAgentApp:
             ttk.Label(scrolled, text=line, wraplength=830, justify="left").pack(anchor=W)
         self.status.set("Draft written in this window only: nothing was sent, and no email account is "
                         "connected.")
+
+    def _send_follow_up_email(self):
+        """Try to send the selected follow-up, through the one guarded path out of this machine.
+
+        Nothing here decides anything. The window builds the draft from records, asks once, and
+        hands the whole thing to :func:`integrations.guarded_dispatch`, which is where the order
+        lives: the do-not-contact list first, then what is already recorded for this job, then the
+        standing authorisation, then the enabling gate, then the integration. There is deliberately
+        no path around it - this method cannot call an integration directly, and the result it
+        shows is whatever the guard returned.
+
+        In this build the answer is always a refusal with a reason: no mailbox has ever been
+        authorised, so the default integration is the disabled one and the gate for this route is
+        closed. The refusal is written into the attempt records, which is the point of pressing a
+        button that is expected to say no.
+        """
+        listing_id = self._selected_follow_up_id()
+        if not listing_id:
+            messagebox.showinfo("Select an application",
+                                "Select the reminder this follow-up is about first.",
+                                parent=self.root)
+            return
+        choice = self.follow_up_recipient.get()
+        recipient = address_from_choice(choice)
+        if not recipient:
+            messagebox.showerror(
+                "Nothing was sent",
+                "Choose one of your stored HR contacts to send to. This window will not send to an "
+                "address you type in: every recipient here comes from a list you imported and "
+                "reviewed.", parent=self.root)
+            self.status.set("Nothing was sent; no recipient was chosen.")
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+            job = self.store.get_job(listing_id)
+            policy = self.store.get_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if tracker is None:
+            self._report_stale_selection(listing_id)
+            return
+        if job is None or tracker.follow_up_on is None:
+            messagebox.showinfo(
+                "Nothing to send",
+                "This application has no follow-up day recorded, so there is nothing to follow up "
+                "on. Set the day on this tab first.", parent=self.root)
+            return
+        today = datetime.now().date()
+        reminder = reminder_for(tracker, job, today)
+        if reminder is None:
+            messagebox.showinfo(
+                "Nothing to send",
+                "This application's follow-up day is not in the window this list covers, so there "
+                "is nothing to send about it today.", parent=self.root)
+            return
+        integration = integrations.default_integration()
+        if not messagebox.askyesno(
+                "Try to send this follow-up",
+                dispatch_question(job.employer_name, job.role_title, recipient,
+                                  integration_name=integration.name), parent=self.root):
+            self.status.set("Nothing was sent.")
+            return
+        try:
+            draft = integrations.draft_for_follow_up(reminder, recipient=recipient)
+            result = integrations.guarded_dispatch(
+                self.store, integration, draft,
+                identity_key=identity_key(job),
+                policy=policy,
+                source_id=job.source_id,
+                now=datetime.now(timezone.utc),
+                done_today=integrations.COUNT_FROM_RECORDS,
+                # No mailbox route has ever been enabled in this build, so the gate for this
+                # capability is closed by construction. It is passed explicitly rather than read
+                # from the discovery decisions: reading a job source's gate here would let a
+                # decision about *reading* a site stand in for permission to write to a person.
+                source_gate_allows=False,
+            )
+        except (AttemptError, PolicyError, SuppressionError,
+                integrations.IntegrationLedgerError, ValueError) as exc:
+            messagebox.showerror("Nothing was sent", str(exc), parent=self.root)
+            self.status.set("Nothing was sent; the attempt was refused before anything was tried.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        scrolled = self._open_read_only_dialog(
+            title="What the guarded path answered",
+            heading=f"Follow-up to {recipient} about {job.role_title} at {job.employer_name}",
+            intro=("This is what the guard returned. The attempt - including a refusal - is "
+                   "written into your records, and you can read it again on the What's happening "
+                   "tab."),
+        )
+        self._add_read_only_lines(scrolled, dispatch_result_text(
+            result.outcome.value, result.performed, result.message,
+            integration_name=result.integration_name).splitlines())
+        self._refresh_report()
+        self.status.set(
+            f"{'Performed' if result.performed else 'Nothing was sent'}: "
+            f"recorded as operation {result.operation_id}."
+            if result.operation_id else "Nothing was sent; nothing was recorded.")
 
     def _refresh_scheduler(self):
         """Re-read the schedule and the run history; change nothing.

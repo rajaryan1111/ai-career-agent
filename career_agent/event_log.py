@@ -110,6 +110,38 @@ EVENTS: tuple[str, ...] = (
     "contacts.deleted",
     "contacts.exported",
     "contacts.export.failed",
+    # The versioned role strategies: one event per strategy written, revised or deleted. The identifier
+    # is generated (never typed) and the version is a number; the strategy's own content - its name, the
+    # places, the employers ruled out - is the person's data and never reaches the log.
+    "attempt.started",
+    "suppression.recorded",
+    "suppression.lifted",
+    "suppression.blocked",
+    # Acceptance evidence recorded against a route's written requirements. The route id and the kind
+    # of requirement are this project's own vocabulary; the reference and the note the person typed
+    # are not logged, because either can carry a name, an address or a private URL.
+    "evidence.recorded",
+    "evidence.withdrawn",
+    "notifications.saved",
+    "notifications.prepared",
+    "attempt.settled",
+    "attempt.unresolved",
+    "attempt.reconciled",
+    "policy.saved",
+    "policy.revoked",
+    "strategy.created",
+    "strategy.revised",
+    "strategy.deleted",
+    # A tailored artifact is one row of evidence about what was prepared; the event carries its
+    # generated identifier and its shape (kind, strategy version). The document's text, the listing's
+    # employer and role, and every fact value stay out of the log.
+    "artifact.saved",
+    "artifact.deleted",
+    # A copy written out to a file the person named. The identifier and the size are recorded; the
+    # path is not - a folder name is as personal as anything else on their disk, and the question the
+    # log has to answer later is "was a copy made of this document", not "where is it now".
+    "artifact.exported",
+    "artifact.export.refused",
     "backup.written",
     "backup.refused",
     "restore.completed",

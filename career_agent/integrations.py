@@ -53,7 +53,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
+from .attempts import AttemptError, AttemptState, may_attempt, state_from_outcome
 from .followups import FollowUpReminder, event_summary, event_uid
+from .suppression import SuppressionError, refusal_message as suppression_refusal
+from .policy import (
+    ActionKind, GlobalPolicy, PolicyError, PolicySubject, evaluate_policy, no_authorisation,
+)
 from .store import write_private_text_file
 
 #: The longest a subject line may be. Long enough for a real subject, short enough to stay a subject.
@@ -894,6 +899,176 @@ def dispatch_with_retry(
         result = perform(request)
         tried += 1
     return result if tried == 1 else replace(result, attempts=tried)
+
+
+def authorised_dispatch(
+    integration: Integration, request: EmailDraft | CalendarEventRequest, *,
+    policy: GlobalPolicy | None,
+    source_id: str,
+    now: datetime,
+    done_today: int | None,
+    source_gate_allows: bool,
+    subject: PolicySubject | None = None,
+    attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> IntegrationResult:
+    """Dispatch a request **only** when the standing authorisation and the enabling gate both permit it.
+
+    This is a separate door from :func:`dispatch_with_retry` on purpose. That function is the mechanical
+    part - perform, retry a failure, stop - and it is used by tests and by the local stand-in, where there
+    is nothing to authorise because nothing leaves the machine. This one is what a real provider would be
+    called through, and it refuses by default:
+
+    * ``policy=None`` refuses: a missing authorisation is not an empty one, and neither permits anything;
+    * ``done_today=None`` refuses: a daily limit cannot be honoured without today's count, and the count
+      has to come from durable records rather than from a number this function could invent;
+    * ``source_gate_allows=False`` refuses, whatever the authorisation says, so an authorisation can never
+      open a gate;
+    * an operation the authorisation has no word for refuses by raising :class:`PolicyError`, because
+      guessing which action a request counts as is exactly the mistake a limit exists to prevent.
+
+    A refusal is returned as :attr:`Outcome.DISABLED` with ``performed=False`` and the decision's own
+    reasons in ``detail`` - the same shape a disabled integration returns, because to the caller the two
+    mean the same thing: nothing happened, and here is why.
+    """
+    if isinstance(request, EmailDraft):
+        action = ActionKind.EMAIL_SEND
+    else:
+        raise PolicyError(
+            "A calendar event is not an action the standing authorisation can describe, so it cannot be "
+            "authorised here. Write the .ics file and let the person's own calendar accept it."
+        )
+    operation_id = request.operation_id or ""
+    if done_today is None and policy is not None:
+        return IntegrationResult(
+            outcome=Outcome.DISABLED, operation_id=operation_id,
+            message="Nothing was sent: how many of today's messages have already gone out is not known, "
+                    "and a daily limit cannot be honoured without it.",
+            performed=False, integration_name=integration.name)
+    decision = evaluate_policy(
+        policy if policy is not None else no_authorisation(),
+        source_id=source_id, action=action, now=now,
+        done_today=done_today or 0, source_gate_allows=source_gate_allows, subject=subject)
+    if not decision.allowed:
+        return IntegrationResult(
+            outcome=Outcome.DISABLED, operation_id=operation_id,
+            message=f"Nothing was sent: this is not authorised. {decision.describe()}",
+            performed=False, integration_name=integration.name,
+            detail="; ".join(decision.refusals))
+    return dispatch_with_retry(integration, request, attempts=attempts)
+
+
+#: Pass as ``done_today`` to have :func:`guarded_dispatch` count the day's actions from the stored
+#: attempt rows instead of being told. ``None`` keeps its meaning - *nobody counted* - and refuses.
+COUNT_FROM_RECORDS = "count-from-records"
+
+
+def guarded_dispatch(
+    store, integration: Integration, request: EmailDraft, *,
+    identity_key: str,
+    policy: GlobalPolicy | None,
+    source_id: str,
+    now: datetime,
+    done_today: int | str | None,
+    source_gate_allows: bool,
+    subject: PolicySubject | None = None,
+    attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> IntegrationResult:
+    """Dispatch at most once per job identity, writing the attempt down before it is made.
+
+    This is :func:`authorised_dispatch` with the part that makes a retry safe to allow at all: a
+    durable record of what has already been tried, keyed by the **cross-source job identity** rather
+    than by a listing id, so the same vacancy found on two sources cannot be written to twice.
+
+    The order is the point:
+
+    1. read what is already recorded for this identity and action, and refuse when an earlier attempt
+       ended without an established outcome (it may have happened) or already succeeded (a second one
+       is a duplicate, not a retry);
+    2. write the attempt as ``unknown`` **before** performing it, so a crash in the middle leaves
+       evidence rather than silence;
+    3. perform it through the authorised door, which still checks the policy and the gate;
+    4. record what was observed - and a dispatch that *failed* settles as ``unknown``, not as
+       ``failed``, because a failure mid-flight is exactly the case nobody can resolve from here.
+
+    Nothing about this function can make an action permissible: every refusal in
+    :func:`authorised_dispatch` still applies, and today every one of them fires.
+    """
+    identity = str(identity_key or "").strip()
+    if not identity:
+        raise AttemptError(
+            "A dispatch is recorded against a job identity so it cannot be repeated; none was given.")
+    operation_id = str(getattr(request, "operation_id", "") or "").strip()
+    action = ActionKind.EMAIL_SEND.value
+    if not operation_id:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id="", integration_name=integration.name,
+            performed=False,
+            message="Nothing was sent: this request carries no operation id, and without one a "
+                    "repeat could not be told from a first attempt.")
+    if done_today is COUNT_FROM_RECORDS:
+        # Counted before this attempt's own row exists, or an allowance of one would refuse the
+        # first action of the day for having already spent itself.
+        done_today = store.actions_done_today(action, now=now)
+    recipient = str(getattr(request, "recipient", "") or "").strip()
+    if recipient:
+        try:
+            suppressed = store.suppression_for(recipient)
+        except SuppressionError:
+            suppressed = None  # An address this application cannot match on reaches no provider anyway.
+        if suppressed is not None:
+            store._record("suppression.blocked", "count=1")
+            return IntegrationResult(
+                outcome=Outcome.DISABLED, operation_id=operation_id,
+                integration_name=integration.name, performed=False,
+                message=suppression_refusal(suppressed),
+                detail=f"reason={suppressed.reason.value}")
+    recorded = store.list_attempts(identity_key=identity, action=action)
+    if (policy is not None and policy.follow_up_limit is not None
+            and (subject is None or subject.follow_ups_so_far is None)):
+        # The limit is per job, so the count is per job identity, and it comes from the rows rather
+        # than from the caller's memory of what it sent.
+        already = sum(1 for attempt in recorded if attempt.state is not AttemptState.REFUSED)
+        subject = (replace(subject, follow_ups_so_far=already) if subject is not None
+                   else PolicySubject(follow_ups_so_far=already))
+    # An operation id derived from the message's own content repeats when the same message is built
+    # twice - the same follow-up, to the same person, pressed again. The write-ahead row for that id
+    # is already settled, and settling it a second time is refused by the ledger, so this is answered
+    # here rather than as an exception out of the store: the attempt is reported with the outcome
+    # that *is* recorded, and nothing is sent. Found by giving this function its first caller in the
+    # window; before that, every caller built a fresh message each time.
+    already = store.get_attempt(operation_id)
+    if already is not None and already.state is not AttemptState.UNKNOWN:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id=operation_id,
+            integration_name=integration.name, performed=False,
+            message=(f"Nothing was sent: this exact message was already attempted on "
+                     f"{already.started_at} and is recorded as {already.state.value}. Change the "
+                     f"message, or look at what was recorded, rather than repeating it blind."),
+            detail=f"state={already.state.value}")
+    decision = may_attempt(recorded, identity_key=identity, action=action)
+    if not decision.allowed:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id=operation_id, integration_name=integration.name,
+            performed=False, message=decision.describe(),
+            detail="; ".join(decision.blocking_operation_ids))
+    # The attempt is stamped with the moment the policy was judged at, not with whatever the clock
+    # says a few milliseconds later: a limit evaluated for one day must be counted against that day.
+    moment = now.isoformat() if isinstance(now, datetime) else None
+    store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action, now=moment)
+    result = authorised_dispatch(
+        integration, request, policy=policy, source_id=source_id, now=now,
+        done_today=done_today, source_gate_allows=source_gate_allows, subject=subject,
+        attempts=attempts)
+    state = state_from_outcome(result.outcome.value, performed=result.performed)
+    store.settle_attempt(operation_id, state=state, detail=result.message[:300], now=moment)
+    if state is AttemptState.UNKNOWN:
+        return replace(
+            result,
+            message=(result.message + " Whether it arrived could not be established, so it is "
+                     "recorded as unknown and no further attempt will be made at this job until "
+                     "you check and reconcile it."),
+            detail="unknown outcome recorded")
+    return result
 
 
 @dataclass(frozen=True)

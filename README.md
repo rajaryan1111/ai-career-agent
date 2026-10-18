@@ -59,6 +59,10 @@ career-agent --version           # print the version and database schema version
 career-agent --database "/path/to/career-agent.sqlite3"
 career-agent --doctor            # where is my data, and can this app read it?
 career-agent --analytics         # what the records add up to, with every denominator named
+career-agent --report            # what has been happening: unresolved things first, nothing inferred
+career-agent --report --weekly   # the same over seven days, with a fortnight of dates ahead
+career-agent --notifications     # when this application may tell you something (off by default)
+career-agent --acceptance-evidence  # what a job route must prove before it could be enabled
 career-agent --integration-status        # whether this app can email or add events, and why not
 career-agent --preview-calendar-export   # what the .ics export would contain, without writing it
 career-agent --draft-follow-up j1        # a follow-up email draft you can read and copy out; nothing is sent
@@ -660,6 +664,32 @@ the app uses, and a run outcome that is one of success/empty/partial/failure rat
 is deliberately **no flag anywhere that opens the gate**: measured today, forcing it open would enable
 exactly one source, and the whole "nothing runs" property rests on that one constant being honest.
 
+### In the window: the Sources & evidence tab
+
+The same two answers are on a tab now, because a person looking at an empty jobs list should not have to
+run a command to learn why it is empty.
+
+- **Where jobs could come from, and why they do not.** Every reviewed source, what the review decided,
+  and - for the one you select - the gate's own sentence for reading and for submitting, plus the
+  conditions written into the review. "Closed" always comes with a reason.
+- **What a route would have to prove first.** The six application routes, each with the nine written
+  requirements, and whichever of them you have recorded in your own database: *held* or *missing*, with
+  the date, where to check it and what you wrote about it.
+
+Recording a piece of evidence needs two things in the boxes at the bottom: a **reference** - a link, a
+file, a message id, anything another person can open - and a **note** of what you actually checked. The
+window asks once before writing, refuses an empty reference or a note shorter than eight characters
+before it asks, and never writes over a requirement that is already recorded: you withdraw it, with a
+reason, and record it again. The event log keeps the route and the requirement only; what you typed stays
+in your database.
+
+**Recording evidence switches nothing on.** The source-quality gate is a constant in this build's code,
+not a row in your database; discovery, submission, outbound email and inbox reading are gated separately,
+and evidence for one of them opens none of the others. A route that shows "every requirement recorded" is
+a route somebody could now sensibly *discuss* enabling - the enabling itself is a deliberate code change
+made by a person who has read what is recorded. `python -m career_agent --acceptance-evidence` prints the
+same thing, reading your database when one already exists and never creating one.
+
 ## How matching works (and what it will not claim)
 
 When you evaluate a saved listing, the app shows two things: whether you appear **eligible**, and how the
@@ -698,6 +728,60 @@ reads like a forecast appears in the output. A listing whose stated requirements
 than guessing from the listing's free text. Also, differently-spelled skill names are only treated as the
 same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
 otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
+
+## Build a tailored résumé or cover letter (on this machine, from your own facts)
+
+The **Tailored documents** tab builds a document for one listing, under one role strategy, out of the
+facts you have already saved. Nothing is fetched, nothing is uploaded, and no employer ever sees
+anything the app does here.
+
+1. In **Build one**, choose the listing, the strategy (each line shows the version a document would be
+   tied to) and whether you want a tailored résumé or a cover letter.
+2. Press **Show what would be used…**. Nothing is stored yet. You get the facts the document would be
+   built from, the file those facts were read out of, the ones still marked unconfirmed, how many work
+   and study records it can draw on, and what is **missing** — the skills the strategy asks for that
+   your facts do not state, and separately the ones this listing asks for. Missing things are reported;
+   they are never written into the document. Below that you get **the document itself**, in full, exactly
+   as it would be stored.
+3. Press **Build this document…** and confirm. What gets stored is exactly the document you just read.
+   If your facts changed, or the strategy moved to a new version, or you changed what you picked while
+   you were reading, the build is **refused** with the reason and nothing is written — so a document can
+   never quietly claim a provenance it does not have.
+4. The new row appears in the list below with its listing, strategy version, when it was built, the file
+   its facts came from, and whether it is still current.
+
+**Saving a copy.** Select a row and press **Save a copy to a file…**. You get a plain-text file with a
+short header — which document it is, which listing and strategy version it was built under, when, which
+file the facts came from, which facts were unconfirmed at the time, and the fact that it was built only
+from your saved facts and sent nowhere — followed by the document itself. The file is written so that
+only you can read it.
+
+**Two refusals worth knowing about.**
+
+- **An existing file is never written over.** If the name you choose is already taken, the app refuses
+  and nothing happens, even if you meant it. The file most likely to be picked by accident is the résumé
+  the document was built from, and a replace prompt is one careless click away from losing it. Choose a
+  name that is free.
+- **A document whose facts, strategy or listing have moved on will not be saved out**, and the row says
+  which fact, version or part of the listing moved. Rebuild it from your current facts first — the old
+  document stays as history.
+
+**The job itself can move too.** A document is written *for a job*, so the employer's name, the role
+title and the skills that job asks for are stored with it. Rename the employer, retitle the role, or
+change what the listing asks for, and every document written for it reads **Rebuild before use —** with
+the old and new values spelled out. Editing something no document reads — the listing's URL, its
+availability, the note on where you found it — changes nothing, because none of it appears in what was
+written.
+
+**A third state: "Cannot be checked".** Documents built by a version of this app older than schema 16
+have no record of what their listing said at the time. The app will not guess, and it will not call them
+current: the row says they were stored before the listing was recorded with them, and they cannot be
+saved out. Rebuilding one gives you a document that can be checked from then on. All three states are
+written in the row in words — nothing here is signalled by colour alone.
+
+**What it will not write.** No employment, qualification, metric, certification or project outcome you
+have not recorded. Screening-question answers are not offered at all: an answer invented by software
+and signed with your name is the one thing this app will not produce.
 
 ## Keep your own employment and education record
 
@@ -780,6 +864,57 @@ import proposes the flat profile fields only), any verification of a record agai
 use of these records in eligibility or matching. They are your notes.
 
 ## See how the search is going (and what the numbers do not mean)
+
+### When it may tell you something
+
+Off until you say otherwise. `python -m career_agent --notifications` shows the current preference;
+`--notifications daily` or `--notifications weekly` sets a cadence, and `--notifications off` stops it.
+A report is prepared only after the hour you chose, only once per period, never during the quiet hours
+recorded in your standing authorisation, and never at all while everything is stopped or your
+authorisation has been withdrawn. By default a period in which nothing needs you passes in silence.
+
+**What this cannot do.** There is no email, no push and no system notification in this build. The two
+honest channels are the window you open and a file on your own machine, and asking for anything else is
+refused rather than quietly downgraded. Nothing reaches you while the application is closed.
+
+### What has been happening
+
+`python -m career_agent --report` prints what the records say has been going on, built only from rows that
+already exist — scheduled runs, the tracker, attempts at outside actions, the standing authorisation and the
+source gates. Three rules decide what it says, and they are the reason it exists:
+
+- **Queued is not done.** A scheduled task, a run that is pending and an application marked *prepared* are
+  plans; they are reported as plans and never counted as things that happened.
+- **Unknown leads.** An attempt whose outcome was never established, a run that timed out, an application
+  recorded as sent-but-unverified: those come first, because only you can resolve them. Time never settles
+  one of them.
+- **A refusal is not a failure.** A scheduled discovery run that refuses because the source gate is closed is
+  the permission rule working, and the report says so rather than reporting an error.
+
+```bash
+python -m career_agent --report            # the last 24 hours, with a week of dates ahead
+python -m career_agent --report --weekly   # the last seven days, with a fortnight of dates ahead
+```
+
+Read-only: it fetches nothing, sends nothing and changes nothing.
+
+The same report is in the window, on the **What's happening** tab, with the two things a printed report
+cannot give you: the attempts nobody has settled are a list you can act on, and the notification preference
+is a control rather than a stored value you have to take on trust.
+
+- **The list of unsettled attempts comes first**, because an attempt whose outcome was never established
+  blocks any further attempt on the same job and action, and nothing but you can clear it.
+- **Settling one needs evidence and one explicit yes.** The window asks for what you checked — a provider's
+  own log, a sent-mail folder, a reply — refuses an empty or near-empty note, and quotes the note back in the
+  confirmation before anything is written. Settling is the only write on the tab; "still unknown" is not an
+  option, because recording it would clear nothing.
+- **The report is the reporting module's own text**, headline included. The window adds no count and no
+  wording of its own, so the tab and `--report` cannot disagree about the same records.
+- **The notification preference is set here**, and the confirmation says plainly what it does not buy:
+  no email, no push, no system notification, nothing while the application is closed. Changing it writes a
+  preference and starts nothing.
+
+Nothing on the tab fetches, sends or submits anything.
 
 `python -m career_agent --analytics` prints what the records in this database add up to. The same report is
 in the window: a one-line summary under the **Application tracker** list and a **Progress report** button
@@ -898,6 +1033,42 @@ mocked into looking present — a reminder that needs somebody's credentials is 
 not faked. What it does have is the *interface* for one, with every path to a real side effect switched
 off: see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar).
 
+## What you can put conditions on
+
+The standing authorisation (the **Permissions & limits** tab, and `career_agent/policy.py` behind it) is
+a single value that says what this application may ever do. It carries seven things:
+
+| What | Means |
+| --- | --- |
+| `(source, action)` pairs | "this board, for looking" is a different permission from "this board, for applying" |
+| daily limits | required per action — an authorisation without a ceiling is not one this app will act on |
+| quiet hours | a local window, which may wrap past midnight; nothing acts and nothing is prepared inside it |
+| role conditions | terms that must appear in a role's title before it may be acted on |
+| place conditions | where a role may be |
+| attachment rules | which kinds of file may ever be attached — **with no rule, nothing may be attached** |
+| follow-up limit | how many follow-ups one job may receive in total, counted from stored attempts |
+| stop / withdraw | two ways to switch everything off, checked before anything else |
+
+Conditions fail closed in both directions: a condition that cannot be checked — because nothing described
+the job being acted on — **refuses**, and every failed condition is reported together rather than one per
+attempt. A tightened authorisation is a different authorisation: it gets its own stored version, and
+changing permissions in the window carries the conditions through untouched.
+
+**Where you set them.** On the **Permissions & limits** tab, under the permissions they narrow — role
+terms, places, file endings, the follow-up limit and the quiet window, each in its own box. They were
+stored and enforced from the day they were added and could only be *set* from Python until 2026-10-18.
+Four rules the tab keeps:
+
+- **Empty means no condition of that kind**, with the one exception said beside the box: with no
+  attachment rule, nothing may be attached at all.
+- **Half a quiet window is refused, not guessed.** "Quiet from 22" with no end hour is either one hour
+  or ten, and the refusal happens before the confirmation is asked. Hours that start and end together
+  are refused for the same reason.
+- **The confirmation lists what changes**, in both directions — `roles must mention: data → nothing` —
+  says a condition can only narrow, and names the version number it is about to write.
+- **The boxes read back what is stored**, so pressing save again writes no new version: the
+  authorisation's content key is unchanged, and a version that records nothing is not written.
+
 ## Can it send email or add things to my calendar?
 
 Short answer: no, and it will not pretend otherwise. What exists is the interface a real integration would
@@ -936,6 +1107,38 @@ operations in a file you choose, contacts nothing, and needs no socket at all (a
 draft-and-record path in an interpreter where creating a socket raises). What the mock cannot do is prove
 that a request the network dropped never arrived — that is provider-side idempotency, and it is why a real
 integration is a decision with evidence behind it rather than a flag.
+
+### Pressing the button that is expected to say no
+
+The **Follow-ups** tab has a third control now: **Try to send this follow-up...**, next to the draft. It
+is the first thing in the application that reaches the central dispatch guard, and it exists because a
+guard nothing calls is a guard nobody has tested in the only situation that matters.
+
+What it does, in this order — all of it inside `integrations.guarded_dispatch`, with no path around it:
+
+1. **the do-not-contact list**, before any attempt is written down at all;
+2. **what is already recorded for this job**: an attempt that succeeded, or one whose outcome nobody
+   established, stops this one — no blind retry;
+3. **your standing authorisation**: the action, the source, the daily limit, the quiet hours and every
+   condition you set;
+4. **the enabling gate for the route**, which no authorisation can open;
+5. **the integration**, which in this build is the disabled one.
+
+Before anything is attempted, the attempt is written into your records with an unknown outcome, so a crash
+halfway through leaves evidence instead of silence; what actually happened is written over it afterwards,
+and a failure in flight stays *unknown* rather than becoming *failed*. A refusal does not spend your daily
+allowance, because nothing left the machine.
+
+**The recipient can only be one of your stored HR contacts.** You cannot type an address here, and an
+address on the do-not-contact list is not offered at all — the guard would refuse it anyway, but offering
+it would be an invitation to find that out by pressing the button.
+
+**In this build the answer is always a refusal with a reason.** No mailbox has ever been authorised, so
+the default integration is the disabled one and the gate for this route is closed; a test proves that even
+a full standing authorisation and a working local integration cannot get a message out of this window.
+What you get is the refusal, written into your records where the **What's happening** tab can show it. When
+a mailbox is one day authorised, "the provider accepted it" will still not mean delivered, read or
+replied to: those need the inbox permission this project does not have.
 
 ## Run scheduled tasks (local worker)
 
@@ -979,6 +1182,85 @@ timed out rather than successful), but the worker cannot force a Python function
 **Discovery stays refused.** `--worker` reports the gate's state at startup, and every scheduled
 discovery run is recorded as a refusal with the reason. That is the permission rule working, not a
 fault: no source has passed the quality gate, so nothing is read.
+
+## The do-not-contact list
+
+The one record this application keeps about somebody who is **not** you. An address goes on the list
+when a person asks to stop, when mail to it bounces permanently, when it turns out to be the wrong
+person, when they say they are not recruiting, or because you decided not to write to them. The entry
+keeps the reason, because "they asked us to stop" and "the address bounced" are the same silence with
+very different meanings.
+
+What the list guarantees:
+
+- it **survives restarts**, and is checked inside the only function that could ever send;
+- it cannot be walked around by capitalisation or whitespace — matching is on the normalised address;
+- the **first reason wins**: re-recording the same address never softens "they asked to stop" into
+  something this application could undo on its own;
+- **nothing expires.** There is no rule that says a person's no runs out after six months;
+- lifting an entry is a deliberate act that **requires a note**, and nothing else in the application
+  removes one — no import, no retry, no cleanup;
+- a blocked attempt writes **no attempt record and no message**, and the event log records a count,
+  never the address.
+
+What it does not do: this build sends nothing at all, so the list is a guard in front of a door that
+is already locked. It exists now because the alternative — adding it at the same time as sending —
+is how people end up emailing someone who asked them not to.
+
+**In the window.** The list is on the **HR contacts** tab, under the stored contacts, beside the mark
+that writes it — and marking a contact *is* what puts the address on it. That was two separate things
+until 2026-10-18: the window wrote a column on the contact row, and the list the sending gate reads
+could only be reached from Python, so a person could mark somebody "do not contact" and leave the one
+check that matters knowing nothing about it. One decision is now recorded in both places, from one
+confirmation:
+
+- **marking** asks for a reason — the five the list defines, no sixth — and the confirmation says the
+  address goes on the list that is checked before anything may be sent, and that recording an address
+  twice keeps the first reason;
+- **taking a mark off** needs a note of at least four characters, refused *before* the question is
+  asked rather than after, because an entry removed with no note cannot be told apart from a mistake;
+- **a note's text is never shown in the list, a dialog, an event or the log** — only that one exists;
+- a contact marked by an older build shows as **not on the list**, and the line above the list says
+  how many are in that state, because quietly counting them as protected would be the dangerous lie.
+
+
+**An address that was never in your contact file can go on the list too.** On the **HR contacts** tab,
+under the list itself: type the address, choose why, and confirm once. It needs no contact row, invents
+none, and the confirmation says what the reason means - "they asked not to be contacted" is permanent in
+this application, the others are not. An address already on the list keeps the reason it was first
+recorded with; the window says so and writes nothing. This closes the gap that mattered most about this
+list: the person most likely to have asked to stop is the one who replied from an address your imported
+file never had.
+
+## Syncing, credentials, and what is deliberately not claimed
+
+**Laptop-off operation is not available, and this project does not claim it.** The worker is a
+foreground process you start: there is no service unit, no operating-system scheduler registration and
+no deployed component. Before any always-on claim could be made, there would have to be release
+evidence for it — a deployed worker, a tested storage boundary, a recorded run while the laptop was
+shut, and a stated recovery behaviour for an interrupted run. None of that exists, so the claim is not
+made anywhere.
+
+**The remote storage and sync boundary.** Your data is one SQLite file on one machine. That file is
+safe in a folder that only this machine writes. It is **not** safe as a shared file:
+
+- a database in a sync folder (Dropbox, iCloud Drive, OneDrive, Google Drive) that two machines open
+  at once can be corrupted by the sync service, which copies bytes without knowing about transactions;
+- `WorkerLease` protects one file from two workers *on one machine* — it is crash recovery, not a
+  distributed lock, and it cannot protect a file two computers reach through a sync service;
+- pointing a remote worker at this file is therefore refused by design, and will stay refused until a
+  boundary is designed and tested rather than assumed.
+
+To move data between machines, use the supported paths: `--backup` / `--restore` for the whole
+database, or `--export-json` / `--import-json` for the portable subset. Both are explicit, and both
+leave you with one writer at a time.
+
+**Credentials.** This application stores none. There is no mailbox token, no site login, no API key
+and no password anywhere in the database, the event log or a backup — and nothing in it asks you for
+one. If a route ever needs a credential, the rule is already written down: it belongs in the operating
+system's own keychain, referenced by name, never in the database and never in anything this
+application exports. You can check that claim rather than trust it: a test asserts no column in the
+schema and no file in the package holds a credential-shaped name.
 
 ## Audit research data
 
@@ -1068,7 +1350,8 @@ python scripts/desktop_smoke_test.py
 ```
 
 It constructs the real `CareerAgentApp` against a disposable synthetic database in a temporary folder,
-checks the window's title, minimum size, nine tabs in their documented order, that every tab was built,
+checks the window's title, minimum size, every documented tab in its documented order, that every tab was
+built,
 and that the main lists carry the columns they are read from, switches to every tab with a real rendering
 pass, presses the affected tabs' read-only **Refresh** buttons through Tk's own command dispatch, then
 closes the window, releases the database and deletes the folder it created — and checks that the default
