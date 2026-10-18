@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .core import JobListing, canonicalize_url, duplicate_key, deduplicate_listings
+from .policy import ActionKind, GlobalPolicy, evaluate_policy, no_authorisation
 from .sources import (
     RunOutcome, discovery_gate, is_failure, is_partial, is_transient,
 )
@@ -645,15 +646,24 @@ class AdapterRegistry:
         return None if adapter is None else adapter.capabilities
 
     def execute(self, source_id: str, request: AdapterRequest, *,
-                budget: RequestBudget | None = None, now: datetime | None = None) -> AdapterResponse:
-        """Run one bounded request through the gate. Refuses unless the source is fully approved.
+                budget: RequestBudget | None = None, now: datetime | None = None,
+                policy: GlobalPolicy | None = None, done_today: int | None = None) -> AdapterResponse:
+        """Run one bounded request through the gate and the standing authorisation.
 
-        Three refusals are possible, and each is raised rather than reported as a source outcome, because
+        Five refusals are possible, and each is raised rather than reported as a source outcome, because
         none of them is the source's fault:
 
         * no adapter is registered for that source id (a framework gap, not a source failure);
         * the registered adapter does not declare discovery capability;
-        * the source's discovery gate is closed.
+        * the source's discovery gate is closed;
+        * no standing authorisation was supplied, or the one supplied does not cover this source;
+        * an authorisation was supplied without today's count, so its daily limit cannot be honoured.
+
+        The authorisation is checked **immediately before the call**, after the gate, and it is checked
+        with ``source_gate_allows`` set from the gate's own answer, so the two can only ever agree to
+        permit - a policy cannot open a gate. The last two refusals are the fail-closed half: a caller
+        that forgets the ``policy`` argument gets a refusal, never a run, and a caller that cannot say how
+        many of today's actions already happened cannot be given a sixth one under a limit of five.
 
         There is deliberately **no parameter to open the gate here.** The recorded state is the only
         state this method consults, because - measured today - forcing
@@ -677,6 +687,22 @@ class AdapterRegistry:
         if not gate.allowed:
             raise SourceDisabled(
                 f"Discovery for {source_id} is not permitted, so no request was made. {gate.reason}"
+            )
+        if policy is not None and done_today is None:
+            raise SourceDisabled(
+                f"Discovery for {source_id} is not authorised, so no request was made. An authorisation "
+                f"was supplied without a count of today's discovery runs, and a daily limit cannot be "
+                f"honoured without one."
+            )
+        moment = now or datetime.now(timezone.utc)
+        decision = evaluate_policy(
+            policy if policy is not None else no_authorisation(),
+            source_id=source_id, action=ActionKind.DISCOVERY, now=moment,
+            done_today=done_today or 0, source_gate_allows=gate.allowed)
+        if not decision.allowed:
+            raise SourceDisabled(
+                f"Discovery for {source_id} is not authorised, so no request was made. "
+                f"{decision.describe()}"
             )
         return call_adapter(adapter, request, now=now, budget=budget)
 

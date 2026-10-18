@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .followups import FollowUpReminder, event_summary, event_uid
+from .policy import ActionKind, GlobalPolicy, PolicyError, evaluate_policy, no_authorisation
 from .store import write_private_text_file
 
 #: The longest a subject line may be. Long enough for a real subject, short enough to stay a subject.
@@ -894,6 +895,61 @@ def dispatch_with_retry(
         result = perform(request)
         tried += 1
     return result if tried == 1 else replace(result, attempts=tried)
+
+
+def authorised_dispatch(
+    integration: Integration, request: EmailDraft | CalendarEventRequest, *,
+    policy: GlobalPolicy | None,
+    source_id: str,
+    now: datetime,
+    done_today: int | None,
+    source_gate_allows: bool,
+    attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> IntegrationResult:
+    """Dispatch a request **only** when the standing authorisation and the enabling gate both permit it.
+
+    This is a separate door from :func:`dispatch_with_retry` on purpose. That function is the mechanical
+    part - perform, retry a failure, stop - and it is used by tests and by the local stand-in, where there
+    is nothing to authorise because nothing leaves the machine. This one is what a real provider would be
+    called through, and it refuses by default:
+
+    * ``policy=None`` refuses: a missing authorisation is not an empty one, and neither permits anything;
+    * ``done_today=None`` refuses: a daily limit cannot be honoured without today's count, and the count
+      has to come from durable records rather than from a number this function could invent;
+    * ``source_gate_allows=False`` refuses, whatever the authorisation says, so an authorisation can never
+      open a gate;
+    * an operation the authorisation has no word for refuses by raising :class:`PolicyError`, because
+      guessing which action a request counts as is exactly the mistake a limit exists to prevent.
+
+    A refusal is returned as :attr:`Outcome.DISABLED` with ``performed=False`` and the decision's own
+    reasons in ``detail`` - the same shape a disabled integration returns, because to the caller the two
+    mean the same thing: nothing happened, and here is why.
+    """
+    if isinstance(request, EmailDraft):
+        action = ActionKind.EMAIL_SEND
+    else:
+        raise PolicyError(
+            "A calendar event is not an action the standing authorisation can describe, so it cannot be "
+            "authorised here. Write the .ics file and let the person's own calendar accept it."
+        )
+    operation_id = request.operation_id or ""
+    if done_today is None and policy is not None:
+        return IntegrationResult(
+            outcome=Outcome.DISABLED, operation_id=operation_id,
+            message="Nothing was sent: how many of today's messages have already gone out is not known, "
+                    "and a daily limit cannot be honoured without it.",
+            performed=False, integration_name=integration.name)
+    decision = evaluate_policy(
+        policy if policy is not None else no_authorisation(),
+        source_id=source_id, action=action, now=now,
+        done_today=done_today or 0, source_gate_allows=source_gate_allows)
+    if not decision.allowed:
+        return IntegrationResult(
+            outcome=Outcome.DISABLED, operation_id=operation_id,
+            message=f"Nothing was sent: this is not authorised. {decision.describe()}",
+            performed=False, integration_name=integration.name,
+            detail="; ".join(decision.refusals))
+    return dispatch_with_retry(integration, request, attempts=attempts)
 
 
 @dataclass(frozen=True)
