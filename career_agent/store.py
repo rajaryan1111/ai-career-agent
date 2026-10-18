@@ -32,6 +32,10 @@ from .core import (
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
 )
+from .acceptance_evidence import (
+    EVIDENCE_TITLES, ROUTE_REQUIREMENTS, EvidenceError, EvidenceKind, RouteEvidence,
+    get_route,
+)
 from .attempts import AttemptError, AttemptRecord, AttemptState
 from .suppression import (
     SuppressionEntry, SuppressionError, SuppressionReason, normalise_address,
@@ -51,7 +55,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 14
+_SCHEMA_VERSION = 15
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -101,6 +105,12 @@ SCHEMA_TABLES_BY_VERSION = {
          "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
          "role_strategy_version", "scheduled_task", "tailored_artifact", "task_run",
          "worker_lease"),
+    15: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "route_evidence", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
     13: ("action_attempt", "app_preference", "application_activity", "application_preparation",
          "application_tracker", "candidate_education", "candidate_profile",
          "candidate_work_history", "hr_contact", "hr_contact_conflict", "interview_round",
@@ -1235,6 +1245,27 @@ def _migration_to_v14(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v15(connection: sqlite3.Connection) -> None:
+    """Schema 15: the acceptance evidence a person has recorded for a route.
+
+    Additive and empty. One row per (route, kind of evidence), because the requirements are written
+    per route and per kind: "we reviewed the terms" is a different claim from "we have a rate limit
+    in writing", and a single "approved" flag would let one of them stand in for the other. The
+    reference is where the evidence lives - a URL, a document, a message id - so a claim recorded
+    here can be checked by somebody who was not in the room.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS route_evidence (
+               route_id TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               reference TEXT NOT NULL,
+               note TEXT NOT NULL DEFAULT '',
+               PRIMARY KEY (route_id, kind)
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1254,6 +1285,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (12, "add the record of attempts and their outcomes", _migration_to_v12),
     (13, "add the person's own settings", _migration_to_v13),
     (14, "add the do-not-contact list", _migration_to_v14),
+    (15, "add the acceptance evidence recorded for each route", _migration_to_v15),
 )
 
 
@@ -4094,6 +4126,157 @@ class CareerStore:
         if removed:
             self._record("suppression.lifted", "count=1")
         return bool(removed)
+
+    # --------------------------------------------------------------- recorded acceptance evidence
+
+    def _schema_records_evidence(self) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='route_evidence'"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _checked_route(route_id: str) -> str:
+        key = str(route_id or "").strip()
+        if get_route(key) is None:
+            raise EvidenceError(
+                f"{route_id!r} is not a route this project has written requirements for.")
+        return key
+
+    @staticmethod
+    def _checked_kind(route_id: str, kind: object) -> EvidenceKind:
+        try:
+            value = kind if isinstance(kind, EvidenceKind) else EvidenceKind(str(kind))
+        except ValueError:
+            raise EvidenceError(
+                f"{kind!r} is not a kind of acceptance evidence this build knows about.") from None
+        route = get_route(route_id)
+        if route is not None and value not in route.kinds:
+            raise EvidenceError(
+                f"{route.display_name} does not list {value.value!r} among its requirements, so "
+                f"recording it would prove nothing about this route.")
+        return value
+
+    def record_route_evidence(self, route_id: str, kind: object, *, reference: str, note: str,
+                              now: str | None = None) -> RouteEvidence:
+        """Record that one requirement of one route has been met, and where the proof lives.
+
+        Three refusals are deliberate. Evidence needs a **reference** - something another person can
+        open - because an unreferenced claim is an opinion. It needs a **note** of at least eight
+        characters saying what was actually checked. And a requirement that is already held is never
+        quietly overwritten: withdraw it first, with a reason, so the history shows that somebody
+        changed their mind rather than that the record always said this.
+
+        Recording evidence switches nothing on. The source-quality gate, the discovery sources and
+        every outbound capability are separate decisions in code, and none of them reads this table.
+        """
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            raise EvidenceError(
+                "this file records a schema older than the one that keeps acceptance evidence. "
+                "Open the application on this file to update it.")
+        where = str(reference or "").strip()
+        if len(where) < 4:
+            raise EvidenceError(
+                "Evidence needs a reference - a link, a file name, a message id - that somebody "
+                "else can go and check.")
+        written = str(note or "").strip()
+        if len(written) < 8:
+            raise EvidenceError(
+                "Evidence needs a short note saying what was actually checked, of at least eight "
+                "characters.")
+        existing = self.route_evidence_for(route, value)
+        if existing is not None:
+            raise EvidenceError(
+                f"{EVIDENCE_TITLES[value]} is already recorded for this route, from "
+                f"{existing.recorded_at}. Withdraw that record first, with a reason, rather than "
+                f"writing over it.")
+        entry = RouteEvidence(route_id=route, kind=value, recorded_at=now or _now(),
+                              reference=where, note=written)
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO route_evidence (route_id, kind, recorded_at, reference, note) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (entry.route_id, entry.kind.value, entry.recorded_at, entry.reference, entry.note))
+        self._record("evidence.recorded", f"route={entry.route_id} kind={entry.kind.value}")
+        return entry
+
+    def withdraw_route_evidence(self, route_id: str, kind: object, *, note: str) -> bool:
+        """Remove one recorded piece of evidence. Returns whether a row was removed.
+
+        A note is required for the same reason a lifted suppression needs one: withdrawing evidence
+        makes a route less ready than it looked a minute ago, and the next person needs to know why.
+        """
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            return False
+        if len(str(note or "").strip()) < 4:
+            raise EvidenceError(
+                "Withdrawing evidence needs a short reason, of at least four characters.")
+        with self._connection:
+            removed = self._connection.execute(
+                "DELETE FROM route_evidence WHERE route_id = ? AND kind = ?",
+                (route, value.value)).rowcount
+        if removed:
+            self._record("evidence.withdrawn", f"route={route} kind={value.value}")
+        return bool(removed)
+
+    def route_evidence_for(self, route_id: str, kind: object) -> RouteEvidence | None:
+        """One recorded piece of evidence, or ``None``."""
+        route = self._checked_route(route_id)
+        value = self._checked_kind(route, kind)
+        if not self._schema_records_evidence():
+            return None
+        row = self._connection.execute(
+            "SELECT * FROM route_evidence WHERE route_id = ? AND kind = ?",
+            (route, value.value)).fetchone()
+        return None if row is None else self._decode_evidence(row)
+
+    @staticmethod
+    def _decode_evidence(row: sqlite3.Row) -> RouteEvidence:
+        try:
+            kind = EvidenceKind(str(row["kind"]))
+        except ValueError as exc:
+            raise StoredRecordError(
+                "route evidence",
+                f"{row['route_id']} records a kind of evidence this build does not know "
+                f"({row['kind']!r}), so it cannot be judged; it counts for nothing") from exc
+        return RouteEvidence(route_id=str(row["route_id"]), kind=kind,
+                             recorded_at=str(row["recorded_at"]), reference=str(row["reference"]),
+                             note=str(row["note"] or ""))
+
+    def list_route_evidence(self, route_id: str | None = None) -> tuple[RouteEvidence, ...]:
+        """Recorded evidence, oldest first. Raises if a row cannot be read."""
+        if not self._schema_records_evidence():
+            return ()
+        if route_id is None:
+            rows = self._connection.execute(
+                "SELECT * FROM route_evidence ORDER BY recorded_at, route_id, kind").fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT * FROM route_evidence WHERE route_id = ? ORDER BY recorded_at, kind",
+                (self._checked_route(route_id),)).fetchall()
+        return tuple(self._decode_evidence(row) for row in rows)
+
+    def held_evidence_kinds(self, route_id: str) -> tuple[EvidenceKind, ...]:
+        """What this file holds for a route, in the route's own requirement order.
+
+        A stored kind this build does not know is **not** counted: it cannot be matched against a
+        written requirement, so counting it would make a route look readier than the evidence
+        supports. :meth:`list_route_evidence` still reports that the row exists.
+        """
+        route = get_route(self._checked_route(route_id))
+        if route is None or not self._schema_records_evidence():
+            return ()
+        stored = {str(row["kind"]) for row in self._connection.execute(
+            "SELECT kind FROM route_evidence WHERE route_id = ?", (route.route_id,)).fetchall()}
+        return tuple(kind for kind in route.kinds if kind.value in stored)
+
+    def evidence_held_by_route(self) -> dict[str, tuple[EvidenceKind, ...]]:
+        """Every route this build knows, with what this file holds for it."""
+        return {route.route_id: self.held_evidence_kinds(route.route_id)
+                for route in ROUTE_REQUIREMENTS}
 
     # ------------------------------------------------------------------ the person's settings
 

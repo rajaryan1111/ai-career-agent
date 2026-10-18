@@ -1098,12 +1098,42 @@ def run_analytics(args: argparse.Namespace) -> int:
 
 
 def run_acceptance_evidence(args: argparse.Namespace) -> int:
-    """Print what every named route would have to prove first. Touches no database and no network."""
+    """Print what every named route would have to prove first, and what this file already holds.
+
+    Reads the database only if one is already there - the command answers on a machine where
+    nothing has been set up yet - and never creates or changes one. Touches no network.
+    """
     print(f"AI Career Agent {__version__} · what a route would have to prove first")
     print("")
-    for line in acceptance_evidence.describe_all():
+    held: dict[str, tuple[acceptance_evidence.EvidenceKind, ...]] | None = None
+    recorded = 0
+    database = _database_path(args)
+    if database.exists():
+        try:
+            store = CareerStore(database)
+        except (PrivateWriteError, sqlite3.Error) as exc:
+            print(f"The database at {database} could not be read ({exc}), so this lists the "
+                  f"requirements only.")
+            print("")
+        else:
+            try:
+                held = store.evidence_held_by_route()
+                recorded = sum(len(kinds) for kinds in held.values())
+            except (StoredRecordError, sqlite3.Error) as exc:
+                held, recorded = None, 0
+                print(f"The recorded evidence in {database} could not be read ({exc}), so this "
+                      f"lists the requirements only.")
+                print("")
+            finally:
+                store.close()
+    for line in acceptance_evidence.describe_all(held_by_route=held):
         print(line)
     print("")
+    if held is not None:
+        print(f"{recorded} piece(s) of evidence are recorded in {database}. Recorded evidence is "
+              f"what somebody wrote down here, not a permission granted by anyone outside.")
+    else:
+        print("No database was read, so this is the written requirement only - nothing recorded.")
     print("Nothing here switches anything on. The source-quality gate is closed, every source is "
           "disabled, and this list exists so that opening one later is a matter of producing "
           "evidence rather than of being in a hurry.")

@@ -12,6 +12,8 @@ from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.core import ActivityKind
 from types import SimpleNamespace
 
+from career_agent import sources
+from career_agent.acceptance_evidence import ROUTE_REQUIREMENTS, EvidenceKind
 from career_agent import desktop_logic as logic
 from career_agent.desktop_logic import (
     ACTIVITY_KIND_CHOICES, DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED,
@@ -806,3 +808,128 @@ class PolicyConditionTextTests(unittest.TestCase):
     def test_terms_are_written_back_the_way_they_are_stored(self):
         self.assertEqual(logic.condition_terms_text(frozenset({"b", "a"})), "a, b")
         self.assertEqual(logic.condition_terms_text(()), "")
+
+
+class SourceStatusTextTests(unittest.TestCase):
+    """The words the window uses for "why is nothing being fetched?".
+
+    A closed source has a reason, and the reason is the point: a tab that simply showed an empty
+    list would be telling a person that nothing is available, when what is true is that this build
+    has decided not to read anything until the evidence exists.
+    """
+
+    def test_every_reviewed_source_appears_with_both_gates_closed(self):
+        rows = logic.source_rows()
+        self.assertEqual(len(rows), len(sources.SOURCE_DECISIONS))
+        self.assertEqual({row[0] for row in rows},
+                         {decision.source_id for decision in sources.SOURCE_DECISIONS})
+        for row in rows:
+            with self.subTest(source=row[0]):
+                self.assertEqual(row[3], "closed")
+                self.assertEqual(row[4], "closed")
+
+    def test_the_summary_counts_what_is_approved_separately_from_what_is_open(self):
+        summary = logic.source_summary_text()
+        self.assertIn("approved in principle", summary)
+        self.assertIn("0 open for discovery right now", summary)
+        self.assertIn("0 switched on", summary)
+        self.assertIn("has not passed", summary)
+        self.assertIn("including the approved ones", summary)
+
+    def test_a_selected_source_carries_the_gates_own_reason_and_its_conditions(self):
+        text = logic.source_detail_text("jobicy")
+        self.assertIn("Jobicy", text)
+        self.assertIn("Reviewed 2026-10-14", text)
+        self.assertIn("Discovery: closed - ", text)
+        self.assertIn("Submission: closed - ", text)
+        self.assertIn("Conditions written into the review for reading it:", text)
+        self.assertIn("research/source-permission-decision-matrix", text)
+
+    def test_nothing_selected_and_an_unknown_source_both_say_so_rather_than_guess(self):
+        for source_id in ("", "   ", "indeed", "LinkedIn Jobs"):
+            with self.subTest(source_id=source_id):
+                self.assertIn("Select a source", logic.source_detail_text(source_id))
+
+
+class AcceptanceEvidenceTextTests(unittest.TestCase):
+    """The words the window uses for "what would it take?".
+
+    Held, missing and what each requirement means - and, in every one of these strings, that
+    recording evidence is not the same act as switching something on.
+    """
+
+    def kinds(self, route_id):
+        return next(route.kinds for route in ROUTE_REQUIREMENTS if route.route_id == route_id)
+
+    def test_a_route_row_counts_what_is_recorded_against_what_is_required(self):
+        rows = {row[0]: row for row in logic.evidence_route_rows({"naukri": self.kinds("naukri")[:2]})}
+        self.assertEqual(len(rows), len(ROUTE_REQUIREMENTS))
+        self.assertEqual(rows["naukri"][2], "2 of 9 recorded")
+        self.assertEqual(rows["naukri"][3], "7 missing")
+        self.assertEqual(rows["linkedin"][2], "0 of 9 recorded")
+
+    def test_a_route_with_everything_recorded_reads_as_recorded_not_as_permitted(self):
+        rows = {row[0]: row for row in logic.evidence_route_rows(
+            {"employer_site": self.kinds("employer_site")})}
+        self.assertEqual(rows["employer_site"][3], "every requirement recorded")
+        self.assertNotIn("permitted", rows["employer_site"][3])
+        self.assertNotIn("enabled", rows["employer_site"][3])
+
+    def test_the_summary_says_what_recording_does_and_does_not_do(self):
+        summary = logic.evidence_summary_text({"unstop": self.kinds("unstop")[:3]})
+        self.assertIn("3 of 54", summary)
+        self.assertIn("0 route(s) have all of theirs", summary)
+        self.assertIn("opens no source", summary)
+        self.assertIn("changes none of the gates", summary)
+
+    def test_requirement_rows_mark_held_and_missing_and_date_only_what_is_held(self):
+        record = SimpleNamespace(kind=EvidenceKind.TERMS_REVIEW,
+                                 recorded_at="2026-10-18T09:30:00+05:30",
+                                 reference="research/matrix.md", note="read it in full")
+        rows = {row[0]: row for row in logic.evidence_kind_rows("linkedin", (record,))}
+        self.assertEqual(len(rows), 9)
+        self.assertEqual(rows["terms_review"][2], "held")
+        self.assertEqual(rows["terms_review"][3], "2026-10-18")
+        self.assertEqual(rows["permission_basis"][2], "missing")
+        self.assertEqual(rows["permission_basis"][3], "")
+
+    def test_an_unknown_route_lists_nothing_rather_than_inventing_requirements(self):
+        self.assertEqual(logic.evidence_kind_rows("indeed", ()), ())
+        self.assertIn("Select a requirement",
+                      logic.evidence_detail_text("indeed", EvidenceKind.TERMS_REVIEW, None))
+
+    def test_a_missing_requirement_is_described_as_missing_not_as_failed(self):
+        text = logic.evidence_detail_text("unstop", EvidenceKind.HUMAN_VERIFICATION, None)
+        self.assertIn("A person verified one real run", text)
+        self.assertIn("What this requires:", text)
+        self.assertIn("Missing is the honest state", text)
+        self.assertIn("it is not a failure", text)
+
+    def test_a_held_requirement_shows_where_to_check_it_and_what_it_is_not(self):
+        record = SimpleNamespace(kind=EvidenceKind.TERMS_REVIEW,
+                                 recorded_at="2026-10-18T09:30:00+05:30",
+                                 reference="https://example.invalid/terms",
+                                 note="their clause 4 permits a read-only feed")
+        text = logic.evidence_detail_text("unstop", EvidenceKind.TERMS_REVIEW, record)
+        self.assertIn("Where to check it: https://example.invalid/terms", text)
+        self.assertIn("their clause 4 permits a read-only feed", text)
+        self.assertIn("not a permission granted by the route's owner", text)
+
+    def test_the_recording_question_states_the_route_the_claim_and_the_limits(self):
+        question = logic.evidence_record_question(
+            "ats_provider", EvidenceKind.RATE_LIMITS, " https://example.invalid/limits ",
+            " 60 requests a minute, documented ")
+        self.assertIn("Stated rate and volume limits", question)
+        self.assertIn("https://example.invalid/limits", question)
+        self.assertIn("60 requests a minute, documented", question)
+        self.assertIn("switches nothing on", question)
+        self.assertIn("each still need their own", question)
+        self.assertIn("withdraw it, with a reason", question)
+
+    def test_the_withdrawal_question_says_what_goes_back_to_missing(self):
+        question = logic.evidence_withdraw_question(
+            "linkedin", EvidenceKind.TERMS_REVIEW, " their terms changed ")
+        self.assertIn("Withdraw \"Terms and robots review\"", question)
+        self.assertIn("their terms changed", question)
+        self.assertIn("goes back to missing", question)
+        self.assertIn("nothing was switched on by the record", question)

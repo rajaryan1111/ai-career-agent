@@ -664,6 +664,32 @@ the app uses, and a run outcome that is one of success/empty/partial/failure rat
 is deliberately **no flag anywhere that opens the gate**: measured today, forcing it open would enable
 exactly one source, and the whole "nothing runs" property rests on that one constant being honest.
 
+### In the window: the Sources & evidence tab
+
+The same two answers are on a tab now, because a person looking at an empty jobs list should not have to
+run a command to learn why it is empty.
+
+- **Where jobs could come from, and why they do not.** Every reviewed source, what the review decided,
+  and - for the one you select - the gate's own sentence for reading and for submitting, plus the
+  conditions written into the review. "Closed" always comes with a reason.
+- **What a route would have to prove first.** The six application routes, each with the nine written
+  requirements, and whichever of them you have recorded in your own database: *held* or *missing*, with
+  the date, where to check it and what you wrote about it.
+
+Recording a piece of evidence needs two things in the boxes at the bottom: a **reference** - a link, a
+file, a message id, anything another person can open - and a **note** of what you actually checked. The
+window asks once before writing, refuses an empty reference or a note shorter than eight characters
+before it asks, and never writes over a requirement that is already recorded: you withdraw it, with a
+reason, and record it again. The event log keeps the route and the requirement only; what you typed stays
+in your database.
+
+**Recording evidence switches nothing on.** The source-quality gate is a constant in this build's code,
+not a row in your database; discovery, submission, outbound email and inbox reading are gated separately,
+and evidence for one of them opens none of the others. A route that shows "every requirement recorded" is
+a route somebody could now sensibly *discuss* enabling - the enabling itself is a deliberate code change
+made by a person who has read what is recorded. `python -m career_agent --acceptance-evidence` prints the
+same thing, reading your database when one already exists and never creating one.
+
 ## How matching works (and what it will not claim)
 
 When you evaluate a saved listing, the app shows two things: whether you appear **eligible**, and how the

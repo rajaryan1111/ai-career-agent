@@ -117,6 +117,11 @@ EVENTS: tuple[str, ...] = (
     "suppression.recorded",
     "suppression.lifted",
     "suppression.blocked",
+    # Acceptance evidence recorded against a route's written requirements. The route id and the kind
+    # of requirement are this project's own vocabulary; the reference and the note the person typed
+    # are not logged, because either can carry a name, an address or a private URL.
+    "evidence.recorded",
+    "evidence.withdrawn",
     "notifications.saved",
     "notifications.prepared",
     "attempt.settled",

@@ -60,7 +60,11 @@ from .desktop_logic import (
     required_fact_questions, required_facts_to_confirm,
     suppression_lift_question, suppression_lift_refusal, suppression_mark_question,
     suppression_reason_choices, suppression_rows, suppression_summary_text,
+    evidence_detail_text, evidence_kind_rows, evidence_record_question, evidence_route_rows,
+    evidence_summary_text, evidence_withdraw_question, source_detail_text, source_rows,
+    source_summary_text,
 )
+from .acceptance_evidence import EVIDENCE_TITLES, EvidenceError, EvidenceKind, get_route
 # Aliased on import: this module already has an ActionKind - the next-actions vocabulary - and the two
 # are about different things. A permission is not a to-do item, and conflating the names would be the
 # first step to conflating the ideas.
@@ -322,6 +326,7 @@ class CareerAgentApp:
         self.artifacts_tab = ttk.Frame(self.tabs, padding=12)
         self.policy_tab = ttk.Frame(self.tabs, padding=12)
         self.report_tab = ttk.Frame(self.tabs, padding=12)
+        self.evidence_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -334,6 +339,7 @@ class CareerAgentApp:
         self.tabs.add(self.artifacts_tab, text="Tailored documents")
         self.tabs.add(self.policy_tab, text="Permissions & limits")
         self.tabs.add(self.report_tab, text="What's happening")
+        self.tabs.add(self.evidence_tab, text="Sources & evidence")
         # Whatever a person did in another tab, or a second window did to this database, the contacts tab
         # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
         # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
@@ -352,6 +358,7 @@ class CareerAgentApp:
         self._build_artifacts()
         self._build_policy()
         self._build_report()
+        self._build_evidence()
         self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
@@ -367,6 +374,7 @@ class CareerAgentApp:
         self._refresh_artifacts()
         self._refresh_policy()
         self._refresh_report()
+        self._refresh_evidence()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -988,6 +996,318 @@ class CareerAgentApp:
             return
         self._refresh_report()
         self.status.set("Saved. Nothing is sent anywhere; a report is prepared where you can see it.")
+
+    def _build_evidence(self):
+        """The tab that answers "why is nothing being fetched, and what would change that?".
+
+        Two panels. The first is the reviewed source decisions with each gate's own answer, so the
+        reason a source is closed is a sentence rather than a silence. The second is the written
+        acceptance requirements per route, with whatever evidence has been recorded in this
+        database against them - held, missing, and what each one means.
+
+        Nothing on this tab fetches, sends or submits, and nothing on it switches anything on.
+        Recording evidence writes a row and changes no gate: enabling a source remains a separate,
+        deliberate change made by somebody who has read what is recorded here.
+        """
+        body = self._scrollable_body(self.evidence_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Two different questions live on this tab. Above: the sources this project "
+                "reviewed, what was decided about each one, and exactly what is holding it closed "
+                "today. Below: what each application route would have to prove before anybody "
+                "could sensibly open it, and what you have written down so far. The second does "
+                "not unlock the first - recording evidence is a note for whoever decides, not the "
+                "decision."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+
+        sources_panel = ttk.Frame(body)
+        sources_panel.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        ttk.Label(sources_panel, text="Where jobs could come from, and why they do not",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        self.source_summary = tk.StringVar(value=source_summary_text())
+        ttk.Label(sources_panel, textvariable=self.source_summary,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=1, column=0, columnspan=4, sticky=W, pady=(2, 6))
+        columns = ("source", "name", "decision", "discovery", "submission")
+        self.source_tree = ttk.Treeview(sources_panel, columns=columns, show="headings", height=6)
+        for column, heading, width in (
+            ("source", "Source id", 150), ("name", "What it is", 300),
+            ("decision", "The review decided", 170), ("discovery", "Reading", 90),
+            ("submission", "Submitting", 100),
+        ):
+            self.source_tree.heading(column, text=heading)
+            self.source_tree.column(column, width=width, anchor=W)
+        self.source_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.source_tree.bind("<<TreeviewSelect>>", self._on_source_selection)
+        self.source_detail = tk.StringVar(value=source_detail_text(""))
+        ttk.Label(sources_panel, textvariable=self.source_detail,
+                  wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT).grid(
+                      row=3, column=0, columnspan=4, sticky=W, pady=(6, 0))
+
+        evidence = ttk.Frame(body)
+        evidence.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(4, 8))
+        ttk.Label(evidence, text="What a route would have to prove first",
+                  font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky=W)
+        self.evidence_summary = tk.StringVar(value="Reading what is recorded...")
+        ttk.Label(evidence, textvariable=self.evidence_summary, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(2, 6))
+        columns = ("route", "name", "recorded", "state")
+        self.evidence_route_tree = ttk.Treeview(evidence, columns=columns, show="headings",
+                                                height=6)
+        for column, heading, width in (
+            ("route", "Route id", 150), ("name", "Where it would apply", 300),
+            ("recorded", "Recorded", 150), ("state", "Standing", 220),
+        ):
+            self.evidence_route_tree.heading(column, text=heading)
+            self.evidence_route_tree.column(column, width=width, anchor=W)
+        self.evidence_route_tree.grid(row=2, column=0, columnspan=4, sticky="nsew")
+        self.evidence_route_tree.bind("<<TreeviewSelect>>", self._on_evidence_route_selection)
+        columns = ("kind", "title", "held", "recorded")
+        self.evidence_kind_tree = ttk.Treeview(evidence, columns=columns, show="headings", height=9)
+        for column, heading, width in (
+            ("kind", "Requirement", 180), ("title", "In short", 300),
+            ("held", "Held or missing", 130), ("recorded", "Recorded on", 120),
+        ):
+            self.evidence_kind_tree.heading(column, text=heading)
+            self.evidence_kind_tree.column(column, width=width, anchor=W)
+        self.evidence_kind_tree.grid(row=3, column=0, columnspan=4, sticky="nsew", pady=(8, 0))
+        self.evidence_kind_tree.bind("<<TreeviewSelect>>", self._on_evidence_kind_selection)
+        self.evidence_detail = tk.StringVar(value=evidence_detail_text("", None, None))
+        ttk.Label(evidence, textvariable=self.evidence_detail, wraplength=_TAB_TEXT_WRAP - 40,
+                  justify=LEFT).grid(row=4, column=0, columnspan=4, sticky=W, pady=(6, 6))
+
+        controls = ttk.Frame(evidence)
+        controls.grid(row=5, column=0, columnspan=4, sticky=W)
+        ttk.Label(controls, text="Where to check it").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.evidence_reference = tk.StringVar(value="")
+        ttk.Entry(controls, textvariable=self.evidence_reference, width=40).grid(
+            row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(controls, text="What you checked").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.evidence_note = tk.StringVar(value="")
+        ttk.Entry(controls, textvariable=self.evidence_note, width=44).grid(
+            row=0, column=3, sticky=W, padx=(0, 12))
+        self.evidence_record_button = ttk.Button(
+            controls, text="Record this evidence...", state="disabled",
+            command=self._record_selected_evidence)
+        self.evidence_record_button.grid(row=0, column=4, sticky=W, padx=(0, 8))
+        self.evidence_withdraw_button = ttk.Button(
+            controls, text="Withdraw it...", state="disabled",
+            command=self._withdraw_selected_evidence)
+        self.evidence_withdraw_button.grid(row=0, column=5, sticky=W)
+        ttk.Label(
+            evidence,
+            text=(
+                "A reference is anything another person could open - a link, a file in this "
+                "repository, a message id. A note says what you actually checked. Both are "
+                "required, an already-recorded requirement is never written over, and withdrawing "
+                "one needs a reason in the same box. The event log keeps the route and the "
+                "requirement only: what you type stays in this database."
+            ),
+            wraplength=_TAB_TEXT_WRAP - 40, justify=LEFT,
+        ).grid(row=6, column=0, columnspan=4, sticky=W, pady=(8, 0))
+
+        ttk.Label(
+            body,
+            text=(
+                "Nothing on this tab switches anything on. The source-quality gate is a decision "
+                "in this build's code, not a row in your database, and discovery, submission, "
+                "outbound email and inbox reading are gated separately: evidence for one of them "
+                "opens none of the others."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=3, column=0, columnspan=4, sticky=W, pady=(6, 0))
+
+    def _refresh_evidence(self):
+        """Re-read the sources and the recorded evidence. Reads only; never opens a dialog."""
+        if not hasattr(self, "evidence_route_tree"):
+            return
+        self._clear_tree(self.source_tree)
+        for row in source_rows():
+            self.source_tree.insert("", END, iid=row[0], values=row)
+        self.source_summary.set(source_summary_text())
+        try:
+            held = self.store.evidence_held_by_route()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected_route = self._selected_evidence_route()
+        selected_kind = self._selected_evidence_kind()
+        self._clear_tree(self.evidence_route_tree)
+        for row in evidence_route_rows(held):
+            self.evidence_route_tree.insert("", END, iid=row[0], values=row)
+        self.evidence_summary.set(evidence_summary_text(held))
+        if selected_route is not None and get_route(selected_route) is not None:
+            self.evidence_route_tree.selection_set(selected_route)
+        self._on_evidence_route_selection(restore=selected_kind)
+        self._on_source_selection()
+
+    def _selected_source_id(self) -> str | None:
+        """The source id selected in the list, or ``None``. Reads the screen, not the database."""
+        if not hasattr(self, "source_tree"):
+            return None
+        chosen = self.source_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _on_source_selection(self, _event=None) -> None:
+        """Describe the selected source: what was decided, and what each gate answers today."""
+        self.source_detail.set(source_detail_text(self._selected_source_id() or ""))
+
+    def _selected_evidence_route(self) -> str | None:
+        """The route id selected in the list, or ``None``."""
+        if not hasattr(self, "evidence_route_tree"):
+            return None
+        chosen = self.evidence_route_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _selected_evidence_kind(self) -> str | None:
+        """The requirement selected in the list, or ``None``."""
+        if not hasattr(self, "evidence_kind_tree"):
+            return None
+        chosen = self.evidence_kind_tree.selection()
+        return str(chosen[0]) if chosen else None
+
+    def _evidence_records(self, route_id: str) -> tuple:
+        """What is recorded for one route, or an empty list if a row cannot be read."""
+        try:
+            return self.store.list_route_evidence(route_id)
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return ()
+        except (EvidenceError, sqlite3.Error):
+            return ()
+
+    def _on_evidence_route_selection(self, _event=None, *, restore: str | None = None) -> None:
+        """Redraw the requirement list for the selected route, keeping the requirement in view."""
+        route_id = self._selected_evidence_route()
+        self._clear_tree(self.evidence_kind_tree)
+        self._evidence_shown = {}
+        if route_id is not None:
+            records = self._evidence_records(route_id)
+            self._evidence_shown = {record.kind.value: record for record in records}
+            for row in evidence_kind_rows(route_id, records):
+                self.evidence_kind_tree.insert("", END, iid=row[0], values=row)
+            route = get_route(route_id)
+            known = route is not None and any(kind.value == restore for kind in route.kinds)
+            if restore and known:  # keep the requirement the person was reading in view
+                self.evidence_kind_tree.selection_set(restore)
+        self._on_evidence_kind_selection()
+
+    def _on_evidence_kind_selection(self, _event=None) -> None:
+        """Describe the selected requirement, and offer only the action that makes sense for it."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        kind = None
+        if kind_value is not None:
+            try:
+                kind = EvidenceKind(kind_value)
+            except ValueError:
+                kind = None
+        record = getattr(self, "_evidence_shown", {}).get(kind_value) if kind_value else None
+        self.evidence_detail.set(evidence_detail_text(route_id or "", kind, record))
+        has_requirement = route_id is not None and kind is not None
+        self.evidence_record_button.configure(
+            state="normal" if has_requirement and record is None else "disabled")
+        self.evidence_withdraw_button.configure(
+            state="normal" if has_requirement and record is not None else "disabled")
+
+    def _record_selected_evidence(self) -> None:
+        """Write down one piece of acceptance evidence, after one explicit yes. Enables nothing."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        if route_id is None or kind_value is None:
+            self.status.set("Select a route and a requirement first; nothing was recorded.")
+            return
+        try:
+            kind = EvidenceKind(kind_value)
+        except ValueError:
+            self.status.set("That requirement is not one this build knows; nothing was recorded.")
+            return
+        reference, note = self.evidence_reference.get(), self.evidence_note.get()
+        if len(reference.strip()) < 4:
+            messagebox.showerror(
+                "Nothing was recorded",
+                "Evidence needs a reference - a link, a file name, a message id - that somebody "
+                "else can go and check. Nothing was recorded.", parent=self.root)
+            self.status.set("Nothing was recorded; evidence needs something to check.")
+            return
+        if len(note.strip()) < 8:
+            messagebox.showerror(
+                "Nothing was recorded",
+                "Evidence needs a short note saying what you actually checked, of at least eight "
+                "characters. Nothing was recorded.", parent=self.root)
+            self.status.set("Nothing was recorded; evidence needs a note of what you checked.")
+            return
+        if not messagebox.askyesno(
+                "Record this evidence",
+                evidence_record_question(route_id, kind, reference, note), parent=self.root):
+            self.status.set("Nothing was recorded.")
+            return
+        try:
+            self.store.record_route_evidence(route_id, kind, reference=reference, note=note)
+        except EvidenceError as exc:
+            messagebox.showerror("Nothing was recorded", str(exc), parent=self.root)
+            self.status.set("Nothing was recorded.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.evidence_reference.set("")
+        self.evidence_note.set("")
+        self._refresh_evidence()
+        self.status.set(
+            f"Recorded {EVIDENCE_TITLES[kind].lower()} for {route_id}; nothing was switched on.")
+
+    def _withdraw_selected_evidence(self) -> None:
+        """Remove one recorded piece of evidence, with a reason, after one explicit yes."""
+        route_id = self._selected_evidence_route()
+        kind_value = self._selected_evidence_kind()
+        if route_id is None or kind_value is None:
+            self.status.set("Select a route and a requirement first; nothing was changed.")
+            return
+        try:
+            kind = EvidenceKind(kind_value)
+        except ValueError:
+            self.status.set("That requirement is not one this build knows; nothing was changed.")
+            return
+        note = self.evidence_note.get()
+        if len(note.strip()) < 4:
+            messagebox.showerror(
+                "Nothing was changed",
+                "Withdrawing evidence needs a short reason, of at least four characters, in the "
+                "box marked 'What you checked'. Nothing was changed.", parent=self.root)
+            self.status.set("Nothing was changed; withdrawing evidence needs a reason.")
+            return
+        if not messagebox.askyesno(
+                "Withdraw this evidence",
+                evidence_withdraw_question(route_id, kind, note), parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        try:
+            removed = self.store.withdraw_route_evidence(route_id, kind, note=note)
+        except EvidenceError as exc:
+            messagebox.showerror("Nothing was changed", str(exc), parent=self.root)
+            self.status.set("Nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.evidence_note.set("")
+        self._refresh_evidence()
+        self.status.set(
+            f"Withdrew {EVIDENCE_TITLES[kind].lower()} for {route_id}; that route now misses it."
+            if removed else "There was nothing recorded to withdraw; nothing was changed.")
 
     def _build_contacts(self):
         """The tab about the contact list: what the chosen file holds, and what storing it would do.

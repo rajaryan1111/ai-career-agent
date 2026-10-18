@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Iterable, Mapping
 
 
 class EvidenceError(ValueError):
@@ -185,6 +186,37 @@ def get_route(route_id: str) -> RouteRequirement | None:
     return None
 
 
+#: A short name per requirement, for a list or a column heading where the full sentence in
+#: :data:`EVIDENCE_LABELS` would not fit. The full sentence stays the definition; these are labels.
+EVIDENCE_TITLES: dict[EvidenceKind, str] = {
+    EvidenceKind.PERMISSION_BASIS: "Written permission basis",
+    EvidenceKind.TERMS_REVIEW: "Terms and robots review",
+    EvidenceKind.RATE_LIMITS: "Stated rate and volume limits",
+    EvidenceKind.IDENTIFIED_CLIENT: "Honest client identity",
+    EvidenceKind.NO_CIRCUMVENTION: "Nothing is circumvented",
+    EvidenceKind.DATA_MINIMISATION: "Fields read and kept",
+    EvidenceKind.TEST_ROUTE: "A test route to try first",
+    EvidenceKind.HUMAN_VERIFICATION: "A person verified one real run",
+    EvidenceKind.WITHDRAWAL_PATH: "A way to switch it off",
+}
+
+
+@dataclass(frozen=True)
+class RouteEvidence:
+    """One piece of evidence a person recorded against one requirement of one route.
+
+    ``reference`` is where the evidence lives - a URL, a file, a message id, a ticket - because a
+    claim nobody can go and check is not evidence. ``note`` is what was checked, in the recorder's
+    own words. Neither is interpreted by this build: recording evidence enables nothing.
+    """
+
+    route_id: str
+    kind: EvidenceKind
+    recorded_at: str
+    reference: str
+    note: str = ""
+
+
 def held_evidence(route_id: str) -> tuple[EvidenceKind, ...]:
     """What evidence this project actually holds for a route today: nothing, for every route.
 
@@ -196,21 +228,33 @@ def held_evidence(route_id: str) -> tuple[EvidenceKind, ...]:
     return ()
 
 
-def outstanding(route_id: str) -> tuple[EvidenceKind, ...]:
-    """The evidence a route still needs, in a stable order."""
+def outstanding(route_id: str, *, held: Iterable[EvidenceKind] | None = None) -> tuple[EvidenceKind, ...]:
+    """The evidence a route still needs, in a stable order.
+
+    ``held`` is what a caller can show it holds - the rows a person recorded in their own database,
+    read by :meth:`career_agent.store.CareerStore.held_evidence_kinds`. Left out, the answer is about
+    what *this project* holds in its own code, which is nothing, for every route.
+    """
     route = get_route(route_id)
     if route is None:
         raise EvidenceError(f"{route_id!r} is not a route this project has written requirements for.")
-    held = set(held_evidence(route_id))
-    return tuple(kind for kind in route.kinds if kind not in held)
+    shown = set(held_evidence(route_id)) if held is None else {
+        kind if isinstance(kind, EvidenceKind) else EvidenceKind(str(kind)) for kind in held}
+    return tuple(kind for kind in route.kinds if kind not in shown)
 
 
-def route_is_ready(route_id: str) -> bool:
-    """Whether every requirement is met. False for every route in this build, by evidence."""
-    return not outstanding(route_id)
+def route_is_ready(route_id: str, *, held: Iterable[EvidenceKind] | None = None) -> bool:
+    """Whether every requirement is met. False for every route in this build, by evidence.
+
+    Being "ready" means every written requirement has something recorded against it. It is not a
+    permission and it switches nothing on: the source-quality gate is a decision in code, each
+    capability is gated separately, and a ready route still runs nothing until somebody changes
+    both deliberately.
+    """
+    return not outstanding(route_id, held=held)
 
 
-def describe_route(route_id: str) -> tuple[str, ...]:
+def describe_route(route_id: str, *, held: Iterable[EvidenceKind] | None = None) -> tuple[str, ...]:
     """One route as lines a person can read, ending in what is still missing."""
     route = get_route(route_id)
     if route is None:
@@ -220,16 +264,24 @@ def describe_route(route_id: str) -> tuple[str, ...]:
              f"evidence for one opens none of the others."]
     for extra in route.additional:
         lines.append(f"  Also needs: {extra}")
-    missing = outstanding(route.route_id)
+    missing = outstanding(route.route_id, held=held)
     lines.append(f"  Outstanding: {len(missing)} of {len(route.kinds)} requirement(s).")
     for kind in missing:
         lines.append(f"    - {EVIDENCE_LABELS[kind]}")
     return tuple(lines)
 
 
-def describe_all() -> tuple[str, ...]:
-    """Every route, with the standing summary first."""
-    ready = [route.route_id for route in ROUTE_REQUIREMENTS if route_is_ready(route.route_id)]
+def describe_all(*, held_by_route: Mapping[str, Iterable[EvidenceKind]] | None = None) -> tuple[str, ...]:
+    """Every route, with the standing summary first.
+
+    ``held_by_route`` is what a person has recorded in their own database, route by route. Left out,
+    the report is about what this project holds in its code: nothing.
+    """
+    def held_for(route_id: str) -> Iterable[EvidenceKind] | None:
+        return None if held_by_route is None else tuple(held_by_route.get(route_id, ()))
+
+    ready = [route.route_id for route in ROUTE_REQUIREMENTS
+             if route_is_ready(route.route_id, held=held_for(route.route_id))]
     lines = [
         f"{len(ROUTE_REQUIREMENTS)} route(s) have written acceptance evidence requirements; "
         f"{len(ready)} are ready to be considered for enabling.",
@@ -239,6 +291,6 @@ def describe_all() -> tuple[str, ...]:
         "",
     ]
     for route in ROUTE_REQUIREMENTS:
-        lines.extend(describe_route(route.route_id))
+        lines.extend(describe_route(route.route_id, held=held_for(route.route_id)))
         lines.append("")
     return tuple(lines[:-1])

@@ -4068,3 +4068,33 @@ it once lost the conditions by rebuilding the value field by field. 20 tests (12
 acceptance N7-N9; stand-in run 134 checks, 0 failed, still not a window. Suite 2560 OK (skipped=13).
 Six manual steps (151-156) BLOCKED, checklist now 156: 22 PASS, 134 BLOCKED, 0 FAIL. Note:
 `research/conditions-you-can-actually-set-2026-10-18.md`.
+
+## Acceptance evidence you can record, and sources that say why they are closed, 2026-10-18
+
+Two statements this project was proud of lived where nobody using it could see them. The six routes'
+acceptance requirements were a pure module whose `held_evidence()` returned nothing *by construction* -
+there was no table to hold an answer - and the reviewed source decisions, with the closed quality gate
+that keeps even the approved one shut, were printed by `--sources` and by nothing in the window. A
+person looking at an empty jobs list had no way to learn that the emptiness is a decision.
+
+Schema 15 adds `route_evidence(route_id, kind, recorded_at, reference, note)`, keyed per route *and*
+per requirement, because "we read their terms" and "we have their rate limit in writing" are different
+claims. Recording needs a reference somebody else can open and a note of at least eight characters
+saying what was checked; an already-recorded requirement is never written over, only withdrawn with a
+reason and recorded again; and a stored kind this build cannot read raises on listing and counts for
+nothing towards readiness - fail closed, or a row typed in by hand could make a route look ready. The
+pure requirements module learned an optional `held=` argument, so every existing caller still answers
+the old question: what *this project* holds in its code, which is nothing.
+
+The new **Sources & evidence** tab puts both halves on one screen: every reviewed source with the
+gate's own sentence for reading and for submitting, then the six routes with their nine requirements as
+held or missing. The negative is what the tests are really for - 23 store tests, 15 handler tests, 9
+text tests and acceptance **P1-P6** all end by checking that recording evidence left
+`SOURCE_QUALITY_GATE_PASSED` false, `enabled_discovery_sources()` empty and every gate closed. Writing
+down that a requirement is met is a note for whoever decides; it is not the decision.
+
+Stand-in acceptance run 140 checks, 0 failed, still not a window. Suite 2611 OK (skipped=13). Four
+deliberate re-pins came with the schema bump and the new tab: the version literals in `test_store.py`
+and `test_store_tasks.py`, the documented workflow letters in `test_desktop_acceptance.py` and
+`.github/workflows/tests.yml`, and the expected tabs/trees/summaries in `scripts/desktop_smoke_test.py`.
+Note: `research/acceptance-evidence-you-can-record-2026-10-18.md`.

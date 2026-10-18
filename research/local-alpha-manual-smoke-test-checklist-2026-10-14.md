@@ -1,9 +1,9 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 156 steps — at this revision **22 PASS, 134 BLOCKED, 0 FAIL, no box ticked** (the six
-newest steps, 151-156, are for the conditions and the quiet window on the Permissions & limits tab, and
-all six are BLOCKED; steps 137-143, for the What's happening tab, and 144-150, for the do-not-contact
-list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+**Status:** 163 steps — at this revision **22 PASS, 141 BLOCKED, 0 FAIL, no box ticked** (the seven
+newest steps, 157-163, are for the Sources & evidence tab and all seven are BLOCKED; steps 151-156,
+for the conditions and the quiet window, 137-143, for the What's happening tab, and 144-150, for the
+do-not-contact list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1450,3 +1450,34 @@ second verification pass, after the first run was already green.
 156. [ ] Keyboard and screen reader: reach all six boxes and the button with **Tab** alone, and operate
     them without a mouse.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## Sources & evidence: the closed gates and the evidence you record (added 2026-10-18)
+
+157. [ ] Open **Sources & evidence** on any database. Read the source list and the summary above it and
+    judge whether it is unmistakable that nothing is being fetched *by decision* rather than by accident.
+    → **BLOCKED — acceptance check P1 asserts every source is listed with both gates closed and that the
+    summary says the quality gate has not passed; whether a person reads it as a decision is judgement.**
+158. [ ] Select a source and read the detail underneath. Check that the reason it is closed is a sentence
+    you could repeat to somebody else, and that the conditions from the review are visible.
+    → **BLOCKED — acceptance check P2 asserts both gate reasons and the length of the detail; whether the
+    reason is *understandable* is a person's judgement.**
+159. [ ] Choose a route and a requirement, type two characters in **Where to check it**, and press
+    **Record this evidence...**. Nothing may be written and no confirmation may appear.
+    → **BLOCKED — acceptance check P3 and two handler tests assert the refusal before the question and the
+    unchanged change counter; no display-backed run.**
+160. [ ] Fill both boxes properly, press **Record this evidence...** and choose **No**. Read the question
+    first: check it says, in words you believe, that recording this switches nothing on.
+    → **BLOCKED — acceptance check P4 asserts the question's wording and that a declined dialog writes
+    nothing; whether the sentence is convincing is a person's judgement.**
+161. [ ] Record the same requirement a second time. Check the window refuses rather than overwriting, and
+    that it tells you to withdraw the first record instead.
+    → **BLOCKED — the store test and the tab's disabled **Record** button assert this; no display-backed run.**
+162. [ ] Record every requirement for one route, then look at the source list again. Check that nothing
+    opened: no source changed, and no run started.
+    → **BLOCKED — acceptance check P5 and a handler test assert the gates are untouched after nine
+    recordings; the visual confirmation needs a window.**
+163. [ ] Keyboard and screen reader: reach both lists and the two buttons with **Tab** alone, move the
+    selection with the arrow keys, and check that **Withdraw it...** is announced as disabled while the
+    selected requirement is missing.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The
+    disabled state is asserted in the handler tests; focus order and announcement are not.**

@@ -71,6 +71,7 @@ EXPECTED_TABS = (
     "Tailored documents",
     "Permissions & limits",
     "What's happening",
+    "Sources & evidence",
 )
 
 #: The lists carried by the tabs, with the columns each one must expose. These are the controls a person
@@ -89,6 +90,9 @@ EXPECTED_TREES = {
     "policy_tree": ("source", "action", "limit", "state"),
     "attempt_tree": ("operation", "action", "identity", "started", "state"),
     "suppression_tree": ("address", "reason", "recorded", "note"),
+    "source_tree": ("source", "name", "decision", "discovery", "submission"),
+    "evidence_route_tree": ("route", "name", "recorded", "state"),
+    "evidence_kind_tree": ("kind", "title", "held", "recorded"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
@@ -103,6 +107,8 @@ EXPECTED_SUMMARY_VARIABLES = (
     "facts_summary",
     "artifact_summary",
     "policy_summary",
+    "source_summary",
+    "evidence_summary",
 )
 
 #: The tabs whose whole point is a read-only refresh, and therefore the buttons this script presses. The

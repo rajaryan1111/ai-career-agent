@@ -3753,6 +3753,109 @@ def workflow_o_whats_happening(run: Run) -> None:
     workspace.close_window(host, app)
 
 
+def workflow_p_sources_and_evidence(run: Run) -> None:
+    """The Sources & evidence tab: why nothing runs, and what recording evidence does not do.
+
+    The one property worth more than all the others here is negative: a person can record every
+    requirement for a route and *nothing opens*. The gates are decisions in this build's code, and
+    this workflow checks that they are still closed after the database says the evidence is in.
+    Nothing in this workflow fetches, sends or submits anything.
+    """
+    from career_agent import sources as source_rules  # noqa: PLC0415 - only this workflow needs it
+    from career_agent.acceptance_evidence import EvidenceKind  # noqa: PLC0415
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.evidence_tab)
+
+    with results.step("P1 every reviewed source is listed, with both gates closed"):
+        rows = [app.source_tree.item(item, "values") for item in app.source_tree.get_children()]
+        require(len(rows) == len(source_rules.SOURCE_DECISIONS),
+                f"the list shows {len(rows)} source(s) of {len(source_rules.SOURCE_DECISIONS)}")
+        closed = [row for row in rows if row[3] == "closed" and row[4] == "closed"]
+        require(len(closed) == len(rows), f"a source is shown as open: {rows!r}")
+        require("has not passed" in app.source_summary.get(),
+                f"the summary says {app.source_summary.get()!r}")
+
+    with results.step("P2 a selected source says what is holding it back, not just that it is off"):
+        first = app.source_tree.get_children()[0]
+        app.source_tree.selection_set(first)
+        app._on_source_selection()
+        detail = app.source_detail.get()
+        require("Discovery: closed - " in detail, "the detail gives no reason for discovery")
+        require("Submission: closed - " in detail, "the detail gives no reason for submission")
+        require(len(detail) > 120, f"the detail is too short to be a reason: {detail!r}")
+
+    with results.step("P3 evidence with nothing to check is refused before any question"):
+        dialogs.reset()
+        app.evidence_route_tree.selection_set("employer_site")
+        app.evidence_kind_tree.selection_set("terms_review")
+        app.evidence_reference.set("ok")
+        app.evidence_note.set("read their published terms in full")
+        before = app.store._connection.total_changes
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require("Nothing was recorded" in dialogs.titles("showerror"),
+                f"no refusal was shown; dialogs: {dialogs.titles()!r}")
+        require(dialogs.titles("askyesno") == [],
+                f"a refused record still asked the question: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a refused record changed the database")
+
+    with results.step("P4 a declined confirmation records nothing"):
+        dialogs.reset()
+        dialogs.answers["Record this evidence"] = False
+        app.evidence_reference.set("research/source-permission-decision-matrix-2026-10-14.md")
+        before = app.store._connection.total_changes
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require("Record this evidence" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require("switches nothing on" in dialogs.said("Record this evidence"),
+                "the confirmation does not say that recording evidence enables nothing")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.held_evidence_kinds("employer_site") == (),
+                "the evidence was recorded anyway")
+
+    with results.step("P5 a confirmed record is stored and read back, and opens no source"):
+        dialogs.reset()
+        dialogs.answers["Record this evidence"] = True
+        press(app.evidence_tab, "Record this evidence...", workspace.root)
+        require(app.store.held_evidence_kinds("employer_site") == (EvidenceKind.TERMS_REVIEW,),
+                f"what is held is {app.store.held_evidence_kinds('employer_site')!r}")
+        shown = {values[0]: values for values in
+                 (app.evidence_route_tree.item(item, "values")
+                  for item in app.evidence_route_tree.get_children())}
+        require(shown["employer_site"][2] == "1 of 9 recorded",
+                f"the route row reads {shown['employer_site']!r}")
+        require(source_rules.enabled_discovery_sources() == (),
+                "recording evidence switched a discovery source on")
+        require(not source_rules.SOURCE_QUALITY_GATE_PASSED,
+                "recording evidence opened the source-quality gate")
+        require(not source_rules.discovery_gate("jobicy").allowed,
+                "recording evidence opened a discovery gate")
+        require(app.evidence_reference.get() == "",
+                "the reference box kept its text, which the next record could inherit")
+
+    with results.step("P6 withdrawing needs a reason, and returns the route to missing"):
+        dialogs.reset()
+        dialogs.answers["Withdraw this evidence"] = True
+        app.evidence_route_tree.selection_set("employer_site")
+        app.evidence_kind_tree.selection_set("terms_review")
+        app.evidence_note.set("no")
+        press(app.evidence_tab, "Withdraw it...", workspace.root)
+        require("Nothing was changed" in dialogs.titles("showerror"),
+                f"a noteless withdrawal was not refused; dialogs: {dialogs.titles()!r}")
+        require(app.store.held_evidence_kinds("employer_site") == (EvidenceKind.TERMS_REVIEW,),
+                "the record was removed without a reason")
+        app.evidence_note.set("their terms changed this month")
+        press(app.evidence_tab, "Withdraw it...", workspace.root)
+        require(app.store.held_evidence_kinds("employer_site") == (),
+                "the record is still held after a confirmed withdrawal")
+        require("now misses it" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 def workflow_f_cleanup(run: Run) -> None:
     workspace, results = run.workspace, run.results
 
@@ -5097,6 +5200,8 @@ WORKFLOWS = (
     ("M - tailored documents: lineage, refusal and rebuild", workflow_m_tailored_documents),
     ("N - permissions: confirmation, withdrawal and the closed gate", workflow_n_permissions),
     ("O - what's happening: unresolved work, evidence and notifications", workflow_o_whats_happening),
+    ("P - sources and acceptance evidence: closed gates, recorded and withdrawn",
+     workflow_p_sources_and_evidence),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 

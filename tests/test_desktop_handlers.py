@@ -31,6 +31,8 @@ from career_agent import (
 from career_agent.core import (ActivityKind, ApplicationActivity, FactSource, FactVerification,
                             InterviewOutcome, PreparationKind, PROFILE_FACTS, REQUIRED_PROFILE_FACTS,
                             missing_required_profile_facts)
+from career_agent import sources
+from career_agent.acceptance_evidence import ROUTE_REQUIREMENTS, EvidenceKind
 from career_agent import backup as backup_module
 from career_agent import contact_export
 from career_agent import contacts
@@ -9378,3 +9380,230 @@ class PolicyConditionsTabTests(HandlerTestCase):
         self.assertIn("every failed condition is reported together", said)
         self.assertIn("may wrap past midnight", said)
         self.assertIsNotNone(app.conditions_summary.get())
+
+
+class SourcesAndEvidenceTabTests(HandlerTestCase):
+    """The tab that explains why nothing is being fetched, and records what would change that.
+
+    Until now the source decisions and the written acceptance requirements existed in code and in
+    two command-line reports, and the window said nothing about either: a person looking at an
+    empty jobs list had no way to learn that every source is closed, let alone what would open one.
+    These tests drive the tab's own handlers against a real store - "nothing was recorded" is the
+    connection's change counter, and what is held is read back from the database.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "evidence.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def choose(self, app, route="ats_provider", kind="terms_review"):
+        app.evidence_route_tree.selection_set(route)
+        app.evidence_kind_tree.selection_set(kind)
+
+    def typed(self, app, *, reference="", note=""):
+        app.evidence_reference.set(reference)
+        app.evidence_note.set(note)
+
+    def test_every_reviewed_source_is_listed_with_both_gates_closed(self):
+        app = self.build_window()
+        listed = {row[0]: row for row in app.source_tree.inserted}
+        self.assertEqual(set(listed), {decision.source_id for decision in sources.SOURCE_DECISIONS})
+        for source_id, (_iid, values) in listed.items():
+            with self.subTest(source=source_id):
+                self.assertEqual(values[3], "closed")
+                self.assertEqual(values[4], "closed")
+        summary = app.source_summary.get()
+        self.assertIn("0 switched on", summary)
+        self.assertIn("has not passed", summary)
+
+    def test_selecting_a_source_explains_what_is_holding_it_back(self):
+        app = self.build_window()
+        app.source_tree.selection_set("jobicy")
+        detail = app.source_detail.get()
+        self.assertIn("Jobicy", detail)
+        self.assertIn("source-quality gate", detail)
+        self.assertIn("Discovery: closed", detail)
+        self.assertIn("Submission: closed", detail)
+
+    def test_every_route_is_listed_with_nothing_recorded_on_a_fresh_database(self):
+        app = self.build_window()
+        listed = {row[0]: row[1] for row in app.evidence_route_tree.inserted}
+        self.assertEqual(set(listed), {route.route_id for route in ROUTE_REQUIREMENTS})
+        self.assertEqual(listed["linkedin"][2], "0 of 9 recorded")
+        self.assertIn("0 of 54", app.evidence_summary.get())
+
+    def test_choosing_a_route_lists_its_requirements_and_each_one_reads_missing(self):
+        app = self.build_window()
+        app.evidence_route_tree.selection_set("unstop")
+        rows = {row[0]: row[1] for row in app.evidence_kind_tree.inserted}
+        self.assertEqual(set(rows), {kind.value for kind in EvidenceKind})
+        for kind, values in rows.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(values[2], "missing")
+                self.assertEqual(values[3], "")
+
+    def test_a_missing_requirement_offers_recording_and_not_withdrawing(self):
+        app = self.build_window()
+        self.choose(app)
+        self.assertEqual(app.evidence_record_button.options["state"], "normal")
+        self.assertEqual(app.evidence_withdraw_button.options["state"], "disabled")
+        self.assertIn("Nothing is recorded against this requirement", app.evidence_detail.get())
+
+    def test_recording_asks_first_and_a_declined_question_writes_nothing(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = False
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="read the automation clauses in full")
+        before = app.store._connection.total_changes
+
+        app._record_selected_evidence()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("Terms and robots review", asked)
+        self.assertIn("switches nothing on", asked)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+
+    def test_a_confirmed_record_is_stored_read_back_and_switches_nothing_on(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="read the automation clauses in full")
+
+        app._record_selected_evidence()
+
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+        held = {row[0]: row[1] for row in app.evidence_route_tree.inserted}["ats_provider"]
+        self.assertEqual(held[2], "1 of 9 recorded")
+        self.assertEqual(app.evidence_reference.get(), "")
+        self.assertIn("nothing was switched on", app.status.get())
+        self.assertFalse(sources.SOURCE_QUALITY_GATE_PASSED)
+        self.assertEqual(sources.enabled_discovery_sources(), ())
+
+    def test_evidence_with_nothing_to_check_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="ok", note="read the automation clauses in full")
+        before = app.store._connection.total_changes
+
+        app._record_selected_evidence()
+
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertIn("go and check", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+
+    def test_evidence_with_no_note_of_what_was_checked_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/source-permission-decision-matrix-2026-10-14.md",
+                   note="fine")
+
+        app._record_selected_evidence()
+
+        self.assertIn("Nothing was recorded", MESSAGES.titles("showerror"))
+        self.assertIn("what you actually checked", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+
+    def test_a_held_requirement_offers_withdrawing_and_not_recording_over_it(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+
+        self.choose(app)
+        self.assertEqual(app.evidence_record_button.options["state"], "disabled")
+        self.assertEqual(app.evidence_withdraw_button.options["state"], "normal")
+        detail = app.evidence_detail.get()
+        self.assertIn("Where to check it: research/matrix.md", detail)
+        self.assertIn("not a permission granted by the route's owner", detail)
+
+    def test_withdrawing_without_a_reason_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        MESSAGES.reset()
+        self.choose(app)
+        self.typed(app, note="no")
+
+        app._withdraw_selected_evidence()
+
+        self.assertIn("Nothing was changed", MESSAGES.titles("showerror"))
+        self.assertIn("short reason", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+
+    def test_a_confirmed_withdrawal_removes_the_record_and_says_the_route_misses_it(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        CONFIG["Withdraw this evidence"] = True
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        self.choose(app)
+        self.typed(app, note="their terms changed this month")
+
+        app._withdraw_selected_evidence()
+
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"), ())
+        self.assertIn("now misses it", app.status.get())
+        self.assertEqual(app.evidence_note.get(), "")
+
+    def test_a_declined_withdrawal_keeps_the_record(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        CONFIG["Withdraw this evidence"] = False
+        self.choose(app)
+        self.typed(app, reference="research/matrix.md", note="read the clauses in full")
+        app._record_selected_evidence()
+        self.choose(app)
+        self.typed(app, note="actually I am not sure")
+        before = app.store._connection.total_changes
+
+        app._withdraw_selected_evidence()
+
+        self.assertIn("Withdraw \"Terms and robots review\"", MESSAGES.text("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.held_evidence_kinds("ats_provider"),
+                         (EvidenceKind.TERMS_REVIEW,))
+
+    def test_recording_every_requirement_reads_as_complete_and_still_opens_no_source(self):
+        app = self.build_window()
+        CONFIG["Record this evidence"] = True
+        for index, kind in enumerate(EvidenceKind):
+            self.choose(app, route="employer_site", kind=kind.value)
+            self.typed(app, reference=f"research/evidence-{index}.md",
+                       note=f"checked requirement {index} against their published terms")
+            app._record_selected_evidence()
+
+        row = {row[0]: row[1] for row in app.evidence_route_tree.inserted}["employer_site"]
+        self.assertEqual(row[2], "9 of 9 recorded")
+        self.assertEqual(row[3], "every requirement recorded")
+        self.assertIn("1 route(s) have all of theirs", app.evidence_summary.get())
+        self.assertIn("0 switched on", app.source_summary.get())
+        for source_id in ("jobicy", "remotive", "linkedin"):
+            with self.subTest(source=source_id):
+                self.assertFalse(sources.discovery_gate(source_id).allowed)
+
+    def test_the_tab_says_in_plain_words_that_recording_evidence_enables_nothing(self):
+        RecordingLabel.created = []
+        app = self.build_window()
+        said = " ".join(label.text for label in RecordingLabel.created
+                        if isinstance(label.text, str))
+        self.assertIn("recording evidence is a note for whoever decides, not the decision", said)
+        self.assertIn("evidence for one of them opens none of the others", said)
+        self.assertIn("an already-recorded requirement is never written over", said)
+        self.assertIsNotNone(app.evidence_summary.get())

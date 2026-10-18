@@ -26,7 +26,14 @@ from .core import (
 # The résumé reviewer owns the profile vocabulary's user-facing names and the study-status choices, and
 # this module reads them from there rather than keeping a second copy: one label list, so the form, the
 # review screen and the confirmation table cannot call the same fact three different things.
+from .acceptance_evidence import (
+    EVIDENCE_LABELS, EVIDENCE_TITLES, ROUTE_REQUIREMENTS, get_route,
+)
 from .policy import ACTION_LABELS, ActionKind, GlobalPolicy, PolicyDecision
+from .sources import (
+    SOURCE_DECISIONS, SOURCE_QUALITY_GATE_PASSED, PermissionState, discovery_gate,
+    enabled_discovery_sources, get_source_decision, submission_gate,
+)
 from .resume import PROFILE_FIELD_LABELS, study_status_choices
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
@@ -1180,3 +1187,182 @@ def condition_changes(before: Mapping[str, object], after: Mapping[str, object])
         if old_text != new_text:
             changes.append(f"{label}: {old_text} → {new_text}")
     return tuple(changes)
+
+
+# ---------------------------------------------------------------------------------------------
+# Sources and acceptance evidence
+#
+# Two questions that are usually answered by a shrug - "why is nothing being fetched?" and "what
+# would it take?" - turned into text a person can read in the window. The first comes from the
+# reviewed source decisions and the gates that read them; the second from the written acceptance
+# requirements and whatever evidence somebody has recorded in their own database. Neither of these
+# functions can enable anything: they produce strings.
+
+
+def source_rows() -> tuple[tuple[str, str, str, str, str], ...]:
+    """One row per reviewed source: id, name, what the review decided, and each gate's answer."""
+    rows = []
+    for decision in SOURCE_DECISIONS:
+        discovery = discovery_gate(decision.source_id)
+        submission = submission_gate(decision.source_id)
+        rows.append((
+            decision.source_id,
+            decision.display_name,
+            decision.permission_state.value.replace("_", " "),
+            "open" if discovery.allowed else "closed",
+            "open" if submission.allowed else "closed",
+        ))
+    return tuple(rows)
+
+
+def source_summary_text() -> str:
+    """The standing answer to "is anything being fetched?", before any row is selected."""
+    total = len(SOURCE_DECISIONS)
+    approved = sum(1 for decision in SOURCE_DECISIONS
+                   if decision.permission_state is PermissionState.APPROVED)
+    open_now = sum(1 for decision in SOURCE_DECISIONS if discovery_gate(decision.source_id).allowed)
+    enabled = len(enabled_discovery_sources())
+    gate = "passed" if SOURCE_QUALITY_GATE_PASSED else "has not passed"
+    return (
+        f"{total} source(s) reviewed; {approved} approved in principle; {open_now} open for "
+        f"discovery right now; {enabled} switched on. The source-quality gate {gate}, and while it "
+        f"is closed every source stays closed with it - including the approved ones. Nothing on "
+        f"this tab fetches anything."
+    )
+
+
+def source_detail_text(source_id: str) -> str:
+    """One source in full: what was decided, on what date, and exactly what is holding it back."""
+    decision = get_source_decision(source_id)
+    if decision is None:
+        return "Select a source to see what was decided about it and why it is closed."
+    discovery = discovery_gate(decision.source_id)
+    submission = submission_gate(decision.source_id)
+    lines = [
+        f"{decision.display_name} ({decision.source_id})",
+        f"Reviewed {decision.reviewed_on or 'on no recorded date'}; "
+        f"{decision.permission_state.value.replace('_', ' ')}.",
+        decision.notes,
+        "",
+        f"Discovery: {'open' if discovery.allowed else 'closed'} - {discovery.reason}",
+        f"Submission: {'open' if submission.allowed else 'closed'} - {submission.reason}",
+    ]
+    if decision.discovery_conditions:
+        lines.append("")
+        lines.append("Conditions written into the review for reading it:")
+        lines.extend(f"  - {condition}" for condition in decision.discovery_conditions)
+    if decision.submission_conditions:
+        lines.append("")
+        lines.append("Conditions written into the review for submitting through it:")
+        lines.extend(f"  - {condition}" for condition in decision.submission_conditions)
+    if decision.evidence_ref:
+        lines.append("")
+        lines.append(f"The decision is recorded in {decision.evidence_ref}")
+    return "\n".join(lines)
+
+
+def evidence_route_rows(
+        held_by_route: Mapping[str, Iterable[object]]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per route: id, name, how much of its requirement is recorded, and whether it is met."""
+    rows = []
+    for route in ROUTE_REQUIREMENTS:
+        held = tuple(held_by_route.get(route.route_id, ()))
+        total = len(route.kinds)
+        rows.append((
+            route.route_id,
+            route.display_name,
+            f"{len(held)} of {total} recorded",
+            "every requirement recorded" if len(held) >= total else f"{total - len(held)} missing",
+        ))
+    return tuple(rows)
+
+
+def evidence_summary_text(held_by_route: Mapping[str, Iterable[object]]) -> str:
+    """The standing summary above the evidence list."""
+    total_kinds = sum(len(route.kinds) for route in ROUTE_REQUIREMENTS)
+    recorded = sum(len(tuple(held_by_route.get(route.route_id, ()))) for route in ROUTE_REQUIREMENTS)
+    complete = sum(1 for route in ROUTE_REQUIREMENTS
+                   if len(tuple(held_by_route.get(route.route_id, ()))) >= len(route.kinds))
+    return (
+        f"{recorded} of {total_kinds} written requirement(s) recorded across "
+        f"{len(ROUTE_REQUIREMENTS)} route(s); {complete} route(s) have all of theirs. Recording "
+        f"evidence here is a note to yourself and to whoever reads this later: it opens no source, "
+        f"sends nothing, and changes none of the gates above."
+    )
+
+
+def evidence_kind_rows(route_id: str, records: Iterable[object]) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per requirement of one route: kind, title, held or missing, and when it was recorded."""
+    route = get_route(route_id)
+    if route is None:
+        return ()
+    by_kind = {record.kind: record for record in records}
+    rows = []
+    for kind in route.kinds:
+        record = by_kind.get(kind)
+        rows.append((
+            kind.value,
+            EVIDENCE_TITLES.get(kind, kind.value),
+            "held" if record is not None else "missing",
+            (record.recorded_at[:10] if record is not None and record.recorded_at else ""),
+        ))
+    return tuple(rows)
+
+
+def evidence_detail_text(route_id: str, kind: object, record: object | None) -> str:
+    """What one requirement means, and what - if anything - is recorded against it."""
+    route = get_route(route_id)
+    if route is None or kind is None:
+        return "Select a requirement to see what it means and what is recorded against it."
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    lines = [f"{title} - {route.display_name}", "", f"What this requires: {EVIDENCE_LABELS[kind]}."]
+    if record is None:
+        lines.extend([
+            "",
+            "Nothing is recorded against this requirement, so this route cannot be considered for "
+            "enabling. Missing is the honest state: it is not a failure, and it is not something "
+            "this application can produce on its own.",
+        ])
+    else:
+        lines.extend([
+            "",
+            f"Recorded {record.recorded_at}.",
+            f"Where to check it: {record.reference}",
+            f"What was checked: {record.note}",
+            "",
+            "Recorded evidence is somebody's written claim, kept so it can be checked and "
+            "withdrawn. It is not a permission granted by the route's owner.",
+        ])
+    return "\n".join(lines)
+
+
+def evidence_record_question(route_id: str, kind: object, reference: str, note: str) -> str:
+    """The one confirmation shown before a piece of evidence is written down."""
+    route = get_route(route_id)
+    name = route.display_name if route is not None else route_id
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    return (
+        f"Record \"{title}\" for {name}?\n\n"
+        f"Where to check it: {reference.strip()}\n"
+        f"What was checked: {note.strip()}\n\n"
+        "This is written to your database and to the event log as a route and a requirement - the "
+        "reference and the note stay in the database only.\n\n"
+        "It switches nothing on. The source-quality gate stays closed, every source stays "
+        "disabled, and discovery, submission, email and inbox reading each still need their own "
+        "decision. To change this record later you withdraw it, with a reason, and record it again."
+    )
+
+
+def evidence_withdraw_question(route_id: str, kind: object, note: str) -> str:
+    """The one confirmation shown before recorded evidence is removed."""
+    route = get_route(route_id)
+    name = route.display_name if route is not None else route_id
+    title = EVIDENCE_TITLES.get(kind, getattr(kind, "value", str(kind)))
+    return (
+        f"Withdraw \"{title}\" for {name}?\n\n"
+        f"Your reason: {note.strip()}\n\n"
+        "The record is removed and this route goes back to missing that requirement. The reason "
+        "is kept in your database with nothing else; the event log records only the route and the "
+        "requirement. Nothing else changes: nothing was switched on by the record, so nothing is "
+        "switched off by removing it."
+    )
