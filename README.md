@@ -62,6 +62,7 @@ career-agent --analytics         # what the records add up to, with every denomi
 career-agent --report            # what has been happening: unresolved things first, nothing inferred
 career-agent --report --weekly   # the same over seven days, with a fortnight of dates ahead
 career-agent --notifications     # when this application may tell you something (off by default)
+career-agent --acceptance-evidence  # what a job route must prove before it could be enabled
 career-agent --integration-status        # whether this app can email or add events, and why not
 career-agent --preview-calendar-export   # what the .ics export would contain, without writing it
 career-agent --draft-follow-up j1        # a follow-up email draft you can read and copy out; nothing is sent
@@ -1036,6 +1037,36 @@ timed out rather than successful), but the worker cannot force a Python function
 **Discovery stays refused.** `--worker` reports the gate's state at startup, and every scheduled
 discovery run is recorded as a refusal with the reason. That is the permission rule working, not a
 fault: no source has passed the quality gate, so nothing is read.
+
+## Syncing, credentials, and what is deliberately not claimed
+
+**Laptop-off operation is not available, and this project does not claim it.** The worker is a
+foreground process you start: there is no service unit, no operating-system scheduler registration and
+no deployed component. Before any always-on claim could be made, there would have to be release
+evidence for it — a deployed worker, a tested storage boundary, a recorded run while the laptop was
+shut, and a stated recovery behaviour for an interrupted run. None of that exists, so the claim is not
+made anywhere.
+
+**The remote storage and sync boundary.** Your data is one SQLite file on one machine. That file is
+safe in a folder that only this machine writes. It is **not** safe as a shared file:
+
+- a database in a sync folder (Dropbox, iCloud Drive, OneDrive, Google Drive) that two machines open
+  at once can be corrupted by the sync service, which copies bytes without knowing about transactions;
+- `WorkerLease` protects one file from two workers *on one machine* — it is crash recovery, not a
+  distributed lock, and it cannot protect a file two computers reach through a sync service;
+- pointing a remote worker at this file is therefore refused by design, and will stay refused until a
+  boundary is designed and tested rather than assumed.
+
+To move data between machines, use the supported paths: `--backup` / `--restore` for the whole
+database, or `--export-json` / `--import-json` for the portable subset. Both are explicit, and both
+leave you with one writer at a time.
+
+**Credentials.** This application stores none. There is no mailbox token, no site login, no API key
+and no password anywhere in the database, the event log or a backup — and nothing in it asks you for
+one. If a route ever needs a credential, the rule is already written down: it belongs in the operating
+system's own keychain, referenced by name, never in the database and never in anything this
+application exports. You can check that claim rather than trust it: a test asserts no column in the
+schema and no file in the package holds a credential-shaped name.
 
 ## Audit research data
 

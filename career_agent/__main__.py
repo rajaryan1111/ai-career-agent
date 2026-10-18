@@ -81,7 +81,8 @@ from .store import (
     unreadable_stored_records, write_private_text_file,
 )
 from . import (
-    analytics, contact_export, contacts, erasure, importer, notifications, preparation, reporting,
+    acceptance_evidence, analytics, contact_export, contacts, erasure, importer, notifications,
+    preparation, reporting,
 )
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
@@ -195,6 +196,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--analytics", action="store_true",
         help="Add up what the records hold: counts, rates with their denominators, then exit (read-only).",
+    )
+    actions.add_argument(
+        "--acceptance-evidence", action="store_true",
+        help=("What each job route would have to prove before it could ever be switched on, and "
+              "what is still outstanding. Reads nothing and enables nothing."),
     )
     actions.add_argument(
         "--notifications", nargs="?", const="show", choices=("show", "off", "daily", "weekly"),
@@ -1091,6 +1097,19 @@ def run_analytics(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_acceptance_evidence(args: argparse.Namespace) -> int:
+    """Print what every named route would have to prove first. Touches no database and no network."""
+    print(f"AI Career Agent {__version__} · what a route would have to prove first")
+    print("")
+    for line in acceptance_evidence.describe_all():
+        print(line)
+    print("")
+    print("Nothing here switches anything on. The source-quality gate is closed, every source is "
+          "disabled, and this list exists so that opening one later is a matter of producing "
+          "evidence rather than of being in a hurry.")
+    return EXIT_OK
+
+
 def run_notifications(args: argparse.Namespace) -> int:
     """Show or set when this application may tell you something.
 
@@ -1832,6 +1851,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_interviews(args)
         if args.analytics:
             return run_analytics(args)
+        if args.acceptance_evidence:
+            return run_acceptance_evidence(args)
         if args.notifications:
             return run_notifications(args)
         if args.report:

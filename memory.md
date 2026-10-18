@@ -3973,3 +3973,20 @@ dropped the new conditions - a silent *loosening* of a restriction somebody wrot
 direction for an authorisation screen to be wrong in. The habit that found the second one: after
 adding a field to a frozen value, ask what else constructs that value. 2457 OK (skipped=13). Note:
 `research/conditions-on-what-may-be-acted-on-2026-10-18.md`.
+
+**Refusals written down in advance, 2026-10-18:** P8 item 6 and the documentation half of item 8 are
+both the same kind of work - deciding, while nobody is in a hurry, what would have to be true before
+a gate could open. `acceptance_evidence.py` names six routes (LinkedIn, Unstop, Internshala, Naukri,
+an employer's own careers page, an ATS/provider API) and nine requirements each; a route may add
+requirements and cannot drop one, `held_evidence()` returns nothing for every route, and a test
+pins that all six are outstanding on all nine. The three labels that carry old arguments: a
+permission basis is never an inference from silence, human verification is a person's account of a
+real run and not a passing test suite, and no-circumvention is a requirement to rule out rather than
+a hope. The README now states the sync hazard plainly (a SQLite file two machines reach through a
+sync service can be corrupted by it; the lease is single-machine crash recovery, not a distributed
+lock) and refuses the always-on claim while listing the evidence such a claim would need. The
+credential promise is checked against the software rather than the prose - no credential-shaped
+column, no credential store imported, no credential-shaped literal - and the README assertions run
+against a whitespace-normalised copy, because a documentation test that punishes re-wrapping is one
+people route around. 23 tests, suite **2480 OK (skipped=13)**. Note:
+`research/acceptance-evidence-and-the-boundary-2026-10-18.md`.
