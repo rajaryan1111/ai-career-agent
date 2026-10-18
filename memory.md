@@ -3865,3 +3865,15 @@ version and refuses unknown field names. Evidence: 8 rebuild tests, 5 revision t
 tests through the real window, 7 text tests, acceptance workflow **M** (M1-M5, stand-in run only -
 no display-backed run yet), manual steps 124-129 all BLOCKED, suite **2215 tests OK (skipped=13)**.
 Note: [the invalidation window](research/artifact-invalidation-window-2026-10-18.md).
+
+
+**The central policy gate, 2026-10-18:** `career_agent/policy.py` is P8's standing authorisation as
+a value plus a decision: `(source_id, action)` pairs over four independently gated actions, a
+**required** daily limit per action, quiet hours that may wrap midnight, `stop_all` and
+`revoked_at`. `evaluate_policy` takes the source's own gate answer as an argument and refuses when
+it is closed, so the policy authorises but never enables - a test composes a policy naming every
+action with the real (closed) `discovery_gate` and asserts every action is still refused. Refusals
+carry every reason, not the first, and anything unnamed fails closed (unknown action, naive clock,
+no recorded limit). Not yet stored, shown or called - there is no external side effect to call it
+from. 24 tests; suite **2239 tests OK (skipped=13)**. Note:
+[the central policy gate](research/global-policy-gate-2026-10-18.md).
