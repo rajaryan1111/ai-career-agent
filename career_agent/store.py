@@ -20,7 +20,8 @@ from pathlib import Path
 
 from .contacts import ContactImport, ContactRow, Flag, normalise_email_key
 from .artifacts import (
-    ArtifactBasis, ArtifactError, ArtifactKind, TailoredArtifact, new_artifact_id,
+    ArtifactBasis, ArtifactError, ArtifactKind, ListingFingerprint, TailoredArtifact,
+    new_artifact_id,
 )
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
@@ -55,7 +56,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -116,6 +117,15 @@ SCHEMA_TABLES_BY_VERSION = {
          "candidate_work_history", "hr_contact", "hr_contact_conflict", "interview_round",
          "job_listings", "policy_version", "profile_fact_provenance", "role_strategy_version",
          "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
+    # Schema 16 adds a column to ``tailored_artifact``, not a table, so its list is 15's list. The
+    # entry is written out anyway: the newest key must name the current version, and a version this
+    # build can open with no entry here would be a version ``career_agent.backup`` cannot check.
+    16: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "contact_suppression", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "policy_version", "profile_fact_provenance",
+         "role_strategy_version", "route_evidence", "scheduled_task", "tailored_artifact",
+         "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -880,6 +890,25 @@ def _migration_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
+def _holds_table(connection: sqlite3.Connection, name: str) -> bool:
+    """Whether this database actually has ``name``, whatever version it claims to be.
+
+    A step that adds a *column* has to ask. ``CREATE TABLE IF NOT EXISTS`` is safe on any file, but
+    ``ALTER TABLE ... ADD COLUMN`` on a table that is not there fails, and a failing step makes the
+    database refuse to open at all - a far worse outcome than the inconsistency it tripped over.
+
+    Files like that are real: a ``user_version`` set by hand or by a tool, a file assembled by a
+    harness, a copy restored from somewhere odd. The recorded version then runs ahead of the
+    structure, the earlier steps are skipped because the file says they already ran, and the table a
+    later step wants was never created. A column step's job is to add a column to a table that
+    exists; where the table does not, there is nothing for it to do, and inventing the table here
+    would be this step quietly standing in for the one that was skipped.
+    """
+    found = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,)).fetchone()
+    return found is not None
+
+
 def _migration_to_v4(connection: sqlite3.Connection) -> None:
     """Schema 4: two nullable columns recording the day a person plans to follow an application up.
 
@@ -899,6 +928,8 @@ def _migration_to_v4(connection: sqlite3.Connection) -> None:
     step that was interrupted after its first statement. Running the step twice must never fail, because
     a failed step leaves a database that cannot be opened at all.
     """
+    if not _holds_table(connection, "application_tracker"):  # see ``_holds_table``: nothing to alter
+        return
     existing = {row["name"] for row in connection.execute("PRAGMA table_info(application_tracker)")}
     if "follow_up_on" not in existing:
         connection.execute("ALTER TABLE application_tracker ADD COLUMN follow_up_on TEXT")
@@ -1266,6 +1297,37 @@ def _migration_to_v15(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v16(connection: sqlite3.Connection) -> None:
+    """Schema 16: the listing each tailored document was written from, recorded with the document.
+
+    One nullable column, added with ``ALTER TABLE ... ADD COLUMN``: additive, no table rewritten, no
+    existing row touched. It holds the employer, the role title and the required skills as they were
+    when the document was written, with a digest of those three values beside them
+    (``career_agent.artifacts.ListingFingerprint``).
+
+    Why this had to be stored rather than derived: an artifact row already names its listing, but a
+    listing is editable, so "which listing" was never the same question as "what did that listing
+    say when this letter was addressed to it". Without this column a cover letter written to one
+    employer still read as current after the employer was renamed - the one thing the lineage exists
+    to prevent.
+
+    Existing rows get ``NULL``, and that is the only honest value for them: this build has no record
+    of what those listings said when those documents were written, so it reports them as *not
+    checkable* rather than inventing a baseline that would make them look verified. Nothing is
+    back-filled from the listing as it stands today - that would quietly declare every old document
+    current, which is the failure this step was written to remove.
+
+    SQLite has no ``ADD COLUMN IF NOT EXISTS``, so the check is explicit, exactly as
+    :func:`_migration_to_v4` does it: running the step twice must never fail, because a step that
+    fails half way leaves a database that cannot be opened at all.
+    """
+    if not _holds_table(connection, "tailored_artifact"):  # see ``_holds_table``: nothing to alter
+        return
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(tailored_artifact)")}
+    if "listing_fingerprint" not in existing:
+        connection.execute("ALTER TABLE tailored_artifact ADD COLUMN listing_fingerprint TEXT")
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1286,6 +1348,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (13, "add the person's own settings", _migration_to_v13),
     (14, "add the do-not-contact list", _migration_to_v14),
     (15, "add the acceptance evidence recorded for each route", _migration_to_v15),
+    (16, "record the listing each tailored document was written from", _migration_to_v16),
 )
 
 
@@ -4725,7 +4788,8 @@ class CareerStore:
 
     def save_tailored_artifact(self, artifact: TailoredArtifact) -> None:
         """Append one artifact, refusing a lineage that does not resolve as the row is written."""
-        if self.get_job(artifact.listing_id) is None:
+        listing = self.get_job(artifact.listing_id)
+        if listing is None:
             raise ArtifactError(
                 f"no listing with the identifier {artifact.listing_id!r} is stored, so an artifact "
                 "cannot be filed under it")
@@ -4734,17 +4798,31 @@ class CareerStore:
                 f"no strategy version {artifact.strategy_version} under {artifact.strategy_id!r} is "
                 "stored, so the artifact's lineage could never be read; build it under a stored "
                 "strategy version")
+        # The listing is fingerprinted here, from the row that was just read, because here is the
+        # only moment this method can tell the truth about: what the listing said as the document
+        # entered the ledger. A caller that brought its own fingerprint is checked against it rather
+        # than believed - a document written for one employer must not be filed under another, and
+        # that refusal belongs in the store, where every path to a row passes.
+        written_for = ListingFingerprint.from_listing(listing)
+        if artifact.listing_fingerprint is not None:
+            moved = artifact.listing_fingerprint.changes_against(written_for)
+            if moved:
+                raise ArtifactError(
+                    f"the listing {artifact.listing_id!r} is not what this document was written for "
+                    f"({'; '.join(moved)}), so filing it under that listing would record a document "
+                    "nobody prepared for it")
         try:
             with self._connection:
                 self._connection.execute(
                     """INSERT INTO tailored_artifact
                            (artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
-                            content, fact_basis, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            content, fact_basis, created_at, listing_fingerprint)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (artifact.artifact_id, artifact.listing_id, artifact.strategy_id,
                      artifact.strategy_version, artifact.kind.value, artifact.content,
                      json.dumps(artifact.basis.to_json(), sort_keys=True, ensure_ascii=False),
-                     artifact.created_at or _now()),
+                     artifact.created_at or _now(),
+                     json.dumps(written_for.to_json(), sort_keys=True, ensure_ascii=False)),
                 )
         except sqlite3.IntegrityError as exc:
             raise ArtifactError(
@@ -4760,11 +4838,15 @@ class CareerStore:
         """Build a record with a fresh identifier and store it: one call, one append-only row."""
         # The record is stamped once, here, so the object a caller holds is byte-identical to the
         # row that was stored - a returned artifact that disagrees with its own row would be a
-        # second version of the truth.
+        # second version of the truth. That now includes the listing it was written for: the
+        # fingerprint is taken from the stored listing, and ``save_tailored_artifact`` refuses the
+        # row if the listing moved between these two lines.
+        listing = self.get_job(listing_id)
         artifact = TailoredArtifact(
             artifact_id=new_artifact_id(), listing_id=listing_id, strategy_id=strategy.strategy_id,
             strategy_version=strategy.version, kind=kind, content=content, basis=basis,
-            created_at=_now())
+            created_at=_now(),
+            listing_fingerprint=None if listing is None else ListingFingerprint.from_listing(listing))
         self.save_tailored_artifact(artifact)
         return artifact
 
@@ -4772,7 +4854,7 @@ class CareerStore:
         """One artifact by identifier, or ``None``. A damaged row raises rather than reading as absent."""
         row = self._connection.execute(
             """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
-                      content, fact_basis, created_at
+                      content, fact_basis, created_at, listing_fingerprint
                FROM tailored_artifact WHERE artifact_id=?""", (artifact_id,)).fetchone()
         if row is None:
             return None
@@ -4800,7 +4882,7 @@ class CareerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._connection.execute(
             """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
-                      content, fact_basis, created_at
+                      content, fact_basis, created_at, listing_fingerprint
                FROM tailored_artifact""" + where + " ORDER BY created_at DESC, rowid DESC",
             tuple(parameters),
         ).fetchall()
@@ -4828,14 +4910,23 @@ class CareerStore:
             raise StoredRecordError(
                 noun, f"its kind {row['artifact_kind']!r} is not one this version recognises") from exc
         version = _stored_int(row["strategy_version"], noun, "strategy version")
+        # The column arrived with schema 16, and the read-only doctor reads files at the version
+        # they were written at - so "this row has no such column" and "this row left it empty" are
+        # both read as *no recorded listing*, which is what an artifact from an older build is.
+        # A fingerprint that is present but unreadable is damage, and is reported as damage below:
+        # absent is not the same as corrupt, and only one of the two is a row nobody should trust.
+        stored_fingerprint = row["listing_fingerprint"] if "listing_fingerprint" in row.keys() else None
         try:
             basis_payload = json.loads(row["fact_basis"])
             basis = ArtifactBasis.from_json(basis_payload)
+            written_for = None
+            if stored_fingerprint is not None and str(stored_fingerprint).strip():
+                written_for = ListingFingerprint.from_json(json.loads(stored_fingerprint))
             return TailoredArtifact(
                 artifact_id=artifact_id, listing_id=str(row["listing_id"] or ""),
                 strategy_id=str(row["strategy_id"] or ""), strategy_version=version, kind=kind,
                 content=str(row["content"] or ""), basis=basis,
-                created_at=str(row["created_at"] or ""))
+                created_at=str(row["created_at"] or ""), listing_fingerprint=written_for)
         except ArtifactError as exc:
             raise StoredRecordError(noun, str(exc)) from exc
         except json.JSONDecodeError as exc:

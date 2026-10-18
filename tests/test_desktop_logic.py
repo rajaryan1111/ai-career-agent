@@ -495,6 +495,27 @@ class TailoredDocumentTextTests(unittest.TestCase):
         self.assertIn("1 needs rebuilding", logic.artifact_summary_text(3, 1))
         self.assertIn("2 need rebuilding", logic.artifact_summary_text(3, 2))
 
+    def test_a_document_nobody_can_check_is_not_called_out_of_date(self):
+        """Three states in words: a reader without colour gets the same sentence as everybody else."""
+        reasons = ("this document was stored before the listing it was written for was recorded "
+                   "with it, so whether it still matches that listing cannot be checked",)
+        text = logic.artifact_state_text(False, reasons, verifiable=False)
+
+        self.assertTrue(text.startswith("Cannot be checked"))
+        self.assertNotIn("Rebuild before use", text)
+        self.assertIn("stored before the listing", text)
+        self.assertEqual(logic.artifact_state_text(True, reasons, verifiable=False), "Current",
+                         "the current reading is decided by the report, not by this helper")
+
+    def test_the_summary_counts_the_documents_nobody_can_check_separately(self):
+        counted = logic.artifact_summary_text(3, 2, 1)
+
+        self.assertIn("2 need rebuilding", counted)
+        self.assertIn("1 of those was stored before the listing was recorded", counted)
+        self.assertIn("2 of those were stored", logic.artifact_summary_text(4, 3, 2))
+        self.assertNotIn("cannot be checked", logic.artifact_summary_text(3, 1),
+                         "a count nobody passed must not be implied")
+
     def test_a_rebuild_names_both_documents_and_the_gaps_it_refused_to_invent(self):
         text = logic.artifact_rebuild_text("new123", "old456", ("Docker", "Kubernetes"))
         self.assertIn("new123", text)

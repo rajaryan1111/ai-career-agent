@@ -3784,6 +3784,103 @@ def workflow_m_tailored_documents(run: Run) -> None:
         require(len(app.store.list_tailored_artifacts()) == stored_before,
                 "a document written for another employer was stored anyway")
 
+    # ---------------------------------------------------------------------------------------
+    # The listing a document was written for is part of its lineage (schema 16). Up to here the
+    # tab has been checked against facts and strategies that moved; what follows is the job
+    # itself moving - a renamed employer, a retitled role - and the third state the list has to
+    # be able to say out loud: a document stored before any of this was recorded, which nobody
+    # can check and which must therefore never read as current.
+    drift_listing = JobListing(
+        listing_id="acceptance-m3", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m3", employer_name="Third Employer",
+        role_title="Research Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python"}), location_text="Delhi, India")
+    app.store.save_job(drift_listing)
+
+    with results.step("M14 a listing edited after the document was stored makes the row stale"):
+        policy.reset()
+        for_drift = app.store.new_tailored_artifact(
+            listing_id=drift_listing.listing_id, strategy=strategy,
+            kind=ArtifactKind.COVER_LETTER,
+            content="Dear Third Employer,\n\nI am writing about the Research Engineer role.\n",
+            basis=capture_basis(app.store))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require(row_of(for_drift.artifact_id)["state"] == "Current",
+                f"a document nothing has touched reads as "
+                f"{row_of(for_drift.artifact_id)['state']!r}")
+        app.store.save_job(JobListing(
+            listing_id=drift_listing.listing_id, source_id="manual", source_name="Manual entry",
+            source_listing_url=drift_listing.source_listing_url,
+            employer_name="Third Employer Renamed", role_title="Research Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python"}), location_text="Delhi, India"))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(for_drift.artifact_id)["state"]
+        require(state.startswith("Rebuild before use"), f"the row says {state!r}")
+        require("the employer is now 'Third Employer Renamed'" in state,
+                f"the row does not say which part of the listing moved: {state!r}")
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a letter addressed to the old employer is still offered for saving")
+        drift_target = workspace.folder / "acceptance-listing-drift.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(drift_target)],
+                         workspace.root)
+        require("This document is out of date" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require(not drift_target.exists(), "a document written for another employer was written out")
+
+    with results.step("M15 rebuilding after the listing moved writes the listing as it stands now"):
+        policy.reset()
+        policy.answers["Rebuild this document"] = True
+        before_rebuild = {stored.artifact_id for stored in app.store.list_tailored_artifacts()}
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        press(app.artifacts_tab, "Rebuild from current facts...", workspace.root)
+        appended = [stored for stored in app.store.list_tailored_artifacts()
+                    if stored.artifact_id not in before_rebuild]
+        require(len(appended) == 1, f"the rebuild appended {len(appended)} documents")
+        rebuilt = appended[0]
+        require("Third Employer Renamed" in rebuilt.content,
+                "the rebuilt letter is not addressed to the employer as it stands now")
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require(row_of(rebuilt.artifact_id)["state"] == "Current",
+                f"the rebuilt document reads as {row_of(rebuilt.artifact_id)['state']!r}")
+        require(row_of(for_drift.artifact_id)["state"].startswith("Rebuild before use"),
+                "the old document stopped being stale when the new one was built")
+        kept = app.store.get_tailored_artifact(for_drift.artifact_id)
+        require(kept.listing_fingerprint.employer == "Third Employer",
+                "the old document's record of what it was written for was rewritten")
+
+    with results.step("M16 a document stored before listings were recorded says it cannot be checked"):
+        policy.reset()
+        # The only way to have such a row on a database this script just created: write it the way
+        # schema 15 wrote it. A person upgrading a real file will have several.
+        with app.store._connection:
+            app.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=NULL WHERE artifact_id=?",
+                (for_drift.artifact_id,))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        state = row_of(for_drift.artifact_id)["state"]
+        require(state.startswith("Cannot be checked"), f"the row says {state!r}")
+        require(state != "Current", "a document nobody can check reads as current")
+        require("stored before the listing" in state,
+                f"the row does not say why it cannot be checked: {state!r}")
+        require("cannot be checked" in app.artifact_summary.get(),
+                f"the summary does not count it: {app.artifact_summary.get()!r}")
+        app.artifacts_tree.selection_set(for_drift.artifact_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a document nobody can check is still offered for saving")
+        unknown_target = workspace.folder / "acceptance-unknown-listing.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy,
+                         [str(unknown_target)], workspace.root)
+        require("This document cannot be checked" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("nobody can tell whether it still matches"
+                in policy.said("This document cannot be checked"),
+                "the refusal does not say what is unknown")
+        require(not unknown_target.exists(), "a document nobody can check was written out")
+
     workspace.close_window(host, app)
 
 

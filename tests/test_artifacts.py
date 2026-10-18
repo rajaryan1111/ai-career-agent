@@ -14,8 +14,9 @@ from pathlib import Path
 
 from career_agent.artifacts import (
     MAX_CONTENT_CHARS, ArtifactBasis, ArtifactError, ArtifactKind, BuiltArtifact, LineageReport,
-    StaleArtifactError, TailoredArtifact, capture_basis, cover_letter_document, lineage_status,
-    new_artifact_id, rebuild_artifact, require_current_artifact, tailored_resume_document,
+    ListingFingerprint, StaleArtifactError, TailoredArtifact, capture_basis, cover_letter_document,
+    export_artifact, lineage_status, new_artifact_id, plan_artifact, rebuild_artifact,
+    require_current_artifact, store_planned_artifact, tailored_resume_document,
 )
 from career_agent.backup import create_backup, restore_backup
 from career_agent.core import (
@@ -705,6 +706,254 @@ class LineageTests(unittest.TestCase):
         self.store.save_profile(PROFILE, source=FactSource.USER_ENTERED)
         report = lineage_status(self.store, self.artifact)
         self.assertTrue(report.is_current, "re-saving the same facts is not a change")
+
+
+class ListingLineageTests(unittest.TestCase):
+    """A document is written *for a job*, so the job it was written for is part of its lineage.
+
+    The hole this closes: before schema 16 an artifact row named its listing but kept nothing about
+    what that listing said, so a cover letter addressed to one employer still read as "Current"
+    after the employer was renamed, and could be exported. Every test here is one sentence of the
+    rule - what makes a document stale, what deliberately does not, and what happens to a document
+    stored before any of this was recorded.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.folder = Path(self._temporary.name)
+        self.store = CareerStore(str(self.folder / "career_agent.sqlite3"))
+        self.addCleanup(self.store.close)
+        self.store.save_job(LISTING)
+        self.store.save_profile(PROFILE, source=FactSource.EXTRACTED_FROM_DOCUMENT,
+                                document_name="resume.docx")
+        self.strategy = self.store.create_role_strategy(
+            name=STRATEGY.name, role_family=STRATEGY.role_family,
+            required_skills=STRATEGY.required_skills, preferred_skills=STRATEGY.preferred_skills)
+
+    def build(self, kind=ArtifactKind.COVER_LETTER):
+        """The whole public path: look at what would be used, then store exactly that."""
+        plan = plan_artifact(self.store, listing_id=LISTING.listing_id,
+                             strategy_id=self.strategy.strategy_id, kind=kind)
+        return store_planned_artifact(self.store, plan)
+
+    def edit_listing(self, **changes):
+        self.store.save_job(replace(LISTING, **changes))
+
+    # ---------------------------------------------------------------- what is recorded, and when
+
+    def test_a_stored_document_records_the_listing_it_was_written_for(self):
+        stored = self.build()
+
+        fingerprint = stored.listing_fingerprint
+        self.assertIsNotNone(fingerprint, "the document kept no record of the job it was written for")
+        self.assertEqual(fingerprint.employer, "Example Employer")
+        self.assertEqual(fingerprint.role_title, "GenAI Engineer")
+        self.assertEqual(fingerprint.required_skills, ("Docker", "Python"))
+        self.assertEqual(self.store.get_tailored_artifact(stored.artifact_id).listing_fingerprint,
+                         fingerprint, "what was returned is not what was stored")
+        report = lineage_status(self.store, stored)
+        self.assertTrue(report.is_current)
+        self.assertTrue(report.listing_recorded)
+        self.assertTrue(report.listing_verifiable)
+
+    def test_the_record_holds_nothing_but_the_three_fields_a_document_uses(self):
+        """No résumé text, no candidate facts, no listing fields the document never reads."""
+        stored = self.build()
+        row = self.store._connection.execute(
+            "SELECT listing_fingerprint FROM tailored_artifact WHERE artifact_id=?",
+            (stored.artifact_id,)).fetchone()[0]
+        payload = json.loads(row)
+
+        self.assertEqual(set(payload), {"employer", "role_title", "required_skills", "digest"})
+        self.assertNotIn("India", row, "a candidate fact reached the listing record")
+        self.assertNotIn("resume.docx", row, "the source document reached the listing record")
+        self.assertNotIn(LISTING.source_listing_url, row, "a field no document reads was recorded")
+
+    # ---------------------------------------------------------------- what makes a document stale
+
+    def test_renaming_the_employer_makes_the_document_stale_and_names_both_names(self):
+        stored = self.build()
+        self.edit_listing(employer_name="Renamed Corp")
+
+        report = lineage_status(self.store, stored)
+
+        self.assertFalse(report.is_current, "a letter addressed to another employer read as current")
+        self.assertTrue(report.listing_verifiable, "this one can be checked; it is simply out of date")
+        self.assertEqual(report.listing_changes,
+                         ("the employer is now 'Renamed Corp', not 'Example Employer'",))
+        self.assertIn("the listing this was written for changed", "; ".join(report.summary()))
+
+    def test_changing_the_role_title_makes_the_document_stale(self):
+        stored = self.build()
+        self.edit_listing(role_title="Machine Learning Engineer")
+
+        report = lineage_status(self.store, stored)
+
+        self.assertFalse(report.is_current)
+        self.assertEqual(report.listing_changes,
+                         ("the role is now 'Machine Learning Engineer', not 'GenAI Engineer'",))
+
+    def test_changing_the_required_skills_makes_the_document_stale(self):
+        stored = self.build()
+        self.edit_listing(required_skills=frozenset({"Python", "Kubernetes"}))
+
+        report = lineage_status(self.store, stored)
+
+        self.assertFalse(report.is_current)
+        self.assertEqual(report.listing_changes, ("the skills the listing asks for changed",))
+
+    def test_fields_no_document_reads_are_not_drift(self):
+        """A source URL, an availability flag and a provenance note move nothing a document says."""
+        stored = self.build()
+        self.edit_listing(source_listing_url="https://jobs.example.invalid/role/1?utm=newsletter",
+                          availability_status=Availability.UNKNOWN,
+                          provenance_note="re-read from the careers page on 18 October")
+
+        report = lineage_status(self.store, stored)
+
+        self.assertEqual(report.listing_changes, ())
+        self.assertTrue(report.is_current,
+                        "touching a field no document reads made a good document unusable")
+
+    def test_resaving_the_same_listing_is_not_a_change(self):
+        stored = self.build()
+        self.store.save_job(LISTING)
+
+        self.assertTrue(lineage_status(self.store, stored).is_current)
+
+    def test_the_skill_order_a_listing_is_saved_with_does_not_matter(self):
+        """Required skills are a set; two readings of the same set are the same fingerprint."""
+        first = ListingFingerprint.from_listing(replace(LISTING, required_skills=frozenset({"Python", "Docker"})))
+        second = ListingFingerprint.from_listing(replace(LISTING, required_skills=frozenset({"Docker", "Python"})))
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.digest, second.digest)
+        self.assertEqual(first.changes_against(second), ())
+
+    # ------------------------------------------------------------ a stale document cannot be used
+
+    def test_a_document_whose_listing_moved_is_refused_and_not_written_out(self):
+        stored = self.build()
+        self.edit_listing(employer_name="Renamed Corp")
+        target = self.folder / "cover-letter.txt"
+
+        with self.assertRaises(StaleArtifactError) as caught:
+            export_artifact(self.store, stored.artifact_id, target)
+
+        self.assertIn("the employer is now 'Renamed Corp'", str(caught.exception))
+        self.assertFalse(target.exists(), "a document written for another employer was written out")
+        with self.assertRaises(StaleArtifactError):
+            require_current_artifact(self.store, stored.artifact_id)
+
+    def test_rebuilding_writes_the_current_listing_and_keeps_the_old_record_intact(self):
+        stored = self.build()
+        self.edit_listing(employer_name="Renamed Corp")
+
+        rebuilt = rebuild_artifact(self.store, stored.artifact_id)
+
+        self.assertTrue(lineage_status(self.store, rebuilt.artifact).is_current)
+        self.assertEqual(rebuilt.artifact.listing_fingerprint.employer, "Renamed Corp")
+        self.assertIn("Renamed Corp", rebuilt.artifact.content,
+                      "the rebuilt letter is addressed to the employer as it stands now")
+        kept = self.store.get_tailored_artifact(stored.artifact_id)
+        self.assertEqual(kept.content, stored.content, "the old document was changed by a rebuild")
+        self.assertEqual(kept.listing_fingerprint.employer, "Example Employer",
+                         "history was rewritten: the old record no longer says what it was built for")
+        self.assertFalse(lineage_status(self.store, kept).is_current,
+                         "the old document stopped being stale when a new one was built")
+
+    # ------------------------------------------------------- a document nobody can check any more
+
+    def legacy_row(self) -> TailoredArtifact:
+        """A row as schema 15 left it: everything recorded except the listing it was written for."""
+        stored = self.build()
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=NULL WHERE artifact_id=?",
+                (stored.artifact_id,))
+        return self.store.get_tailored_artifact(stored.artifact_id)
+
+    def test_a_document_stored_before_schema_16_is_never_reported_as_current(self):
+        legacy = self.legacy_row()
+
+        self.assertIsNone(legacy.listing_fingerprint)
+        report = lineage_status(self.store, legacy)
+
+        self.assertFalse(report.is_current, "a document nobody can check was reported as current")
+        self.assertFalse(report.listing_recorded)
+        self.assertFalse(report.listing_verifiable)
+        self.assertEqual(report.listing_changes, (), "nothing was invented about what it was built for")
+        self.assertIn("cannot be checked", "; ".join(report.summary()))
+
+    def test_a_document_that_cannot_be_checked_is_not_written_out(self):
+        legacy = self.legacy_row()
+        target = self.folder / "legacy.txt"
+
+        with self.assertRaises(StaleArtifactError) as caught:
+            export_artifact(self.store, legacy.artifact_id, target)
+
+        self.assertIn("cannot be checked", str(caught.exception))
+        self.assertIn("the new document will record what it was written for", str(caught.exception))
+        self.assertFalse(target.exists())
+
+    def test_rebuilding_a_legacy_document_produces_one_that_can_be_checked(self):
+        legacy = self.legacy_row()
+
+        rebuilt = rebuild_artifact(self.store, legacy.artifact_id)
+
+        self.assertIsNotNone(rebuilt.artifact.listing_fingerprint)
+        self.assertTrue(lineage_status(self.store, rebuilt.artifact).is_current)
+        self.assertIsNone(self.store.get_tailored_artifact(legacy.artifact_id).listing_fingerprint,
+                          "the old row was back-filled with a listing nobody recorded for it")
+
+    def test_a_listing_that_is_gone_is_reported_as_gone_rather_than_as_current(self):
+        """Deleting a listing cascades to its documents, so this is the state a damaged file reaches."""
+        stored = self.build()
+        orphan = replace(stored, listing_id="no-such-listing")
+
+        report = lineage_status(self.store, orphan)
+
+        self.assertTrue(report.listing_missing)
+        self.assertFalse(report.listing_verifiable)
+        self.assertFalse(report.is_current)
+        self.assertIn("no longer stored", "; ".join(report.summary()))
+
+    # ------------------------------------------------------------------ the record is checkable
+
+    def test_a_fingerprint_edited_in_the_database_is_reported_as_damage(self):
+        """The digest is what makes the record evidence; a row that fails it is never believed."""
+        stored = self.build()
+        tampered = dict(json.loads(self.store._connection.execute(
+            "SELECT listing_fingerprint FROM tailored_artifact WHERE artifact_id=?",
+            (stored.artifact_id,)).fetchone()[0]))
+        tampered["employer"] = "Somebody Else Ltd"
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=? WHERE artifact_id=?",
+                (json.dumps(tampered), stored.artifact_id))
+
+        with self.assertRaises(StoredRecordError) as caught:
+            self.store.get_tailored_artifact(stored.artifact_id)
+
+        self.assertIn("does not match its own digest", str(caught.exception))
+
+    def test_a_document_cannot_be_filed_under_a_listing_it_was_not_written_for(self):
+        """The store is the last gate: a row is only written where the listing still agrees."""
+        written_for = ListingFingerprint(employer="Another Employer", role_title="GenAI Engineer",
+                                         required_skills=("Docker", "Python"))
+        artifact = TailoredArtifact(
+            artifact_id=new_artifact_id(), listing_id=LISTING.listing_id,
+            strategy_id=self.strategy.strategy_id, strategy_version=self.strategy.version,
+            kind=ArtifactKind.COVER_LETTER, content="Dear Another Employer,\n",
+            basis=capture_basis(self.store), listing_fingerprint=written_for)
+
+        with self.assertRaises(ArtifactError) as caught:
+            self.store.save_tailored_artifact(artifact)
+
+        self.assertIn("is not what this document was written for", str(caught.exception))
+        self.assertEqual(self.store.list_tailored_artifacts(), (), "the refused row was stored anyway")
+
 
 
 if __name__ == "__main__":

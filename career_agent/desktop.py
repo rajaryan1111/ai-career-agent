@@ -2510,12 +2510,14 @@ class CareerAgentApp:
                     f"{artifact.strategy_id} v{artifact.strategy_version}",
                     format_stored_timestamp(artifact.created_at),
                     artifact_citation_text(artifact.source_documents),
-                    artifact_state_text(report.is_current, report.summary()),
+                    artifact_state_text(report.is_current, report.summary(),
+                                        verifiable=report.listing_verifiable),
                 ),
             )
         self._artifact_reports = reports
         stale = sum(1 for report in reports.values() if not report.is_current)
-        self.artifact_summary.set(artifact_summary_text(len(artifacts), stale))
+        unverifiable = sum(1 for report in reports.values() if not report.listing_verifiable)
+        self.artifact_summary.set(artifact_summary_text(len(artifacts), stale, unverifiable))
         self._refresh_artifact_choices()
         if selected in reports:  # the row the person was looking at is still there
             self.artifacts_tree.selection_set(selected)
@@ -2668,11 +2670,17 @@ class CareerAgentApp:
             return
         report = self._artifact_reports.get(artifact_id)
         if report is not None and not report.is_current:
-            self._record("artifact.export.refused", f"id={artifact_id} reason=stale")
+            checkable = report.listing_verifiable
+            self._record("artifact.export.refused",
+                         f"id={artifact_id} reason={'stale' if checkable else 'unverifiable'}")
             messagebox.showerror(
-                "This document is out of date",
-                artifact_export_refusal_text(artifact_id, report.summary()), parent=self.root)
-            self.status.set(f"{artifact_id} is out of date and was not written out.")
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                artifact_export_refusal_text(artifact_id, report.summary(), verifiable=checkable),
+                parent=self.root)
+            self.status.set(
+                f"{artifact_id} is out of date and was not written out." if checkable else
+                f"{artifact_id} cannot be checked against its listing and was not written out.")
             return
         chosen = filedialog.asksaveasfilename(
             parent=self.root, title="Save a copy of this document",
@@ -2688,11 +2696,18 @@ class CareerAgentApp:
         try:
             export = export_artifact(self.store, artifact_id, chosen)
         except StaleArtifactError as exc:
-            self._record("artifact.export.refused", f"id={artifact_id} reason=stale")
-            messagebox.showerror("This document is out of date",
-                                 artifact_export_refusal_text(artifact_id, exc.report.summary()),
-                                 parent=self.root)
-            self.status.set(f"{artifact_id} is out of date and was not written out.")
+            checkable = exc.report.listing_verifiable
+            self._record("artifact.export.refused",
+                         f"id={artifact_id} reason={'stale' if checkable else 'unverifiable'}")
+            messagebox.showerror(
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                artifact_export_refusal_text(artifact_id, exc.report.summary(),
+                                             verifiable=checkable),
+                parent=self.root)
+            self.status.set(
+                f"{artifact_id} is out of date and was not written out." if checkable else
+                f"{artifact_id} cannot be checked against its listing and was not written out.")
             self._refresh_artifacts()
             return
         except ArtifactError as exc:
@@ -2733,6 +2748,10 @@ class CareerAgentApp:
         lines = "; ".join(report.summary())
         if report.is_current:
             self.artifact_detail.set(f"{artifact_id}: {lines}.")
+        elif not report.listing_verifiable:
+            self.artifact_detail.set(
+                f"{artifact_id} cannot be used as it is: {lines}. Rebuilding writes a new document "
+                "that records the listing it was written for, and keeps this one as history.")
         else:
             self.artifact_detail.set(
                 f"{artifact_id} cannot be used as it is: {lines}. Rebuilding writes a new document "
@@ -2755,10 +2774,16 @@ class CareerAgentApp:
             reasons = "\n".join(f"- {line}" for line in exc.report.summary())
             self.status.set(
                 f"{artifact_id} was not used: it is no longer built on what is stored.")
+            checkable = exc.report.listing_verifiable
             if messagebox.askyesno(
-                "This document is out of date",
-                f"{artifact_id} was built from facts or a strategy version that have changed:\n\n"
-                f"{reasons}\n\nRebuild it from your current facts now? The old document is kept.",
+                "This document is out of date" if checkable
+                else "This document cannot be checked",
+                (f"{artifact_id} was built from facts, a strategy version or a listing that have "
+                 f"changed:\n\n{reasons}\n\nRebuild it from your current facts now? The old "
+                 "document is kept." if checkable else
+                 f"{artifact_id} cannot be checked against what it was written for:\n\n{reasons}"
+                 "\n\nRebuild it from your current facts and the listing as it stands now? The "
+                 "old document is kept."),
                 parent=self.root,
             ):
                 self._rebuild_selected_artifact(artifact_id=artifact_id, confirmed=True)

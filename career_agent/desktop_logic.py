@@ -696,28 +696,50 @@ def artifact_citation_text(documents: Iterable[str]) -> str:
     return ", ".join(names) if names else ARTIFACT_NO_DOCUMENT
 
 
-def artifact_state_text(is_current: bool, reasons: Iterable[str]) -> str:
-    """The state cell: current, or why this document must be rebuilt before it is used.
+def artifact_state_text(is_current: bool, reasons: Iterable[str], *, verifiable: bool = True) -> str:
+    """The state cell: current, why this must be rebuilt, or why it cannot be checked at all.
 
     The reasons come from the lineage report, which always has at least one line, so a row never says
     only "stale" - the point of the whole lineage is that the person is told what moved.
+
+    Three states, not two, and each is spelled out in the cell's own words rather than shown by a
+    colour: a person reading this list with a screen reader, on a monochrome display, or without
+    colour vision gets the same sentence everybody else gets. ``verifiable=False`` is the honest
+    reading for a document stored before the listing was recorded with it - "nobody can tell whether
+    this still matches" is a different thing from "this is out of date", and telling a person to
+    rebuild something that may be perfectly fine, as though it were known to be stale, would be this
+    window claiming knowledge it does not have.
     """
     if is_current:
         return "Current"
+    if not verifiable:
+        return "Cannot be checked — " + "; ".join(reasons)
     return "Rebuild before use — " + "; ".join(reasons)
 
 
-def artifact_summary_text(total: int, stale: int) -> str:
-    """The line above the list: how many documents are stored, and how many cannot be used as they are."""
+def artifact_summary_text(total: int, stale: int, unverifiable: int = 0) -> str:
+    """The line above the list: how many documents are stored, and how many cannot be used as they are.
+
+    ``unverifiable`` is counted separately and said separately. Those documents are inside ``stale``
+    - nothing that cannot be checked is offered for use - but "we cannot tell" is not "it is out of
+    date", and a summary that merged the two would overstate what this build knows.
+    """
     if total == 0:
         return ("No tailored document is stored yet. Documents are built from your saved facts under a "
                 "role strategy; nothing here is sent anywhere.")
     documents = "1 tailored document" if total == 1 else f"{total} tailored documents"
     if stale == 0:
-        return f"{documents} stored; every one still matches the facts and strategy it was built from."
+        return (f"{documents} stored; every one still matches the facts, the strategy and the listing "
+                "it was built from.")
     needs = "1 needs" if stale == 1 else f"{stale} need"
-    return (f"{documents} stored; {needs} rebuilding before use because the facts or the strategy "
+    line = (f"{documents} stored; {needs} rebuilding before use because what they were built from "
             "moved on. Nothing is reused silently.")
+    if unverifiable:
+        counted = ("1 of those was stored" if unverifiable == 1
+                   else f"{unverifiable} of those were stored")
+        line += (f" {counted} before the listing was recorded with the document, so whether the "
+                 "listing still matches cannot be checked.")
+    return line
 
 
 def artifact_rebuild_text(artifact_id: str, replaced_id: str, gaps: Iterable[str]) -> str:
@@ -868,9 +890,22 @@ def artifact_export_text(path: str, characters: int) -> str:
             "and nothing was sent anywhere.")
 
 
-def artifact_export_refusal_text(artifact_id: str, reasons: Iterable[str]) -> str:
-    """Why a document was not written out: the lineage reasons, in the window's own words."""
+def artifact_export_refusal_text(artifact_id: str, reasons: Iterable[str], *,
+                                 verifiable: bool = True) -> str:
+    """Why a document was not written out: the lineage reasons, in the window's own words.
+
+    A document that *cannot be checked* is refused for a different reason than a document that is
+    known to be out of date, and says so: claiming the first is stale would be asserting something
+    this build does not know, and both refusals have to hold, because a file on a disk carries no
+    status with it.
+    """
     moved = "; ".join(reason for reason in reasons if reason)
+    if not verifiable:
+        return (f"Document {artifact_id} was not written out: "
+                f"{moved or 'what it was written for cannot be established'}. Exporting it would "
+                "put a document in a folder with nothing to say that nobody can tell whether it "
+                "still matches the job it was written for. Rebuild it to get one that records the "
+                "listing it was written for.")
     return (f"Document {artifact_id} was not written out: {moved or 'it is no longer current'}. "
             "Exporting it would put a document in a folder with nothing to say it is out of date. "
             "Rebuild it from your current facts first.")

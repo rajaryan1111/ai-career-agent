@@ -5153,6 +5153,108 @@ class TailoredDocumentsTabTests(HandlerTestCase):
         written = log_path(Path(app.store.database_path)).read_text(encoding="utf-8")
         self.assertNotIn("A tailored resume built from the stored facts", written)
 
+    def rename_the_employer(self, app, name="Renamed Corp"):
+        """Edit the listing the way a person would after the employer rebranded."""
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name=name, role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+
+    def forget_the_listing_record(self, app, artifact_id):
+        """Put the row back the way schema 15 wrote it: no record of the listing it was built for."""
+        with app.store._connection:
+            app.store._connection.execute(
+                "UPDATE tailored_artifact SET listing_fingerprint=NULL WHERE artifact_id=?",
+                (artifact_id,))
+
+    def test_a_document_whose_listing_moved_is_shown_as_needing_a_rebuild(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.rename_the_employer(app)
+
+        app._refresh_artifacts()
+
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Rebuild before use"), f"the row says {row['state']!r}")
+        self.assertIn("the employer is now 'Renamed Corp', not 'Example Employer'", row["state"],
+                      "the row does not say which part of the listing moved")
+        self.assertIn("1 need", app.artifact_summary.get())
+
+    def test_a_document_with_no_record_of_its_listing_says_so_in_words(self):
+        """Not a colour, not a blank cell: the row says what is unknown and the summary counts it."""
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+
+        app._refresh_artifacts()
+
+        row = self.row(app, artifact.artifact_id)
+        self.assertTrue(row["state"].startswith("Cannot be checked"), f"the row says {row['state']!r}")
+        self.assertNotEqual(row["state"], "Current")
+        self.assertIn("stored before the listing", row["state"])
+        self.assertIn("cannot be checked", app.artifact_summary.get())
+
+    def test_a_document_that_cannot_be_checked_is_not_offered_for_saving(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        app._on_artifact_selection()
+
+        self.assertTrue(app.export_artifact_button.instate(["disabled"]),
+                        "a document nobody can check was offered for saving")
+        self.assertIn("cannot be used as it is", app.artifact_detail.get())
+        self.assertIn("records the listing it was written for", app.artifact_detail.get())
+
+        app._export_selected_artifact()
+
+        self.assertIn("This document cannot be checked", MESSAGES.titles("showerror"))
+        self.assertIn("nobody can tell whether it still matches",
+                      MESSAGES.text("showerror"))
+        self.assertIn("cannot be checked against its listing", app.status.get())
+
+    def test_checking_a_document_with_no_listing_record_offers_a_rebuild_that_records_one(self):
+        app = self.build_window()
+        artifact = self.seed(app)
+        self.forget_the_listing_record(app, artifact.artifact_id)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["This document cannot be checked"] = True
+
+        app._check_selected_artifact()
+
+        self.assertIn("This document cannot be checked", MESSAGES.titles("askyesno"))
+        stored = app.store.list_tailored_artifacts()
+        self.assertEqual(len(stored), 2, "the rebuild was not appended")
+        rebuilt = next(item for item in stored if item.artifact_id != artifact.artifact_id)
+        self.assertIsNotNone(rebuilt.listing_fingerprint)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertIsNone(
+            app.store.get_tailored_artifact(artifact.artifact_id).listing_fingerprint,
+            "the old row was given a listing record nobody wrote for it")
+
+    def test_rebuilding_a_document_whose_listing_moved_uses_the_listing_as_it_stands(self):
+        app = self.build_window()
+        from career_agent.artifacts import ArtifactKind
+
+        artifact = self.seed(app, kind=ArtifactKind.COVER_LETTER)
+        self.rename_the_employer(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(artifact.artifact_id)
+        CONFIG["Rebuild this document"] = True
+
+        app._rebuild_selected_artifact()
+
+        rebuilt = next(item for item in app.store.list_tailored_artifacts()
+                       if item.artifact_id != artifact.artifact_id)
+        self.assertEqual(rebuilt.listing_fingerprint.employer, "Renamed Corp")
+        self.assertIn("Renamed Corp", rebuilt.content)
+        self.assertEqual(self.row(app, rebuilt.artifact_id)["state"], "Current")
+        self.assertEqual(self.row(app, artifact.artifact_id)["state"][:18], "Rebuild before use")
+
     def test_rebuilding_a_document_that_was_deleted_elsewhere_is_refused(self):
         app = self.build_window()
         artifact = self.seed(app)

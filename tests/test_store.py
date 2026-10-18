@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import stat
@@ -1634,15 +1635,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 15)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 15)
+        self.assertEqual(SCHEMA_VERSION, 16)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 16)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
         # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
         # the current version's contract names - so it is written as the version it is checking.
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[15]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[16]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1674,6 +1675,113 @@ class SchemaMigrationTests(unittest.TestCase):
             row[0] for row in upgraded._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")
         })
+
+    def _artifact_world(self, store):
+        """A listing, a profile, a strategy and one stored document - the rows schema 16 touches."""
+        from career_agent.artifacts import ArtifactKind, capture_basis  # noqa: PLC0415 - one test
+
+        store.save_job(self._job())
+        store.save_profile(CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                                            graduation_year=2027, skills=frozenset({"Python"})))
+        strategy = store.create_role_strategy(name="Applied AI roles", role_family="Applied AI",
+                                              required_skills=frozenset({"Python"}))
+        artifact = store.new_tailored_artifact(
+            listing_id="j1", strategy=strategy, kind=ArtifactKind.TAILORED_RESUME,
+            content="A document written before the listing was recorded with it.\n",
+            basis=capture_basis(store))
+        return strategy, artifact
+
+    def test_the_listing_step_adds_its_column_and_leaves_every_stored_document_alone(self):
+        """A real v15 file: the documents in it survive, and none of them gains an invented lineage.
+
+        The point of the assertions about ``NULL`` is that a migration must not guess. Filling the new
+        column from the listing as it stands today would declare every old document "written for
+        exactly this listing", which is the false reassurance the column exists to remove.
+        """
+        from career_agent.artifacts import ArtifactBasis, ArtifactKind  # noqa: PLC0415 - one test
+
+        older = self._open_at_version(15)
+        columns = {row["name"] for row in
+                   older._connection.execute("PRAGMA table_info(tailored_artifact)")}
+        self.assertNotIn("listing_fingerprint", columns, "version 15 predates the listing record")
+        older.save_job(self._job())
+        older.save_profile(CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                                            graduation_year=2027, skills=frozenset({"Python"})))
+        strategy = older.create_role_strategy(name="Applied AI roles", role_family="Applied AI",
+                                              required_skills=frozenset({"Python"}))
+        # Written the way the old build wrote it: the column list schema 15 had, no fingerprint.
+        # Going through ``save_tailored_artifact`` would write today's columns into yesterday's table.
+        content = "A document written before the listing was recorded with it.\n"
+        with older._connection:
+            older._connection.execute(
+                """INSERT INTO tailored_artifact
+                       (artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                        content, fact_basis, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("artifact-from-v15", "j1", strategy.strategy_id, strategy.version,
+                 ArtifactKind.TAILORED_RESUME.value, content,
+                 json.dumps(ArtifactBasis().to_json(), sort_keys=True), "2026-10-01T09:00:00Z"))
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0],
+                         SCHEMA_VERSION)
+        stored = upgraded.get_tailored_artifact("artifact-from-v15")
+        self.assertEqual(stored.content, content, "an existing document was rewritten")
+        self.assertEqual(stored.created_at, "2026-10-01T09:00:00Z")
+        self.assertEqual(stored.strategy_version, strategy.version)
+        self.assertIsNone(stored.listing_fingerprint,
+                          "the migration invented a listing for a document that never recorded one")
+        self.assertEqual(upgraded.get_job("j1"), self._job(), "the listing itself was touched")
+        # And the new column is usable at once, on the file that was just upgraded.
+        from career_agent.artifacts import capture_basis  # noqa: PLC0415 - one test
+        fresh = upgraded.new_tailored_artifact(
+            listing_id="j1", strategy=upgraded.get_role_strategy(strategy.strategy_id),
+            kind=ArtifactKind.COVER_LETTER,
+            content="A document written after the upgrade.\n", basis=capture_basis(upgraded))
+        self.assertEqual(upgraded.get_tailored_artifact(fresh.artifact_id)
+                         .listing_fingerprint.employer, "Example")
+
+    def test_running_the_listing_step_again_changes_nothing(self):
+        """Steps are re-runnable: a version set back by hand must not make the file unopenable."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        _, artifact = self._artifact_world(store)
+
+        store_module._migration_to_v16(store._connection)
+        store_module._migration_to_v16(store._connection)
+
+        columns = [row["name"] for row in
+                   store._connection.execute("PRAGMA table_info(tailored_artifact)")]
+        self.assertEqual(columns.count("listing_fingerprint"), 1, "the column was added twice")
+        self.assertEqual(len(store.list_tailored_artifacts()), 1, "a row was duplicated or lost")
+        self.assertIsNotNone(
+            store.get_tailored_artifact(artifact.artifact_id).listing_fingerprint,
+            "re-running the step emptied a record that was already written")
+
+    def test_the_listing_step_does_not_break_a_file_whose_version_runs_ahead_of_its_tables(self):
+        """A ``user_version`` set by hand, with none of the tables that version implies.
+
+        The earlier steps are skipped - the file says they ran - so the artifact table is simply not
+        there. A column step has nothing to do in that case, and must say so by doing nothing: the
+        alternative is a step that raises, and a step that raises leaves a database nobody can open.
+        """
+        connection = sqlite3.connect(self.path)
+        connection.execute("PRAGMA user_version = 15")
+        connection.commit()
+        connection.close()
+
+        store = CareerStore(self.path)  # opens rather than refusing
+        self.addCleanup(store.close)
+
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0],
+                         SCHEMA_VERSION)
+        self.assertEqual(
+            store._connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tailored_artifact'"
+            ).fetchone()[0], 0, "the step invented the table it was meant to alter")
 
     def test_the_newest_step_adds_its_tables_to_a_database_that_already_holds_records(self):
         """The upgrade a person's real file will run: new tables, and not one existing row touched.

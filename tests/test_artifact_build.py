@@ -151,6 +151,30 @@ class StoringTests(BuildTestCase):
         self.assertEqual(stored.content, plan.content)
         self.assertTrue(lineage_status(self.store, stored).is_current)
 
+    def test_a_stored_document_keeps_the_listing_it_was_written_for(self):
+        """The full round trip: preview, store, and the row still knows which job it was for.
+
+        The two checks at the end are the point of schema 16. Before it, the stored row named the
+        listing but recorded nothing about it, so renaming the employer left a letter addressed to
+        somebody else reading as current - and exportable.
+        """
+        plan = self.plan(ArtifactKind.COVER_LETTER)
+        artifact = store_planned_artifact(self.store, plan)
+
+        self.assertEqual(artifact.listing_fingerprint.employer, "Example Employer")
+        self.assertEqual(artifact.listing_fingerprint.role_title, "GenAI Engineer")
+        self.assertEqual(artifact.listing_fingerprint.required_skills, ("Docker", "Python"))
+        self.assertTrue(lineage_status(self.store, artifact).is_current)
+
+        self.store.save_job(replace(LISTING, employer_name="Renamed Corp"))
+
+        report = lineage_status(self.store, self.store.get_tailored_artifact(artifact.artifact_id))
+        self.assertFalse(report.is_current, "a letter addressed to another employer stayed current")
+        self.assertIn("the employer is now 'Renamed Corp'", "; ".join(report.summary()))
+        with self.assertRaises(StaleArtifactError):
+            export_artifact(self.store, artifact.artifact_id, self.root / "letter.txt")
+        self.assertFalse((self.root / "letter.txt").exists())
+
     def test_a_strategy_that_moved_while_the_document_was_read_is_refused(self):
         plan = self.plan()
         self.store.revise_role_strategy(

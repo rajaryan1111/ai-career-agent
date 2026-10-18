@@ -20,6 +20,8 @@ what the lineage says. Email bodies, uploads and any external transfer are not t
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -404,6 +406,125 @@ def cover_letter_document(basis: ArtifactBasis, strategy: RoleStrategy,
     return BuiltArtifact(content="\n".join(lines) + "\n", gaps=gaps)
 
 
+# -------------------------------------------------- the listing a document was written for
+
+@dataclass(frozen=True)
+class ListingFingerprint:
+    """The part of a listing a generated document is actually written from.
+
+    Three values, and deliberately only three. A listing carries twenty-odd fields; a document reads
+    the employer it is addressed to, the role it names, and the skills the listing asks for (which
+    decide what the screen reported as missing). Recording more would make an edit to a source URL or
+    an availability flag turn a perfectly good document stale, which is a refusal nobody could act on.
+    Recording less would let a cover letter addressed to one employer be reused for another.
+
+    Nothing from the candidate is in here: an employer's name, a role title and a job's skill list are
+    the employer's own public words, already stored in ``job_listings``, and the résumé text the
+    document was built from stays where it was - in the basis, which is what it is for.
+
+    The :attr:`digest` is the sha256 of the canonical JSON of those three values, written beside them
+    in the stored row. It is what makes the record *checkable*: a row whose values were edited after
+    the fact no longer matches its own digest, and :meth:`from_json` refuses it rather than letting
+    this build report a lineage it cannot stand behind.
+    """
+
+    employer: str
+    role_title: str
+    required_skills: tuple[str, ...] = ()
+
+    #: Long enough for any real employer or role title, short enough that a damaged row is caught.
+    MAX_TEXT_CHARS = 500
+    #: A listing with more required skills than this is damage, not a job advert.
+    MAX_SKILLS = 200
+
+    def __post_init__(self) -> None:
+        for name in ("employer", "role_title"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise ArtifactError(
+                    f"a listing fingerprint records the {name.replace('_', ' ')} as text")
+            if len(value) > self.MAX_TEXT_CHARS:
+                raise ArtifactError(
+                    f"the {name.replace('_', ' ')} in a listing fingerprint is {len(value)} "
+                    f"characters, over the {self.MAX_TEXT_CHARS}-character limit")
+        skills = self.required_skills
+        if not isinstance(skills, tuple) or any(not isinstance(skill, str) for skill in skills):
+            raise ArtifactError("a listing fingerprint records the required skills as a tuple of names")
+        if len(skills) > self.MAX_SKILLS:
+            raise ArtifactError(
+                f"a listing fingerprint holds {len(skills)} required skills, over the "
+                f"{self.MAX_SKILLS} a listing can state")
+        # Sorted and de-duplicated so two readings of the same listing produce the same digest: the
+        # listing stores skills in a set, and a set has no order to preserve.
+        object.__setattr__(self, "required_skills", tuple(sorted(set(skills))))
+
+    @classmethod
+    def from_listing(cls, listing: "JobListing") -> "ListingFingerprint":
+        """The fingerprint of one stored listing, as it is right now."""
+        if not isinstance(listing, JobListing):
+            raise ArtifactError("a listing fingerprint is taken from a stored job listing")
+        return cls(employer=str(listing.employer_name or ""),
+                   role_title=str(listing.role_title or ""),
+                   required_skills=tuple(listing.required_skills))
+
+    @property
+    def digest(self) -> str:
+        """A stable sha256 of the three values, in the canonical form this module writes."""
+        canonical = json.dumps(
+            {"employer": self.employer, "role_title": self.role_title,
+             "required_skills": list(self.required_skills)},
+            sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def to_json(self) -> dict:
+        """The stored form: the three values a reader needs to explain a change, plus the digest."""
+        return {
+            "employer": self.employer,
+            "role_title": self.role_title,
+            "required_skills": list(self.required_skills),
+            "digest": self.digest,
+        }
+
+    @classmethod
+    def from_json(cls, payload: object) -> "ListingFingerprint":
+        """A stored fingerprint back into a record, refusing one that does not match its own digest."""
+        if not isinstance(payload, dict):
+            raise ArtifactError("a stored listing fingerprint is a JSON object")
+        skills = payload.get("required_skills", [])
+        if not isinstance(skills, list) or any(not isinstance(skill, str) for skill in skills):
+            raise ArtifactError(
+                "a stored listing fingerprint carries the required skills as a list of names")
+        employer = payload.get("employer")
+        role_title = payload.get("role_title")
+        if not isinstance(employer, str) or not isinstance(role_title, str):
+            raise ArtifactError(
+                "a stored listing fingerprint carries the employer and the role title as text")
+        fingerprint = cls(employer=employer, role_title=role_title, required_skills=tuple(skills))
+        recorded = payload.get("digest")
+        if not isinstance(recorded, str) or not recorded:
+            raise ArtifactError(
+                "a stored listing fingerprint carries the digest it was written with; without it "
+                "there is nothing to check the values against")
+        if recorded != fingerprint.digest:
+            raise ArtifactError(
+                "the stored listing fingerprint does not match its own digest, so what this "
+                "document was written for cannot be established from it")
+        return fingerprint
+
+    def changes_against(self, current: "ListingFingerprint") -> tuple[str, ...]:
+        """What moved between this fingerprint and ``current``, in words a person can act on."""
+        if not isinstance(current, ListingFingerprint):
+            raise ArtifactError("a listing fingerprint is compared with another listing fingerprint")
+        changes = []
+        if self.employer != current.employer:
+            changes.append(f"the employer is now {current.employer!r}, not {self.employer!r}")
+        if self.role_title != current.role_title:
+            changes.append(f"the role is now {current.role_title!r}, not {self.role_title!r}")
+        if self.required_skills != current.required_skills:
+            changes.append("the skills the listing asks for changed")
+        return tuple(changes)
+
+
 # ---------------------------------------------------------------- the lineage: what has moved on since
 
 @dataclass(frozen=True)
@@ -412,9 +533,17 @@ class LineageReport:
 
     ``is_current`` is true only when nothing changed: the profile facts render exactly as the basis
     holds them, every fact the basis marked unconfirmed is still unconfirmed, the work and education
-    records are unchanged, and the referenced strategy version is still that strategy's newest. Any
-    other reading is ``False`` — and the ``summary`` lines say which part moved, because "stale"
-    without a reason is a status, not an answer.
+    records are unchanged, the referenced strategy version is still that strategy's newest, and the
+    listing the document was written for still says what it said. Any other reading is ``False`` —
+    and the ``summary`` lines say which part moved, because "stale" without a reason is a status,
+    not an answer.
+
+    There is a third reading beside current and stale, and it is the honest one for a document
+    stored before schema 16 began recording the listing with it: **not checkable**. Such a row has
+    no fingerprint to compare, and this build will not invent what the listing said last month, so
+    it is reported as unverifiable - never as current. ``listing_verifiable`` is what a window reads
+    to tell the two apart, because "rebuild it, the employer changed" and "nobody can tell whether
+    the employer changed" are different sentences to put in front of a person.
     """
 
     artifact_id: str
@@ -425,13 +554,28 @@ class LineageReport:
     strategy_version_current: bool
     documents_changed: tuple[str, ...] = ()
     cited_documents: tuple[str, ...] = ()
+    #: What moved in the listing since the document was written, among the fields a document uses.
+    listing_changes: tuple[str, ...] = ()
+    #: Whether the artifact carries the listing it was written from at all. ``False`` for a row
+    #: stored before schema 16, and for a row whose stored fingerprint cannot be trusted.
+    listing_recorded: bool = True
+    #: Whether the listing itself has since gone. Normally impossible - deleting a listing cascades
+    #: to its artifacts - but a report that cannot say "the listing is gone" would have to guess.
+    listing_missing: bool = False
+
+    @property
+    def listing_verifiable(self) -> bool:
+        """Whether this build can compare the listing at all. ``False`` is not the same as stale."""
+        return self.listing_recorded and not self.listing_missing
 
     @property
     def is_current(self) -> bool:
         return not (self.facts_changed or self.facts_confirmed_since
                     or self.work_changed or self.education_changed
                     or self.documents_changed
-                    or not self.strategy_version_current)
+                    or not self.strategy_version_current
+                    or self.listing_changes
+                    or not self.listing_verifiable)
 
     def summary(self) -> tuple[str, ...]:
         lines = []
@@ -451,6 +595,15 @@ class LineageReport:
             lines.append("education changed since this was built")
         if not self.strategy_version_current:
             lines.append("the strategy has a newer version than the one this was built under")
+        if self.listing_changes:
+            lines.append("the listing this was written for changed: "
+                         + "; ".join(self.listing_changes))
+        if self.listing_missing:
+            lines.append("the listing this was written for is no longer stored")
+        elif not self.listing_recorded:
+            lines.append("this document was stored before the listing it was written for was "
+                         "recorded with it, so whether it still matches that listing cannot be "
+                         "checked")
         if not lines:
             lines.append("every source fact and the strategy version are unchanged")
         return tuple(lines)
@@ -467,9 +620,16 @@ class StaleArtifactError(ArtifactError):
     def __init__(self, artifact_id: str, report: LineageReport) -> None:
         self.report = report
         reasons = "; ".join(report.summary())
+        # A document nobody can check is refused for a different reason than one known to have moved
+        # on, and the advice differs with it: confirming facts cannot fix a missing record of the
+        # listing, and telling somebody it can would waste their time on a thing that will not help.
+        advice = ("from the current facts and strategy, or confirm them, before using this document."
+                  if report.listing_verifiable else
+                  "from the current facts, strategy and listing - the new document will record what "
+                  "it was written for, which this one cannot.")
         super().__init__(
             f"The artifact {artifact_id} is no longer built on what is stored: {reasons}. Rebuild it "
-            "from the current facts and strategy, or confirm them, before using this document.")
+            + advice)
 
 
 def require_current_artifact(store: "CareerStore", artifact_id: str) -> TailoredArtifact:
@@ -546,6 +706,12 @@ def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> Lineag
     change, and confirming a fact does not change its value — which is why confirmation is reported
     as its own line. A strategy version never disappears while an artifact references it (the store
     refuses that deletion), so the only strategy question is whether a newer version exists.
+
+    The listing is compared the same way, through the fingerprint the row was written with: the
+    employer, the role title and the required skills, which are the parts a document is written
+    from. An artifact with no fingerprint - one stored before schema 16 - is reported as *not
+    checkable* rather than as current, because this build has no record of what that listing said
+    when the document was written and will not pretend otherwise.
     """
     basis = artifact.basis
     profile = store.get_profile()
@@ -572,6 +738,11 @@ def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> Lineag
         != [_plain_work(entry) for entry in basis.work]
     education_changed = [_plain_education(entry) for entry in store.list_education()] \
         != [_plain_education(entry) for entry in basis.education]
+    listing = store.get_job(artifact.listing_id)
+    written_for = artifact.listing_fingerprint
+    listing_changes: tuple[str, ...] = ()
+    if listing is not None and written_for is not None:
+        listing_changes = written_for.changes_against(ListingFingerprint.from_listing(listing))
     return LineageReport(
         artifact_id=artifact.artifact_id,
         facts_changed=facts_changed,
@@ -581,6 +752,9 @@ def lineage_status(store: "CareerStore", artifact: "TailoredArtifact") -> Lineag
         strategy_version_current=strategy_version_current,
         documents_changed=documents_changed,
         cited_documents=cited_documents,
+        listing_changes=listing_changes,
+        listing_recorded=written_for is not None,
+        listing_missing=listing is None,
     )
 
 
@@ -598,6 +772,9 @@ class TailoredArtifact:
     content: str
     basis: ArtifactBasis = field(default_factory=ArtifactBasis)
     created_at: str = ""
+    #: The listing as it was when this document was written (schema 16). ``None`` means the row was
+    #: stored before that was recorded: not "the listing never changed", but "nobody can tell".
+    listing_fingerprint: "ListingFingerprint | None" = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.artifact_id, str) or not self.artifact_id.strip():
@@ -624,6 +801,10 @@ class TailoredArtifact:
                 "limit")
         if not isinstance(self.basis, ArtifactBasis):
             raise ArtifactError("an artifact carries the basis it was built from")
+        if self.listing_fingerprint is not None \
+                and not isinstance(self.listing_fingerprint, ListingFingerprint):
+            raise ArtifactError(
+                "the listing an artifact was written for is recorded as a listing fingerprint")
 
     @property
     def source_documents(self) -> tuple[str, ...]:
@@ -765,17 +946,16 @@ def _listing_changes(planned: "JobListing | None", current: "JobListing") -> tup
     because one of those was touched would be a refusal nobody could act on. What is compared is
     what a document is written from - the employer it is addressed to, the role it names, and the
     required skills the screen reported as missing.
+
+    That comparison lives in :class:`ListingFingerprint` and is used from exactly two places: here,
+    where a listing edited between the preview and the confirmation refuses the build, and in
+    :func:`lineage_status`, where a listing edited after the document was stored makes it stale.
+    One rule, so the two can never disagree about what counts as a change.
     """
     if planned is None:  # a plan from before this check existed; nothing to compare against
         return ()
-    changes = []
-    if planned.employer_name != current.employer_name:
-        changes.append(f"the employer is now {current.employer_name!r}, not {planned.employer_name!r}")
-    if planned.role_title != current.role_title:
-        changes.append(f"the role is now {current.role_title!r}, not {planned.role_title!r}")
-    if frozenset(planned.required_skills) != frozenset(current.required_skills):
-        changes.append("the skills the listing asks for changed")
-    return tuple(changes)
+    return ListingFingerprint.from_listing(planned).changes_against(
+        ListingFingerprint.from_listing(current))
 
 
 def store_planned_artifact(store: "CareerStore", plan: ArtifactPlan) -> TailoredArtifact:
