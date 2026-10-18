@@ -3919,3 +3919,22 @@ things to check. `integrations.guarded_dispatch` composes it with the policy doo
 identity tests, 43 attempt tests, suite **2368 OK (skipped=13)**. Still not true: nothing in the window
 shows unresolved attempts or duplicate pairs, there is no submission path to guard, and no provider is
 enabled. Note: `research/job-identity-and-unknown-outcomes-2026-10-18.md`.
+
+**The audit, and the report it produced, 2026-10-18:** P8 item 1 asked for a reconciliation of what
+already exists before adding abstractions, and doing it in that order paid: the schedule, the worker
+and its lease, the three handlers, the tracker/activity/interview tables, the event log and the
+disabled integrations were all already there and were re-verified by running them, so nothing was
+rebuilt. Remote-worker status, from evidence: `--worker` is a foreground local process, there is no
+service unit, no OS scheduler registration, no remote storage boundary, and `WorkerLease` is
+single-machine crash recovery rather than a distributed lock - laptop-off operation is not available
+and not claimed, which is what the README already said. The one genuine gap was operational reporting:
+`analytics.py` answers "how is the search going?", and nothing answered "what has this thing been
+doing, and what needs me?". `career_agent/reporting.py` does, through `--report` / `--report --weekly`,
+from stored rows only, under three rules its tests pin: queued is not done (scheduled tasks, pending
+runs and prepared applications are plans); unknown leads (unresolved attempts, timed-out runs and
+unverified submissions are the only things counted as needing a person, and age settles nothing); a
+refusal is not a failure (a refused discovery run is the permission rule working, and a report that
+calls it an error teaches people to ignore reports). The sources section quotes each gate's own reason
+so it cannot drift. 21 tests, suite **2389 OK (skipped=13)**. Not built: delivery of any kind - no
+notification, no schedule, no window tab. Notes:
+`research/operational-reconciliation-2026-10-18.md`.

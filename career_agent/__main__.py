@@ -79,7 +79,7 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, contact_export, contacts, erasure, importer, preparation
+from . import analytics, contact_export, contacts, erasure, importer, preparation, reporting
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -194,6 +194,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Add up what the records hold: counts, rates with their denominators, then exit (read-only).",
     )
     actions.add_argument(
+        "--report", action="store_true",
+        help="Report what the records say has been happening - unresolved first - then exit "
+             "(read-only). Add --weekly for seven days instead of one.",
+    )
+    actions.add_argument(
         "--history", action="store_true",
         help="List your recorded employment and education, most recent first, then exit (read-only).",
     )
@@ -242,6 +247,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--import-from", metavar="PATH",
         help="Show what importing a JSON export at PATH would do (add --yes to apply it).",
+    )
+    parser.add_argument(
+        "--weekly", action="store_true",
+        help="With --report: cover the last seven days and a fortnight of dates instead of one day.",
     )
     parser.add_argument(
         "--recipient", metavar="ADDRESS", default=None,
@@ -1074,6 +1083,41 @@ def run_analytics(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_report(args: argparse.Namespace) -> int:
+    """Report what the stored records say has been happening, with the unresolved parts first.
+
+    Read-only, and built by :mod:`career_agent.reporting` from rows that already exist - scheduled
+    runs, the tracker, attempts, the authorisation, the source gates. Nothing is fetched to produce
+    it, and nothing queued is counted as something that happened: that distinction is the report's
+    reason for existing.
+    """
+    database = _database_path(args)
+    weekly = bool(getattr(args, "weekly", False))
+    period = "last 7 days" if weekly else "last 24 hours"
+    heading = f"AI Career Agent {__version__} · what the records say ({period})"
+    if not database.exists() or _empty_database_file(database):
+        print(heading)
+        print("")
+        print("No database yet, so there is nothing to report. Nothing has run, and nothing has been "
+              "written down.")
+        _say_an_empty_file_was_left_alone(database)
+        return EXIT_OK
+    try:
+        with CareerStore(database) as store:
+            report = (reporting.weekly_report(store) if weekly else reporting.daily_report(store))
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_database_problem(exc)
+    except reporting.ReportError as exc:
+        print(f"The report was not produced: {exc}")
+        return EXIT_REFUSED
+    print(heading)
+    for line in report.describe()[1:]:
+        print(line)
+    print("")
+    print("This report is read-only; nothing was fetched, sent, submitted or changed.")
+    return EXIT_OK
+
+
 def run_history(args: argparse.Namespace) -> int:
     """List the candidate's own employment and education records, most recent first.
 
@@ -1729,6 +1773,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_interviews(args)
         if args.analytics:
             return run_analytics(args)
+        if args.report:
+            return run_report(args)
         if args.history:
             return run_history(args)
         if args.add_role:

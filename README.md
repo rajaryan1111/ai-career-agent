@@ -59,6 +59,8 @@ career-agent --version           # print the version and database schema version
 career-agent --database "/path/to/career-agent.sqlite3"
 career-agent --doctor            # where is my data, and can this app read it?
 career-agent --analytics         # what the records add up to, with every denominator named
+career-agent --report            # what has been happening: unresolved things first, nothing inferred
+career-agent --report --weekly   # the same over seven days, with a fortnight of dates ahead
 career-agent --integration-status        # whether this app can email or add events, and why not
 career-agent --preview-calendar-export   # what the .ics export would contain, without writing it
 career-agent --draft-follow-up j1        # a follow-up email draft you can read and copy out; nothing is sent
@@ -780,6 +782,27 @@ import proposes the flat profile fields only), any verification of a record agai
 use of these records in eligibility or matching. They are your notes.
 
 ## See how the search is going (and what the numbers do not mean)
+
+### What has been happening
+
+`python -m career_agent --report` prints what the records say has been going on, built only from rows that
+already exist — scheduled runs, the tracker, attempts at outside actions, the standing authorisation and the
+source gates. Three rules decide what it says, and they are the reason it exists:
+
+- **Queued is not done.** A scheduled task, a run that is pending and an application marked *prepared* are
+  plans; they are reported as plans and never counted as things that happened.
+- **Unknown leads.** An attempt whose outcome was never established, a run that timed out, an application
+  recorded as sent-but-unverified: those come first, because only you can resolve them. Time never settles
+  one of them.
+- **A refusal is not a failure.** A scheduled discovery run that refuses because the source gate is closed is
+  the permission rule working, and the report says so rather than reporting an error.
+
+```bash
+python -m career_agent --report            # the last 24 hours, with a week of dates ahead
+python -m career_agent --report --weekly   # the last seven days, with a fortnight of dates ahead
+```
+
+Read-only: it fetches nothing, sends nothing and changes nothing.
 
 `python -m career_agent --analytics` prints what the records in this database add up to. The same report is
 in the window: a one-line summary under the **Application tracker** list and a **Progress report** button
