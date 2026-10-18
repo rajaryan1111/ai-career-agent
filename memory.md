@@ -3877,3 +3877,26 @@ carry every reason, not the first, and anything unnamed fails closed (unknown ac
 no recorded limit). Not yet stored, shown or called - there is no external side effect to call it
 from. 24 tests; suite **2239 tests OK (skipped=13)**. Note:
 [the central policy gate](research/global-policy-gate-2026-10-18.md).
+
+**The standing authorisation, stored and consulted, 2026-10-18:** the policy stopped being a value in
+memory. Schema **11** adds `policy_version(version, payload, created_at)`, append-only: a change appends
+a version, a withdrawal appends a version that *keeps* the pairs it withdraws with `revoked_at` set, a
+revision whose `content_key()` matches writes nothing at all, and a file with no row authorises nothing
+rather than everything. A row that cannot be decoded raises and is reported by the doctor instead of
+reading as permissive, and the JSON export deliberately does not carry it (a permission belongs to this
+machine; it travels in a whole-database backup). The two places that can act now ask:
+`AdapterRegistry.execute` takes `policy=`/`done_today=` and decides immediately before `call_adapter`,
+composed with the gate's own answer so an authorisation can never open a closed gate, and
+`integrations.authorised_dispatch(...)` is a new door rather than a change to `dispatch_with_retry`,
+whose retry arithmetic the existing tests rely on with the local stand-in. Both fail closed twice over:
+no policy refuses, and a policy without today's count refuses rather than assuming zero, because a daily
+ceiling cannot be honoured against a number this layer would invent. The **Permissions & limits** tab is
+where a person meets it - grant, remove, stop everything, withdraw everything, and *What would happen
+now?*, which answers with the refusal and names the closed gate rather than running anything. Every
+write is behind one confirmation and every decline is asserted against the connection's own change
+counter. Evidence: 16 persistence tests, 21 wiring tests, 16 handler tests, 11 text tests, acceptance
+workflow **N** (stand-in: 124 checks, 0 failed, still `RESULT: BLOCKED`), manual steps 130-136 added as
+BLOCKED, suite **2303 OK (skipped=13)**. Still not true, and said plainly: nothing counts a day's
+actions from durable records, quiet hours are not editable in the window, there are no job/role/location
+or attachment constraints yet, and every source remains disabled - so nothing runs today whatever the
+tab lists. Note: `research/standing-authorisation-stored-and-enforced-2026-10-18.md`.

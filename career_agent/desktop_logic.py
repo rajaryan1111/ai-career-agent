@@ -26,6 +26,7 @@ from .core import (
 # The résumé reviewer owns the profile vocabulary's user-facing names and the study-status choices, and
 # this module reads them from there rather than keeping a second copy: one label list, so the form, the
 # review screen and the confirmation table cannot call the same fact three different things.
+from .policy import ACTION_LABELS, ActionKind, GlobalPolicy, PolicyDecision
 from .resume import PROFILE_FIELD_LABELS, study_status_choices
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
@@ -720,3 +721,96 @@ def artifact_rebuild_text(artifact_id: str, replaced_id: str, gaps: Iterable[str
         line += (" Your saved facts do not state " + ", ".join(missing)
                  + ", so the document does not claim them.")
     return line
+
+
+# ---------------------------------------------------------------- standing authorisation
+#
+# The window's words for the policy. They live here, Tk-free, for the same reason the artifact
+# sentences do: what a person is told before they agree to something is part of the decision, and a
+# sentence that is only reachable through a dialog is a sentence nobody tests. Every one of these is a
+# description of state or of a proposed change - none of them performs anything, and none of them can
+# enable a source, because a source is enabled by the gate and the gate is not here.
+
+
+def policy_summary_text(policy: GlobalPolicy, version: int) -> str:
+    """The line above the list: what is authorised right now, and what that does and does not mean."""
+    if version == 0 or policy.is_empty:
+        return ("Nothing is authorised. This application performs no discovery, no submission and no "
+                "email until you authorise it here, and authorising it here is still not enough on its "
+                "own — every source is also switched off in this build.")
+    if policy.revoked_at:
+        return (f"Authorisation version {version} is withdrawn, so nothing is permitted. What it used to "
+                f"cover is kept below so you can see what was withdrawn.")
+    if policy.stop_all:
+        return (f"Authorisation version {version} is in force but everything is stopped, so nothing is "
+                f"permitted until you allow actions again.")
+    pairs = "1 permission" if len(policy.allowed) == 1 else f"{len(policy.allowed)} permissions"
+    quiet = ""
+    if policy.quiet_hours:
+        start, end = policy.quiet_hours
+        quiet = f" Nothing runs between {start:02d}:00 and {end:02d}:00."
+    return (f"Authorisation version {version} holds {pairs}, each with a daily ceiling.{quiet} Every "
+            f"source is still switched off in this build, so nothing runs today whatever is listed here.")
+
+
+def policy_rows(policy: GlobalPolicy) -> tuple[tuple[str, str, str, str], ...]:
+    """One row per authorised pair: the source, the action, its daily ceiling, and what applies now.
+
+    A pair with no recorded ceiling is shown as refused rather than unlimited, which is exactly what
+    :func:`career_agent.policy.evaluate_policy` does with it - the list and the decision agree.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for source_id, action in sorted(policy.allowed, key=lambda pair: (pair[0], pair[1].value)):
+        limit = policy.daily_limits.get(action)
+        if limit is None:
+            ceiling, state = "none recorded", "Refused: a permission without a daily ceiling is not acted on"
+        else:
+            ceiling = f"{limit} per day"
+            state = "Permitted by you"
+        if policy.revoked_at:
+            state = "Withdrawn"
+        elif policy.stop_all:
+            state = "Stopped"
+        rows.append((source_id, ACTION_LABELS[action], ceiling, state))
+    return tuple(rows)
+
+
+def policy_grant_question(source_id: str, action: ActionKind, limit: int) -> str:
+    """What a person is asked before a permission is written. States the limit and the limits of it."""
+    return (f"Authorise {ACTION_LABELS[action]} with {source_id}, at most {limit} time(s) a day?\n\n"
+            "This is written to your local database as a new version and can be withdrawn at any time. "
+            "It does not switch anything on by itself: every source in this build is disabled, so "
+            "nothing will run because of this.")
+
+
+def policy_removal_question(source_id: str, action: ActionKind) -> str:
+    """What a person is asked before a permission is taken away again."""
+    return (f"Remove your permission for {ACTION_LABELS[action]} with {source_id}?\n\n"
+            "A new version is written without it; the version that had it is kept, so what was "
+            "permitted when something ran stays readable.")
+
+
+def policy_revocation_question(pairs: int) -> str:
+    """What a person is asked before withdrawing everything at once."""
+    counted = "1 permission" if pairs == 1 else f"{pairs} permissions"
+    return (f"Withdraw all authorisation now? {counted} stop applying immediately.\n\n"
+            "Nothing is deleted: a new version records the withdrawal and the earlier versions stay "
+            "readable, so what was permitted at the time something ran can still be seen.")
+
+
+def policy_stop_question(stopping: bool) -> str:
+    """What a person is asked before the stop switch is moved, in whichever direction."""
+    if stopping:
+        return ("Stop everything now?\n\nWhile this is on, every permission below is refused, whatever "
+                "else it says. Your permissions are not deleted and you can allow actions again later.")
+    return ("Allow actions again?\n\nThe permissions below start applying again, within their daily "
+            "ceilings and quiet hours. Every source in this build is still disabled, so this does not "
+            "make anything run.")
+
+
+def policy_decision_text(decision: PolicyDecision, *, gate_reason: str) -> str:
+    """The answer to 'what would happen if I asked for this now?', including the gate's own answer."""
+    if decision.allowed:
+        return (f"{decision.describe()} The source gate also permits it, so this would run if you asked "
+                f"for it.")
+    return f"{decision.describe()}\n\nThe source gate says: {gate_reason}"

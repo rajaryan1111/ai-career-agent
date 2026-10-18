@@ -1,8 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 129 steps — at this revision **22 PASS, 107 BLOCKED, 0 FAIL, no box ticked** (the six
+**Status:** 136 steps — at this revision **22 PASS, 114 BLOCKED, 0 FAIL, no box ticked** (the six
 newest steps, 118-123, are for the profile's saved-facts table and the missing-facts setup, and all six are
-BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 129 steps today, 107 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
+BLOCKED). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
 **Update, 2026-10-15 (final increment of the day):** the verdicts are unchanged again — 22 PASS, 76 BLOCKED,
 0 FAIL — and **no box has been ticked**. The acceptance run now also drives the Work history & study forms as
@@ -1334,3 +1334,32 @@ second verification pass, after the first run was already green.
     selected, and listen to what a screen reader makes of a row whose last cell is a sentence about what moved.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The disabled
     state is asserted in the handler tests; everything about focus order, announcement and native feel is not.**
+130. [ ] Open **Permissions & limits** on a database you have never authorised anything in. Read the summary and
+    judge whether it is unmistakable that nothing is authorised, and that permitting something here still would
+    not make it run.
+    → **BLOCKED — acceptance check N1 asserts the summary and the empty list; whether a person reads it as
+    "nothing will happen without me" is a person's judgement.**
+131. [ ] Choose a source and an action, type a daily ceiling, press **Authorise this...** and choose **No**.
+    Nothing may be written: check the list is unchanged and the status line says the authorisation was cancelled.
+    → **BLOCKED — acceptance check N2 asserts the confirmation and that a declined dialog writes nothing at all;
+    the wording of the question is a person's check.**
+132. [ ] Press it again and choose **Yes**. The row must appear with the ceiling you typed, the summary must name
+    the version number, and the status line must say that nothing was started. Close the window, open it again
+    and confirm the permission is still there.
+    → **BLOCKED — acceptance check N3 and the handler tests assert the stored version, the row and the reopened
+    window; judging that the version number means something to you is yours.**
+133. [ ] Select the row and press **What would happen now?**. The answer must be a refusal that names the closed
+    source gate, not a run. Judge whether it is clear that the refusal comes from the build, not from a mistake
+    you made.
+    → **BLOCKED — acceptance check N4 asserts the refusal and the named gate; the clarity is a person's check.**
+134. [ ] Press **Remove the selected permission...** and choose **No**, then **Yes**. Confirm the declined one
+    changed nothing and the confirmed one removed the permission while the summary moved to a new version.
+    → **BLOCKED — acceptance check N5 asserts both halves against the database's own change counter.**
+135. [ ] Press **Stop everything now...**, then **Withdraw all authorisation...**, declining each the first time.
+    Confirm that a withdrawal does not erase what it withdrew: the rows stay visible, marked as withdrawn.
+    → **BLOCKED — acceptance check N6 asserts the confirmation, the zero-write decline and the kept history.**
+136. [ ] Keyboard and screen reader: reach the source and action choosers, the ceiling box and every button with
+    **Tab** alone, and operate them without a mouse. Listen to how a screen reader announces the confirmation
+    dialogs, which are the point at which something is written.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. Focus order
+    is counted in acceptance check K4 under a stand-in; announcement and native feel are not established.**

@@ -48,9 +48,19 @@ from .desktop_logic import (
     artifact_citation_text, artifact_rebuild_text, artifact_state_text, artifact_summary_text,
     build_activity, build_candidate_profile,
     fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
-    plan_job_save, profile_fact_review, profile_fields_not_matching, profile_form_values,
+    plan_job_save, policy_decision_text, policy_grant_question, policy_removal_question,
+    policy_revocation_question, policy_rows, policy_stop_question, policy_summary_text,
+    profile_fact_review, profile_fields_not_matching, profile_form_values,
     required_fact_questions, required_facts_to_confirm,
 )
+# Aliased on import: this module already has an ActionKind - the next-actions vocabulary - and the two
+# are about different things. A permission is not a to-do item, and conflating the names would be the
+# first step to conflating the ideas.
+from .policy import (
+    ACTION_LABELS as PERMISSION_LABELS, ActionKind as PermissionKind, GlobalPolicy, PolicyError,
+    evaluate_policy, no_authorisation,
+)
+from .sources import SOURCE_DECISIONS, discovery_gate, submission_gate
 from .artifacts import (
     KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, StaleArtifactError, lineage_status,
     rebuild_artifact, require_current_artifact,
@@ -280,6 +290,7 @@ class CareerAgentApp:
         self.history_tab = ttk.Frame(self.tabs, padding=12)
         self.contacts_tab = ttk.Frame(self.tabs, padding=12)
         self.artifacts_tab = ttk.Frame(self.tabs, padding=12)
+        self.policy_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
@@ -290,6 +301,7 @@ class CareerAgentApp:
         self.tabs.add(self.scheduler_tab, text="Background tasks")
         self.tabs.add(self.contacts_tab, text="HR contacts")
         self.tabs.add(self.artifacts_tab, text="Tailored documents")
+        self.tabs.add(self.policy_tab, text="Permissions & limits")
         # Whatever a person did in another tab, or a second window did to this database, the contacts tab
         # reads it again when it is shown rather than keeping what it drew an hour ago: an import that ran
         # somewhere else shows up here the moment the tab is looked at, and a screen that came back to life
@@ -306,6 +318,7 @@ class CareerAgentApp:
         self._build_data_safety()
         self._build_scheduler()
         self._build_artifacts()
+        self._build_policy()
         self._build_contacts()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
@@ -319,6 +332,7 @@ class CareerAgentApp:
         self._refresh_scheduler()
         self._refresh_contacts()
         self._refresh_artifacts()
+        self._refresh_policy()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -1715,6 +1729,297 @@ class CareerAgentApp:
             self._on_artifact_selection()
         self.status.set(artifact_rebuild_text(rebuilt.artifact.artifact_id,
                                               rebuilt.replaced_artifact_id, rebuilt.gaps))
+
+    # ------------------------------------------------------------- permissions and limits
+    #
+    # This tab is where a person says what this application may do on their behalf, and it is written
+    # to be unable to do more than that. Three properties are deliberate and are pinned by tests:
+    #
+    # * nothing is written without an explicit yes - every control asks first, and a declined dialog
+    #   leaves the database byte-for-byte as it was;
+    # * granting a permission switches nothing on. A source runs only when its own gate is open, and
+    #   no control here can open one. The tab says so in its own words rather than implying otherwise;
+    # * a withdrawal is a new version, not an erasure, because the question "what was permitted when
+    #   that ran?" has to stay answerable afterwards.
+
+    def _build_policy(self):
+        """The tab that holds the standing authorisation: what is permitted, and how often."""
+        body = self._scrollable_body(self.policy_tab)
+        ttk.Label(
+            body,
+            text=(
+                "Nothing in this application contacts anyone, looks for jobs or sends an email unless "
+                "you have said it may, here, and said how often. Your answer is stored on this machine "
+                "as a numbered version, so what you permitted at the time something ran stays "
+                "readable, and you can withdraw it at any moment. Permission on its own is not enough: "
+                "every source in this build is switched off, and nothing here can switch one on."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        self.policy_summary = tk.StringVar(value="Reading your permissions...")
+        ttk.Label(body, textvariable=self.policy_summary, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        form = ttk.Frame(body)
+        form.grid(row=2, column=0, columnspan=4, sticky=W)
+        self.policy_vars = {}
+        ttk.Label(form, text="Source").grid(row=0, column=0, sticky=W, padx=(0, 5))
+        self.policy_vars["source"] = tk.StringVar(value=SOURCE_DECISIONS[0].source_id)
+        ttk.Combobox(form, textvariable=self.policy_vars["source"], state="readonly", width=22,
+                     values=[decision.source_id for decision in SOURCE_DECISIONS]).grid(
+                         row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(form, text="Action").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.policy_vars["action"] = tk.StringVar(value=PERMISSION_LABELS[PermissionKind.DISCOVERY])
+        ttk.Combobox(form, textvariable=self.policy_vars["action"], state="readonly", width=24,
+                     values=[PERMISSION_LABELS[kind] for kind in PermissionKind]).grid(
+                         row=0, column=3, sticky=W, padx=(0, 12))
+        ttk.Label(form, text="At most, per day").grid(row=0, column=4, sticky=W, padx=(0, 5))
+        self.policy_vars["limit"] = tk.StringVar(value="3")
+        ttk.Entry(form, textvariable=self.policy_vars["limit"], width=6).grid(
+            row=0, column=5, sticky=W)
+        controls = ttk.Frame(body)
+        controls.grid(row=3, column=0, columnspan=4, sticky=W, pady=(8, 4))
+        ttk.Button(controls, text="Authorise this...",
+                   command=self._grant_policy_permission).grid(row=0, column=0, sticky=W)
+        self.remove_policy_button = ttk.Button(
+            controls, text="Remove the selected permission...", state="disabled",
+            command=self._remove_policy_permission)
+        self.remove_policy_button.grid(row=0, column=1, sticky=W, padx=(8, 0))
+        self.policy_stop_button = ttk.Button(
+            controls, text="Stop everything now...", command=self._toggle_policy_stop)
+        self.policy_stop_button.grid(row=0, column=2, sticky=W, padx=(8, 0))
+        ttk.Button(controls, text="Withdraw all authorisation...",
+                   command=self._revoke_policy).grid(row=0, column=3, sticky=W, padx=(8, 0))
+        ttk.Button(controls, text="Refresh",
+                   command=self._refresh_policy).grid(row=0, column=4, sticky=W, padx=(8, 0))
+        columns = ("source", "action", "limit", "state")
+        self.policy_tree = ttk.Treeview(body, columns=columns, show="headings", height=7)
+        for column, heading, width in (
+            ("source", "Source", 150), ("action", "What it may do", 200),
+            ("limit", "Daily ceiling", 130), ("state", "Applies now", 330),
+        ):
+            self.policy_tree.heading(column, text=heading)
+            self.policy_tree.column(column, width=width, anchor=W)
+        self.policy_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
+        self.policy_tree.bind("<<TreeviewSelect>>", self._on_policy_selection)
+        self.policy_detail = tk.StringVar(
+            value="Select a permission to see what would happen if it were asked for now.")
+        ttk.Label(body, textvariable=self.policy_detail, wraplength=_TAB_TEXT_WRAP,
+                  justify=LEFT).grid(row=5, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        ttk.Button(body, text="What would happen now?",
+                   command=self._explain_policy_row).grid(row=6, column=0, sticky=W, pady=(6, 0))
+        ttk.Label(
+            body,
+            text=(
+                "Withdrawing does not delete anything: a new version records it and the earlier "
+                "versions stay readable. Every action is also refused outright while a source's own "
+                "gate is closed, which is the state of every source in this build."
+            ),
+            wraplength=_TAB_TEXT_WRAP, justify=LEFT,
+        ).grid(row=7, column=0, columnspan=4, sticky=W, pady=(8, 0))
+        body.columnconfigure(0, weight=1)
+        #: The authorisation the list was drawn from, so a control acts on what the person is looking
+        #: at and a refusal can be explained without reading the database again mid-click.
+        self._policy_shown = no_authorisation()
+        self._policy_version_shown = 0
+
+    def _refresh_policy(self):
+        """Re-read the stored authorisation and redraw the tab. Reads only; never a dialog."""
+        if not hasattr(self, "policy_tree"):
+            return
+        try:
+            policy = self.store.get_global_policy()
+            version = self.store.policy_version_number()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        selected = self._selected_policy_pair()
+        self._clear_tree(self.policy_tree)
+        drawn = []
+        for source_id, action_label, limit, state in policy_rows(policy):
+            row_id = f"{source_id}|{action_label}"
+            drawn.append(row_id)
+            self.policy_tree.insert("", END, iid=row_id,
+                                    values=(source_id, action_label, limit, state))
+        self.policy_summary.set(policy_summary_text(policy, version))
+        self.policy_stop_button.configure(
+            text="Allow actions again..." if policy.stop_all else "Stop everything now...")
+        self._policy_shown = policy
+        self._policy_version_shown = version
+        if selected in drawn:  # the row the person was looking at is still permitted
+            self.policy_tree.selection_set(selected)
+        self._on_policy_selection()
+
+    def _selected_policy_pair(self) -> str | None:
+        """The row selected in the list, or ``None``. Reads the screen, never the database."""
+        if not hasattr(self, "policy_tree"):
+            return None
+        selection = self.policy_tree.selection()
+        return selection[0] if selection else None
+
+    def _selected_policy_permission(self) -> tuple[str, PermissionKind] | None:
+        """The selected row as the pair the authorisation is written in, or ``None``."""
+        selected = self._selected_policy_pair()
+        if not selected or "|" not in selected:
+            return None
+        source_id, label = selected.split("|", 1)
+        for kind in PermissionKind:
+            if PERMISSION_LABELS[kind] == label:
+                return source_id, kind
+        return None
+
+    def _on_policy_selection(self, _event=None) -> None:
+        """Offer the removal control only when a row is selected. Writes nothing."""
+        permission = self._selected_policy_permission()
+        self.remove_policy_button.configure(state="normal" if permission else "disabled")
+        if permission is None:
+            self.policy_detail.set(
+                "Select a permission to see what would happen if it were asked for now.")
+
+    def _chosen_policy_action(self) -> PermissionKind | None:
+        """The action chosen in the form, by the label a person reads rather than by position."""
+        wanted = self.policy_vars["action"].get().strip()
+        for kind in PermissionKind:
+            if PERMISSION_LABELS[kind] == wanted:
+                return kind
+        return None
+
+    def _save_policy(self, policy: GlobalPolicy, *, done: str) -> None:
+        """Write one new version, report it, and redraw. The only writing path on this tab."""
+        try:
+            version = self.store.save_global_policy(policy)
+        except PolicyError as exc:
+            messagebox.showerror("Permission not saved", str(exc), parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            self._refresh_policy()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_policy()
+        self.status.set(f"{done} Saved as authorisation version {version}; nothing was started.")
+
+    def _grant_policy_permission(self) -> None:
+        """Add one permission, after one explicit yes. A no writes nothing at all."""
+        source_id = self.policy_vars["source"].get().strip()
+        action = self._chosen_policy_action()
+        raw_limit = self.policy_vars["limit"].get().strip()
+        if not source_id or action is None:
+            self.status.set("Choose a source and an action first; nothing was changed.")
+            return
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            messagebox.showerror(
+                "Permission not saved",
+                "A permission needs a daily ceiling as a whole number, so there is a number to stop "
+                "at. Nothing was changed.", parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            return
+        if limit < 1:
+            messagebox.showerror(
+                "Permission not saved",
+                "A daily ceiling of zero or less would permit nothing, so it is not written as a "
+                "permission. Remove the permission instead. Nothing was changed.", parent=self.root)
+            self.status.set("Your permissions were not changed.")
+            return
+        if not messagebox.askyesno("Authorise this action",
+                                   policy_grant_question(source_id, action, limit),
+                                   parent=self.root):
+            self.status.set("Authorisation cancelled; nothing was changed.")
+            return
+        current = self._policy_shown
+        limits = dict(current.daily_limits)
+        limits[action] = limit
+        updated = GlobalPolicy(
+            allowed=frozenset(current.allowed | {(source_id, action)}), daily_limits=limits,
+            quiet_hours=current.quiet_hours, stop_all=current.stop_all, revoked_at=None)
+        self._save_policy(updated,
+                          done=f"{PERMISSION_LABELS[action]} with {source_id} is permitted "
+                               f"at most {limit} time(s) a day.")
+
+    def _remove_policy_permission(self) -> None:
+        """Take one permission away, after one explicit yes. A no writes nothing at all."""
+        permission = self._selected_policy_permission()
+        if permission is None:
+            self.status.set("Select a permission in the list first; nothing was changed.")
+            return
+        source_id, action = permission
+        if not messagebox.askyesno("Remove this permission",
+                                   policy_removal_question(source_id, action), parent=self.root):
+            self.status.set("Removal cancelled; nothing was changed.")
+            return
+        current = self._policy_shown
+        remaining = frozenset(pair for pair in current.allowed if pair != (source_id, action))
+        still_used = {kind for _source, kind in remaining}
+        limits = {kind: value for kind, value in current.daily_limits.items() if kind in still_used}
+        updated = GlobalPolicy(allowed=remaining, daily_limits=limits,
+                               quiet_hours=current.quiet_hours, stop_all=current.stop_all,
+                               revoked_at=current.revoked_at)
+        self._save_policy(updated,
+                          done=f"{PERMISSION_LABELS[action]} with {source_id} is no longer permitted.")
+
+    def _toggle_policy_stop(self) -> None:
+        """Move the stop switch, after one explicit yes. A no writes nothing at all."""
+        current = self._policy_shown
+        stopping = not current.stop_all
+        title = "Stop everything" if stopping else "Allow actions again"
+        if not messagebox.askyesno(title, policy_stop_question(stopping), parent=self.root):
+            self.status.set("Nothing was changed.")
+            return
+        updated = GlobalPolicy(allowed=current.allowed, daily_limits=current.daily_limits,
+                               quiet_hours=current.quiet_hours, stop_all=stopping,
+                               revoked_at=current.revoked_at)
+        self._save_policy(updated,
+                          done="Everything is stopped." if stopping
+                               else "Your permissions apply again.")
+
+    def _revoke_policy(self) -> None:
+        """Withdraw the whole authorisation, after one explicit yes. A no writes nothing at all."""
+        current = self._policy_shown
+        if self._policy_version_shown == 0:
+            self.status.set("There is nothing to withdraw: nothing is authorised.")
+            return
+        if current.revoked_at:
+            self.status.set("Your authorisation is already withdrawn; nothing was changed.")
+            return
+        if not messagebox.askyesno("Withdraw all authorisation",
+                                   policy_revocation_question(len(current.allowed)),
+                                   parent=self.root):
+            self.status.set("Withdrawal cancelled; nothing was changed.")
+            return
+        try:
+            version = self.store.revoke_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._refresh_policy()
+        self.status.set(
+            f"Your authorisation is withdrawn, recorded as version {version}. Nothing is permitted, "
+            "and the earlier versions are kept so what was permitted before stays readable.")
+
+    def _explain_policy_row(self) -> None:
+        """Answer 'what would happen now?' for the selected row, honestly, without doing it."""
+        permission = self._selected_policy_permission()
+        if permission is None:
+            self.status.set("Select a permission in the list first; nothing was changed.")
+            return
+        source_id, action = permission
+        gate = (submission_gate(source_id) if action is PermissionKind.SUBMISSION
+                else discovery_gate(source_id))
+        decision = evaluate_policy(
+            self._policy_shown, source_id=source_id, action=action,
+            now=datetime.now(timezone.utc), done_today=0, source_gate_allows=gate.allowed)
+        self.policy_detail.set(policy_decision_text(decision, gate_reason=gate.reason))
+        self.status.set("Checked what would happen; nothing was started and nothing was changed.")
 
     def _build_data_safety(self):
         ttk.Label(

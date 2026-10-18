@@ -501,3 +501,99 @@ class TailoredDocumentTextTests(unittest.TestCase):
     def test_a_rebuild_with_no_gaps_claims_nothing_about_gaps(self):
         text = logic.artifact_rebuild_text("new123", "old456", ())
         self.assertNotIn("do not state", text)
+
+
+class PolicyTextTests(unittest.TestCase):
+    """The sentences the Permissions & limits tab puts in front of a person before they agree."""
+
+    def policy(self, **overrides):
+        from career_agent.policy import ActionKind, GlobalPolicy
+
+        content = {
+            "allowed": frozenset({("jobicy", ActionKind.DISCOVERY)}),
+            "daily_limits": {ActionKind.DISCOVERY: 3},
+        }
+        content.update(overrides)
+        return GlobalPolicy(**content)
+
+    def test_nothing_authorised_says_so_and_says_what_else_is_off(self):
+        from career_agent.policy import no_authorisation
+
+        text = logic.policy_summary_text(no_authorisation(), 0)
+        self.assertIn("Nothing is authorised", text)
+        self.assertIn("every source is also switched off", text)
+
+    def test_a_live_authorisation_names_its_version_and_keeps_the_caveat(self):
+        text = logic.policy_summary_text(self.policy(), 2)
+        self.assertIn("version 2", text)
+        self.assertIn("1 permission", text)
+        self.assertIn("still switched off", text,
+                      "a summary that omits this implies permission is enough to make things run")
+
+    def test_quiet_hours_are_stated_in_hours_a_person_reads(self):
+        text = logic.policy_summary_text(self.policy(quiet_hours=(22, 7)), 3)
+        self.assertIn("between 22:00 and 07:00", text)
+
+    def test_a_stopped_or_withdrawn_authorisation_says_nothing_is_permitted(self):
+        self.assertIn("everything is stopped",
+                      logic.policy_summary_text(self.policy(stop_all=True), 4))
+        withdrawn = logic.policy_summary_text(
+            self.policy(revoked_at="2026-10-20T10:00:00+00:00"), 5)
+        self.assertIn("withdrawn", withdrawn)
+        self.assertIn("what was withdrawn", withdrawn)
+
+    def test_a_row_shows_the_source_the_action_and_the_ceiling(self):
+        rows = logic.policy_rows(self.policy())
+        self.assertEqual(rows, (("jobicy", "look for jobs", "3 per day", "Permitted by you"),))
+
+    def test_a_permission_without_a_ceiling_reads_as_refused_not_unlimited(self):
+        rows = logic.policy_rows(self.policy(daily_limits={}))
+        self.assertIn("none recorded", rows[0][2])
+        self.assertIn("Refused", rows[0][3])
+
+    def test_a_stopped_or_withdrawn_row_says_which_it_is(self):
+        self.assertEqual(logic.policy_rows(self.policy(stop_all=True))[0][3], "Stopped")
+        self.assertEqual(
+            logic.policy_rows(self.policy(revoked_at="2026-10-20T10:00:00+00:00"))[0][3],
+            "Withdrawn")
+
+    def test_rows_are_ordered_so_the_same_authorisation_always_reads_the_same(self):
+        from career_agent.policy import ActionKind
+
+        policy = self.policy(
+            allowed=frozenset({("b-source", ActionKind.DISCOVERY),
+                               ("a-source", ActionKind.EMAIL_SEND),
+                               ("a-source", ActionKind.DISCOVERY)}),
+            daily_limits={ActionKind.DISCOVERY: 2, ActionKind.EMAIL_SEND: 1})
+        self.assertEqual([row[0] for row in logic.policy_rows(policy)],
+                         ["a-source", "a-source", "b-source"])
+
+    def test_the_questions_state_what_is_written_and_what_is_kept(self):
+        from career_agent.policy import ActionKind
+
+        grant = logic.policy_grant_question("jobicy", ActionKind.EMAIL_SEND, 2)
+        self.assertIn("at most 2 time(s) a day", grant)
+        self.assertIn("withdrawn at any time", grant)
+        removal = logic.policy_removal_question("jobicy", ActionKind.DISCOVERY)
+        self.assertIn("kept", removal)
+        withdrawal = logic.policy_revocation_question(2)
+        self.assertIn("2 permissions", withdrawal)
+        self.assertIn("Nothing is deleted", withdrawal)
+        self.assertIn("1 permission", logic.policy_revocation_question(1))
+
+    def test_the_stop_question_reads_differently_in_each_direction(self):
+        self.assertIn("Stop everything now?", logic.policy_stop_question(True))
+        self.assertIn("Allow actions again?", logic.policy_stop_question(False))
+        self.assertIn("does not make anything run", logic.policy_stop_question(False))
+
+    def test_a_refusal_is_reported_with_the_gate_that_also_refused(self):
+        from career_agent.policy import ActionKind, evaluate_policy, no_authorisation
+        from datetime import datetime, timezone
+
+        decision = evaluate_policy(no_authorisation(), source_id="jobicy",
+                                   action=ActionKind.DISCOVERY,
+                                   now=datetime(2026, 10, 20, 12, tzinfo=timezone.utc),
+                                   done_today=0, source_gate_allows=False)
+        text = logic.policy_decision_text(decision, gate_reason="the quality gate has not been passed")
+        self.assertIn("Refused", text)
+        self.assertIn("quality gate", text)

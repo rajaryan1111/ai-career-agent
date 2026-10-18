@@ -69,6 +69,7 @@ EXPECTED_TABS = (
     "Background tasks",
     "HR contacts",
     "Tailored documents",
+    "Permissions & limits",
 )
 
 #: The lists carried by the tabs, with the columns each one must expose. These are the controls a person
@@ -84,6 +85,7 @@ EXPECTED_TREES = {
     "contact_conflicts_tree": ("ref", "contact", "field", "origins", "recorded_from", "recorded_at"),
     "facts_tree": ("fact", "value", "origin", "confirmation"),
     "artifacts_tree": ("kind", "listing", "strategy", "built", "cited", "state"),
+    "policy_tree": ("source", "action", "limit", "state"),
 }
 
 #: The summary lines the window renders for its read-only reports. Every one of them must hold text once
@@ -97,6 +99,7 @@ EXPECTED_SUMMARY_VARIABLES = (
     "contacts_summary",
     "facts_summary",
     "artifact_summary",
+    "policy_summary",
 )
 
 #: The tabs whose whole point is a read-only refresh, and therefore the buttons this script presses. The

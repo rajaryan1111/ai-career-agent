@@ -8587,3 +8587,188 @@ class ProfileSetupTests(HandlerTestCase):
         self.assertEqual(setup.confirm_vars, {})
         self.assertIn("nothing to fill in here", setup.summary.get().casefold())
         self.assertEqual(setup.save_button.options["state"], "disabled")
+
+
+class PermissionsTabTests(HandlerTestCase):
+    """The tab that holds the standing authorisation, exercised through the real window.
+
+    The two properties worth testing here cannot be seen by looking at the screen: a declined dialog
+    leaves the database untouched (asserted against the connection's own change counter, not against a
+    re-read), and a granted permission still starts nothing, because the gate it would have to pass is
+    closed and no control on this tab can open one.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "policy.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def grant(self, app, *, source="jobicy", action="look for jobs", limit="3", answer=True):
+        CONFIG["Authorise this action"] = answer
+        app.policy_vars["source"].set(source)
+        app.policy_vars["action"].set(action)
+        app.policy_vars["limit"].set(limit)
+        app._grant_policy_permission()
+
+    def rows(self, app):
+        return [app.policy_tree.item(item, "values") for item in app.policy_tree.get_children()]
+
+    def test_a_new_database_shows_that_nothing_is_authorised(self):
+        app = self.build_window()
+        self.assertIn("Nothing is authorised", app.policy_summary.get())
+        self.assertEqual(self.rows(app), [])
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_granting_asks_first_and_a_refusal_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        self.grant(app, answer=False)
+        self.assertIn("Authorise this action", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+        self.assertIn("cancelled", app.status.get())
+
+    def test_the_question_says_that_permitting_is_not_enabling(self):
+        app = self.build_window()
+        self.grant(app, answer=False)
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("does not switch anything on", asked)
+        self.assertIn("at most 3 time(s) a day", asked)
+
+    def test_a_granted_permission_is_stored_as_a_version_and_listed(self):
+        app = self.build_window()
+        self.grant(app, limit="2")
+        from career_agent.policy import ActionKind as PermissionKind
+
+        stored = app.store.get_global_policy()
+        self.assertEqual(app.store.policy_version_number(), 1)
+        self.assertIn(("jobicy", PermissionKind.DISCOVERY), stored.allowed)
+        self.assertEqual(stored.daily_limits[PermissionKind.DISCOVERY], 2)
+        self.assertEqual(self.rows(app)[0][:3], ("jobicy", "look for jobs", "2 per day"))
+        self.assertIn("nothing was started", app.status.get())
+
+    def test_a_ceiling_that_is_not_a_number_is_refused_and_writes_nothing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        self.grant(app, limit="as often as you like")
+        self.assertIn("Permission not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_a_ceiling_of_zero_is_refused_rather_than_stored_as_a_permission(self):
+        app = self.build_window()
+        self.grant(app, limit="0")
+        self.assertIn("Permission not saved", MESSAGES.titles("showerror"))
+        self.assertEqual(app.store.policy_version_number(), 0)
+
+    def test_granting_the_same_permission_twice_writes_one_version(self):
+        app = self.build_window()
+        self.grant(app)
+        self.grant(app)
+        self.assertEqual(app.store.policy_version_number(), 1,
+                         "a repeat of what is already permitted is not a new decision")
+
+    def test_removal_asks_first_and_a_refusal_writes_nothing(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        CONFIG["Remove this permission"] = False
+        before = app.store._connection.total_changes
+        app._remove_policy_permission()
+        self.assertIn("Remove this permission", MESSAGES.titles("askyesno"))
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(len(app.store.get_global_policy().allowed), 1)
+
+    def test_a_confirmed_removal_appends_a_version_and_keeps_the_old_one(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        CONFIG["Remove this permission"] = True
+        app._remove_policy_permission()
+        self.assertEqual(app.store.policy_version_number(), 2)
+        self.assertEqual(app.store.get_global_policy().allowed, frozenset())
+        self.assertEqual(len(app.store.policy_versions()[0][1].allowed), 1,
+                         "the version that permitted it stopped saying so")
+        self.assertEqual(self.rows(app), [])
+
+    def test_the_removal_control_is_off_until_a_row_is_selected(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set(())
+        app._on_policy_selection()
+        self.assertTrue(app.remove_policy_button.instate(["disabled"]))
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        self.assertFalse(app.remove_policy_button.instate(["disabled"]))
+
+    def test_the_stop_switch_asks_first_and_refuses_everything_while_it_is_on(self):
+        app = self.build_window()
+        self.grant(app)
+        CONFIG["Stop everything"] = False
+        before = app.store._connection.total_changes
+        app._toggle_policy_stop()
+        self.assertEqual(app.store._connection.total_changes, before)
+        CONFIG["Stop everything"] = True
+        app._toggle_policy_stop()
+        self.assertTrue(app.store.get_global_policy().stop_all)
+        self.assertIn("everything is stopped", app.policy_summary.get().casefold())
+        self.assertEqual(self.rows(app)[0][3], "Stopped")
+
+    def test_withdrawing_asks_first_keeps_the_history_and_refuses_afterwards(self):
+        app = self.build_window()
+        self.grant(app)
+        CONFIG["Withdraw all authorisation"] = False
+        before = app.store._connection.total_changes
+        app._revoke_policy()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIsNone(app.store.get_global_policy().revoked_at)
+        CONFIG["Withdraw all authorisation"] = True
+        app._revoke_policy()
+        current = app.store.get_global_policy()
+        self.assertIsNotNone(current.revoked_at)
+        self.assertEqual(len(current.allowed), 1, "the withdrawal erased what it withdrew")
+        self.assertIn("withdrawn", app.policy_summary.get())
+        self.assertEqual(self.rows(app)[0][3], "Withdrawn")
+
+    def test_withdrawing_nothing_says_so_instead_of_writing(self):
+        app = self.build_window()
+        before = app.store._connection.total_changes
+        app._revoke_policy()
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(MESSAGES.titles("askyesno"), [])
+        self.assertIn("nothing is authorised", app.status.get().casefold())
+
+    def test_the_tab_reports_the_refusal_a_permitted_action_would_still_meet(self):
+        app = self.build_window()
+        self.grant(app)
+        app.policy_tree.selection_set("jobicy|look for jobs")
+        app._on_policy_selection()
+        before = app.store._connection.total_changes
+        app._explain_policy_row()
+        detail = app.policy_detail.get()
+        self.assertIn("gate", detail.lower())
+        self.assertIn("refused", detail.lower())
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "asking what would happen changed the database")
+
+    def test_the_permission_survives_closing_and_reopening_the_window(self):
+        app = self.build_window()
+        self.grant(app, limit="4")
+        app.close()
+        second = self.build_window()
+        self.assertEqual(self.rows(second)[0][2], "4 per day")
+        self.assertIn("version 1", second.policy_summary.get())
+
+    def test_nothing_on_this_tab_can_open_a_gate(self):
+        app = self.build_window()
+        self.grant(app)
+        from career_agent.sources import SOURCE_DECISIONS, discovery_gate, enabled_discovery_sources
+
+        self.assertEqual(enabled_discovery_sources(), ())
+        for decision in SOURCE_DECISIONS:
+            self.assertFalse(discovery_gate(decision.source_id).allowed)
+        source = inspect.getsource(desktop.CareerAgentApp._grant_policy_permission)
+        self.assertNotIn("SOURCE_QUALITY_GATE_PASSED", source)

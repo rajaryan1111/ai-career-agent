@@ -3471,6 +3471,126 @@ def workflow_m_tailored_documents(run: Run) -> None:
     workspace.close_window(host, app)
 
 
+def workflow_n_permissions(run: Run) -> None:
+    """The Permissions & limits tab: nothing is authorised, nothing is written without a yes.
+
+    This is the tab where a person says what the application may do on their behalf, so the checks are
+    about the two properties that matter and cannot be seen in a screenshot: a declined dialog leaves
+    the database byte-for-byte as it was, and a granted permission still runs nothing, because every
+    source is disabled and no control here can enable one. Nothing in this workflow contacts anything:
+    the only writes are rows in a disposable local database, and the only "action" is the window
+    reporting what would be refused.
+    """
+    from career_agent.policy import ActionKind  # noqa: PLC0415 - only this workflow needs it
+
+    workspace, results, dialogs = run.workspace, run.results, run.dialogs
+    host, app = workspace.open_window()
+    show_tab(app, app.policy_tab)
+
+    with results.step("N1 a fresh database authorises nothing, and says so"):
+        press(app.policy_tab, "Refresh", workspace.root)
+        require("Nothing is authorised" in app.policy_summary.get(),
+                f"the summary says {app.policy_summary.get()!r}")
+        require(app.policy_tree.get_children() == (),
+                "a database with no permissions showed permissions")
+        require(app.store.policy_version_number() == 0,
+                "reading the tab wrote an authorisation")
+
+    with results.step("N2 authorising asks first, and declining writes nothing at all"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = False
+        app.policy_vars["source"].set("jobicy")
+        app.policy_vars["action"].set("look for jobs")
+        app.policy_vars["limit"].set("2")
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        require("Authorise this action" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require("does not switch anything on" in dialogs.said("Authorise this action"),
+                "the confirmation implies that permitting something starts it")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.policy_version_number() == 0, "a declined confirmation wrote a version")
+        require("cancelled" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    with results.step("N3 accepting records one version, with the ceiling the person typed"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = True
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        require(app.store.policy_version_number() == 1,
+                f"the database holds version {app.store.policy_version_number()}")
+        stored = app.store.get_global_policy()
+        require(("jobicy", ActionKind.DISCOVERY) in stored.allowed,
+                f"the permission was not stored: {stored.allowed!r}")
+        require(stored.daily_limits[ActionKind.DISCOVERY] == 2,
+                f"the ceiling was stored as {stored.daily_limits.get(ActionKind.DISCOVERY)!r}")
+        rows = [app.policy_tree.item(item, "values") for item in app.policy_tree.get_children()]
+        require(len(rows) == 1 and rows[0][0] == "jobicy" and "2 per day" in rows[0][2],
+                f"the list shows {rows!r}")
+        require("nothing was started" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
+
+    with results.step("N4 the tab answers 'what would happen now?' with the refusal, not a run"):
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "What would happen now?", workspace.root)
+        detail = app.policy_detail.get()
+        require("Refused" in detail or "refused" in detail,
+                f"an action nothing permits was not reported as refused: {detail!r}")
+        require("gate" in detail.lower(), f"the closed source gate was not named: {detail!r}")
+        require(app.store._connection.total_changes == before, "a question changed the database")
+
+    with results.step("N5 removing a permission asks first; a no writes nothing, a yes appends"):
+        dialogs.reset()
+        dialogs.answers["Remove this permission"] = False
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Remove the selected permission...", workspace.root)
+        require("Remove this permission" in dialogs.titles("askyesno"),
+                f"no confirmation was shown; dialogs: {dialogs.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "a declined removal changed the database")
+        dialogs.reset()
+        dialogs.answers["Remove this permission"] = True
+        app.policy_tree.selection_set(app.policy_tree.get_children()[0])
+        workspace.root.update()
+        press(app.policy_tab, "Remove the selected permission...", workspace.root)
+        require(app.store.policy_version_number() == 2,
+                f"the removal is version {app.store.policy_version_number()}, not 2")
+        require(app.store.get_global_policy().allowed == frozenset(),
+                "the permission is still in force after being removed")
+        history = app.store.policy_versions()
+        require(("jobicy", ActionKind.DISCOVERY) in history[0][1].allowed,
+                "the earlier version stopped saying what it permitted")
+
+    with results.step("N6 withdrawing everything asks first, and keeps the history it withdraws"):
+        dialogs.reset()
+        dialogs.answers["Authorise this action"] = True
+        app.policy_vars["limit"].set("1")
+        press(app.policy_tab, "Authorise this...", workspace.root)
+        dialogs.reset()
+        dialogs.answers["Withdraw all authorisation"] = False
+        before = app.store._connection.total_changes
+        press(app.policy_tab, "Withdraw all authorisation...", workspace.root)
+        require(app.store._connection.total_changes == before,
+                "a declined withdrawal changed the database")
+        require(app.store.get_global_policy().revoked_at is None,
+                "a declined withdrawal withdrew the authorisation")
+        dialogs.reset()
+        dialogs.answers["Withdraw all authorisation"] = True
+        press(app.policy_tab, "Withdraw all authorisation...", workspace.root)
+        current = app.store.get_global_policy()
+        require(current.revoked_at is not None, "the authorisation was not withdrawn")
+        require(("jobicy", ActionKind.DISCOVERY) in current.allowed,
+                "the withdrawal erased what it withdrew instead of recording it")
+        require("withdrawn" in app.policy_summary.get(),
+                f"the summary says {app.policy_summary.get()!r}")
+
+    workspace.close_window(host, app)
+
+
 def workflow_f_cleanup(run: Run) -> None:
     workspace, results = run.workspace, run.results
 
@@ -4756,6 +4876,7 @@ WORKFLOWS = (
     ("K - layout, focus order and labelling, measured", workflow_k_layout_focus_labels),
     ("L - HR contact import: preview, refusal, cancel and confirm", workflow_l_contact_import),
     ("M - tailored documents: lineage, refusal and rebuild", workflow_m_tailored_documents),
+    ("N - permissions: confirmation, withdrawal and the closed gate", workflow_n_permissions),
     ("F - cleanup and lifecycle", workflow_f_cleanup),
 )
 
