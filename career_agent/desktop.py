@@ -18,6 +18,7 @@ from .core import (
     allowed_transitions, evaluate_eligibility, score_relevance,
 )
 from .export import ExportFormatError, RestoreError, restore_from_backup, write_export
+from .preparation import assess_readiness, build_application_draft
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
@@ -121,7 +122,8 @@ class CareerAgentApp:
         actions.grid(row=8, column=0, columnspan=6, sticky=W, pady=6)
         for text, callback in [
             ("Save job", self._save_job), ("Evaluate selected", self._evaluate),
-            ("Shortlist if eligible", self._shortlist), ("Delete selected", self._delete_job), ("Clear form", self._clear_form),
+            ("Shortlist if eligible", self._shortlist), ("Prepare application", self._prepare),
+            ("Delete selected", self._delete_job), ("Clear form", self._clear_form),
         ]:
             ttk.Button(actions, text=text, command=callback).pack(side="left", padx=(0, 6))
         self.jobs_tree = ttk.Treeview(self.jobs_tab, columns=("employer", "role", "availability", "status", "source"), show="headings", height=9)
@@ -345,6 +347,81 @@ class CareerAgentApp:
             self.status.set("Job shortlisted locally. No external action was taken.")
         except ValueError as exc:
             messagebox.showerror("Cannot shortlist", str(exc), parent=self.root)
+
+    def _other_active_application(self, job):
+        for other in self.store.find_duplicate_group(job):
+            if other.listing_id == job.listing_id:
+                continue
+            attempt = self.store.get_tracker(other.listing_id)
+            if attempt is not None and not attempt.is_terminal:
+                return f"{other.employer_name}: {other.role_title} ({attempt.status.value})"
+        return None
+
+    def _prepare(self):
+        listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
+        if not listing_id:
+            messagebox.showinfo("Select a job", "Select a saved, shortlisted job first.", parent=self.root)
+            return
+        job, profile = self.store.get_job(listing_id), self.store.get_profile()
+        if job is None:
+            messagebox.showinfo("Job missing", "This saved job no longer exists. Refreshing the list.", parent=self.root)
+            self._refresh_jobs()
+            return
+        if not profile:
+            messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
+            return
+        tracker = self.store.get_tracker(listing_id)
+        if tracker is None:
+            messagebox.showinfo("No application", "Start an application for this open listing before preparing.", parent=self.root)
+            return
+        if tracker.status not in {ApplicationStatus.SHORTLISTED, ApplicationStatus.PREPARED}:
+            messagebox.showinfo(
+                "Shortlist first",
+                f"Attempt {tracker.attempt_number} is {tracker.status.value}; preparation follows shortlisting. The tracker was not changed.",
+                parent=self.root,
+            )
+            return
+        readiness = assess_readiness(profile, job, other_active_label=self._other_active_application(job))
+        draft = build_application_draft(profile, job)
+        lines = [f"READINESS: {readiness.decision.value.upper()}", ""]
+        lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.explanation}" for item in readiness.items]
+        if readiness.blockers:
+            lines += ["", "Blocking items:"] + [f"- {item}" for item in readiness.blockers]
+        if readiness.notes:
+            lines += ["", "Needs review:"] + [f"- {item}" for item in readiness.notes]
+        lines += ["", f"Draft preview — {draft.role_title} at {draft.employer_name}", ""]
+        lines += [
+            f"{field.label}: {field.value if field.value is not None else 'Not recorded'} ({field.source})"
+            for field in draft.fields
+        ]
+        lines += ["", draft.summary]
+        if draft.warnings:
+            lines += ["", "Warnings:"] + [f"- {warning}" for warning in draft.warnings]
+        self._report("\n".join(lines))
+        if not readiness.can_prepare:
+            messagebox.showwarning(
+                "Not ready to prepare",
+                "Resolve the blocking or review items first. The draft preview is shown; the tracker was not changed.",
+                parent=self.root,
+            )
+            self.status.set(f"Preparation blocked for {job.role_title}: {readiness.decision.value}.")
+            return
+        if tracker.status is ApplicationStatus.PREPARED:
+            self.status.set("Application is already marked prepared; the draft preview is unchanged.")
+            return
+        if not messagebox.askyesno(
+            "Mark as prepared?",
+            "This records the prepared state and appends a history entry. Nothing is submitted and no data leaves this device. Continue?",
+            parent=self.root,
+        ):
+            self.status.set("Preparation cancelled; the tracker was not changed.")
+            return
+        try:
+            self.store.save_tracker(tracker.transition(ApplicationStatus.PREPARED))
+            self._refresh_jobs()
+            self.status.set("Application marked prepared locally. Nothing was submitted.")
+        except ValueError as exc:
+            messagebox.showerror("Cannot mark prepared", str(exc), parent=self.root)
 
     def _delete_job(self):
         listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)

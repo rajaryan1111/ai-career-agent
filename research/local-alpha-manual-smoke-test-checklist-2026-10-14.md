@@ -2,7 +2,7 @@
 
 **Status:** Required before calling the desktop alpha verified; not yet recorded as passed  
 **Date created:** 2026-10-14  
-**Updated:** 2026-10-19 — added backup restore, cancellation, and invalid-file steps
+**Updated:** 2026-10-19 — added backup restore, cancellation, invalid-file, and application-preparation steps
 
 This checklist is intentionally separate from unit tests. It requires a real desktop session and should be completed on each operating system that the project advertises as supported. Do not mark a step passed based only on code inspection.
 
@@ -39,6 +39,7 @@ This checklist is intentionally separate from unit tests. It requires a real des
 20. [ ] Delete a job and confirm its tracker record is deleted. Delete the profile and confirm it is absent after restart.
 21. [ ] Inspect the application workflow for network access: local alpha operations must not send requests or candidate data to external services.
 22. [ ] Close and reopen the app after a forced close or normal exit; confirm the SQLite database remains readable.
+23. [ ] Select a shortlisted, eligible job and choose **Prepare application**. Confirm the readiness checklist is explicit, the draft preview uses only recorded facts and labels missing fields "Not recorded", declining the confirmation changes nothing, and accepting records `prepared` with a new history entry. With an ineligible job the action must warn and leave the tracker unchanged.
 
 ## Record results
 
