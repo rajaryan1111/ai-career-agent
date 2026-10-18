@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping, Sequence
+from xml.parsers import expat
 from xml.etree import ElementTree
 
 try:  # optional: PDF import needs it, everything else works without it
@@ -584,6 +585,35 @@ def _docx_lines_for(element: ElementTree.Element) -> list[str]:
     return lines
 
 
+class _DocxDoctypeFound(Exception):
+    """Internal sentinel raised before the XML parser can expand a document's entities."""
+
+
+def _reject_docx_doctype(raw: bytes, source_name: str) -> None:
+    """Refuse a DOCX document part containing a DTD before ``ElementTree`` sees it.
+
+    A byte-prefix search is not sufficient here: XML may be encoded as UTF-16, and a declaration can
+    occur after a legal prolog longer than the old 4 KiB scan. Expat decodes the input according to
+    its XML encoding rules and invokes this handler before it reads the declaration's entity set. If
+    the preflight sees malformed XML, the normal ``ElementTree`` parse below remains responsible for
+    the user-facing malformed-document refusal.
+    """
+    parser = expat.ParserCreate()
+
+    def found(*_arguments) -> None:
+        raise _DocxDoctypeFound
+
+    parser.StartDoctypeDeclHandler = found
+    try:
+        parser.Parse(raw, True)
+    except _DocxDoctypeFound:
+        raise ResumeUnreadable(f"{source_name} contains a document type declaration, so it was refused.")
+    except expat.ExpatError:
+        # ElementTree.fromstring() below gives the existing bounded, non-echoing parse error for an
+        # otherwise malformed document. A preflight parse must not change that public contract.
+        return
+
+
 def extract_docx(path: Path) -> ExtractedDocument:
     """Extract paragraph and table text from a DOCX locally, using only the standard library.
 
@@ -665,10 +695,10 @@ def extract_docx(path: Path) -> ExtractedDocument:
             f"{path.name} expands to more than {MAX_DOCX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB, "
             "far more than a résumé holds. Refusing rather than reading it."
         )
-    if b"<!doctype" in raw[:4096].lower():
-        # Word never writes a DTD into a document part; refusing one keeps entity-expansion tricks
-        # away from the XML parser instead of relying on the parser to be careful.
-        raise ResumeUnreadable(f"{path.name} contains a document type declaration, so it was refused.")
+    # Word never writes a DTD into a document part; refusing one keeps entity-expansion tricks away
+    # from ElementTree.  This is an encoding-aware preflight rather than a bounded byte-prefix search,
+    # so a late or UTF-16 declaration cannot reach a parser that expands it.
+    _reject_docx_doctype(raw, path.name)
     try:
         root = ElementTree.fromstring(raw)
     except ElementTree.ParseError as exc:

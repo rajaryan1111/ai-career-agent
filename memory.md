@@ -3746,3 +3746,22 @@ The user asked that the previously proposed career-agent features be reflected c
 
 ### Status and next work
 These requirements are recorded as target behavior, not implementation status. The actionable additions are tracked in P7/P8 of `task.md` and the cross-phase acceptance addendum in `phases.md`. Existing source/email/submission gates remain closed; PR #2 stays open and unmerged; `main` must remain untouched. No code tests, external side effects or production deployment are implied by this documentation entry.
+
+
+## 2026-10-18 — DOCX DTD/entity boundary hardened
+
+The roadmap audit tested the documented local résumé boundary instead of assuming the existing byte scan
+was sufficient. `career_agent.resume.extract_docx` searched only the first 4 KiB for an ASCII `<!DOCTYPE`.
+A synthetic late-prolog DOCX and a UTF-16 DOCX both bypassed that check, reached `ElementTree`, and
+returned internal-entity text as résumé content. No external network fetch was observed; the confirmed
+defect was bypassed DTD rejection before the text budget and the resulting internal entity-expansion risk.
+
+The fix keeps the bounded `word/document.xml` read but adds an encoding-aware Expat preflight with a
+`StartDoctypeDeclHandler`. It refuses as soon as a DTD is seen, before `ElementTree` can expand its
+entity set; malformed XML continues through the existing non-echoing parse refusal. The regression
+fixtures cover a DTD after more than 4 KiB of comments and a UTF-16 DTD, and assert that expanded text
+is neither returned nor echoed. Focused results: 3 DTD tests, 13 DOCX extraction tests, and 86 résumé
+tests all passed. The repository suite then ran 2082 tests with 1 skip; `compileall`, `tabnanny`, and
+`git diff --check` passed; the real-window desktop smoke and acceptance harnesses reported 14 and 113
+checks passed. The limitation remains explicit: this is a DTD/entity boundary, not a general malware
+scanner. Human GUI acceptance remains separate and blocked.

@@ -432,6 +432,38 @@ class DocxExtractionTests(ResumeTestCase):
 
         self.assertIn("document type declaration", str(caught.exception))
 
+    def test_a_late_document_type_declaration_is_refused_before_entity_expansion(self):
+        payload = (
+            "<?xml version='1.0'?>"
+            + "<!-- harmless prolog padding -->" * 350
+            + "<!DOCTYPE w:document [<!ENTITY x 'expanded text'>]>"
+            + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            + "<w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>"
+        )
+        self.assertGreater(len(payload.encode()), 4096)
+        path = self.write_docx(document_xml=payload)
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("document type declaration", str(caught.exception))
+        self.assertNotIn("expanded text", str(caught.exception))
+
+    def test_a_utf16_document_type_declaration_is_refused_before_entity_expansion(self):
+        payload = (
+            "<?xml version='1.0' encoding='UTF-16'?>"
+            "<!DOCTYPE w:document [<!ENTITY x 'expanded text'>]>"
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>"
+        ).encode("utf-16")
+        path = self.write_docx(document_xml=payload)
+
+        with self.assertRaises(ResumeUnreadable) as caught:
+            resume.extract_text(path)
+
+        self.assertIn("document type declaration", str(caught.exception))
+        self.assertNotIn("expanded text", str(caught.exception))
+
     def test_a_zip_without_the_document_part_is_refused(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:

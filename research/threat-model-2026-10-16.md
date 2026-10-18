@@ -104,8 +104,12 @@ one and its own help text says to remove file locations before sharing its outpu
 extracted text at 400 000 characters; it accepts only the compression methods the standard library can
 decompress and refuses entries marked encrypted. Tests cover an over-large declared DOCX, an oversized
 input, the page cap, a damaged ZIP, a missing document part, and encrypted PDF/DOCX files — each refused with
-its own message rather than a traceback. Extraction never promotes a guess to a fact: proposals carry their
-evidence and confidence, and the person confirms them.
+its own message rather than a traceback. Before `ElementTree` sees `word/document.xml`, an encoding-aware
+Expat preflight now refuses any DTD, including one after a long prolog or encoded as UTF-16; this closes
+the old bounded ASCII-prefix bypass and prevents internal entity expansion from becoming résumé text. The
+late-prolog and UTF-16 cases are regression-tested. This is a parser boundary, not a general malware scan.
+Extraction never promotes a guess to a fact: proposals carry their evidence and confidence, and the person
+confirms them.
 
 ### 4.6 Destructive operations are refused rather than performed
 

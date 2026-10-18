@@ -150,6 +150,15 @@ the dialog open and directs the person to inspect the Profile tab; extracted val
 desktop/resume tests ran **174** and **523** tests OK, and the full local suite ran **2080 tests OK (skipped=1)**.
 See [the resume-import write-verification note](research/resume-import-write-verification-2026-10-17.md).
 
+**DOCX XML boundary hardening, 2026-10-18:** the audit reproduced a DTD/entity rejection bypass: a
+declaration after the old 4 KiB byte scan, and a UTF-16 declaration, both reached `ElementTree` and
+expanded an internal entity. `career_agent.resume` now performs an encoding-aware Expat preflight and
+refuses a DTD before the entity set reaches the extracting parser. The focused DTD tests ran **3 OK**,
+the DOCX extraction class **13 OK**, the full résumé module **86 OK**, and the repository suite **2082 OK
+(1 skipped)**; `compileall`, `tabnanny`, the 14-check smoke test and 113-check real-window acceptance
+harness also passed. Source-quality and external-action gates remain unchanged. Evidence: [DOCX DTD
+boundary note](research/docx-dtd-boundary-2026-10-18.md).
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.

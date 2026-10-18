@@ -256,7 +256,7 @@ and unconfirmed state (schema 8). Automated coverage: the reader and proposal la
 
 * **Implemented:** the domain core, storage, migrations and backup/restore, the Tk window with its tabs, the
   scheduler engine, the adapter framework, analytics, export/import, résumé reading, the event log.
-* **Automated-tested:** 2073 unit and integration tests plus the two scripted desktop entry points, green on
+* **Automated-tested:** 2082 unit and integration tests (one skipped locally) plus the two scripted desktop entry points, green on
   five display-backed legs and four interpreter versions — **and the checks are about records, widget cells and
   status lines, never about pixels, wording or focus**.
 * **Human-accepted:** **nothing.** No person has opened this window on any platform.
@@ -267,8 +267,7 @@ and unconfirmed state (schema 8). Automated coverage: the reader and proposal la
 
 The offline domain core, the SQLite persistence layer, verified local backup/restore, local-first
 résumé import (PDF and DOCX), and the Tkinter local desktop alpha (`python -m career_agent`) are
-implemented, with 2073 tests passing locally (13 skipped in a checkout: 12 of them need the optional
-`pypdf` library and one runs only where the project is installed) and a
+implemented, with 2082 tests passing locally (one skipped because it runs only where the project is installed) and a
 Python 3.10–3.14 CI workflow running the suite, compilation checks, and the research-CSV audit, plus a
 second job that builds the wheel, checks its contents, installs it into a clean environment, and runs
 the installed `career-agent` command from outside the checkout — on the declared floor (3.10) and on the
@@ -291,7 +290,8 @@ floor and the backed-up record-correction tool, owner-only export
 permissions, stale-selection handling, the status chooser's option set measured against the state machine, unrecognised stored statuses and the refusal paths they trigger, stored records this version cannot read (an unknown field, damaged JSON, a string where a list belongs, a listing with no saved availability status) on every read path and in every view, stored-timestamp rendering (missing, offset-less and unparseable values), version reporting and start-up diagnostics (including path redaction for the database, the home folder, and any file named on the command line), backup and restore (verified snapshots, corruption and
 schema-version refusals, POSIX permissions, WAL and side-file handling, the command-line front end),
 résumé extraction and proposal parsing (DOCX paragraphs and tables, database-engine-free PDF fixtures,
-encrypted, damaged, empty, oversized and textless input, refusal to guess, and a socket-blocked
+encrypted, damaged, empty, oversized and textless input, refusal to guess, an encoding-aware DOCX DTD
+preflight that rejects late and UTF-16 entity-bearing XML before `ElementTree`, and a socket-blocked
 local-only run),
 the Tk-free desktop logic (including platform data-folder resolution, where a relative `XDG_DATA_HOME` or `LOCALAPPDATA` is ignored as the base-directory specification requires so the database path never depends on the working directory), and the desktop handlers through widget stubs, including the review screen
 that shows every proposal with its evidence before a single value can be written. They also hold the SQLite
