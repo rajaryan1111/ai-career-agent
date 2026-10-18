@@ -165,7 +165,7 @@ Safety contract:
 - Deleting existing data and writing restored data happen in one SQLite transaction. Any failure rolls the whole operation back, leaving the previous database intact and usable.
 - Version 2 exports are still accepted, but they lack job and attempt timestamps and revisions. Those fields default to the import time and revision 0, so a version 2 restore is semantically complete but not byte-for-byte faithful. Unsupported versions are refused.
 - There are no automatic or scheduled backups; creating one is a manual action.
-- The restore dialog is wired to this contract, but the GUI has not been exercised in an automated or headless session here; desktop acceptance still depends on the manual checklist.
+- Scripted Tk tests exercise the restore dialog (declined restore, cancelled file chooser, preparation, resume import, deletion, and close confirmation) when a display exists; layout, focus order, and visual messaging still depend on the manual checklist.
 
 The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main`, for all pull requests, and on manual dispatch. A failing scenario fails the job. Branch pushes are not built separately: an open pull request already runs the matrix for each pushed commit, so the same commit is not checked twice.
 
@@ -174,6 +174,7 @@ Changes reach `main` only through a pull request, and merging requires the `unit
 ## Safety and product principles
 
 - Keep candidate profile and application history local by default. On POSIX systems the SQLite file is restricted to the owning user (mode 0600) when opened, so a shared machine cannot read it with the process umask default.
+- The database is **not** encrypted at rest. File permissions and OS volume encryption are the current boundary; backups are plain JSON. The options, threat model, and the deferred key-recovery decision are recorded in [the encryption-at-rest note](research/encryption-at-rest-decision-2026-10-19.md).
 - Missing eligibility evidence is not a pass.
 - A visible Apply button is not proof that a job is open or that submission succeeded.
 - Never infer worldwide eligibility from the word “remote.”

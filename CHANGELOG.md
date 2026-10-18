@@ -25,4 +25,5 @@ internal local alpha; entries describe what has actually been verified.
 - Resume import handles labelled text only: no OCR, contact fields, tables, multi-column layouts, or projects/certifications; no live job discovery, no email integration, no automated submission, no scheduler or remote worker.
 - Restore is replace-only; format-2 restores are not byte-for-byte faithful.
 - No wheel, installer, updater, or code-signing pipeline; only editable installs are verified.
+- No encryption at rest: the database relies on `0600` permissions plus OS volume encryption, and backups are plain JSON. Key management and recovery are unresolved; see [the encryption note](research/encryption-at-rest-decision-2026-10-19.md).
 - Only macOS has hosted GUI execution; CI covers tests on Linux but not the desktop UI.

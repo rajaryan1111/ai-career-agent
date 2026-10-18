@@ -6,8 +6,8 @@ This file is the durable record of meaningful decisions, research findings, assu
 
 - Working name: **AI Career Agent** (not final).
 - Repository: https://github.com/rajaryan1111/ai-career-agent
-- Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented; resume parsing, source adapters and remote worker remain gated or pending.
-- Last updated: 2026-10-14.
+- Current stage: production-oriented, cross-industry product implementation plus parallel source/competitor/permission research; the local Tkinter/SQLite alpha is implemented with resume import, diagnostics, and a permission-gated adapter framework; live discovery, submission, email, and a remote worker remain gated or unimplemented.
+- Last updated: 2026-10-19.
 
 ## Confirmed user decisions
 
