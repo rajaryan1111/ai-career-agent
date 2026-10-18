@@ -890,7 +890,7 @@ def _migration_to_v3(connection: sqlite3.Connection) -> None:
     )
 
 
-def _holds_table(connection: sqlite3.Connection, name: str) -> bool:
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
     """Whether this database actually has ``name``, whatever version it claims to be.
 
     A step that adds a *column* has to ask. ``CREATE TABLE IF NOT EXISTS`` is safe on any file, but
@@ -928,7 +928,7 @@ def _migration_to_v4(connection: sqlite3.Connection) -> None:
     step that was interrupted after its first statement. Running the step twice must never fail, because
     a failed step leaves a database that cannot be opened at all.
     """
-    if not _holds_table(connection, "application_tracker"):  # see ``_holds_table``: nothing to alter
+    if not _table_exists(connection, "application_tracker"):  # see ``_table_exists``: nothing to alter
         return
     existing = {row["name"] for row in connection.execute("PRAGMA table_info(application_tracker)")}
     if "follow_up_on" not in existing:
@@ -1321,7 +1321,7 @@ def _migration_to_v16(connection: sqlite3.Connection) -> None:
     :func:`_migration_to_v4` does it: running the step twice must never fail, because a step that
     fails half way leaves a database that cannot be opened at all.
     """
-    if not _holds_table(connection, "tailored_artifact"):  # see ``_holds_table``: nothing to alter
+    if not _table_exists(connection, "tailored_artifact"):  # see ``_table_exists``: nothing to alter
         return
     existing = {row["name"] for row in connection.execute("PRAGMA table_info(tailored_artifact)")}
     if "listing_fingerprint" not in existing:

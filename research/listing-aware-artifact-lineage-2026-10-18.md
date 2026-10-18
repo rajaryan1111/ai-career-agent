@@ -92,7 +92,7 @@ tailored_artifact` hit a table that was never created — and a failing step lea
 cannot be opened at all. Step 4 (the follow-up columns) had the same latent hole since schema 4; it
 had simply never been hit.
 
-Both now call `_holds_table(connection, name)` first and do nothing when the table is absent: a
+Both now call `_table_exists(connection, name)` first and do nothing when the table is absent: a
 column step's job is to add a column to a table that exists, and standing in for the step that was
 skipped would hide the inconsistency instead of leaving it visible to
 `backup.validate_app_database`. Pinned by

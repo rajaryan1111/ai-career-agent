@@ -1783,6 +1783,42 @@ class SchemaMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tailored_artifact'"
             ).fetchone()[0], 0, "the step invented the table it was meant to alter")
 
+    def test_the_doctor_reads_a_version_15_document_without_opening_the_file(self):
+        """The read-only check runs against files at the version they were written at.
+
+        It must therefore cope with a ``tailored_artifact`` row that has no ``listing_fingerprint``
+        column at all - not merely an empty one. A decoder that assumed the column would raise
+        ``IndexError`` on every old file, and the doctor's whole promise is that it never changes
+        the file it is asked about, including by making it unreadable.
+        """
+        from career_agent.artifacts import ArtifactBasis, ArtifactKind  # noqa: PLC0415 - one test
+
+        older = self._open_at_version(15)
+        older.save_job(self._job())
+        strategy = older.create_role_strategy(name="Applied AI roles", role_family="Applied AI",
+                                              required_skills=frozenset({"Python"}))
+        with older._connection:
+            older._connection.execute(
+                """INSERT INTO tailored_artifact
+                       (artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                        content, fact_basis, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("artifact-v15", "j1", strategy.strategy_id, strategy.version,
+                 ArtifactKind.COVER_LETTER.value, "Dear Example,\n",
+                 json.dumps(ArtifactBasis().to_json(), sort_keys=True), "2026-10-01T09:00:00Z"))
+        older._connection.execute("PRAGMA user_version = 15")
+        older._connection.commit()
+        older.close()
+
+        self.assertEqual(store_module.unreadable_stored_records(self.path), (),
+                         "the doctor could not read a document written by the previous version")
+        connection = sqlite3.connect(self.path)
+        try:
+            recorded = connection.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(recorded, 15, "the read-only check updated the file it was asked about")
+
     def test_the_newest_step_adds_its_tables_to_a_database_that_already_holds_records(self):
         """The upgrade a person's real file will run: new tables, and not one existing row touched.
 
