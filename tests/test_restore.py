@@ -8,7 +8,7 @@ from unittest import mock
 from career_agent import (
     ApplicationStatus, Availability, CandidateProfile, ExportFormatError, JobListing,
     RestoreError, build_export_payload, load_export, restore_export, restore_export_file,
-    validate_export, write_export,
+    restore_from_backup, validate_export, write_export,
 )
 from career_agent.export import MAX_BACKUP_BYTES
 from career_agent.store import CareerStore
@@ -378,6 +378,103 @@ class RestoreSafetyTests(unittest.TestCase):
         started = target.start_application("after-failure")
         saved = target.save_tracker(started.transition(ApplicationStatus.SHORTLISTED))
         self.assertEqual(saved.status, ApplicationStatus.SHORTLISTED)
+
+
+class RestoreConfirmationTests(unittest.TestCase):
+    """The interactive flow validates first, asks, and only then writes."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        source = CareerStore(Path(self.folder.name) / "source.sqlite3")
+        self.addCleanup(source.close)
+        seed(source)
+        self.backup_path = Path(self.folder.name) / "backup.json"
+        write_export(source, self.backup_path)
+
+    def existing_target(self):
+        store = CareerStore(Path(self.folder.name) / "target.sqlite3")
+        self.addCleanup(store.close)
+        store.save_profile(sample_profile())
+        store.save_job(sample_job("kept", url="https://jobs.example/kept"))
+        store.start_application("kept")
+        return store
+
+    def test_declining_confirmation_leaves_the_database_untouched(self):
+        target = self.existing_target()
+        before = snapshot(target)
+        summary = restore_from_backup(target, self.backup_path, confirm=lambda counts: False)
+        self.assertIsNone(summary)
+        self.assertEqual(snapshot(target), before)
+        self.assertIsNotNone(target.get_job("kept"))
+        self.assertIsNone(target.get_job("j1"))
+        target.save_job(sample_job("after-cancel", url="https://jobs.example/after"))
+        self.assertIsNotNone(target.get_job("after-cancel"))
+
+    def test_confirmation_receives_counts_and_restores_only_on_approval(self):
+        target = self.existing_target()
+        seen = []
+
+        def confirm(counts):
+            seen.append(dict(counts))
+            return True
+
+        summary = restore_from_backup(target, self.backup_path, confirm=confirm)
+        self.assertEqual(seen, [{"profile": 1, "jobs": 2, "attempts": 2, "events": 10}])
+        self.assertEqual(summary["jobs"], 2)
+        self.assertEqual(summary["attempts"], 2)
+        self.assertEqual(summary["events"], 10)
+        self.assertEqual(summary["replaced"], 1)
+        self.assertIsNone(target.get_job("kept"))
+        self.assertIsNotNone(target.get_job("j1"))
+        self.assertEqual(
+            [attempt.status for attempt in target.list_attempts("j1")],
+            [ApplicationStatus.WITHDRAWN, ApplicationStatus.SHORTLISTED],
+        )
+
+    def test_empty_database_restores_without_asking(self):
+        target = CareerStore(Path(self.folder.name) / "empty.sqlite3")
+        self.addCleanup(target.close)
+
+        def confirm(counts):  # pragma: no cover - must never run
+            raise AssertionError("an empty database needs no confirmation")
+
+        summary = restore_from_backup(target, self.backup_path, confirm=confirm)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["replaced"], 0)
+        self.assertEqual(target.get_profile(), sample_profile())
+        self.assertEqual(target.list_events("j1", 1)[0].to_status, ApplicationStatus.DISCOVERED)
+
+    def test_missing_confirmation_refuses_to_replace_existing_data(self):
+        target = self.existing_target()
+        before = snapshot(target)
+        with self.assertRaises(ExportFormatError):
+            restore_from_backup(target, self.backup_path)
+        self.assertEqual(snapshot(target), before)
+
+    def test_invalid_backup_is_rejected_before_confirmation_is_asked(self):
+        target = self.existing_target()
+        before = snapshot(target)
+        broken = Path(self.folder.name) / "broken.json"
+        payload = self.payload_with_broken_history()
+        broken.write_text(json.dumps(payload), encoding="utf-8")
+        asked = []
+
+        def confirm(counts):  # pragma: no cover - must never run
+            asked.append(counts)
+            return True
+
+        with self.assertRaises(ExportFormatError):
+            restore_from_backup(target, broken, confirm=confirm)
+        self.assertEqual(asked, [])
+        self.assertEqual(snapshot(target), before)
+
+    def payload_with_broken_history(self):
+        payload = json.loads(self.backup_path.read_text(encoding="utf-8"))
+        attempt = payload["jobs"][0]["application_attempts"][0]
+        attempt["status"] = "confirmed"
+        attempt["status_evidence"] = "tampered"
+        return payload
 
 
 if __name__ == "__main__":

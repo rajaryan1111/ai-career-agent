@@ -15,7 +15,7 @@ from .core import (
     ApplicationStatus, Availability, CandidateProfile, Decision, JobListing,
     allowed_transitions, evaluate_eligibility, score_relevance,
 )
-from .export import ExportFormatError, RestoreError, load_export, restore_export, validate_export, write_export
+from .export import ExportFormatError, RestoreError, restore_from_backup, write_export
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
@@ -502,6 +502,16 @@ class CareerAgentApp:
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc), parent=self.root)
 
+    def _confirm_replace(self, counts):
+        return messagebox.askyesno(
+            "Replace all local data?",
+            f"This backup contains {counts['jobs']} job(s), {counts['attempts']} application attempt(s) "
+            f"and {counts['events']} history event(s).\n\n"
+            "Restoring replaces every profile, job, application and history record stored on this "
+            "device. This cannot be undone. Continue?",
+            parent=self.root,
+        )
+
     def _restore(self):
         source = filedialog.askopenfilename(
             parent=self.root, title="Restore from backup",
@@ -510,26 +520,15 @@ class CareerAgentApp:
         if not source:
             return
         try:
-            payload = load_export(source)
-            validated = validate_export(payload)
+            summary = restore_from_backup(self.store, source, confirm=self._confirm_replace)
         except ExportFormatError as exc:
             messagebox.showerror("Cannot restore backup", str(exc), parent=self.root)
             return
-        counts = validated.counts()
-        replace = self.store.has_data()
-        if replace and not messagebox.askyesno(
-            "Replace all local data?",
-            f"This backup contains {counts['jobs']} job(s), {counts['attempts']} application attempt(s) "
-            f"and {counts['events']} history event(s).\n\n"
-            "Restoring replaces every profile, job, application and history record stored on this "
-            "device. This cannot be undone. Continue?",
-            parent=self.root,
-        ):
-            return
-        try:
-            summary = restore_export(self.store, payload, replace=replace)
-        except (ExportFormatError, RestoreError) as exc:
+        except RestoreError as exc:
             messagebox.showerror("Restore failed", str(exc), parent=self.root)
+            return
+        if summary is None:
+            self.status.set("Restore cancelled; the local database was not changed.")
             return
         self.selected_job_id = None
         self._clear_form()

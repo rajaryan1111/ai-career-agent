@@ -24,7 +24,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .core import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
@@ -577,3 +577,30 @@ def restore_export_file(
 ) -> dict[str, int]:
     """Load, validate and restore a backup file."""
     return restore_export(store, load_export(source), replace=replace)
+
+
+def restore_from_backup(
+    store: CareerStore,
+    source: str | Path,
+    *,
+    confirm: Callable[[dict[str, int]], bool] | None = None,
+) -> dict[str, int] | None:
+    """Load, validate, then restore a backup file after the caller confirms replacement.
+
+    The file is fully validated before ``confirm`` is called, and ``confirm`` is
+    only consulted when the database already holds data. Declining returns
+    ``None`` with the database untouched, which is what the desktop dialog uses
+    for cancellation. Restoring over existing data always requires ``confirm``.
+    On success the summary counts are returned.
+    """
+    payload = load_export(source)
+    restored = validate_export(payload)
+    replace = store.has_data()
+    if replace:
+        if confirm is None:
+            raise ExportFormatError(
+                "The database already contains data; replacing it requires confirmation."
+            )
+        if not confirm(restored.counts()):
+            return None
+    return restore_export(store, payload, replace=replace)

@@ -29,7 +29,7 @@ if __package__ in (None, ""):
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision,
     ExportFormatError, JobListing, StaleApplicationError, evaluate_eligibility,
-    restore_export,
+    restore_export, restore_from_backup,
 )
 from career_agent.export import FORMAT_VERSION, build_export_payload, load_export, write_export
 from career_agent.store import CareerStore
@@ -456,6 +456,27 @@ def import_round_trip(workspace: Path) -> str:
         expect(restored_events == expected_events, "event history changed during restore")
         expect(target.get_tracker("j1", 1).status_evidence == "Synthetic employer confirmation",
                "confirmation evidence was lost")
+
+        # Declining the replacement prompt must not touch the restored data.
+        before_cancel = [(a.attempt_number, a.status) for a in target.list_attempts("j1")]
+        prompts = []
+
+        def decline(counts):
+            prompts.append(dict(counts))
+            return False
+
+        expect(restore_from_backup(target, backup_path, confirm=decline) is None,
+               "declining the restore confirmation did not cancel the restore")
+        expect(prompts == [{"profile": 1, "jobs": 1, "attempts": 2, "events": 8}],
+               f"unexpected confirmation counts: {prompts}")
+        expect([(a.attempt_number, a.status) for a in target.list_attempts("j1")] == before_cancel,
+               "a cancelled restore mutated the database")
+        try:
+            restore_from_backup(target, backup_path)
+        except ExportFormatError:
+            pass
+        else:
+            raise SmokeFailure("a replacement restore ran without confirmation")
 
         # Negative control: a tampered history must be rejected and change nothing.
         tampered = json.loads(backup_path.read_text(encoding="utf-8"))

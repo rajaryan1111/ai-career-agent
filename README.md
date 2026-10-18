@@ -76,24 +76,26 @@ The JSON file written by **Tracker → Export backup (JSON)** is a complete loca
 
 The research CSV produced by `scripts/audit_job_source_csv.py` is a report over the source-audit seed file. It is **not** a backup and cannot restore the application.
 
-To restore, use **Tracker → Restore from backup…**. The file is parsed, validated, and only then written. Restoring replaces all local profile, job, attempt, and history records, so the app asks for confirmation whenever data already exists. The same operations are available in code:
+To restore, use **Tracker → Restore from backup…**. The file is parsed, validated, and only then written. Restoring replaces all local profile, job, attempt, and history records, so the app asks for confirmation whenever data already exists; cancelling that prompt writes nothing. The same operations are available in code:
 
 ```python
-from career_agent import CareerStore, restore_export_file, write_export
+from career_agent import CareerStore, restore_export_file, restore_from_backup, write_export
 
 with CareerStore("backup-target.sqlite3") as store:
     write_export(store, "backup.json")             # create a backup
     restore_export_file(store, "backup.json")       # only into an empty database
-    restore_export_file(store, "backup.json", replace=True)  # replace after confirmation
+    # Replace after an explicit decision; returning False leaves the data untouched.
+    restore_from_backup(store, "backup.json", confirm=lambda counts: True)
 ```
 
 Safety contract:
 
 - Validation covers the format and schema version, required fields and types, status values, duplicate listing/attempt identifiers, confirmation evidence, event ordering, and a replay of each attempt's status chain. Unknown fields, malformed JSON, non-UTF-8 input, empty files, and files over 10 MiB are rejected.
-- Restore is replace-only; it never merges. A non-empty database is refused unless replacement is explicitly requested.
+- Restore is replace-only; it never merges. A non-empty database is refused unless replacement is explicitly requested, and `restore_from_backup` always asks `confirm` before replacing (declining returns `None` with nothing written).
 - Deleting existing data and writing restored data happen in one SQLite transaction. Any failure rolls the whole operation back, leaving the previous database intact and usable.
 - Version 2 exports are still accepted, but they lack job and attempt timestamps and revisions. Those fields default to the import time and revision 0, so a version 2 restore is semantically complete but not byte-for-byte faithful. Unsupported versions are refused.
 - There are no automatic or scheduled backups; creating one is a manual action.
+- The restore dialog is wired to this contract, but the GUI has not been exercised in an automated or headless session here; desktop acceptance still depends on the manual checklist.
 
 The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main` and `fix/**`, for all pull requests, and on manual dispatch. A failing scenario fails the job.
 
