@@ -185,6 +185,70 @@ boundary note](research/docx-dtd-boundary-2026-10-18.md).
 - [ ] Verify secure mailbox authorization, contact-to-opportunity linking, suppression/opt-out persistence, bounded personalized outreach, provider-result versus delivery/reply distinctions and duplicate prevention before any real sending. Use mocked providers in tests only. **Partly verified, with mocked providers only; the mailbox half cannot be and is not claimed.** Done: **suppression/opt-out persistence** - `career_agent/suppression.py` + schema 14 (`contact_suppression`), checked inside `guarded_dispatch` before any attempt row is written, so a blocked message leaves no record saying something was attempted; matching is on the normalised address (case and whitespace only - no dot-stripping or plus-tag removal, which would suppress somebody who never asked); **the first reason wins** so "they asked us to stop" cannot be softened on a second write; **nothing expires**; lifting needs a note and is never a side effect of an import, a retry or a cleanup; an unreadable reason still blocks; the event log records a count, never the address. **Bounded outreach**: a required daily limit counted from durable rows plus a per-job follow-up limit counted from that job's attempts. **Duplicate prevention**: cross-source identity + write-ahead attempt. **Provider result versus delivery**: a failed dispatch settles *unknown*, never sent or failed. Evidence: 20 tests in `tests/test_suppression.py`, README section, suite **2500 OK (skipped=13)**, [note](research/the-do-not-contact-list-2026-10-18.md). **Not verified, and not claimed:** secure mailbox authorisation (there is no mailbox, no OAuth flow and no credential store - the only tested statement is that nothing stores a credential anywhere), delivery and reply evidence (nothing reads an inbox, so a reply appears only where a person wrote it down), and contact-to-opportunity linking beyond the listing id a draft carries. This item stays open until a real mailbox can be authorised and verified.
 - [x] Add release evidence for laptop-off operation before claiming always-on behavior; document the remote storage/sync boundary and secure credential handling. Do not point a remote worker at the local SQLite file without a designed and tested boundary. **Documented half done; the claim is refused rather than evidenced.** README section "Syncing, credentials, and what is deliberately not claimed": laptop-off operation is **not available and not claimed**, with the release evidence such a claim would need written out (a deployed worker, a tested storage boundary, a recorded run while the laptop was shut, a stated recovery behaviour for an interrupted run); the sync hazard is described rather than hinted (a SQLite file two machines open through a sync service can be corrupted by it; `WorkerLease` is single-machine crash recovery, **not a distributed lock**; pointing a remote worker at the local file is refused by design); the supported transfers are named; and **no credential is stored anywhere**. The credential claim is checked against the software, not the prose: no credential-shaped column in the live schema, no credential store imported, no credential-shaped literal in the package. Evidence: 7 tests in `tests/test_operational_claims.py`, suite **2480 OK (skipped=13)**, [note](research/acceptance-evidence-and-the-boundary-2026-10-18.md). **Still open by definition:** there is no always-on behaviour to evidence, and there will not be until a worker is deployed and a boundary designed and tested - so this item stays the documented refusal it is, not a shipped capability.
 
+## P9 — The first tailored document, built from the window
+
+The builders (`artifacts.tailored_resume_document`, `artifacts.cover_letter_document`) and the whole
+lineage rule have existed since P7, and nothing a person could press reached them: the Tailored
+documents tab could *check* and *rebuild* a document that already existed, and no part of the
+application created a first one. A document that can only be made from a Python prompt is not a
+feature of this application.
+
+- [x] Choose a strategy and a listing in the window, see what the document would be built from, and
+      build it: the facts used, the documents those facts came from, the facts still unconfirmed and
+      the requirements the profile does not state (the gaps, never invented). **Done.** A *Build one*
+      panel on the Tailored documents tab: listing chooser, strategy chooser (each line naming the
+      version a document would be tied to), document chooser, and *Show what would be used...*, which
+      calls `artifacts.plan_artifact` and writes nothing. `ArtifactPlan.describe()` lists the facts,
+      the files they were read from, the ones still unconfirmed, the work/education counts, the
+      strategy's requirements the facts do not state and - separately - the **listing's** own
+      requirements they do not state either. Screening answers are not offered and are refused by
+      `plan_artifact`. Evidence: `tests/test_artifact_build.py` (23), handler tests
+      `BuildingADocumentTests` (16), logic tests `BuildADocumentTextTests` (11), acceptance M6.
+- [x] Review the document itself before anything is written, and write exactly what was reviewed:
+      a strategy that moved, or facts that changed, between the preview and the confirmation refuses
+      rather than quietly storing something else. **Done.** The window keeps the plan that was read and
+      `store_planned_artifact` re-checks before any write: strategy missing or moved to another
+      version, listing deleted, or `capture_basis(store) != plan.basis` each refuse with what moved
+      and store nothing; the window also refuses when the choices themselves changed after the
+      preview, and the confirmation repeats the preview text rather than summarising it. Evidence:
+      `StoringTests`, the four refusal handler tests, acceptance M7-M8.
+- [x] Refuse a duplicate: the same document, under the same strategy version, for the same listing is
+      reported with the identifier of the one already stored rather than written twice. **Done.**
+      `plan_artifact` sets `duplicate_of`, the preview says so, the build button stays disabled and
+      `store_planned_artifact` refuses naming the stored identifier. Pressing build twice stores one
+      document. Evidence: `test_an_identical_document_is_reported_rather_than_stored_twice`,
+      `test_pressing_build_twice_stores_one_document`, acceptance M9.
+- [x] Persist lineage - listing, strategy and version, basis, documents cited, built-at - and show it
+      again when the document is reopened. **Done.** The stored artifact carries the previewed basis
+      (so `lineage_status` has something true to compare against), and the row shows kind, listing,
+      strategy version, built-at, cited document and state the moment it is built. Evidence:
+      `test_storing_a_plan_writes_exactly_what_was_planned_with_its_lineage`,
+      `test_what_is_stored_is_the_document_that_was_previewed`, acceptance M8.
+- [x] Export a stored document to a file the person names, through the owner-only write this project
+      already uses, **refusing to overwrite an existing file** so no original resume can be replaced.
+      **Done.** *Save a copy to a file...* writes a provenance header (document id, listing, strategy
+      version, built-at, cited files, unconfirmed facts, and that nothing was sent anywhere) above the
+      document, through `store.create_private_file(..., exclusive=True)`. An existing file is refused
+      outright - no replace prompt - and a failed write leaves nothing behind. Evidence: `ExportTests`,
+      the export handler tests, acceptance M10-M11.
+- [x] Refuse to export a document whose facts or strategy have moved on, with the lineage reason, and
+      never silently treat it as current. **Done.** `export_artifact` calls `require_current_artifact`
+      first; the button is disabled for a stale row and pressing it refuses with the lineage reasons
+      before any file chooser opens. Evidence:
+      `test_a_stale_document_is_refused_with_the_reason_rather_than_exported`,
+      `test_a_stale_document_is_not_offered_for_saving_and_is_refused_if_asked`, acceptance M12.
+- [x] Nothing in this workflow contacts anything: no upload, no send, no source enabled, no gate
+      opened. Candidate text stays in the database and in the file the person chose. **Done.** The
+      whole path is `store` + `artifacts` + one local file write; no integration, source or network
+      call is reachable from it, and the document text never reaches the status line, the detail line
+      or the event log. Evidence:
+      `test_the_document_text_never_reaches_the_status_line_or_the_event_log`, and the suite-wide
+      gate tests that still pin `enabled_discovery_sources() == ()`.
+
+**Where it stands:** full suite **2690 OK (skipped=13)**; development acceptance run **154 checks,
+0 failed** under the stand-in widget module (not GUI evidence - no display on this machine);
+[note](research/the-first-tailored-document-2026-10-18.md).
+
 ## Acceptance checklist for the expansion
 - [x] Resume/profile/role strategy versions and tailored artifacts remain traceable and truthful. Every artifact row cites the résumé document by name, the confirmed profile-fact version, the strategy version, the job identity and when it was generated; `require_current_artifact` refuses a stale one with `StaleArtifact` rather than reusing it, and the window surfaces the refusal and the rebuild. Evidence: P7 items 1-5 above, with their test counts.
 - [x] Eligibility is evaluated before ranking and hard failures/unknowns cannot be overridden by fit score. Blocked listings are excluded from the default order and only available on request (`test_blocked_listings_are_excluded_from_the_default_order_but_available_on_request`, and the strategy-aware equivalent), an undecided eligibility is reported as undecided rather than resolved, a stated minimum not met is a failure with the gap named, and a strategy-aware score is pinned as equivalent to `evaluate_eligibility` on the plain path.

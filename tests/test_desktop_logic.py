@@ -1028,3 +1028,105 @@ class SuppressionAddQuestionTests(unittest.TestCase):
                                                   SuppressionReason.WRONG_PERSON)
         self.assertIn("checked before any outbound action is attempted", question)
         self.assertNotIn("unsubscribe", question.casefold())
+
+
+class BuildADocumentTextTests(unittest.TestCase):
+    """The words around building a first document: what is offered, previewed, stored, written out.
+
+    These sentences are the only description a person gets of a path that writes a file, so they
+    are pinned here: that the choices carry their identifiers back, that the confirmation repeats
+    what was previewed rather than summarising it, and that nothing anywhere promises a document
+    went somewhere.
+    """
+
+    class Listing:
+        def __init__(self, listing_id, role_title="GenAI Engineer", employer_name="Example Employer"):
+            self.listing_id, self.role_title, self.employer_name = listing_id, role_title, employer_name
+
+    class Strategy:
+        def __init__(self, strategy_id, name="Applied AI roles", version=1):
+            self.strategy_id, self.name, self.version = strategy_id, name, version
+
+    def test_a_listing_choice_shows_the_role_and_carries_its_identifier(self):
+        (choice,) = logic.artifact_listing_choices([self.Listing("j1")])
+        self.assertIn("GenAI Engineer", choice)
+        self.assertIn("Example Employer", choice)
+        self.assertEqual(logic.artifact_id_from_choice(choice), "j1")
+
+    def test_a_strategy_choice_shows_the_version_a_document_would_be_tied_to(self):
+        (choice,) = logic.artifact_strategy_choices([self.Strategy("s1", version=3)])
+        self.assertIn("version 3", choice)
+        self.assertEqual(logic.artifact_id_from_choice(choice), "s1")
+
+    def test_a_record_without_an_identifier_is_not_offered_at_all(self):
+        self.assertEqual(logic.artifact_listing_choices([self.Listing("  ")]), ())
+        self.assertEqual(logic.artifact_strategy_choices([self.Strategy("")]), ())
+        self.assertEqual(logic.artifact_id_from_choice("a line with no identifier"), "")
+        self.assertEqual(logic.artifact_id_from_choice(None), "")
+
+    def test_an_unnamed_listing_is_still_offered_rather_than_silently_dropped(self):
+        (choice,) = logic.artifact_listing_choices([self.Listing("j2", role_title="", employer_name="")])
+        self.assertIn("untitled role", choice)
+        self.assertIn("unnamed employer", choice)
+        self.assertEqual(logic.artifact_id_from_choice(choice), "j2")
+
+    def test_the_preamble_says_what_is_missing_rather_than_leaving_dead_controls(self):
+        self.assertIn("Save your profile first", logic.artifact_build_preamble(3, 2, False))
+        self.assertIn("Add a job listing and a role strategy",
+                      logic.artifact_build_preamble(0, 0, True))
+        self.assertIn("Add a job listing first", logic.artifact_build_preamble(0, 2, True))
+        self.assertIn("Add a role strategy first", logic.artifact_build_preamble(2, 0, True))
+        ready = logic.artifact_build_preamble(2, 2, True)
+        self.assertIn("read what would be used before anything is stored", ready)
+
+    def test_screening_answers_are_not_offered_as_something_to_build(self):
+        self.assertEqual(logic.ARTIFACT_BUILD_KINDS, ("tailored_resume", "cover_letter"))
+        self.assertNotIn("screening_answers", logic.ARTIFACT_BUILD_KINDS)
+
+    def test_the_confirmation_repeats_the_preview_it_was_built_from(self):
+        lines = ("Tailored resume for j1, under Applied AI roles version 1.",
+                 "Facts it would use: skills.", "")
+        question = logic.artifact_build_question(lines)
+        self.assertIn("Store this document?", question)
+        for line in lines[:2]:
+            self.assertIn(line, question)
+        self.assertIn("Nothing is sent anywhere", question)
+        self.assertIn("original résumé file is not touched", question)
+        self.assertEqual(logic.artifact_plan_text(lines), "\n".join(lines[:2]))
+        self.assertEqual(logic.artifact_plan_text(()), "Nothing to preview.")
+
+    def test_what_is_said_after_storing_names_the_document_and_the_gaps(self):
+        plain = logic.artifact_built_text("artifact-1", ())
+        self.assertIn("Stored as document artifact-1", plain)
+        self.assertNotIn("do not state", plain)
+        with_gaps = logic.artifact_built_text("artifact-1", ("Docker", ""))
+        self.assertIn("do not state Docker", with_gaps)
+        self.assertIn("does not claim them", with_gaps)
+        self.assertNotIn("This listing also asks", with_gaps)
+        both = logic.artifact_built_text("artifact-1", ("Docker",), ("Kubernetes", ""))
+        self.assertIn("do not state Docker", both)
+        self.assertIn("This listing also asks for Kubernetes", both)
+        only_listing = logic.artifact_built_text("artifact-1", (), ("Kubernetes",))
+        self.assertNotIn("does not claim them", only_listing)
+        self.assertIn("do not state either", only_listing)
+
+    def test_the_export_question_promises_that_an_existing_file_survives(self):
+        question = logic.artifact_export_question("/tmp/tailored.txt", "artifact-1")
+        self.assertIn("/tmp/tailored.txt", question)
+        self.assertIn("artifact-1", question)
+        self.assertIn("existing file is never written over", question)
+
+    def test_the_export_report_counts_characters_and_claims_nothing_was_sent(self):
+        self.assertIn("1 character)", logic.artifact_export_text("/tmp/a.txt", 1))
+        written = logic.artifact_export_text("/tmp/a.txt", 2048)
+        self.assertIn("2048 characters", written)
+        self.assertIn("readable only by you", written)
+        self.assertIn("nothing was sent anywhere", written)
+
+    def test_a_refused_export_says_what_moved_and_what_to_do(self):
+        refusal = logic.artifact_export_refusal_text(
+            "artifact-1", ("the strategy moved to version 2", ""))
+        self.assertIn("artifact-1", refusal)
+        self.assertIn("the strategy moved to version 2", refusal)
+        self.assertIn("Rebuild it from your current facts first", refusal)
+        self.assertIn("no longer current", logic.artifact_export_refusal_text("artifact-1", ()))

@@ -283,6 +283,17 @@ class BuiltArtifact:
     gaps: tuple[str, ...] = ()
 
 
+def _stated_skills(basis: ArtifactBasis) -> frozenset[str]:
+    """The skills the basis actually states, in the candidate's own spelling.
+
+    One reader for the one fact the builders lean on hardest: a skill nobody wrote down is not a
+    skill, and splitting the rendered value in three places invites three slightly different ideas
+    of what counts.
+    """
+    rendered = basis.facts.get("skills", "")
+    return frozenset(value.strip() for value in rendered.split(", ") if value.strip())
+
+
 def _overlap(stated: frozenset[str], wanted: frozenset[str]) -> tuple[str, ...]:
     """Stated skills that appear in ``wanted``, case-insensitively, in the strategy's own spelling.
 
@@ -302,9 +313,7 @@ def tailored_resume_document(basis: ArtifactBasis, strategy: RoleStrategy) -> Bu
     of any fact the basis does not hold — those sections belong to the person and the sources they
     choose, and this build does not invent them.
     """
-    stated = {value.lower(): value for value in
-              (basis.facts.get("skills", "").split(", ") if basis.facts.get("skills") else [])}
-    stated_skills = frozenset(value for value in stated.values() if value)
+    stated_skills = _stated_skills(basis)
     wanted = frozenset(strategy.required_skills | strategy.preferred_skills)
     relevant = _overlap(stated_skills, wanted)
     # "Other skills" is what is left after the relevant section took its own: the same skill must
@@ -360,9 +369,7 @@ def cover_letter_document(basis: ArtifactBasis, strategy: RoleStrategy,
     about the candidate. Experience appears only as a stated number of years; relevant skills are the
     stated ones the strategy asks for. A fact the basis does not hold produces no sentence at all.
     """
-    stated = {value.lower(): value for value in
-              (basis.facts.get("skills", "").split(", ") if basis.facts.get("skills") else [])}
-    stated_skills = frozenset(value for value in stated.values() if value)
+    stated_skills = _stated_skills(basis)
     relevant = _overlap(stated_skills, frozenset(strategy.required_skills | strategy.preferred_skills))
 
     lines: list[str] = [f"Dear hiring team at {listing.employer_name},", ""]
@@ -372,8 +379,13 @@ def cover_letter_document(basis: ArtifactBasis, strategy: RoleStrategy,
         lines.append(f"Skills I can bring to this role: {', '.join(relevant)}.")
     experience = basis.facts.get("experience")
     if experience:
+        # The fact is a number of years (``CandidateProfile.experience_years``); saying so is what
+        # makes the sentence true as well as readable. It used to read "1.0 of experience", which
+        # was nothing anybody would send to an employer - invisible while no screen could build a
+        # cover letter, and the first thing a reader sees now that one can.
         lines.append("")
-        lines.append(f"My profile states {experience} of experience.")
+        years = "year" if experience.strip() == "1" else "years"
+        lines.append(f"My profile states {experience} {years} of experience.")
     if basis.work:
         lines.append("")
         latest = basis.work[0]
@@ -615,3 +627,226 @@ class TailoredArtifact:
         return (f"{KIND_LABELS[self.kind]} for {self.listing_id} "
                 f"(strategy {self.strategy_id} version {self.strategy_version}, "
                 f"built from {cited})")
+
+
+# ---------------------------------------------------------------------------------------------
+# Building the first one
+#
+# Everything above could rebuild a document that already existed. Making a *first* one was a thing
+# only Python could do, which meant the lineage rules were enforced on documents nobody using the
+# application could create. These three functions are the whole path: look at what a build would
+# use (writing nothing), store exactly that, and write a copy out to a file.
+
+
+@dataclass(frozen=True)
+class ArtifactPlan:
+    """What a build would use and produce, captured without writing anything.
+
+    A plan is reviewed before it is stored, so the thing stored is the thing somebody read. It
+    carries the basis it was captured from, which is what makes the "did anything move while you
+    were reading?" check possible at the moment of writing.
+    """
+
+    listing_id: str
+    kind: ArtifactKind
+    strategy: RoleStrategy
+    basis: ArtifactBasis
+    content: str
+    gaps: tuple[str, ...] = ()
+    #: What *this listing* asks for that the saved facts do not state. Kept apart from ``gaps``,
+    #: which is the strategy's requirements: a document is built under a strategy, but it is sent
+    #: to one employer, and "your facts do not mention the thing this job asks for" is the sentence
+    #: a person needs before they decide to use it. Neither list is ever written into the document.
+    listing_gaps: tuple[str, ...] = ()
+    duplicate_of: str | None = None
+
+    @property
+    def strategy_version(self) -> int:
+        return self.strategy.version
+
+    def describe(self) -> tuple[str, ...]:
+        """The inputs, as lines a person can read before deciding anything."""
+        facts = ", ".join(sorted(self.basis.facts)) or "none"
+        unconfirmed = ", ".join(sorted(self.basis.unconfirmed_facts)) or "none"
+        documents = ", ".join(sorted({name for name in self.basis.fact_documents.values() if name}))
+        lines = [
+            f"{KIND_LABELS[self.kind]} for {self.listing_id}, under {self.strategy.name} "
+            f"version {self.strategy.version}.",
+            f"Facts it would use: {facts}.",
+            f"Read from: {documents or 'no source document recorded'}.",
+            f"Still unconfirmed: {unconfirmed}.",
+            f"Work records: {len(self.basis.work)}; education records: {len(self.basis.education)}.",
+        ]
+        if self.gaps:
+            lines.append(
+                "Your saved facts do not state " + ", ".join(self.gaps)
+                + ", so the document will not claim them.")
+        else:
+            lines.append("Nothing the strategy asks for is missing from your saved facts.")
+        if self.listing_gaps:
+            lines.append(
+                "This listing also asks for " + ", ".join(self.listing_gaps)
+                + ", which your saved facts do not state either.")
+        if self.duplicate_of is not None:
+            lines.append(
+                f"An identical document is already stored as {self.duplicate_of}; building this "
+                f"again would write a second copy of the same text, so it is refused.")
+        return tuple(lines)
+
+
+@dataclass(frozen=True)
+class ArtifactExport:
+    """What was written out, and what the file says about where it came from."""
+
+    artifact_id: str
+    path: str
+    characters: int
+    provenance: tuple[str, ...]
+
+
+def plan_artifact(store: "CareerStore", *, listing_id: str, strategy_id: str,
+                  kind: ArtifactKind) -> ArtifactPlan:
+    """Work out what a document would be built from and what it would say. Writes nothing.
+
+    Every refusal :func:`rebuild_artifact` makes is made here too, and for the same reasons: a
+    listing or strategy that is not stored leaves nothing to build from, and screening answers are
+    written by the person rather than restated from facts.
+    """
+    listing = store.get_job(str(listing_id or "").strip())
+    if listing is None:
+        raise ArtifactError(
+            f"the listing {listing_id!r} is not stored, so there is nothing to tailor a document to.")
+    strategy = store.get_role_strategy(str(strategy_id or "").strip())
+    if strategy is None:
+        raise ArtifactError(
+            f"the strategy {strategy_id!r} is not stored, so a document built now would have no "
+            f"preferences to follow.")
+    if kind is ArtifactKind.SCREENING_ANSWERS:
+        raise ArtifactError(
+            "screening answers are written by the person, so this application will not generate "
+            "them: a plausible answer this build invented is exactly the thing it must never write.")
+    basis = capture_basis(store)
+    if kind is ArtifactKind.TAILORED_RESUME:
+        built = tailored_resume_document(basis, strategy)
+    else:
+        built = cover_letter_document(basis, strategy, listing)
+    duplicate = next(
+        (stored.artifact_id for stored in store.list_tailored_artifacts(
+            listing_id=listing.listing_id, strategy_id=strategy.strategy_id, kind=kind)
+         if stored.strategy_version == strategy.version and stored.content == built.content),
+        None)
+    stated = {value.lower() for value in _stated_skills(basis)}
+    listing_gaps = tuple(sorted(
+        skill for skill in listing.required_skills
+        if skill.lower() not in stated and skill not in built.gaps))
+    return ArtifactPlan(listing_id=listing.listing_id, kind=kind, strategy=strategy, basis=basis,
+                        content=built.content, gaps=tuple(built.gaps), listing_gaps=listing_gaps,
+                        duplicate_of=duplicate)
+
+
+def store_planned_artifact(store: "CareerStore", plan: ArtifactPlan) -> TailoredArtifact:
+    """Store exactly the document that was planned, or refuse and say what moved.
+
+    Three refusals, all of them about the same thing - what is stored must be what somebody read:
+
+    * the **strategy version moved** between the preview and the confirmation, so the document in
+      front of them was built under preferences that are no longer current;
+    * the **facts moved**: the basis captured for the plan is not what the store holds now, so the
+      document would be stored citing a basis it was not built from;
+    * an **identical document already exists** for this listing, strategy version and kind - a
+      second copy of the same text is not history, it is noise, and the identifier of the one
+      already stored is the useful answer.
+    """
+    current_strategy = store.get_role_strategy(plan.strategy.strategy_id)
+    if current_strategy is None:
+        raise ArtifactError(
+            f"the strategy {plan.strategy.strategy_id!r} is no longer stored, so the document you "
+            f"are looking at cannot be recorded against it.")
+    if current_strategy.version != plan.strategy.version:
+        raise ArtifactError(
+            f"{plan.strategy.name} moved to version {current_strategy.version} while this document "
+            f"was being read (it was built under version {plan.strategy.version}). Look at it again "
+            f"under the current version; nothing was stored.")
+    if store.get_job(plan.listing_id) is None:
+        raise ArtifactError(
+            f"the listing {plan.listing_id!r} is no longer stored, so there is nothing to record "
+            f"this document against.")
+    if capture_basis(store) != plan.basis:
+        raise ArtifactError(
+            "your saved facts changed while this document was being read, so storing it would "
+            "record a basis it was not built from. Look at it again; nothing was stored.")
+    duplicate = next(
+        (stored.artifact_id for stored in store.list_tailored_artifacts(
+            listing_id=plan.listing_id, strategy_id=plan.strategy.strategy_id, kind=plan.kind)
+         if stored.strategy_version == plan.strategy.version and stored.content == plan.content),
+        None)
+    if duplicate is not None:
+        raise ArtifactError(
+            f"an identical document is already stored as {duplicate}, built under the same "
+            f"strategy version for the same listing. Nothing was stored; use that one, or change "
+            f"what it is built from first.")
+    return store.new_tailored_artifact(
+        listing_id=plan.listing_id, strategy=plan.strategy, kind=plan.kind, content=plan.content,
+        basis=plan.basis)
+
+
+def export_provenance(artifact: TailoredArtifact) -> tuple[str, ...]:
+    """The header written above an exported document: where it came from, and what it is not."""
+    cited = ", ".join(artifact.source_documents) or "no source document recorded"
+    unconfirmed = ", ".join(sorted(artifact.basis.unconfirmed_facts)) or "none"
+    return (
+        f"{KIND_LABELS[artifact.kind]}",
+        f"Document id: {artifact.artifact_id}",
+        f"Prepared for listing: {artifact.listing_id}",
+        f"Strategy: {artifact.strategy_id} version {artifact.strategy_version}",
+        f"Built at: {artifact.created_at}",
+        f"Built from: {cited}",
+        f"Facts recorded as unconfirmed when this was built: {unconfirmed}",
+        "Built only from facts saved in this application. Nothing in it was invented, and nothing "
+        "was sent anywhere: this file was written on this machine by the person who asked for it.",
+    )
+
+
+def export_artifact(store: "CareerStore", artifact_id: str, path) -> ArtifactExport:
+    """Write one stored document to a new file, with its provenance above it.
+
+    Two refusals matter more than the writing. A document whose facts or strategy have moved on is
+    refused by :func:`require_current_artifact` - exporting it would put a stale résumé in a folder
+    where nothing says so. And an **existing file is never overwritten**: the one file a person is
+    most likely to name by accident is the résumé this document was built from.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415 - kept local, this module is store-agnostic
+    from .store import PrivateWriteError, create_private_file  # noqa: PLC0415 - avoids a cycle
+
+    artifact = require_current_artifact(store, artifact_id)
+    destination = _Path(path)
+    if destination.exists():
+        raise ArtifactError(
+            f"{destination.name} already exists. This application will not write a document over a "
+            f"file you already have - the file most likely to be named here by mistake is the "
+            f"résumé this was built from. Choose a name that is not in use.")
+    if not destination.parent.is_dir():
+        raise ArtifactError(
+            f"the folder {destination.parent} does not exist, so nothing could be written there.")
+    provenance = export_provenance(artifact)
+    text = "\n".join(provenance) + "\n\n" + ("-" * 72) + "\n\n" + artifact.content.rstrip("\n") + "\n"
+    try:
+        descriptor = create_private_file(destination, exclusive=True)
+    except PrivateWriteError as exc:
+        raise ArtifactError(str(exc)) from exc
+    try:
+        with open(descriptor, "w", encoding="utf-8", closefd=True) as handle:
+            handle.write(text)
+    except OSError as exc:
+        # The file was created before the write was attempted, so a failure half way through would
+        # otherwise leave a truncated "tailored resume" on disk under the name somebody chose, and
+        # the same name would then be refused as "already exists" on the next try.
+        try:
+            destination.unlink()
+        except OSError:  # pragma: no cover - the cleanup failing is not the error worth reporting
+            pass
+        raise ArtifactError(
+            f"the document could not be written ({exc}). Nothing was left behind under that "
+            f"name.") from exc
+    return ArtifactExport(artifact_id=artifact.artifact_id, path=str(destination),
+                          characters=len(text), provenance=provenance)

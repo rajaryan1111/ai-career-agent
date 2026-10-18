@@ -120,7 +120,7 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("Example Employer", built.content)
         self.assertIn("GenAI Engineer", built.content)
         self.assertIn("PyTorch, Python", built.content)
-        self.assertIn("1.0 of experience", built.content)
+        self.assertIn("1.0 years of experience", built.content)
         self.assertIn("Intern at Example Systems", built.content)
         self.assertNotIn("Docker", built.content)
 

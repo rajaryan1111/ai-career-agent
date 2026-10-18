@@ -15,6 +15,7 @@ import io
 import json
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
 import types
@@ -5164,6 +5165,351 @@ class TailoredDocumentsTabTests(HandlerTestCase):
         self.assertIn("Document not rebuilt", MESSAGES.titles("showerror"))
         self.assertIn("no artifact", MESSAGES.text("showerror"))
         self.assertEqual(app.store.list_tailored_artifacts(), ())
+
+
+class BuildingADocumentTests(HandlerTestCase):
+    """Building a *first* document from the window, and saving a copy of it to a file.
+
+    The tab above could only ever rebuild something Python had already put in the database. These
+    tests drive the path a person has: choose, preview, store exactly what was previewed, save a
+    copy. What is asserted is mostly what must *not* happen - a preview that writes, a build from a
+    plan nobody read, a second identical document, an export over an existing file, and a stale
+    document written out with nothing saying so.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(root, database_path=Path(self._directory.name) / "build.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def row(self, app, artifact_id):
+        return dict(zip(("kind", "listing", "strategy", "built", "cited", "state"),
+                        app.artifacts_tree.item(artifact_id, "values")))
+
+    def change_a_fact(self, app):
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=3.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+
+    def prepare(self, app, *, listing_id="j1", kind="Tailored resume"):
+        """A window with facts, a listing and a strategy, and the building controls pointed at them."""
+        strategy = app.store.list_role_strategies()[0]
+        app._refresh_artifacts()
+        app.artifact_listing_choice.set(next(
+            choice for choice in app.artifact_listing_box.cget("values")
+            if listing_id in str(choice)))
+        app.artifact_strategy_choice.set(next(
+            choice for choice in app.artifact_strategy_box.cget("values")
+            if strategy.strategy_id in str(choice)))
+        app.artifact_kind_choice.set(kind)
+        return strategy
+
+    def seed_inputs(self, app, document="resume-v1.docx"):
+        """The same records :meth:`seed` makes, without the document it builds by hand."""
+        app.store.save_job(JobListing(
+            listing_id="j1", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/1",
+            employer_name="Example Employer", role_title="GenAI Engineer",
+            availability_status=Availability.OPEN,
+            required_skills=frozenset({"Python", "Docker"}), location_text="Delhi, India"))
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=1.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})),
+            source=FactSource.EXTRACTED_FROM_DOCUMENT, document_name=document)
+        return app.store.create_role_strategy(
+            name="Applied AI roles", role_family="Applied AI engineering",
+            required_skills=frozenset({"Python", "Docker"}))
+
+    def build_one(self, app):
+        """Preview and store one document the way the window does, and return it."""
+        CONFIG["Build this document"] = True
+        app._preview_artifact_plan()
+        app._build_previewed_artifact()
+        return app.store.list_tailored_artifacts()[0]
+
+    def test_the_controls_say_what_is_missing_instead_of_offering_a_dead_button(self):
+        app = self.build_window()
+        app._refresh_artifacts()
+        self.assertIn("Save your profile first", app.artifact_build_note.get())
+        self.assertTrue(app.preview_artifact_button.instate(["disabled"]))
+        self.seed_inputs(app)
+        app._refresh_artifacts()
+        self.assertIn("Choose a listing", app.artifact_build_note.get())
+        self.assertFalse(app.preview_artifact_button.instate(["disabled"]))
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]),
+                        "the window offers to store a document nobody has previewed")
+
+    def test_a_preview_shows_the_inputs_and_writes_nothing(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        before = app.store._connection.total_changes
+
+        app._preview_artifact_plan()
+
+        shown = app.artifact_plan_box.get("1.0", "end")
+        self.assertIn("resume-v1.docx", shown)
+        self.assertIn(f"version {strategy.version}", shown)
+        self.assertIn("Docker", shown, "the preview hides what the facts do not state")
+        self.assertIn("Still unconfirmed", shown)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertFalse(app.build_artifact_button.instate(["disabled"]))
+
+    def test_building_asks_first_and_a_declined_confirmation_stores_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        CONFIG["Build this document"] = False
+        before = app.store._connection.total_changes
+
+        app._build_previewed_artifact()
+
+        self.assertIn("Build this document", MESSAGES.titles("askyesno"))
+        self.assertIn("resume-v1.docx", MESSAGES.text("askyesno"),
+                      "the confirmation does not repeat what was previewed")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+
+    def test_what_is_stored_is_the_document_that_was_previewed(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        previewed = app._artifact_plan.content
+
+        CONFIG["Build this document"] = True
+        app._build_previewed_artifact()
+
+        (stored,) = app.store.list_tailored_artifacts()
+        self.assertEqual(stored.content, previewed)
+        self.assertEqual(stored.listing_id, "j1")
+        self.assertEqual(stored.strategy_version, strategy.version)
+        self.assertEqual(stored.basis.fact_documents.get("skills"), "resume-v1.docx")
+        self.assertNotIn("Docker", stored.content)
+        self.assertIn(stored.artifact_id, app.status.get())
+        self.assertIn("do not state Docker", app.status.get())
+        self.assertEqual(self.row(app, stored.artifact_id)["state"], "Current")
+        self.assertIsNone(app._artifact_plan, "the plan survived the build it was used for")
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+
+    def test_pressing_build_twice_stores_one_document(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        CONFIG["Build this document"] = True
+        app._preview_artifact_plan()
+
+        app._build_previewed_artifact()
+        app._build_previewed_artifact()
+
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+        self.assertIn("Show what would be used first", app.status.get())
+
+    def test_building_without_a_preview_stores_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "the window asked about a document nobody had previewed")
+
+    def test_changing_the_choice_after_a_preview_refuses_the_build(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        app.store.save_job(JobListing(
+            listing_id="j2", source_id="manual", source_name="Manual entry",
+            source_listing_url="https://jobs.example.invalid/role/2",
+            employer_name="Other Employer", role_title="ML Engineer",
+            availability_status=Availability.OPEN, location_text="Delhi, India"))
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.artifact_listing_choice.set(next(
+            choice for choice in app.artifact_listing_box.cget("values") if "j2" in str(choice)))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("changed after the preview", app.status.get())
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+
+    def test_a_strategy_revised_after_the_preview_refuses_the_build(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        app.store.revise_role_strategy(
+            strategy.strategy_id, name=strategy.name, role_family=strategy.role_family,
+            required_skills=frozenset({"Python", "Rust"}))
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("Document not built", MESSAGES.titles("showerror"))
+        self.assertIn("moved to version 2", MESSAGES.text("showerror"))
+        self.assertIn("nothing was stored", app.status.get())
+
+    def test_facts_changed_after_the_preview_refuse_the_build(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        app._preview_artifact_plan()
+        self.change_a_fact(app)
+        CONFIG["Build this document"] = True
+
+        app._build_previewed_artifact()
+
+        self.assertEqual(app.store.list_tailored_artifacts(), ())
+        self.assertIn("facts changed while", MESSAGES.text("showerror"))
+
+    def test_an_identical_document_is_reported_rather_than_stored_again(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        first = self.build_one(app)
+
+        app._preview_artifact_plan()
+
+        self.assertIn(first.artifact_id, app.artifact_plan_box.get("1.0", "end"))
+        self.assertIn(first.artifact_id, app.status.get())
+        self.assertTrue(app.build_artifact_button.instate(["disabled"]))
+        app._build_previewed_artifact()
+        self.assertEqual(len(app.store.list_tailored_artifacts()), 1)
+
+    def test_a_document_is_saved_to_a_file_with_its_provenance_and_nothing_else(self):
+        app = self.build_window()
+        strategy = self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        app._on_artifact_selection()
+        self.assertFalse(app.export_artifact_button.instate(["disabled"]))
+        target = Path(self._directory.name) / "tailored.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+
+        app._export_selected_artifact()
+
+        written = target.read_text(encoding="utf-8")
+        self.assertIn(stored.artifact_id, written)
+        self.assertIn(f"version {strategy.version}", written)
+        self.assertIn("resume-v1.docx", written)
+        self.assertIn("nothing was sent anywhere", written)
+        self.assertTrue(written.rstrip().endswith(stored.content.rstrip()))
+        self.assertIn(str(target), app.status.get())
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode) & 0o077, 0)
+
+    def test_a_cancelled_or_declined_save_writes_nothing(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        FILEDIALOG.path = ""
+
+        app._export_selected_artifact()
+
+        self.assertIn("Nothing was written out", app.status.get())
+        target = Path(self._directory.name) / "declined.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = False
+
+        app._export_selected_artifact()
+
+        self.assertFalse(target.exists())
+        self.assertIn("Nothing was written out", app.status.get())
+
+    def test_an_existing_file_is_refused_rather_than_written_over(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        target = Path(self._directory.name) / "my-resume.txt"
+        target.write_text("the person's own resume", encoding="utf-8")
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+
+        app._export_selected_artifact()
+
+        self.assertIn("Document not saved", MESSAGES.titles("showerror"))
+        self.assertIn("already exists", MESSAGES.text("showerror"))
+        self.assertEqual(target.read_text(encoding="utf-8"), "the person's own resume")
+
+    def test_a_stale_document_is_not_offered_for_saving_and_is_refused_if_asked(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        self.change_a_fact(app)
+        app._refresh_artifacts()
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        app._on_artifact_selection()
+        self.assertTrue(app.export_artifact_button.instate(["disabled"]))
+        target = Path(self._directory.name) / "stale.txt"
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+        MESSAGES.reset()
+
+        app._export_selected_artifact()
+
+        self.assertIn("This document is out of date", MESSAGES.titles("showerror"))
+        self.assertIn("experience", MESSAGES.text("showerror"))
+        self.assertFalse(target.exists())
+        self.assertEqual(MESSAGES.titles("askyesno"), [],
+                         "a stale document opened a save dialog before refusing")
+        recorded = log_path(database_path=Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertIn("artifact.export.refused", recorded, "the refusal left no trace")
+
+    def test_saving_with_nothing_selected_asks_for_no_file_at_all(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        self.build_one(app)
+        app.artifacts_tree.selection_set(())
+        app._on_artifact_selection()
+        FILEDIALOG.path = str(Path(self._directory.name) / "nothing.txt")
+
+        app._export_selected_artifact()
+
+        self.assertIn("Select a document in the list first", app.status.get())
+        self.assertFalse((Path(self._directory.name) / "nothing.txt").exists())
+
+    def test_the_document_text_never_reaches_the_status_line_or_the_event_log(self):
+        app = self.build_window()
+        self.seed_inputs(app)
+        self.prepare(app)
+        stored = self.build_one(app)
+        target = Path(self._directory.name) / "quiet.txt"
+        app.artifacts_tree.selection_set(stored.artifact_id)
+        FILEDIALOG.path = str(target)
+        CONFIG["Save a copy"] = True
+        app._export_selected_artifact()
+
+        body = stored.content.strip().splitlines()[0]
+        self.assertNotIn(body, app.status.get())
+        self.assertNotIn(body, app.artifact_detail.get())
+        recorded = log_path(database_path=Path(app.store.database_path)).read_text(encoding="utf-8")
+        self.assertNotIn(body, recorded)
+        self.assertNotIn("Python, SQL", recorded)
+        self.assertNotIn(str(target), recorded, "the log names a file on the person's disk")
+        self.assertIn("artifact.exported", recorded, "the copy was written without a trace")
+        self.assertIn(stored.artifact_id, recorded)
 
 
 class WindowConstructionTests(HandlerTestCase):

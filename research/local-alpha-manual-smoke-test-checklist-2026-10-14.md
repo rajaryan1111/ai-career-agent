@@ -1,7 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 172 steps — at this revision **22 PASS, 150 BLOCKED, 0 FAIL, no box ticked** (the newest
-steps are 170-172, for listing an address nobody imported, 164-169, for trying to send a follow-up
+**Status:** 179 steps — at this revision **22 PASS, 157 BLOCKED, 0 FAIL, no box ticked** (the newest
+steps are 173-179, for building a first tailored document from the window and saving a copy of it to a
+file, 170-172, for listing an address nobody imported, 164-169, for trying to send a follow-up
 through the guard, and 157-163, for the Sources & evidence tab; all sixteen are BLOCKED. Steps 151-156,
 for the conditions and the quiet window, 137-143, for the What's happening tab, and 144-150, for the
 do-not-contact list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
@@ -1516,3 +1517,32 @@ second verification pass, after the first run was already green.
 172. [ ] Add the same address again with a milder reason. Check the window reports it and keeps the
     first reason recorded.
     → **BLOCKED — acceptance check L22 asserts the report and the unchanged reason.**
+
+## Tailored documents: building a first one, and saving a copy (added 2026-10-18)
+
+173. [ ] On the **Tailored documents** tab with no profile saved, check the *Build one* panel says to
+    save your profile first and that *Show what would be used…* cannot be pressed.
+    → **BLOCKED — handler test `test_the_controls_say_what_is_missing_instead_of_offering_a_dead_button`
+    asserts both; no display-backed run.**
+174. [ ] Choose a listing, a strategy and *Tailored resume*, press **Show what would be used…**, and
+    read the preview: the facts, the file they were read from, the unconfirmed ones, and what is
+    missing. Check the list of stored documents has not changed.
+    → **BLOCKED — acceptance check M6 asserts the preview's contents and that the database did not
+    change.**
+175. [ ] Press **Build this document…** and say no. Check nothing was stored. Press it again, read the
+    confirmation (it repeats the preview), and say yes. Check the new row names the listing, the
+    strategy version and the résumé the facts came from.
+    → **BLOCKED — acceptance checks M7 and M8 assert the declined and accepted paths.**
+176. [ ] Press **Show what would be used…** again without changing anything. Check the window names the
+    document already stored and will not build a second copy.
+    → **BLOCKED — acceptance check M9 asserts the report and the disabled button.**
+177. [ ] Select the new row, press **Save a copy to a file…**, choose a name that is not in use, and
+    confirm. Open the file: it should start with which document it is, which listing and strategy
+    version, when it was built and which file the facts came from, then the document itself.
+    → **BLOCKED — acceptance check M10 asserts the header, the body and the owner-only file mode.**
+178. [ ] Press **Save a copy to a file…** again and choose the **same name**. Check the window refuses,
+    says the file already exists, and that the file on disk is unchanged.
+    → **BLOCKED — acceptance check M11 asserts the refusal and the untouched file.**
+179. [ ] Change a fact on the **Profile** tab, come back and press **Refresh**. Check the row now says
+    it must be rebuilt, that *Save a copy to a file…* is greyed out, and that no file was written.
+    → **BLOCKED — acceptance check M12 asserts the refusal, the named fact and the absent file.**

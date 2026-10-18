@@ -47,7 +47,10 @@ from .worker import worker_status
 from .desktop_logic import (
     ACTIVITY_DATE_PATTERN, ACTIVITY_KIND_CHOICES, ATTEMPT_STATE_LABELS, JobSaveMode,
     RECONCILIATION_CHOICES, activity_form_values,
-    artifact_citation_text, artifact_rebuild_text, artifact_state_text, artifact_summary_text,
+    ARTIFACT_BUILD_KINDS, artifact_build_preamble, artifact_build_question, artifact_built_text,
+    artifact_citation_text, artifact_export_question, artifact_export_refusal_text,
+    artifact_export_text, artifact_id_from_choice, artifact_listing_choices, artifact_plan_text,
+    artifact_rebuild_text, artifact_state_text, artifact_strategy_choices, artifact_summary_text,
     attempt_detail_text, attempt_rows, build_activity, build_candidate_profile,
     fact_label, fact_review_summary, format_stored_timestamp, form_values, job_form_values,
     notification_question, notification_summary_text, parse_notification_hour,
@@ -87,8 +90,9 @@ from .notifications import (
     notification_due,
 )
 from .artifacts import (
-    KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, StaleArtifactError, lineage_status,
-    rebuild_artifact, require_current_artifact,
+    KIND_LABELS as ARTIFACT_KIND_LABELS, ArtifactError, ArtifactKind, StaleArtifactError,
+    export_artifact, lineage_status, plan_artifact, rebuild_artifact, require_current_artifact,
+    store_planned_artifact,
 )
 from . import contact_export, resume
 from .diagnostics import describe_startup_failure, record_startup_failure
@@ -2411,15 +2415,56 @@ class CareerAgentApp:
         self.artifact_summary = tk.StringVar(value="Reading the stored documents...")
         ttk.Label(body, textvariable=self.artifact_summary, wraplength=_TAB_TEXT_WRAP,
                   justify=LEFT).grid(row=1, column=0, columnspan=4, sticky=W, pady=(0, 8))
+        build = ttk.LabelFrame(body, text="Build one")
+        build.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 10))
+        build.columnconfigure(1, weight=1)
+        self.artifact_build_note = tk.StringVar(value="Reading what there is to build from...")
+        ttk.Label(build, textvariable=self.artifact_build_note, wraplength=_TAB_TEXT_WRAP - 20,
+                  justify=LEFT).grid(row=0, column=0, columnspan=4, sticky=W, padx=6, pady=(4, 8))
+        self.artifact_listing_choice = tk.StringVar()
+        self.artifact_strategy_choice = tk.StringVar()
+        self.artifact_kind_choice = tk.StringVar(
+            value=ARTIFACT_KIND_LABELS[ArtifactKind(ARTIFACT_BUILD_KINDS[0])])
+        ttk.Label(build, text="For listing").grid(row=1, column=0, sticky=W, padx=6, pady=2)
+        self.artifact_listing_box = ttk.Combobox(
+            build, textvariable=self.artifact_listing_choice, state="readonly", width=52, values=())
+        self.artifact_listing_box.grid(row=1, column=1, columnspan=3, sticky=W, pady=2)
+        ttk.Label(build, text="Under strategy").grid(row=2, column=0, sticky=W, padx=6, pady=2)
+        self.artifact_strategy_box = ttk.Combobox(
+            build, textvariable=self.artifact_strategy_choice, state="readonly", width=52, values=())
+        self.artifact_strategy_box.grid(row=2, column=1, columnspan=3, sticky=W, pady=2)
+        ttk.Label(build, text="Document").grid(row=3, column=0, sticky=W, padx=6, pady=2)
+        ttk.Combobox(
+            build, textvariable=self.artifact_kind_choice, state="readonly", width=30,
+            values=[ARTIFACT_KIND_LABELS[ArtifactKind(kind)] for kind in ARTIFACT_BUILD_KINDS],
+        ).grid(row=3, column=1, sticky=W, pady=2)
+        self.preview_artifact_button = ttk.Button(
+            build, text="Show what would be used...", command=self._preview_artifact_plan)
+        self.preview_artifact_button.grid(row=4, column=0, columnspan=2, sticky=W, padx=6, pady=(8, 4))
+        self.build_artifact_button = ttk.Button(
+            build, text="Build this document...", command=self._build_previewed_artifact,
+            state="disabled")
+        self.build_artifact_button.grid(row=4, column=2, sticky=W, pady=(8, 4))
+        self.artifact_plan_box = tk.Text(build, height=10, wrap="word", state="disabled")
+        self.artifact_plan_box.grid(row=5, column=0, columnspan=4, sticky="ew", padx=6, pady=(0, 6))
+        #: The plan a person has actually read, kept so that "Build this document" stores that one
+        #: rather than quietly re-planning against whatever the database holds by the time they press
+        #: it. A plan built for choices that have since changed is refused rather than reused.
+        self._artifact_plan = None
+        self._set_artifact_plan(None)
         self.check_artifact_button = ttk.Button(
             body, text="Check before use", command=self._check_selected_artifact, state="disabled")
-        self.check_artifact_button.grid(row=2, column=0, sticky=W, pady=4)
+        self.check_artifact_button.grid(row=3, column=0, sticky=W, pady=4)
         self.rebuild_artifact_button = ttk.Button(
             body, text="Rebuild from current facts...", command=self._rebuild_selected_artifact,
             state="disabled")
-        self.rebuild_artifact_button.grid(row=2, column=1, sticky=W, padx=(8, 0), pady=4)
+        self.rebuild_artifact_button.grid(row=3, column=1, sticky=W, padx=(8, 0), pady=4)
+        self.export_artifact_button = ttk.Button(
+            body, text="Save a copy to a file...", command=self._export_selected_artifact,
+            state="disabled")
+        self.export_artifact_button.grid(row=3, column=2, sticky=W, padx=(8, 0), pady=4)
         ttk.Button(body, text="Refresh",
-                   command=self._refresh_artifacts).grid(row=2, column=2, sticky=W, padx=(8, 0), pady=4)
+                   command=self._refresh_artifacts).grid(row=3, column=3, sticky=W, padx=(8, 0), pady=4)
         columns = ("kind", "listing", "strategy", "built", "cited", "state")
         self.artifacts_tree = ttk.Treeview(body, columns=columns, show="headings", height=8)
         for column, heading, width in (
@@ -2429,12 +2474,12 @@ class CareerAgentApp:
         ):
             self.artifacts_tree.heading(column, text=heading)
             self.artifacts_tree.column(column, width=width, anchor=W)
-        self.artifacts_tree.grid(row=3, column=0, columnspan=4, sticky="nsew")
+        self.artifacts_tree.grid(row=4, column=0, columnspan=4, sticky="nsew")
         self.artifacts_tree.bind("<<TreeviewSelect>>", self._on_artifact_selection)
         self.artifact_detail = tk.StringVar(
             value="Select a document to see what it was built from.")
         ttk.Label(body, textvariable=self.artifact_detail, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=4, column=0, columnspan=4, sticky=W, pady=(8, 0))
+                  justify=LEFT).grid(row=5, column=0, columnspan=4, sticky=W, pady=(8, 0))
         body.columnconfigure(0, weight=1)
         #: The lineage report for each row currently drawn, so the detail line and the controls describe
         #: the same reading the list was filled from rather than asking the database again on every click.
@@ -2471,9 +2516,198 @@ class CareerAgentApp:
         self._artifact_reports = reports
         stale = sum(1 for report in reports.values() if not report.is_current)
         self.artifact_summary.set(artifact_summary_text(len(artifacts), stale))
+        self._refresh_artifact_choices()
         if selected in reports:  # the row the person was looking at is still there
             self.artifacts_tree.selection_set(selected)
         self._on_artifact_selection()
+
+    def _refresh_artifact_choices(self) -> None:
+        """Fill the building controls from what is stored, and say so when there is nothing to build.
+
+        Reads only. A listing or strategy that is not stored is not offered, which is the first half
+        of the promise that a document can only be built from records the person already has; the
+        other half is in :func:`~career_agent.artifacts.plan_artifact`, which refuses anything else.
+        """
+        if not hasattr(self, "artifact_listing_box"):
+            return
+        try:
+            listings = self.store.list_jobs()
+            strategies = self.store.list_role_strategies()
+            has_profile = self.store.get_profile() is not None
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        listing_choices = artifact_listing_choices(listings)
+        strategy_choices = artifact_strategy_choices(strategies)
+        self.artifact_listing_box.configure(values=list(listing_choices))
+        self.artifact_strategy_box.configure(values=list(strategy_choices))
+        if self.artifact_listing_choice.get() not in listing_choices:
+            self.artifact_listing_choice.set(listing_choices[0] if listing_choices else "")
+        if self.artifact_strategy_choice.get() not in strategy_choices:
+            self.artifact_strategy_choice.set(strategy_choices[0] if strategy_choices else "")
+        ready = bool(listing_choices and strategy_choices and has_profile)
+        self.preview_artifact_button.configure(state="normal" if ready else "disabled")
+        if not ready:
+            self._set_artifact_plan(None)
+        self.artifact_build_note.set(
+            artifact_build_preamble(len(listing_choices), len(strategy_choices), has_profile))
+
+    def _chosen_artifact_kind(self) -> ArtifactKind:
+        """The document kind chosen in the window, as the artifact layer's own value."""
+        chosen = self.artifact_kind_choice.get().strip()
+        for kind in ARTIFACT_BUILD_KINDS:
+            if ARTIFACT_KIND_LABELS[ArtifactKind(kind)] == chosen:
+                return ArtifactKind(kind)
+        return ArtifactKind(ARTIFACT_BUILD_KINDS[0])
+
+    def _set_artifact_plan(self, plan) -> None:
+        """Hold (or drop) the plan that was read, and offer the build button only while one is held."""
+        self._artifact_plan = plan
+        lines = plan.describe() if plan is not None else ()
+        self.artifact_plan_box.configure(state="normal")
+        self.artifact_plan_box.delete("1.0", END)
+        self.artifact_plan_box.insert(
+            "1.0",
+            artifact_plan_text(lines) if plan is not None
+            else "Nothing previewed yet. Choose a listing and a strategy, then show what would be "
+                 "used.")
+        self.artifact_plan_box.configure(state="disabled")
+        buildable = plan is not None and plan.duplicate_of is None
+        self.build_artifact_button.configure(state="normal" if buildable else "disabled")
+
+    def _preview_artifact_plan(self) -> None:
+        """Work out what a document would be built from and show it. Stores nothing, writes nothing."""
+        listing_id = artifact_id_from_choice(self.artifact_listing_choice.get())
+        strategy_id = artifact_id_from_choice(self.artifact_strategy_choice.get())
+        if not listing_id or not strategy_id:
+            self.status.set("Choose a listing and a strategy first; nothing was changed.")
+            return
+        try:
+            plan = plan_artifact(self.store, listing_id=listing_id, strategy_id=strategy_id,
+                                 kind=self._chosen_artifact_kind())
+        except ArtifactError as exc:
+            self._set_artifact_plan(None)
+            messagebox.showerror("Nothing to build from", str(exc), parent=self.root)
+            self.status.set("That document was not previewed; nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._set_artifact_plan(plan)
+        if plan.duplicate_of is not None:
+            self.status.set(
+                f"An identical document is already stored as {plan.duplicate_of}, so there is "
+                "nothing to build; nothing was changed.")
+        else:
+            self.status.set(
+                "This is what the document would be built from. Nothing is stored until you say so.")
+
+    def _build_previewed_artifact(self) -> None:
+        """Store exactly the document that was previewed, after one confirmation showing that text.
+
+        The plan is not recomputed here. If any of the three choices has moved since the preview, or
+        the facts or the strategy version moved underneath it, the build is refused and the person is
+        sent back to look again - a document stored from a plan nobody read is the one thing this
+        pairing exists to prevent.
+        """
+        plan = self._artifact_plan
+        if plan is None:
+            self.status.set("Show what would be used first; nothing was changed.")
+            return
+        chosen = (artifact_id_from_choice(self.artifact_listing_choice.get()),
+                  artifact_id_from_choice(self.artifact_strategy_choice.get()),
+                  self._chosen_artifact_kind())
+        if chosen != (plan.listing_id, plan.strategy.strategy_id, plan.kind):
+            self._set_artifact_plan(None)
+            self.status.set(
+                "What you chose changed after the preview, so nothing was built. Show what would "
+                "be used again.")
+            return
+        if not messagebox.askyesno("Build this document", artifact_build_question(plan.describe()),
+                                   parent=self.root):
+            self.status.set("Nothing was built; nothing was changed.")
+            return
+        try:
+            artifact = store_planned_artifact(self.store, plan)
+        except ArtifactError as exc:
+            self._set_artifact_plan(None)
+            messagebox.showerror("Document not built", str(exc), parent=self.root)
+            self.status.set("That document was not built; nothing was stored.")
+            self._refresh_artifacts()
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._set_artifact_plan(None)
+        self._refresh_artifacts()
+        if artifact.artifact_id in self._artifact_reports:
+            self.artifacts_tree.selection_set(artifact.artifact_id)
+            self._on_artifact_selection()
+        self.status.set(artifact_built_text(artifact.artifact_id, plan.gaps, plan.listing_gaps))
+
+    def _export_selected_artifact(self) -> None:
+        """Write the selected document to a file the person names, with its provenance above it.
+
+        Three things this deliberately does not do: overwrite anything (an existing name is refused
+        outright, because the file most likely to be named by mistake is the résumé the document was
+        built from), export a document whose facts or strategy have moved on, and send anything
+        anywhere - the file is written on this machine, readable only by its owner.
+        """
+        artifact_id = self._selected_artifact_id()
+        if artifact_id is None:
+            self.status.set("Select a document in the list first; nothing was changed.")
+            return
+        report = self._artifact_reports.get(artifact_id)
+        if report is not None and not report.is_current:
+            self._record("artifact.export.refused", f"id={artifact_id} reason=stale")
+            messagebox.showerror(
+                "This document is out of date",
+                artifact_export_refusal_text(artifact_id, report.summary()), parent=self.root)
+            self.status.set(f"{artifact_id} is out of date and was not written out.")
+            return
+        chosen = filedialog.asksaveasfilename(
+            parent=self.root, title="Save a copy of this document",
+            defaultextension=".txt", initialfile=f"{artifact_id}.txt",
+            filetypes=[("Text file", "*.txt"), ("All files", "*.*")])
+        if not chosen:
+            self.status.set("Nothing was written out; nothing was changed.")
+            return
+        if not messagebox.askyesno("Save a copy", artifact_export_question(chosen, artifact_id),
+                                   parent=self.root):
+            self.status.set("Nothing was written out; nothing was changed.")
+            return
+        try:
+            export = export_artifact(self.store, artifact_id, chosen)
+        except StaleArtifactError as exc:
+            self._record("artifact.export.refused", f"id={artifact_id} reason=stale")
+            messagebox.showerror("This document is out of date",
+                                 artifact_export_refusal_text(artifact_id, exc.report.summary()),
+                                 parent=self.root)
+            self.status.set(f"{artifact_id} is out of date and was not written out.")
+            self._refresh_artifacts()
+            return
+        except ArtifactError as exc:
+            self._record("artifact.export.refused", f"id={artifact_id} reason=refused")
+            messagebox.showerror("Document not saved", str(exc), parent=self.root)
+            self.status.set("That document was not written out; nothing was changed.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self._record("artifact.exported", f"id={artifact_id} characters={export.characters}")
+        self.status.set(artifact_export_text(export.path, export.characters))
 
     def _selected_artifact_id(self) -> str | None:
         """The document selected in the list, or ``None``. Does no database lookup on purpose."""
@@ -2488,6 +2722,11 @@ class CareerAgentApp:
         report = self._artifact_reports.get(artifact_id) if artifact_id else None
         for button in (self.check_artifact_button, self.rebuild_artifact_button):
             button.configure(state="normal" if report is not None else "disabled")
+        # Saving a copy is offered only for a document that is still current: a stale one is refused
+        # by the export anyway, and a live button that always refuses is a worse answer than a dead
+        # one next to a row that says why.
+        self.export_artifact_button.configure(
+            state="normal" if report is not None and report.is_current else "disabled")
         if report is None:
             self.artifact_detail.set("Select a document to see what it was built from.")
             return

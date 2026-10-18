@@ -731,6 +731,140 @@ def artifact_rebuild_text(artifact_id: str, replaced_id: str, gaps: Iterable[str
     return line
 
 
+# ---------------------------------------------------------------- tailored documents: building one
+#
+# The sentences for the path that makes a *first* document: pick what it is built from, read what
+# would be used, store exactly that, write a copy out. They are here rather than in the window for
+# the usual reason - what somebody reads before they press a button is part of the decision, and a
+# sentence only reachable through a dialog is a sentence nobody tests. None of them builds, stores
+# or writes anything; they describe a proposal or report what already happened.
+
+#: Offered as the thing to build. Screening answers are deliberately absent: the artifact layer
+#: refuses to generate them, because an invented answer to "why do you want this job" is exactly the
+#: kind of plausible sentence this application must never put in somebody's mouth.
+ARTIFACT_BUILD_KINDS = ("tailored_resume", "cover_letter")
+
+
+def artifact_listing_choices(listings: Iterable[object]) -> tuple[str, ...]:
+    """The listings offered to build a document for, newest-looking name first.
+
+    The identifier is carried in the line itself because the window needs it back from a combobox
+    that can only hold strings; :func:`artifact_id_from_choice` is the other half.
+    """
+    offered = []
+    for listing in listings:
+        listing_id = str(getattr(listing, "listing_id", "") or "").strip()
+        if not listing_id:
+            continue
+        role = str(getattr(listing, "role_title", "") or "").strip() or "untitled role"
+        employer = str(getattr(listing, "employer_name", "") or "").strip() or "unnamed employer"
+        offered.append(f"{role} — {employer} [{listing_id}]")
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def artifact_strategy_choices(strategies: Iterable[object]) -> tuple[str, ...]:
+    """The strategies offered to build under, each showing the version a document would be tied to."""
+    offered = []
+    for strategy in strategies:
+        strategy_id = str(getattr(strategy, "strategy_id", "") or "").strip()
+        if not strategy_id:
+            continue
+        name = str(getattr(strategy, "name", "") or "").strip() or "unnamed strategy"
+        version = getattr(strategy, "version", "")
+        offered.append(f"{name} (version {version}) [{strategy_id}]")
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def artifact_id_from_choice(choice: str) -> str:
+    """The identifier out of a ``... [id]`` line, or an empty string if the line has none."""
+    text = str(choice or "").strip()
+    if text.endswith("]") and "[" in text:
+        return text[text.rindex("[") + 1:-1].strip()
+    return ""
+
+
+def artifact_build_preamble(listings: int, strategies: int, has_profile: bool) -> str:
+    """What the building controls say before anything is chosen - including why they are unusable."""
+    if not has_profile:
+        return ("Save your profile first: a tailored document is written from your saved facts, and "
+                "there are none to read yet.")
+    if listings == 0 and strategies == 0:
+        return ("Add a job listing and a role strategy first. A document is built for one listing "
+                "under one strategy version, and neither is stored yet.")
+    if listings == 0:
+        return ("Add a job listing first. A document is built for one listing, and none is stored "
+                "yet.")
+    if strategies == 0:
+        return ("Add a role strategy first. A document is built under one strategy version, so "
+                "what it leads with can be traced back to a preference you set.")
+    return ("Choose a listing, a strategy and what to build, then read what would be used before "
+            "anything is stored. The document is written here, from your saved facts only.")
+
+
+def artifact_plan_text(lines: Iterable[str]) -> str:
+    """The preview block: the plan's own lines, shown as they are."""
+    body = "\n".join(line for line in lines if line)
+    return body or "Nothing to preview."
+
+
+def artifact_build_question(lines: Iterable[str]) -> str:
+    """The confirmation shown before a previewed document is stored.
+
+    It repeats the preview rather than summarising it: the whole point of the pairing is that what
+    gets stored is what somebody read, so the last thing they see before saying yes is that text.
+    """
+    return ("Store this document?\n\n"
+            + "\n".join(line for line in lines if line)
+            + "\n\nIt is written from the facts above and kept on this machine. Nothing is sent "
+              "anywhere, and your original résumé file is not touched.")
+
+
+def artifact_built_text(artifact_id: str, gaps: Iterable[str],
+                        listing_gaps: Iterable[str] = ()) -> str:
+    """What to say after a first document is stored: its identifier, and what it refused to claim.
+
+    The two kinds of gap are said separately because they mean different things to the person
+    reading: ``gaps`` is what the strategy asks for, ``listing_gaps`` is what this employer asks
+    for. Neither was written into the document, and the sentence says so rather than leaving the
+    silence to be read as a claim.
+    """
+    missing = [gap for gap in gaps if gap]
+    unstated = [gap for gap in listing_gaps if gap]
+    line = (f"Stored as document {artifact_id}. It is listed below with the listing, strategy "
+            "version and source file it was built from.")
+    if missing:
+        line += (" Your saved facts do not state " + ", ".join(missing)
+                 + ", so the document does not claim them.")
+    if unstated:
+        line += (" This listing also asks for " + ", ".join(unstated)
+                 + ", which your saved facts do not state either.")
+    return line
+
+
+def artifact_export_question(path: str, artifact_id: str) -> str:
+    """The confirmation before a stored document is written to a file the person named."""
+    return (f"Write document {artifact_id} to {path}?\n\n"
+            "The file gets a short header saying which listing, strategy version and source file "
+            "it came from, then the document itself. It is written for you to read only, and an "
+            "existing file is never written over - if that name is already taken, nothing happens "
+            "and you can choose another.")
+
+
+def artifact_export_text(path: str, characters: int) -> str:
+    """What to say after a document has been written out."""
+    size = "1 character" if characters == 1 else f"{characters} characters"
+    return (f"Written to {path} ({size}), readable only by you. The stored document is unchanged "
+            "and nothing was sent anywhere.")
+
+
+def artifact_export_refusal_text(artifact_id: str, reasons: Iterable[str]) -> str:
+    """Why a document was not written out: the lineage reasons, in the window's own words."""
+    moved = "; ".join(reason for reason in reasons if reason)
+    return (f"Document {artifact_id} was not written out: {moved or 'it is no longer current'}. "
+            "Exporting it would put a document in a folder with nothing to say it is out of date. "
+            "Rebuild it from your current facts first.")
+
+
 # ---------------------------------------------------------------- standing authorisation
 #
 # The window's words for the policy. They live here, Tk-free, for the same reason the artifact

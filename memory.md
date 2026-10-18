@@ -4132,3 +4132,31 @@ trimmed (this box stops messages rather than addressing one), an address already
 reason and writes nothing, and the Follow-ups recipient chooser drops the address at once. 6 handler
 tests, 3 text tests, acceptance L21-L22 (147 checks, 0 failed), suite 2640 OK (skipped=13). Note:
 `research/an-address-you-never-imported-2026-10-18.md`.
+
+## A document nobody could make, 2026-10-18
+
+The lineage rules were enforced on objects the application could not create. `tailored_resume_document`
+and `cover_letter_document` had two callers between them: `rebuild_artifact`, which needs a document to
+already exist, and the acceptance script, which manufactured one through the store so workflow M would
+have a row to test refusals on. The tab offered *Check before use* and *Rebuild…* in front of a list a
+real user could only ever see empty.
+
+Now there is one path: choose a listing, a strategy and a kind; **Show what would be used…** (writes
+nothing) lists the facts, the file they were read from, the unconfirmed ones and what is missing - the
+strategy's requirements and, separately, the listing's; **Build this document…** stores *exactly* the
+plan that was read, refusing if the strategy version moved, the facts moved, the listing went away, the
+choices changed after the preview, or an identical document already exists (named, not duplicated);
+**Save a copy to a file…** writes a provenance header above the document through the owner-only
+`create_private_file(..., exclusive=True)`. An existing file is refused outright with no replace prompt:
+the file most likely to be chosen by accident is the résumé this was built from. A stale document cannot
+be exported at all.
+
+Two things fell out of actually using it. `cover_letter_document` had always written "My profile states
+1.0 of experience." - harmless while nothing could build one, the first sentence a reader sees now; the
+fact is years, so it says years. And acceptance K5 read labels with `cget("text")`, which is empty for a
+label bound to a `textvariable`, so a perfectly readable label counted as no label; `visible_text()` now
+falls back to the variable.
+
+23 artifact tests, 16 handler tests, 11 text tests, acceptance M6-M12 (154 checks, 0 failed, still
+BLOCKED because a stand-in is not a display), suite 2690 OK (skipped=13). Note:
+`research/the-first-tailored-document-2026-10-18.md`.

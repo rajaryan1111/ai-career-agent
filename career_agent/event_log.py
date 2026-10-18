@@ -137,6 +137,11 @@ EVENTS: tuple[str, ...] = (
     # employer and role, and every fact value stay out of the log.
     "artifact.saved",
     "artifact.deleted",
+    # A copy written out to a file the person named. The identifier and the size are recorded; the
+    # path is not - a folder name is as personal as anything else on their disk, and the question the
+    # log has to answer later is "was a copy made of this document", not "where is it now".
+    "artifact.exported",
+    "artifact.export.refused",
     "backup.written",
     "backup.refused",
     "restore.completed",

@@ -297,6 +297,28 @@ def find_widgets(parent, *, klass: str | None = None, text: str | None = None) -
     return matches
 
 
+def visible_text(widget) -> str:
+    """What a widget shows, whether it was given fixed text or a variable to follow.
+
+    A label built with ``textvariable=`` has no ``text`` option: real Tk answers "" for it and the
+    stand-in module refuses the option outright, so reading ``cget("text")`` alone reports a label
+    that a person can plainly read as carrying nothing. The variable's current value is the honest
+    answer in that case.
+    """
+    for option in ("text", "textvariable"):
+        try:
+            value = widget.cget(option)
+        except Exception:  # noqa: BLE001 - a widget without the option simply has no text this way
+            continue
+        if option == "textvariable" and value not in (None, ""):
+            getter = getattr(value, "get", None)
+            value = getter() if callable(getter) else value
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def find_widget(parent, *, klass: str | None = None, text: str | None = None, what: str = "widget"):
     """Exactly one matching widget, or a failure that says what was looked for and what was there."""
     matches = find_widgets(parent, klass=klass, text=text)
@@ -3447,6 +3469,9 @@ def workflow_m_tailored_documents(run: Run) -> None:
     stays exactly as it was. Every fact, listing and strategy here is synthetic and local; nothing on
     this tab sends anything anywhere.
     """
+    import os  # noqa: PLC0415 - one check asks what this platform's file modes can express
+    import stat  # noqa: PLC0415 - and reads the mode of the file that was written
+
     from career_agent.artifacts import ArtifactKind, capture_basis  # noqa: PLC0415 - only this workflow
     from career_agent.core import (  # noqa: PLC0415 - the synthetic profile and listing
         Availability, CandidateProfile, FactSource, JobListing,
@@ -3550,6 +3575,185 @@ def workflow_m_tailored_documents(run: Run) -> None:
         require(len(app.store.list_tailored_artifacts()) == 2,
                 "a declined confirmation wrote a document")
         require("cancelled" in app.status.get(), f"the status line says {app.status.get()!r}")
+
+    # ---- building a first document from the window, and writing it out -----------------------
+    #
+    # Everything above starts from a document this script put in the database itself. What follows is
+    # the path a person actually has: choose what it is for, read what would be used, store exactly
+    # that, then save a copy. The checks are about the places where that could quietly lie - a stored
+    # document that is not the one that was previewed, a second identical copy, an export landing on
+    # top of the résumé it was built from, and a stale document written out with nothing saying so.
+    second_listing = JobListing(
+        listing_id="acceptance-m2", source_id="manual", source_name="Manual entry",
+        source_listing_url="https://jobs.example.invalid/role/m2", employer_name="Second Employer",
+        role_title="Machine Learning Engineer", availability_status=Availability.OPEN,
+        required_skills=frozenset({"Python", "Kubernetes"}), location_text="Delhi, India")
+    app.store.save_job(second_listing)
+
+    def offered(box, identifier: str, what: str) -> str:
+        """The line in a chooser that carries this identifier, or a failure naming what was offered."""
+        values = [str(choice) for choice in box.cget("values")]
+        matching = [choice for choice in values if identifier in choice]
+        if len(matching) != 1:
+            raise SmokeFailure(
+                f"the {what} chooser offers {len(matching)} line(s) for {identifier}: {values!r}")
+        return matching[0]
+
+    with results.step("M6 the building controls offer what is stored, and a preview writes nothing"):
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        require("Choose a listing" in app.artifact_build_note.get(),
+                f"the building controls say {app.artifact_build_note.get()!r}")
+        listing_choice = offered(app.artifact_listing_box, second_listing.listing_id, "listing")
+        strategy_choice = offered(app.artifact_strategy_box, strategy.strategy_id, "strategy")
+        require("Machine Learning Engineer" in listing_choice,
+                f"the listing is offered as {listing_choice!r}, which does not name the role")
+        require(f"version {strategy.version}" in strategy_choice,
+                f"the strategy is offered as {strategy_choice!r}, which does not name the version")
+        choose_in(app.artifacts_tab, app.artifact_listing_choice, str(listing_choice),
+                  what="the listing to build for")
+        choose_in(app.artifacts_tab, app.artifact_strategy_choice, str(strategy_choice),
+                  what="the strategy to build under")
+        choose_in(app.artifacts_tab, app.artifact_kind_choice, "Tailored resume",
+                  what="the kind of document")
+        before = app.store._connection.total_changes
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        shown = app.artifact_plan_box.get("1.0", "end")
+        require("acceptance-resume.docx" in shown,
+                f"the preview does not name the file the facts were read from: {shown!r}")
+        require(f"version {strategy.version}" in shown,
+                f"the preview does not name the strategy version: {shown!r}")
+        require("Kubernetes" in shown,
+                f"the preview does not report the requirement the facts do not state: {shown!r}")
+        require(app.store._connection.total_changes == before, "previewing changed the database")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "previewing stored a document")
+
+    with results.step("M7 building asks first, and a declined confirmation stores nothing"):
+        policy.reset()
+        policy.answers["Build this document"] = False
+        before = app.store._connection.total_changes
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require("Build this document" in policy.titles("askyesno"),
+                f"the build was not confirmed first; dialogs: {policy.titles()!r}")
+        said = policy.said("Build this document")
+        require("acceptance-resume.docx" in said,
+                "the confirmation does not repeat what the document would be built from")
+        require("not touched" in said, "the confirmation does not say the résumé file is left alone")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a declined confirmation stored a document")
+
+    with results.step("M8 accepting stores exactly the document that was previewed"):
+        policy.reset()
+        policy.answers["Build this document"] = True
+        previewed = app.artifact_plan_box.get("1.0", "end")
+        stored_before = {item.artifact_id for item in app.store.list_tailored_artifacts()}
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        built_ids = {item.artifact_id for item in app.store.list_tailored_artifacts()} - stored_before
+        require(len(built_ids) == 1, f"building wrote {len(built_ids)} document(s)")
+        built_id = built_ids.pop()
+        built = app.store.get_tailored_artifact(built_id)
+        require(built.listing_id == second_listing.listing_id,
+                f"the document was stored for {built.listing_id!r}")
+        require(built.strategy_version == strategy.version,
+                f"it was stored under version {built.strategy_version}")
+        require(built.basis.fact_documents.get("skills") == "acceptance-resume.docx",
+                f"it does not record the file its facts came from: {built.basis.fact_documents!r}")
+        require("Kubernetes" not in built.content,
+                "the document claims a skill the saved facts do not state")
+        require(built_id in app.status.get(),
+                f"the status line does not name the document: {app.status.get()!r}")
+        require("Kubernetes" in app.status.get(),
+                f"the gap the document refused to invent was not reported: {app.status.get()!r}")
+        require(row_of(built_id)["state"] == "Current",
+                f"the new document reads as {row_of(built_id)['state']!r}")
+        require(row_of(built_id)["cited"] == "acceptance-resume.docx",
+                f"the row does not cite the résumé: {row_of(built_id)['cited']!r}")
+        for word in ("Skills for this role", "Experience"):
+            require(word in previewed or word in built.content,
+                    f"the stored document does not match what was previewed ({word!r} missing)")
+
+    with results.step("M9 an identical document is reported, not stored a second time"):
+        policy.reset()
+        stored_before = len(app.store.list_tailored_artifacts())
+        press(app.artifacts_tab, "Show what would be used...", workspace.root)
+        require(built_id in app.artifact_plan_box.get("1.0", "end"),
+                "the preview does not name the identical document already stored")
+        require(built_id in app.status.get(),
+                f"the status line does not name the existing document: {app.status.get()!r}")
+        require(str(app.build_artifact_button.cget("state")) == "disabled",
+                "the window still offers to store a second copy of the same document")
+        press(app.artifacts_tab, "Build this document...", workspace.root)
+        require(len(app.store.list_tailored_artifacts()) == stored_before,
+                "a second identical document was stored anyway")
+
+    with results.step("M10 saving a copy writes one new file with its provenance, and nothing else"):
+        policy.reset()
+        decoy = workspace.folder / "acceptance-resume.docx"
+        decoy.write_bytes(b"the candidate's own resume file")
+        target = workspace.folder / "acceptance-tailored.txt"
+        app.artifacts_tree.selection_set(built_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "normal",
+                "a current document cannot be saved to a file")
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(target)],
+                         workspace.root)
+        require("Save a copy" in policy.titles("askyesno"),
+                f"the file was written without asking; dialogs: {policy.titles()!r}")
+        require(target.is_file(), "no file was written")
+        written = target.read_text(encoding="utf-8")
+        require(built_id in written, "the file does not say which document it is")
+        require(f"version {strategy.version}" in written,
+                "the file does not say which strategy version it was built under")
+        require("acceptance-resume.docx" in written,
+                "the file does not say which résumé the facts came from")
+        require("nothing was sent anywhere" in written,
+                "the file does not say that nothing was sent anywhere")
+        require(written.rstrip().endswith(built.content.rstrip()),
+                "the document itself is not in the file below its provenance")
+        require(decoy.read_bytes() == b"the candidate's own resume file",
+                "the résumé the document was built from was modified")
+        if os.name != "nt":
+            mode = stat.S_IMODE(target.stat().st_mode)
+            require(mode & 0o077 == 0, f"the saved document is readable by others: {mode:o}")
+
+    with results.step("M11 an existing file is refused rather than written over"):
+        policy.reset()
+        before = target.read_text(encoding="utf-8")
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(target)],
+                         workspace.root)
+        require("Document not saved" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("already exists" in policy.said("Document not saved"),
+                f"the refusal does not say why: {policy.said('Document not saved')!r}")
+        require(target.read_text(encoding="utf-8") == before, "the existing file was written over")
+
+    with results.step("M12 a document whose facts moved is not written out at all"):
+        policy.reset()
+        app.store.save_profile(
+            CandidateProfile(candidate_country="India", degree_discipline="ECE",
+                             graduation_year=2027, experience_years=4.0,
+                             work_authorization="citizen",
+                             skills=frozenset({"Python", "SQL"}),
+                             preferred_locations=frozenset({"Delhi"})))
+        press(app.artifacts_tab, "Refresh", workspace.root)
+        app.artifacts_tree.selection_set(built_id)
+        workspace.root.update()
+        require(str(app.export_artifact_button.cget("state")) == "disabled",
+                "a document that is out of date is still offered for saving")
+        stale_target = workspace.folder / "acceptance-stale.txt"
+        choose_and_press(app.artifacts_tab, "Save a copy to a file...", policy, [str(stale_target)],
+                         workspace.root)
+        require("This document is out of date" in policy.titles("showerror"),
+                f"the refusal was not shown; dialogs: {policy.titles()!r}")
+        require("experience" in policy.said("This document is out of date"),
+                "the refusal does not name what moved")
+        require(not stale_target.exists(), "a document that is out of date was written out anyway")
+        require("was not written out" in app.status.get(),
+                f"the status line says {app.status.get()!r}")
 
     workspace.close_window(host, app)
 
@@ -4526,8 +4730,8 @@ def workflow_k_layout_focus_labels(run: Run) -> None:
                 siblings = [frame] + ([parent for parent in descendants(frame)] if frame else [])
                 labelled = any(
                     getattr(sibling, "winfo_class", None) is not None
-                    and sibling.winfo_class() in ("TLabel", "Label")
-                    and str(sibling.cget("text") or "").strip()
+                    and sibling.winfo_class() in ("TLabel", "Label", "TLabelframe", "Labelframe")
+                    and visible_text(sibling)
                     for sibling in siblings
                 )
                 if not labelled:

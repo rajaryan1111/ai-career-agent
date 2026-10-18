@@ -729,6 +729,45 @@ than guessing from the listing's free text. Also, differently-spelled skill name
 same when you supply that equivalence yourself — "Postgres" and "PostgreSQL" are separate until you say
 otherwise, because guessing which names are interchangeable is how a matching tool starts lying.
 
+## Build a tailored résumé or cover letter (on this machine, from your own facts)
+
+The **Tailored documents** tab builds a document for one listing, under one role strategy, out of the
+facts you have already saved. Nothing is fetched, nothing is uploaded, and no employer ever sees
+anything the app does here.
+
+1. In **Build one**, choose the listing, the strategy (each line shows the version a document would be
+   tied to) and whether you want a tailored résumé or a cover letter.
+2. Press **Show what would be used…**. Nothing is stored yet. You get the facts the document would be
+   built from, the file those facts were read out of, the ones still marked unconfirmed, how many work
+   and study records it can draw on, and what is **missing** — the skills the strategy asks for that
+   your facts do not state, and separately the ones this listing asks for. Missing things are reported;
+   they are never written into the document.
+3. Press **Build this document…** and confirm. What gets stored is exactly the document you just read.
+   If your facts changed, or the strategy moved to a new version, or you changed what you picked while
+   you were reading, the build is **refused** with the reason and nothing is written — so a document can
+   never quietly claim a provenance it does not have.
+4. The new row appears in the list below with its listing, strategy version, when it was built, the file
+   its facts came from, and whether it is still current.
+
+**Saving a copy.** Select a row and press **Save a copy to a file…**. You get a plain-text file with a
+short header — which document it is, which listing and strategy version it was built under, when, which
+file the facts came from, which facts were unconfirmed at the time, and the fact that it was built only
+from your saved facts and sent nowhere — followed by the document itself. The file is written so that
+only you can read it.
+
+**Two refusals worth knowing about.**
+
+- **An existing file is never written over.** If the name you choose is already taken, the app refuses
+  and nothing happens, even if you meant it. The file most likely to be picked by accident is the résumé
+  the document was built from, and a replace prompt is one careless click away from losing it. Choose a
+  name that is free.
+- **A document whose facts or strategy have moved on will not be saved out**, and the row says which
+  fact or version moved. Rebuild it from your current facts first — the old document stays as history.
+
+**What it will not write.** No employment, qualification, metric, certification or project outcome you
+have not recorded. Screening-question answers are not offered at all: an answer invented by software
+and signed with your name is the one thing this app will not produce.
+
 ## Keep your own employment and education record
 
 The profile is a summary you hold in your head — a country, a discipline, a skills list, a years-of-work
