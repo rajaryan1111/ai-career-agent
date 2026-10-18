@@ -934,6 +934,27 @@ mocked into looking present — a reminder that needs somebody's credentials is 
 not faked. What it does have is the *interface* for one, with every path to a real side effect switched
 off: see [Can it send email or add things to my calendar?](#can-it-send-email-or-add-things-to-my-calendar).
 
+## What you can put conditions on
+
+The standing authorisation (the **Permissions & limits** tab, and `career_agent/policy.py` behind it) is
+a single value that says what this application may ever do. It carries seven things:
+
+| What | Means |
+| --- | --- |
+| `(source, action)` pairs | "this board, for looking" is a different permission from "this board, for applying" |
+| daily limits | required per action — an authorisation without a ceiling is not one this app will act on |
+| quiet hours | a local window, which may wrap past midnight; nothing acts and nothing is prepared inside it |
+| role conditions | terms that must appear in a role's title before it may be acted on |
+| place conditions | where a role may be |
+| attachment rules | which kinds of file may ever be attached — **with no rule, nothing may be attached** |
+| follow-up limit | how many follow-ups one job may receive in total, counted from stored attempts |
+| stop / withdraw | two ways to switch everything off, checked before anything else |
+
+Conditions fail closed in both directions: a condition that cannot be checked — because nothing described
+the job being acted on — **refuses**, and every failed condition is reported together rather than one per
+attempt. A tightened authorisation is a different authorisation: it gets its own stored version, and
+changing permissions in the window carries the conditions through untouched.
+
 ## Can it send email or add things to my calendar?
 
 Short answer: no, and it will not pretend otherwise. What exists is the interface a real integration would

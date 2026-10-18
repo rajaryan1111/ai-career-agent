@@ -18,10 +18,10 @@ from career_agent.attempts import (
 )
 from career_agent.event_log import log_path
 from career_agent.integrations import (
-    DisabledIntegration, EmailDraft, LocalMockIntegration, Outcome, authorised_dispatch,
-    guarded_dispatch,
+    COUNT_FROM_RECORDS, DisabledIntegration, EmailDraft, LocalMockIntegration, Outcome,
+    authorised_dispatch, guarded_dispatch,
 )
-from career_agent.policy import ActionKind, GlobalPolicy
+from career_agent.policy import ActionKind, GlobalPolicy, evaluate_policy
 from career_agent.store import CareerStore, StoredRecordError
 
 NOON = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
@@ -421,6 +421,140 @@ class GuardedDispatchTests(unittest.TestCase):
         self.assertEqual(
             authorised_dispatch(ledger, self.draft, policy=None, source_id="follow-ups", now=NOON,
                                 done_today=0, source_gate_allows=True).performed, False)
+
+
+class ActionSpellingTests(unittest.TestCase):
+    """One action has one name, whoever is holding it.
+
+    Regression: attempts were stored with ``str(ActionKind.DISCOVERY)`` - the literal text
+    ``"ActionKind.DISCOVERY"`` - so an attempt recorded by a caller holding the enum could never be
+    found by a caller passing ``"discovery"``. The duplicate block only works if the next caller
+    finds the row, so this is the whole feature failing quietly, not a cosmetic difference.
+    """
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.store = CareerStore(str(Path(self._temporary.name) / "spelling.sqlite3"))
+        self.addCleanup(self.store.close)
+
+    def test_an_enum_and_its_value_are_the_same_action(self):
+        self.store.begin_attempt(operation_id="op-1", identity_key="job:1",
+                                 action=ActionKind.DISCOVERY)
+        stored = self.store.get_attempt("op-1")
+        self.assertEqual(stored.action, "discovery",
+                         "the stored name must be the one everybody else uses")
+        self.assertEqual(len(self.store.list_attempts(action="discovery")), 1,
+                         "a caller holding the string must find what the enum recorded")
+        self.assertEqual(len(self.store.list_attempts(action=ActionKind.DISCOVERY)), 1)
+
+    def test_reusing_an_id_across_the_two_spellings_is_still_the_same_attempt(self):
+        first = self.store.begin_attempt(operation_id="op-1", identity_key="job:1",
+                                         action=ActionKind.DISCOVERY)
+        again = self.store.begin_attempt(operation_id="op-1", identity_key="job:1",
+                                         action="discovery")
+        self.assertEqual(first, again, "the same attempt, written one way and read the other")
+
+
+class DailyCountTests(unittest.TestCase):
+    """The count a daily limit needs, taken from rows rather than from memory."""
+
+    MIDDAY = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.store = CareerStore(str(Path(self._temporary.name) / "counting.sqlite3"))
+        self.addCleanup(self.store.close)
+
+    def attempt(self, operation_id, *, action="discovery", at=None, state=None, detail="done"):
+        record = self.store.begin_attempt(
+            operation_id=operation_id, identity_key="job:1", action=action,
+            now=(at or self.MIDDAY).isoformat())
+        if state is not None:
+            self.store.settle_attempt(operation_id, state=state, detail=detail)
+        return record
+
+    def test_nothing_recorded_is_nothing_done(self):
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 0)
+
+    def test_a_refusal_does_not_spend_the_allowance_it_protected(self):
+        self.attempt("op-1", state=AttemptState.REFUSED, detail="the gate is closed")
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 0)
+
+    def test_an_unknown_outcome_counts_because_it_may_have_happened(self):
+        self.attempt("op-1")
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 1)
+
+    def test_performed_and_failed_both_count(self):
+        self.attempt("op-1", state=AttemptState.PERFORMED)
+        self.attempt("op-2", state=AttemptState.FAILED, detail="the server said no")
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 2)
+
+    def test_each_action_has_its_own_allowance(self):
+        self.attempt("op-1", action="discovery")
+        self.attempt("op-2", action="email_send")
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 1)
+        self.assertEqual(self.store.actions_done_today(ActionKind.EMAIL_SEND, now=self.MIDDAY), 1)
+
+    def test_the_day_is_the_persons_day_not_yesterdays(self):
+        self.attempt("op-1", at=self.MIDDAY - timedelta(days=1))
+        self.attempt("op-2", at=self.MIDDAY)
+        self.assertEqual(self.store.actions_done_today("discovery", now=self.MIDDAY), 1)
+
+    def test_the_day_boundary_follows_the_timezone_of_the_moment(self):
+        """The same two instants are one day apart in Delhi and the same day in UTC."""
+        acted = datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc)   # 23:30 on the 20th in Delhi
+        asked = datetime(2026, 10, 20, 20, 0, tzinfo=timezone.utc)   # 01:30 on the 21st in Delhi
+        self.attempt("op-1", at=acted)
+        delhi = timezone(timedelta(hours=5, minutes=30))
+        self.assertEqual(self.store.actions_done_today("discovery", now=asked), 1,
+                         "in UTC both instants fall on the 20th")
+        self.assertEqual(
+            self.store.actions_done_today("discovery", now=asked.astimezone(delhi)), 0,
+            "past midnight where the person is, the allowance has reset")
+
+    def test_a_moment_without_a_timezone_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.store.actions_done_today("discovery", now=datetime(2026, 10, 20, 12, 0))
+
+    def test_a_dispatch_can_count_for_itself_rather_than_being_told(self):
+        """``COUNT_FROM_RECORDS`` closes the loop: the limit is enforced from durable rows."""
+        ledger = LocalMockIntegration()
+        policy = GlobalPolicy(allowed=frozenset({("jobicy", ActionKind.EMAIL_SEND)}),
+                              daily_limits={ActionKind.EMAIL_SEND: 1})
+        draft = EmailDraft(subject="Hello", body="A short note about the role.",
+                           listing_id="j1", recipient="someone@example.com")
+        first = guarded_dispatch(
+            self.store, ledger, draft, identity_key="job:1", policy=policy, source_id="jobicy",
+            now=self.MIDDAY, done_today=COUNT_FROM_RECORDS, source_gate_allows=True)
+        self.assertTrue(first.performed,
+                        "the first of an allowance of one is not refused for spending itself")
+        self.assertEqual(self.store.actions_done_today(ActionKind.EMAIL_SEND, now=self.MIDDAY), 1)
+
+        second = guarded_dispatch(
+            self.store, ledger,
+            EmailDraft(subject="Hello again", body="A note about a different role.",
+                       listing_id="j2", recipient="someone.else@example.com"),
+            identity_key="job:2",
+            policy=policy, source_id="jobicy", now=self.MIDDAY, done_today=COUNT_FROM_RECORDS,
+            source_gate_allows=True)
+        self.assertFalse(second.performed, "one a day is one a day, counted from the records")
+        self.assertIn("limit", second.message.lower())
+        self.assertEqual(len(ledger.ledger.records()), 1,
+                         "only the permitted one reached the local ledger")
+        self.assertEqual(self.store.actions_done_today(ActionKind.EMAIL_SEND, now=self.MIDDAY), 1,
+                         "the refusal did not consume the allowance it enforced")
+
+    def test_the_count_feeds_a_real_limit(self):
+        policy = GlobalPolicy(allowed=frozenset({("jobicy", ActionKind.DISCOVERY)}),
+                              daily_limits={ActionKind.DISCOVERY: 1})
+        self.attempt("op-1", state=AttemptState.PERFORMED)
+        decision = evaluate_policy(
+            policy, source_id="jobicy", action=ActionKind.DISCOVERY, now=self.MIDDAY,
+            done_today=self.store.actions_done_today(ActionKind.DISCOVERY, now=self.MIDDAY),
+            source_gate_allows=True)
+        self.assertFalse(decision.allowed, "one a day means the second is refused")
 
 
 if __name__ == "__main__":  # pragma: no cover

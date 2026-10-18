@@ -5,6 +5,7 @@ Domain rules, validation, and form mapping live in ``core.py``, ``store.py``,
 ``validation.py``, and ``desktop_logic.py``; this module only wires them to widgets.
 """
 from __future__ import annotations
+import dataclasses
 import json
 import sqlite3
 import uuid
@@ -1936,9 +1937,13 @@ class CareerAgentApp:
         current = self._policy_shown
         limits = dict(current.daily_limits)
         limits[action] = limit
-        updated = GlobalPolicy(
-            allowed=frozenset(current.allowed | {(source_id, action)}), daily_limits=limits,
-            quiet_hours=current.quiet_hours, stop_all=current.stop_all, revoked_at=None)
+        # Rebuilt by replacement, never field by field: a condition this window does not show yet
+        # (which roles, which places, what may be attached, how many follow-ups) must survive a
+        # change made here. Dropping one would loosen a restriction the person wrote down, which is
+        # the one kind of silent change an authorisation screen must never make.
+        updated = dataclasses.replace(
+            current, allowed=frozenset(current.allowed | {(source_id, action)}),
+            daily_limits=limits, revoked_at=None)
         self._save_policy(updated,
                           done=f"{PERMISSION_LABELS[action]} with {source_id} is permitted "
                                f"at most {limit} time(s) a day.")
@@ -1958,9 +1963,7 @@ class CareerAgentApp:
         remaining = frozenset(pair for pair in current.allowed if pair != (source_id, action))
         still_used = {kind for _source, kind in remaining}
         limits = {kind: value for kind, value in current.daily_limits.items() if kind in still_used}
-        updated = GlobalPolicy(allowed=remaining, daily_limits=limits,
-                               quiet_hours=current.quiet_hours, stop_all=current.stop_all,
-                               revoked_at=current.revoked_at)
+        updated = dataclasses.replace(current, allowed=remaining, daily_limits=limits)
         self._save_policy(updated,
                           done=f"{PERMISSION_LABELS[action]} with {source_id} is no longer permitted.")
 
@@ -1972,9 +1975,7 @@ class CareerAgentApp:
         if not messagebox.askyesno(title, policy_stop_question(stopping), parent=self.root):
             self.status.set("Nothing was changed.")
             return
-        updated = GlobalPolicy(allowed=current.allowed, daily_limits=current.daily_limits,
-                               quiet_hours=current.quiet_hours, stop_all=stopping,
-                               revoked_at=current.revoked_at)
+        updated = dataclasses.replace(current, stop_all=stopping)
         self._save_policy(updated,
                           done="Everything is stopped." if stopping
                                else "Your permissions apply again.")

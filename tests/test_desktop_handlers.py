@@ -8636,6 +8636,40 @@ class PermissionsTabTests(HandlerTestCase):
         self.assertIn("does not switch anything on", asked)
         self.assertIn("at most 3 time(s) a day", asked)
 
+    def test_a_change_here_keeps_conditions_this_tab_does_not_show(self):
+        """Regression: the tab rebuilt the policy field by field and dropped the conditions.
+
+        Role, place, attachment and follow-up conditions have no control on this tab yet. A grant,
+        a removal or the stop switch must carry them through untouched - quietly dropping one would
+        *loosen* a restriction the person wrote down, which is the one kind of silent change an
+        authorisation screen must never make.
+        """
+        from career_agent.policy import ActionKind as PermissionKind
+        from career_agent.policy import GlobalPolicy
+
+        app = self.build_window()
+        app.store.save_global_policy(GlobalPolicy(
+            allowed=frozenset({("remotive", PermissionKind.DISCOVERY)}),
+            daily_limits={PermissionKind.DISCOVERY: 1},
+            role_terms={"engineer"}, locations={"india"}, allowed_attachments={".pdf"},
+            follow_up_limit=1))
+        app._refresh_policy()
+
+        self.grant(app, limit="2")
+        after_grant = app.store.get_global_policy()
+        self.assertEqual(after_grant.role_terms, frozenset({"engineer"}))
+        self.assertEqual(after_grant.locations, frozenset({"india"}))
+        self.assertEqual(after_grant.allowed_attachments, frozenset({".pdf"}))
+        self.assertEqual(after_grant.follow_up_limit, 1)
+
+        CONFIG["Stop everything"] = True
+        app._toggle_policy_stop()
+        after_stop = app.store.get_global_policy()
+        self.assertTrue(after_stop.stop_all)
+        self.assertEqual(after_stop.role_terms, frozenset({"engineer"}),
+                         "stopping everything must not quietly widen what is permitted afterwards")
+        self.assertEqual(after_stop.follow_up_limit, 1)
+
     def test_a_granted_permission_is_stored_as_a_version_and_listed(self):
         app = self.build_window()
         self.grant(app, limit="2")

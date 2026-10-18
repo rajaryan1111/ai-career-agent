@@ -67,6 +67,47 @@ def _as_action(value: object) -> ActionKind:
 
 
 @dataclass(frozen=True)
+class PolicySubject:
+    """What one action is *about*, when the authorisation puts conditions on that.
+
+    A policy that says "only engineering roles, only in India, never attach anything but a PDF"
+    cannot be checked against the action alone - something has to describe the job being acted on.
+    This is that description, and it is deliberately separate from the policy: a caller that cannot
+    describe its subject gets a refusal rather than an exemption.
+    """
+
+    role_title: str | None = None
+    location: str | None = None
+    attachments: tuple[str, ...] = ()
+    #: How many follow-ups have already gone to this job, counted from durable records.
+    follow_ups_so_far: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attachments",
+                           tuple(str(name).strip() for name in self.attachments if str(name).strip()))
+        if self.follow_ups_so_far is not None:
+            count = self.follow_ups_so_far
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise PolicyError(
+                    f"how many follow-ups have already gone is a whole number, not {count!r}")
+
+
+def _folded_terms(values: object, *, noun: str) -> frozenset[str]:
+    """A set of comparison terms, folded once at the edge so comparisons stay boring."""
+    if values is None:
+        return frozenset()
+    if isinstance(values, str):
+        raise PolicyError(f"{noun} are a collection of terms, not one string")
+    terms = set()
+    for value in values:
+        text = str(value or "").strip().casefold()
+        if not text:
+            raise PolicyError(f"{noun} cannot contain an empty term")
+        terms.add(text)
+    return frozenset(terms)
+
+
+@dataclass(frozen=True)
 class GlobalPolicy:
     """What the person has standing-authorised, as one value.
 
@@ -83,6 +124,14 @@ class GlobalPolicy:
     quiet_hours: tuple[int, int] | None = None
     stop_all: bool = False
     revoked_at: str | None = None
+    #: Terms that must appear in a role's title before it may be acted on. Empty means no condition.
+    role_terms: frozenset[str] = field(default_factory=frozenset)
+    #: Places a role may be in. Empty means no condition; a named place must appear in the location.
+    locations: frozenset[str] = field(default_factory=frozenset)
+    #: File endings that may be attached (``{".pdf"}``). Empty means *nothing* may be attached.
+    allowed_attachments: frozenset[str] = field(default_factory=frozenset)
+    #: How many follow-ups one job may receive in total. ``None`` means no condition is recorded.
+    follow_up_limit: int | None = None
 
     def __post_init__(self) -> None:
         pairs: set[tuple[str, ActionKind]] = set()
@@ -125,6 +174,19 @@ class GlobalPolicy:
         if self.revoked_at is not None and not str(self.revoked_at).strip():
             raise PolicyError("a revoked policy records when it was revoked")
 
+        object.__setattr__(self, "role_terms",
+                           _folded_terms(self.role_terms, noun="role conditions"))
+        object.__setattr__(self, "locations",
+                           _folded_terms(self.locations, noun="location conditions"))
+        endings = _folded_terms(self.allowed_attachments, noun="attachment rules")
+        object.__setattr__(self, "allowed_attachments",
+                           frozenset(e if e.startswith(".") else f".{e}" for e in endings))
+        if self.follow_up_limit is not None:
+            limit = self.follow_up_limit
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                raise PolicyError(
+                    f"a follow-up limit is a whole number of messages per job, not {limit!r}")
+
     def content_key(self) -> str:
         """A stable rendering of the authorisation itself, so "nothing changed" can be recognised.
 
@@ -141,6 +203,10 @@ class GlobalPolicy:
                 "quiet_hours": list(self.quiet_hours) if self.quiet_hours else None,
                 "stop_all": self.stop_all,
                 "revoked_at": self.revoked_at,
+                "role_terms": sorted(self.role_terms),
+                "locations": sorted(self.locations),
+                "allowed_attachments": sorted(self.allowed_attachments),
+                "follow_up_limit": self.follow_up_limit,
             },
             sort_keys=True, ensure_ascii=False,
         )
@@ -192,8 +258,64 @@ def _in_quiet_hours(moment: datetime, quiet_hours: tuple[int, int]) -> bool:
     return hour >= start or hour < until
 
 
+def _condition_refusals(policy: GlobalPolicy, subject: PolicySubject | None) -> list[str]:
+    """Every way the thing being acted on fails the conditions the person wrote down.
+
+    Fails closed in both directions: a condition with nothing to check it against refuses, and an
+    attachment with no rule permitting it refuses. The alternative - acting because the caller
+    forgot to describe what it was acting on - is the failure mode this whole module exists to
+    prevent.
+    """
+    refusals: list[str] = []
+    has_conditions = bool(policy.role_terms or policy.locations or policy.allowed_attachments
+                          or policy.follow_up_limit is not None)
+    if not has_conditions:
+        return refusals
+    if subject is None:
+        return ["the standing authorisation puts conditions on which jobs may be acted on, and "
+                "nothing described the job this action is about"]
+    if policy.role_terms:
+        title = (subject.role_title or "").strip().casefold()
+        if not title:
+            refusals.append("the authorisation names which roles may be acted on, and this action "
+                            "carries no role title to check")
+        elif not any(term in title for term in policy.role_terms):
+            refusals.append(
+                f"'{subject.role_title}' matches none of the roles you authorised "
+                f"({', '.join(sorted(policy.role_terms))})")
+    if policy.locations:
+        where = (subject.location or "").strip().casefold()
+        if not where:
+            refusals.append("the authorisation names where roles may be, and this action carries "
+                            "no location to check")
+        elif not any(place in where for place in policy.locations):
+            refusals.append(
+                f"'{subject.location}' is not one of the places you authorised "
+                f"({', '.join(sorted(policy.locations))})")
+    for name in subject.attachments:
+        ending = name[name.rfind("."):].casefold() if "." in name else ""
+        if not policy.allowed_attachments:
+            refusals.append(f"nothing may be attached: no attachment rule is recorded, and "
+                            f"'{name}' would be the first")
+        elif ending not in policy.allowed_attachments:
+            refusals.append(
+                f"'{name}' is not a kind of file you authorised attaching "
+                f"({', '.join(sorted(policy.allowed_attachments))})")
+    if policy.follow_up_limit is not None:
+        sent = subject.follow_ups_so_far
+        if sent is None:
+            refusals.append("a follow-up limit is recorded, and nobody counted how many have "
+                            "already gone to this job")
+        elif sent >= policy.follow_up_limit:
+            refusals.append(
+                f"this job has already had {sent} follow-up(s), and you allowed "
+                f"{policy.follow_up_limit}")
+    return refusals
+
+
 def evaluate_policy(policy: GlobalPolicy, *, source_id: str, action: object, now: datetime,
-                    done_today: int, source_gate_allows: bool) -> PolicyDecision:
+                    done_today: int, source_gate_allows: bool,
+                    subject: PolicySubject | None = None) -> PolicyDecision:
     """Decide whether one external action may run **now**, failing closed on anything unnamed.
 
     ``source_gate_allows`` is the answer from the source's own permission and quality gate
@@ -241,6 +363,7 @@ def evaluate_policy(policy: GlobalPolicy, *, source_id: str, action: object, now
         refusals.append(
             f"today's limit of {limit} for {ACTION_LABELS[kind]} ({kind.value}) is already reached "
             f"({done_today} so far)")
+    refusals.extend(_condition_refusals(policy, subject))
     return PolicyDecision(allowed=not refusals, source_id=source_id, action=kind,
                           refusals=tuple(refusals))
 
@@ -271,7 +394,8 @@ def policy_from_payload(payload: str) -> GlobalPolicy:
     if not isinstance(content, dict):
         raise PolicyError(f"a stored policy is a JSON object, not {type(content).__name__}")
     unknown = sorted(set(content) - {"allowed", "daily_limits", "quiet_hours", "stop_all",
-                                     "revoked_at"})
+                                     "revoked_at", "role_terms", "locations",
+                                     "allowed_attachments", "follow_up_limit"})
     if unknown:
         raise PolicyError(
             f"a stored policy holds field(s) this version does not know: {', '.join(unknown)}")
@@ -297,8 +421,19 @@ def policy_from_payload(payload: str) -> GlobalPolicy:
     revoked_at = content.get("revoked_at")
     if revoked_at is not None and not isinstance(revoked_at, str):
         raise PolicyError("a stored policy records its revocation as a timestamp")
+    conditions: dict[str, object] = {}
+    for name in ("role_terms", "locations", "allowed_attachments"):
+        stored = content.get(name, [])
+        if not isinstance(stored, list):
+            raise PolicyError(f"a stored policy carries {name.replace('_', ' ')} as a list")
+        conditions[name] = frozenset(str(term) for term in stored)
+    follow_up_limit = content.get("follow_up_limit")
+    if follow_up_limit is not None and (isinstance(follow_up_limit, bool)
+                                        or not isinstance(follow_up_limit, int)):
+        raise PolicyError("a stored follow-up limit is a whole number of messages per job")
     return GlobalPolicy(
         allowed=frozenset(allowed),
         daily_limits={_as_action(name): limit for name, limit in limits.items()},
         quiet_hours=quiet, stop_all=stop_all, revoked_at=revoked_at,
+        follow_up_limit=follow_up_limit, **conditions,
     )

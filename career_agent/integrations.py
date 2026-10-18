@@ -55,7 +55,9 @@ from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_chec
 
 from .attempts import AttemptError, AttemptState, may_attempt, state_from_outcome
 from .followups import FollowUpReminder, event_summary, event_uid
-from .policy import ActionKind, GlobalPolicy, PolicyError, evaluate_policy, no_authorisation
+from .policy import (
+    ActionKind, GlobalPolicy, PolicyError, PolicySubject, evaluate_policy, no_authorisation,
+)
 from .store import write_private_text_file
 
 #: The longest a subject line may be. Long enough for a real subject, short enough to stay a subject.
@@ -905,6 +907,7 @@ def authorised_dispatch(
     now: datetime,
     done_today: int | None,
     source_gate_allows: bool,
+    subject: PolicySubject | None = None,
     attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> IntegrationResult:
     """Dispatch a request **only** when the standing authorisation and the enabling gate both permit it.
@@ -943,7 +946,7 @@ def authorised_dispatch(
     decision = evaluate_policy(
         policy if policy is not None else no_authorisation(),
         source_id=source_id, action=action, now=now,
-        done_today=done_today or 0, source_gate_allows=source_gate_allows)
+        done_today=done_today or 0, source_gate_allows=source_gate_allows, subject=subject)
     if not decision.allowed:
         return IntegrationResult(
             outcome=Outcome.DISABLED, operation_id=operation_id,
@@ -953,14 +956,20 @@ def authorised_dispatch(
     return dispatch_with_retry(integration, request, attempts=attempts)
 
 
+#: Pass as ``done_today`` to have :func:`guarded_dispatch` count the day's actions from the stored
+#: attempt rows instead of being told. ``None`` keeps its meaning - *nobody counted* - and refuses.
+COUNT_FROM_RECORDS = "count-from-records"
+
+
 def guarded_dispatch(
     store, integration: Integration, request: EmailDraft, *,
     identity_key: str,
     policy: GlobalPolicy | None,
     source_id: str,
     now: datetime,
-    done_today: int | None,
+    done_today: int | str | None,
     source_gate_allows: bool,
+    subject: PolicySubject | None = None,
     attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> IntegrationResult:
     """Dispatch at most once per job identity, writing the attempt down before it is made.
@@ -995,19 +1004,34 @@ def guarded_dispatch(
             performed=False,
             message="Nothing was sent: this request carries no operation id, and without one a "
                     "repeat could not be told from a first attempt.")
+    if done_today is COUNT_FROM_RECORDS:
+        # Counted before this attempt's own row exists, or an allowance of one would refuse the
+        # first action of the day for having already spent itself.
+        done_today = store.actions_done_today(action, now=now)
     recorded = store.list_attempts(identity_key=identity, action=action)
+    if (policy is not None and policy.follow_up_limit is not None
+            and (subject is None or subject.follow_ups_so_far is None)):
+        # The limit is per job, so the count is per job identity, and it comes from the rows rather
+        # than from the caller's memory of what it sent.
+        already = sum(1 for attempt in recorded if attempt.state is not AttemptState.REFUSED)
+        subject = (replace(subject, follow_ups_so_far=already) if subject is not None
+                   else PolicySubject(follow_ups_so_far=already))
     decision = may_attempt(recorded, identity_key=identity, action=action)
     if not decision.allowed:
         return IntegrationResult(
             outcome=Outcome.INVALID, operation_id=operation_id, integration_name=integration.name,
             performed=False, message=decision.describe(),
             detail="; ".join(decision.blocking_operation_ids))
-    store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action)
+    # The attempt is stamped with the moment the policy was judged at, not with whatever the clock
+    # says a few milliseconds later: a limit evaluated for one day must be counted against that day.
+    moment = now.isoformat() if isinstance(now, datetime) else None
+    store.begin_attempt(operation_id=operation_id, identity_key=identity, action=action, now=moment)
     result = authorised_dispatch(
         integration, request, policy=policy, source_id=source_id, now=now,
-        done_today=done_today, source_gate_allows=source_gate_allows, attempts=attempts)
+        done_today=done_today, source_gate_allows=source_gate_allows, subject=subject,
+        attempts=attempts)
     state = state_from_outcome(result.outcome.value, performed=result.performed)
-    store.settle_attempt(operation_id, state=state, detail=result.message[:300])
+    store.settle_attempt(operation_id, state=state, detail=result.message[:300], now=moment)
     if state is AttemptState.UNKNOWN:
         return replace(
             result,

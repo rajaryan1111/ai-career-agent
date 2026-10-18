@@ -3938,6 +3938,44 @@ class CareerStore:
         self._record("policy.revoked", f"version={version}")
         return version
 
+    def actions_done_today(self, action: object, *, now: datetime | None = None) -> int:
+        """How many attempts at ``action`` were made on the calendar day of ``now``.
+
+        This is the count a daily limit needs, taken from durable rows rather than from a counter
+        somebody keeps in memory and loses on restart. Two decisions are deliberate:
+
+        * **A refusal does not consume quota.** A refused attempt never left this machine, so
+          counting it would let the permission rules spend the allowance they just protected.
+        * **An unknown outcome does.** If this application may have acted and nobody established
+          what happened, the honest assumption is that it did - the alternative silently doubles a
+          limit every time an outcome goes unconfirmed.
+
+        The day is the calendar day of ``now`` in ``now``'s own timezone, so a limit resets at the
+        person's midnight rather than at UTC's.
+        """
+        moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            raise ValueError("Counting a day's actions needs a moment that carries its timezone.")
+        name = self._action_name(action)
+        if not name:
+            raise ValueError("Counting a day's actions needs the action to count.")
+        today = moment.date()
+        counted = 0
+        for record in self.list_attempts(action=name):
+            if record.state is AttemptState.REFUSED:
+                continue
+            try:
+                started = datetime.fromisoformat(record.started_at)
+            except ValueError:
+                raise StoredRecordError(
+                    "attempt", f"{record.operation_id} records a start time that cannot be read, "
+                               f"so today's actions cannot be counted") from None
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if started.astimezone(moment.tzinfo).date() == today:
+                counted += 1
+        return counted
+
     # ------------------------------------------------------------------ the person's settings
 
     #: The stored names this build knows. A name outside this set is refused rather than kept, so a
@@ -4023,7 +4061,7 @@ class CareerStore:
         the two cannot be the same attempt.
         """
         identity = str(identity_key or "").strip()
-        name = str(action or "").strip()
+        name = self._action_name(action)
         key = str(operation_id or "").strip()
         if not key or not identity or not name:
             raise AttemptError(
@@ -4140,7 +4178,7 @@ class CareerStore:
             values.append(str(identity_key).strip())
         if action is not None:
             clauses.append("action = ?")
-            values.append(str(action).strip())
+            values.append(self._action_name(action))
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY started_at, operation_id"
@@ -4150,6 +4188,19 @@ class CareerStore:
     def unresolved_attempts(self) -> tuple[AttemptRecord, ...]:
         """Attempts whose outcome was never established. These are what block further attempts."""
         return tuple(record for record in self.list_attempts() if record.is_unresolved)
+
+    @staticmethod
+    def _action_name(action: object) -> str:
+        """The one spelling of an action name, whether an enum or a string was handed over.
+
+        ``str(ActionKind.DISCOVERY)`` is ``"ActionKind.DISCOVERY"``, which is not what anybody else
+        calls that action. Storing it would mean an attempt recorded by a caller holding the enum
+        could never be found by a caller holding the string ``"discovery"`` - and the whole point of
+        the attempt record is that the *next* caller finds it before acting again.
+        """
+        if isinstance(action, Enum):
+            return str(action.value).strip()
+        return str(action or "").strip()
 
     def _schema_records_attempts(self) -> bool:
         """Whether this file is new enough to hold attempt records (schema 12)."""

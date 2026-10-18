@@ -3956,3 +3956,20 @@ a worker status read from rows, and stop-all/withdrawal re-read from the stored 
 refusing an otherwise-allowed decision and silencing the notification in the same breath. 33 tests,
 suite **2422 OK (skipped=13)**. Note:
 `research/notification-preferences-and-read-back-controls-2026-10-18.md`.
+
+**Conditions, the counter, and two quiet defects, 2026-10-18:** closing P8 item 2 meant adding what
+the authorisation could not yet say - which roles, which places, what may be attached, how many
+follow-ups - and the counter the daily limit never had. `PolicySubject` is deliberately a separate
+value from the policy: a caller that cannot describe what it is acting on gets a refusal rather than
+an exemption, and an attachment with no rule recorded is refused outright, because "nothing may be
+attached until something says what may" is the only safe default. `actions_done_today` counts from
+the durable attempt rows under two rules worth remembering - a refusal does not spend the allowance
+it protected, and an unknown outcome does, since assuming it did not is how a limit silently doubles.
+The day boundary follows the person's timezone, not UTC's. Two defects surfaced while wiring it: (1)
+attempts were stored as the literal text "ActionKind.DISCOVERY", so a caller holding "discovery"
+could never find them - the duplicate block was failing quietly for anyone holding the other
+spelling; (2) the permissions tab rebuilt the policy field by field, so any change there would have
+dropped the new conditions - a silent *loosening* of a restriction somebody wrote down, the worst
+direction for an authorisation screen to be wrong in. The habit that found the second one: after
+adding a field to a frozen value, ask what else constructs that value. 2457 OK (skipped=13). Note:
+`research/conditions-on-what-may-be-acted-on-2026-10-18.md`.

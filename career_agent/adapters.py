@@ -47,7 +47,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .core import JobListing, canonicalize_url, duplicate_key, deduplicate_listings
-from .policy import ActionKind, GlobalPolicy, evaluate_policy, no_authorisation
+from .policy import ActionKind, GlobalPolicy, PolicySubject, evaluate_policy, no_authorisation
 from .sources import (
     RunOutcome, discovery_gate, is_failure, is_partial, is_transient,
 )
@@ -647,7 +647,8 @@ class AdapterRegistry:
 
     def execute(self, source_id: str, request: AdapterRequest, *,
                 budget: RequestBudget | None = None, now: datetime | None = None,
-                policy: GlobalPolicy | None = None, done_today: int | None = None) -> AdapterResponse:
+                policy: GlobalPolicy | None = None, done_today: int | None = None,
+                subject: PolicySubject | None = None) -> AdapterResponse:
         """Run one bounded request through the gate and the standing authorisation.
 
         Five refusals are possible, and each is raised rather than reported as a source outcome, because
@@ -698,7 +699,7 @@ class AdapterRegistry:
         decision = evaluate_policy(
             policy if policy is not None else no_authorisation(),
             source_id=source_id, action=ActionKind.DISCOVERY, now=moment,
-            done_today=done_today or 0, source_gate_allows=gate.allowed)
+            done_today=done_today or 0, source_gate_allows=gate.allowed, subject=subject)
         if not decision.allowed:
             raise SourceDisabled(
                 f"Discovery for {source_id} is not authorised, so no request was made. "
