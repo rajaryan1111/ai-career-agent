@@ -116,6 +116,11 @@ EVENTS: tuple[str, ...] = (
     "strategy.created",
     "strategy.revised",
     "strategy.deleted",
+    # A tailored artifact is one row of evidence about what was prepared; the event carries its
+    # generated identifier and its shape (kind, strategy version). The document's text, the listing's
+    # employer and role, and every fact value stay out of the log.
+    "artifact.saved",
+    "artifact.deleted",
     "backup.written",
     "backup.refused",
     "restore.completed",

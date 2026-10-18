@@ -13,7 +13,7 @@ from pathlib import Path
 
 from career_agent import importer
 from career_agent.backup import create_backup, restore_backup
-from career_agent.core import CandidateProfile
+from career_agent.core import Availability, CandidateProfile, JobListing
 from career_agent.event_log import EVENTS, log_path
 from career_agent.store import CareerStore, StoredRecordError, unreadable_stored_records
 from career_agent.strategies import (
@@ -327,10 +327,23 @@ class RoleStrategyStoreTests(RoleStrategyStoreTestCase):
         """
         created = self.store.create_role_strategy(**FULL_CONTENT)
         self.store.save_profile(CandidateProfile(candidate_country="India"))
+        from career_agent.artifacts import ArtifactBasis, ArtifactKind
+        self.store.save_job(JobListing(
+            "j1", "manual", "Manual entry", "https://jobs.example.invalid/role/1",
+            "Example Employer", "Role", availability_status=Availability.OPEN))
+        self.store.new_tailored_artifact(
+            listing_id="j1", strategy=created, kind=ArtifactKind.COVER_LETTER,
+            content="A letter that must not travel in the JSON export.\n",
+            basis=ArtifactBasis(facts={"skills": "Python"}))
         document = importer.export_document(self.store)
         self.assertEqual(document["format_version"], 2)
-        self.assertNotIn("role_strateg", json.dumps(document))
-        self.assertNotIn(created.strategy_id, json.dumps(document))
+        rendered = json.dumps(document)
+        self.assertNotIn("role_strateg", rendered)
+        self.assertNotIn(created.strategy_id, rendered)
+        self.assertNotIn("tailored_artifact", rendered)
+        self.assertNotIn("fact_basis", rendered)
+        self.assertNotIn("must not travel", rendered,
+                         "an artifact's content is the person's writing and stays in the backup")
 
 
 if __name__ == "__main__":

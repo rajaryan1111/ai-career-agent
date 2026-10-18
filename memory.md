@@ -3797,3 +3797,22 @@ with the pin that says adding them is a deliberate bump. Evidence: 27 tests in
 OK (skipped=13)**; schema **9** re-pinned in both pinning tests. Deliberately next: matching/eligibility
 consumption, artifact lineage, invalidation, UI. Note:
 [role strategies: model and store](research/role-strategies-versioned-store-2026-10-18.md).
+
+
+## 2026-10-18 — Tailored artifacts with checkable lineage (P7, part 2)
+
+Schema **10** adds `tailored_artifact`, and `career_agent/artifacts.py` owns the rules: builders only
+restate stored facts (a required skill the profile does not state is a reported **gap**, never a
+sentence); every artifact stores the basis it was built from - rendered profile facts, which were
+unconfirmed, and the work/education records without row bookkeeping, so a delete-and-retype is not a
+changed history; `lineage_status` reports facts changed, facts confirmed since, work/education
+changed, and a newer strategy version, and `is_current` is true only when nothing moved. Rows are
+append-only; the listing and strategy-version references are validated **at write time**; deleting a
+strategy that artifacts reference is refused so a lineage chain is never broken; deleting a listing
+cascades its artifacts. Events carry identifier/kind/version only; the JSON export stays at version 2
+with no strategy or artifact trace - the backup carries those. Evidence: 30 tests in
+`tests/test_artifacts.py`, migration and refusal tests in `tests/test_store.py`, extended export pin
+in `tests/test_strategies.py`; focused run 605 OK, full local suite **2151 tests OK (skipped=13)**,
+desktop smoke BLOCKED by construction here. Next: strategy-aware matching/eligibility consumption,
+then artifact invalidation surfaced through a window. Note:
+[tailored artifacts and lineage](research/tailored-artifacts-lineage-2026-10-18.md).

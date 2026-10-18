@@ -23,6 +23,7 @@ from career_agent.store import (
     UnrecognisedDatabaseError, create_private_file, require_owner_only, write_private_bytes_file,
     write_private_text_file,
 )
+from career_agent.strategies import StrategyError
 
 #: A fixed, clearly local timestamp so a test never depends on the clock.
 _TIMESTAMP = "2026-01-01T00:00:00+00:00"
@@ -1633,15 +1634,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 9)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 9)
+        self.assertEqual(SCHEMA_VERSION, 10)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 10)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
         # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
         # the current version's contract names - so it is written as the version it is checking.
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[9]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[10]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1962,6 +1963,47 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], before)
         self.assertEqual(store.role_strategy_versions(strategy.strategy_id), (strategy,),
                          "re-running the step does not disturb a version that was already written")
+
+    def test_the_artifact_step_adds_its_table_to_a_database_full_of_records(self):
+        """The v9 file a person has been using: every row stays, the artifact table arrives empty."""
+        older = self._open_at_version(9)
+        self.assertNotIn("tailored_artifact", {
+            row[0] for row in older._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }, "version 9 predates the artifact table")
+        profile = CandidateProfile(candidate_country="India", skills=frozenset({"Python"}))
+        older.save_profile(profile)
+        older.save_job(self._job())
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_profile(), profile, "the profile is not rebuilt by a migration")
+        self.assertEqual(upgraded.get_job("j1"), self._job())
+        self.assertEqual(upgraded.list_tailored_artifacts(), (), "an upgrade invents no artifact")
+
+    def test_deleting_a_strategy_an_artifact_was_built_under_is_refused(self):
+        """The lineage chain is never broken: delete the artifacts, then the strategy."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        store.save_job(self._job())
+        strategy = store.create_role_strategy(name="Data roles", role_family="Data engineering")
+        from career_agent.artifacts import ArtifactBasis, ArtifactKind
+        store.new_tailored_artifact(
+            listing_id="j1", strategy=strategy, kind=ArtifactKind.TAILORED_RESUME,
+            content="A tailored resume built from the stored facts.\n", basis=ArtifactBasis())
+
+        with self.assertRaises(StrategyError) as caught:
+            store.delete_role_strategy(strategy.strategy_id)
+        self.assertIn("artifact(s)", str(caught.exception))
+        self.assertIsNotNone(store.get_role_strategy(strategy.strategy_id),
+                             "the refusal deletes nothing")
+
+        # The person removes the artifact first; the strategy then deletes whole, as before.
+        artifact = store.list_tailored_artifacts()[0]
+        self.assertEqual(store.delete_tailored_artifact(artifact.artifact_id), 1)
+        self.assertEqual(store.delete_role_strategy(strategy.strategy_id), 1)
 
     def test_the_history_tables_are_deleted_with_the_profile_rather_than_left_behind(self):
         """A person who deletes their profile must not leave their employment record in the file."""

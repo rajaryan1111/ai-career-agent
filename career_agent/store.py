@@ -19,6 +19,9 @@ import uuid
 from pathlib import Path
 
 from .contacts import ContactImport, ContactRow, Flag, normalise_email_key
+from .artifacts import (
+    ArtifactBasis, ArtifactError, ArtifactKind, TailoredArtifact, new_artifact_id,
+)
 from .core import (
     validate_follow_up_date, validate_follow_up_note,
     INITIAL_APPLICATION_STATUS, ActivityKind, ApplicationActivity, ApplicationStatus,
@@ -37,7 +40,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -68,6 +71,10 @@ SCHEMA_TABLES_BY_VERSION = {
         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
         "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
         "scheduled_task", "task_run", "worker_lease"),
+    10: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+         "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
+         "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1092,6 +1099,31 @@ def _migration_to_v9(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v10(connection: sqlite3.Connection) -> None:
+    """Schema 10: tailored artifacts, each with the basis it was built from.
+
+    One new table, additive and empty. Rows are append-only and immutable: a tailored document is
+    evidence of what was prepared, for which listing, under which strategy version, from which facts
+    - so nothing updates it, and the ``fact_basis`` JSON beside the content is what makes its lineage
+    checkable later (``career_agent.artifacts.lineage_status``). The listing reference is declared
+    with the same ``ON DELETE CASCADE`` every per-listing table carries; the strategy reference is a
+    plain pair of columns on purpose - a strategy that artifacts still reference cannot be deleted,
+    which the delete method refuses, so the lineage chain is never broken by a cascade.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS tailored_artifact (
+               artifact_id TEXT PRIMARY KEY,
+               listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+               strategy_id TEXT NOT NULL,
+               strategy_version INTEGER NOT NULL,
+               artifact_kind TEXT NOT NULL,
+               content TEXT NOT NULL,
+               fact_basis TEXT NOT NULL,
+               created_at TEXT NOT NULL
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1106,6 +1138,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (7, "add the imported HR contact list and the disagreements found in it", _migration_to_v7),
     (8, "add where each stored profile fact came from, and whether it was confirmed", _migration_to_v8),
     (9, "add the versioned role strategies", _migration_to_v9),
+    (10, "add the tailored artifacts and the basis each was built from", _migration_to_v10),
 )
 
 
@@ -2753,6 +2786,9 @@ class CareerStore:
         One transaction covers the read and the write, so two workers calling this at the same moment
         cannot both take the same occurrence: the second one's insert violates the uniqueness of
         ``(task, slot, attempt)`` and is answered with ``None`` - "nothing was claimed", not "a run
+        exists", which is the distinction a calls calling this at the same moment
+        cannot both take the same occurrence: the second one's insert violates the uniqueness of
+        ``(task, slot, attempt)`` and is answered with ``None`` - "nothing was claimed", not "a run
         exists", which is the distinction a caller needs to decide whether to keep looking.
 
         The task's bookkeeping is deliberately *not* advanced here. It is advanced when the attempt
@@ -3827,7 +3863,23 @@ class CareerStore:
         some of them would keep a lineage that points at a strategy the person deleted. Returns 0 -
         and writes nothing, records nothing - when no such strategy is stored, because deleting
         nothing is not a change to report.
+
+        A strategy that tailored artifacts still reference is **refused**, not deleted: each artifact
+        carries the strategy version it was built under, and removing that would leave a document
+        whose "why" can no longer be read. Delete the artifacts first; the refusal names how many
+        there are. (The count is asked only of a database whose recorded schema has the table: a file
+        deliberately held at an older version cannot have stored artifacts under it.)
         """
+        if int(self._connection.execute("PRAGMA user_version").fetchone()[0]) >= 10:
+            referenced = self._connection.execute(
+                "SELECT COUNT(*) FROM tailored_artifact WHERE strategy_id=?",
+                (strategy_id,)).fetchone()[0]
+        else:
+            referenced = 0
+        if referenced:
+            raise StrategyError(
+                f"{referenced} tailored artifact(s) were built under this strategy, so deleting it "
+                "would leave them with no readable lineage. Delete those artifacts first.")
         with self._connection:
             cursor = self._connection.execute(
                 "DELETE FROM role_strategy_version WHERE strategy_id=?", (strategy_id,))
@@ -3847,6 +3899,137 @@ class CareerStore:
             return strategy_from_payload(strategy_id, version, row["payload"])
         except StrategyError as exc:
             raise StoredRecordError(noun, str(exc)) from exc
+
+    # ---------------------------------------------------------------------------- tailored artifacts
+    #
+    # An artifact is evidence: this document, for this listing, under this strategy version, from
+    # these facts. That is why rows are append-only and immutable here - nothing updates content or
+    # basis - and why saving one validates its lineage *at write time*: a document whose strategy
+    # version is not stored, or whose listing is gone, must never enter the ledger, because an
+    # artifact that cannot explain itself is not evidence of anything.
+    #
+    # The content and the basis hold the person's own facts and writing, so the events carry the
+    # artifact's generated identifier and its shape (kind, strategy version) - never text from the
+    # document, the listing's employer or role, or any fact value.
+
+    def save_tailored_artifact(self, artifact: TailoredArtifact) -> None:
+        """Append one artifact, refusing a lineage that does not resolve as the row is written."""
+        if self.get_job(artifact.listing_id) is None:
+            raise ArtifactError(
+                f"no listing with the identifier {artifact.listing_id!r} is stored, so an artifact "
+                "cannot be filed under it")
+        if self.get_role_strategy(artifact.strategy_id, artifact.strategy_version) is None:
+            raise ArtifactError(
+                f"no strategy version {artifact.strategy_version} under {artifact.strategy_id!r} is "
+                "stored, so the artifact's lineage could never be read; build it under a stored "
+                "strategy version")
+        try:
+            with self._connection:
+                self._connection.execute(
+                    """INSERT INTO tailored_artifact
+                           (artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                            content, fact_basis, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (artifact.artifact_id, artifact.listing_id, artifact.strategy_id,
+                     artifact.strategy_version, artifact.kind.value, artifact.content,
+                     json.dumps(artifact.basis.to_json(), sort_keys=True, ensure_ascii=False),
+                     artifact.created_at or _now()),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ArtifactError(
+                f"an artifact with the identifier {artifact.artifact_id!r} is already stored; "
+                "artifacts are append-only and are never overwritten") from exc
+        self._record("artifact.saved",
+                     f"id={artifact.artifact_id} kind={artifact.kind.value} "
+                     f"strategy_version={artifact.strategy_version}")
+
+    def new_tailored_artifact(self, *, listing_id: str, strategy: RoleStrategy,
+                              kind: ArtifactKind, content: str,
+                              basis: ArtifactBasis) -> TailoredArtifact:
+        """Build a record with a fresh identifier and store it: one call, one append-only row."""
+        # The record is stamped once, here, so the object a caller holds is byte-identical to the
+        # row that was stored - a returned artifact that disagrees with its own row would be a
+        # second version of the truth.
+        artifact = TailoredArtifact(
+            artifact_id=new_artifact_id(), listing_id=listing_id, strategy_id=strategy.strategy_id,
+            strategy_version=strategy.version, kind=kind, content=content, basis=basis,
+            created_at=_now())
+        self.save_tailored_artifact(artifact)
+        return artifact
+
+    def get_tailored_artifact(self, artifact_id: str) -> TailoredArtifact | None:
+        """One artifact by identifier, or ``None``. A damaged row raises rather than reading as absent."""
+        row = self._connection.execute(
+            """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                      content, fact_basis, created_at
+               FROM tailored_artifact WHERE artifact_id=?""", (artifact_id,)).fetchone()
+        if row is None:
+            return None
+        return self._decode_tailored_artifact(row)
+
+    def list_tailored_artifacts(self, *, listing_id: str | None = None,
+                                strategy_id: str | None = None,
+                                kind: ArtifactKind | None = None) -> tuple[TailoredArtifact, ...]:
+        """Stored artifacts, newest first, filtered by any of listing, strategy or kind.
+
+        Every artifact ever written for the filters is returned: the history of what was prepared is
+        the point, and a caller that wants "the latest one" reads the first row.
+        """
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if listing_id is not None:
+            clauses.append("listing_id=?")
+            parameters.append(listing_id)
+        if strategy_id is not None:
+            clauses.append("strategy_id=?")
+            parameters.append(strategy_id)
+        if kind is not None:
+            clauses.append("artifact_kind=?")
+            parameters.append(kind.value)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._connection.execute(
+            """SELECT artifact_id, listing_id, strategy_id, strategy_version, artifact_kind,
+                      content, fact_basis, created_at
+               FROM tailored_artifact""" + where + " ORDER BY created_at DESC, rowid DESC",
+            tuple(parameters),
+        ).fetchall()
+        return tuple(self._decode_tailored_artifact(row) for row in rows)
+
+    def delete_tailored_artifact(self, artifact_id: str) -> int:
+        """Remove one artifact; returns the rows removed, 0 when nothing was stored under the id."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM tailored_artifact WHERE artifact_id=?", (artifact_id,))
+            removed = cursor.rowcount
+        if removed > 0:
+            self._record("artifact.deleted", f"id={artifact_id}")
+        return removed
+
+    @staticmethod
+    def _decode_tailored_artifact(row: sqlite3.Row) -> TailoredArtifact:
+        noun = "tailored artifact"
+        artifact_id = str(row["artifact_id"] or "")
+        if not artifact_id.strip():
+            raise StoredRecordError(noun, "it has no identifier")
+        try:
+            kind = ArtifactKind(str(row["artifact_kind"] or ""))
+        except ValueError as exc:
+            raise StoredRecordError(
+                noun, f"its kind {row['artifact_kind']!r} is not one this version recognises") from exc
+        version = _stored_int(row["strategy_version"], noun, "strategy version")
+        try:
+            basis_payload = json.loads(row["fact_basis"])
+            basis = ArtifactBasis.from_json(basis_payload)
+            return TailoredArtifact(
+                artifact_id=artifact_id, listing_id=str(row["listing_id"] or ""),
+                strategy_id=str(row["strategy_id"] or ""), strategy_version=version, kind=kind,
+                content=str(row["content"] or ""), basis=basis,
+                created_at=str(row["created_at"] or ""))
+        except ArtifactError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise StoredRecordError(
+                noun, f"its stored basis is not readable JSON ({exc.msg})") from exc
 
 
 # ---------------------------------------------------------------- reading a file without opening it
@@ -3874,6 +4057,7 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     ("hr_contact", "contact_id", CareerStore._decode_contact),
     ("hr_contact_conflict", "conflict_id", CareerStore._decode_contact_conflict),
     ("role_strategy_version", "strategy_id", CareerStore._decode_role_strategy),
+    ("tailored_artifact", "artifact_id", CareerStore._decode_tailored_artifact),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
     ("worker_lease", "worker_id", CareerStore._decode_worker_lease),
