@@ -4098,3 +4098,25 @@ deliberate re-pins came with the schema bump and the new tab: the version litera
 and `test_store_tasks.py`, the documented workflow letters in `test_desktop_acceptance.py` and
 `.github/workflows/tests.yml`, and the expected tabs/trees/summaries in `scripts/desktop_smoke_test.py`.
 Note: `research/acceptance-evidence-you-can-record-2026-10-18.md`.
+
+## The guard gets a caller, 2026-10-18
+
+`guarded_dispatch` has held the whole outbound order since it was written and nothing a person could
+press reached it: the follow-up tab stopped at a read-only draft with no recipient. A guard with no
+caller is a claim. The Follow-ups tab now has a recipient chooser - stored HR contacts only, never a
+typed address, and anybody on the do-not-contact list is simply not offered - and a **Try to send this
+follow-up...** button whose confirmation states the five checks in the order the guard applies them.
+
+Giving it a caller found a real defect at once: the operation id is derived from the message's content
+on purpose, so pressing twice rebuilt the same id, found its write-ahead row already settled, and the
+store refused to re-settle it - an `AttemptError` out of a button press. Fixed in the guard: a settled
+operation id is answered with a result naming the recorded outcome, nothing sent, no second row; an
+*unknown* one is still blocked by `may_attempt`. The content-derived id means a message refused today
+cannot be retried after the authorisation changes without changing the message; that is written down in
+the research note as a decision for the day a mailbox exists, not guessed at now.
+
+The test that matters most: with a full standing authorisation **and** a working `LocalMockIntegration`
+patched in, the window still sends nothing, because the route's gate is closed in code and no
+authorisation opens a gate. 9 handler tests, 7 text tests, 4 ledger regressions, acceptance H15-H19
+(145 checks, 0 failed), suite 2631 OK (skipped=13). Note:
+`research/the-guard-gets-a-caller-2026-10-18.md`.

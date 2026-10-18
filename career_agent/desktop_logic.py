@@ -1366,3 +1366,103 @@ def evidence_withdraw_question(route_id: str, kind: object, note: str) -> str:
         "requirement. Nothing else changes: nothing was switched on by the record, so nothing is "
         "switched off by removing it."
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Trying to send: the words around the one guarded path out of this machine
+#
+# The guard itself lives in ``integrations.guarded_dispatch`` and is not re-implemented here. These
+# functions are the sentences a person reads before and after it runs, and they exist so the window
+# can state the order the checks happen in rather than implying one.
+
+
+#: What the guard checks, in the order it checks it. Shown before anything is attempted, because a
+#: person agreeing to an attempt should know what stands between the press and the outside world.
+DISPATCH_CHECK_ORDER: tuple[str, ...] = (
+    "the do-not-contact list, which is checked before any attempt is written down at all",
+    "what is already recorded for this job - an earlier attempt that succeeded, or one whose "
+    "outcome nobody established, stops this one",
+    "your standing authorisation: the action, the source, the daily limit, the quiet hours and "
+    "every condition you set",
+    "the enabling gate for the route, which no authorisation can open",
+    "the integration itself, which in this build is the disabled one",
+)
+
+
+def dispatch_recipient_choices(contacts: Iterable[object],
+                               blocked: Iterable[str] = ()) -> tuple[str, ...]:
+    """The addresses offered as a recipient: stored contacts only, suppressed ones left out.
+
+    Typing an address into this window is deliberately not possible. Every address here came from a
+    list the person imported and reviewed, and one they have marked do-not-contact is not offered -
+    the guard would refuse it anyway, but offering it would be an invitation to find that out by
+    pressing the button.
+
+    ``blocked`` is the do-not-contact list, which is kept separately from the contact rows: a
+    marked contact row and a listed address are two different records, and either one is enough to
+    keep an address out of this list.
+    """
+    stopped = {str(address or "").strip().casefold() for address in blocked}
+    offered = []
+    for contact in contacts:
+        if getattr(contact, "suppressed", False):
+            continue
+        address = str(getattr(contact, "email", "") or "").strip()
+        if not address or address.casefold() in stopped:
+            continue
+        name = str(getattr(contact, "name", "") or "").strip()
+        offered.append(f"{name} <{address}>" if name else address)
+    return tuple(sorted(set(offered), key=str.casefold))
+
+
+def address_from_choice(choice: str) -> str:
+    """The address out of a ``Name <address>`` line, or the line itself if it is a bare address."""
+    text = str(choice or "").strip()
+    if text.endswith(">") and "<" in text:
+        return text[text.rindex("<") + 1:-1].strip()
+    return text
+
+
+def dispatch_question(employer: str, role: str, recipient: str, *, integration_name: str) -> str:
+    """The one confirmation shown before the guarded path is entered."""
+    checks = "\n".join(f"  {index}. {check}"
+                       for index, check in enumerate(DISPATCH_CHECK_ORDER, start=1))
+    return (
+        f"Try to send this follow-up to {recipient}?\n\n"
+        f"About: {role} at {employer}.\n\n"
+        f"What happens when you say yes, in this order:\n{checks}\n\n"
+        "Before anything is attempted, the attempt is written into your records as having an "
+        "unknown outcome, so a crash halfway through leaves evidence rather than silence. What "
+        "actually happened is written over that - and a failure in flight stays unknown, because "
+        "nobody can tell from here whether it arrived.\n\n"
+        f"The integration this would go through is \"{integration_name}\". In this build that is "
+        "the disabled one: no mailbox has ever been authorised, so the honest expectation is a "
+        "refusal with a reason, not a message."
+    )
+
+
+def dispatch_result_text(outcome: str, performed: bool, message: str, *,
+                         integration_name: str) -> str:
+    """What to show afterwards: what the guard answered, and what that does and does not mean."""
+    heading = {
+        "completed": "The integration reported that it performed this.",
+        "duplicate": "The integration recognised this as something it had already done.",
+        "disabled": "Nothing was sent.",
+        "invalid": "Nothing was sent.",
+        "failed": "The attempt did not complete.",
+        "unknown": "Nothing could be established about what happened.",
+    }.get(str(outcome), "Nothing was sent.")
+    lines = [heading, "", message, ""]
+    if performed:
+        lines.append(
+            "This records that the integration accepted it - not that it was delivered, not that "
+            "it was read, and not that anybody replied. Delivery and replies would need a mailbox "
+            "this project has no authorisation for.")
+    else:
+        lines.append(
+            "Nothing left this machine. The attempt is written into your records with the reason, "
+            "so the refusal can be read later by somebody who was not here.")
+    lines.append(
+        f"Integration: {integration_name}. Discovery, submission, outbound email and inbox reading "
+        f"are separate permissions: this path is the email one and it opens none of the others.")
+    return "\n".join(lines)

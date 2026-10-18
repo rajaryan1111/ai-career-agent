@@ -1030,6 +1030,21 @@ def guarded_dispatch(
         already = sum(1 for attempt in recorded if attempt.state is not AttemptState.REFUSED)
         subject = (replace(subject, follow_ups_so_far=already) if subject is not None
                    else PolicySubject(follow_ups_so_far=already))
+    # An operation id derived from the message's own content repeats when the same message is built
+    # twice - the same follow-up, to the same person, pressed again. The write-ahead row for that id
+    # is already settled, and settling it a second time is refused by the ledger, so this is answered
+    # here rather than as an exception out of the store: the attempt is reported with the outcome
+    # that *is* recorded, and nothing is sent. Found by giving this function its first caller in the
+    # window; before that, every caller built a fresh message each time.
+    already = store.get_attempt(operation_id)
+    if already is not None and already.state is not AttemptState.UNKNOWN:
+        return IntegrationResult(
+            outcome=Outcome.INVALID, operation_id=operation_id,
+            integration_name=integration.name, performed=False,
+            message=(f"Nothing was sent: this exact message was already attempted on "
+                     f"{already.started_at} and is recorded as {already.state.value}. Change the "
+                     f"message, or look at what was recorded, rather than repeating it blind."),
+            detail=f"state={already.state.value}")
     decision = may_attempt(recorded, identity_key=identity, action=action)
     if not decision.allowed:
         return IntegrationResult(

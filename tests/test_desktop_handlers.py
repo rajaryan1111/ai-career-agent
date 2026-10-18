@@ -32,6 +32,10 @@ from career_agent.core import (ActivityKind, ApplicationActivity, FactSource, Fa
                             InterviewOutcome, PreparationKind, PROFILE_FACTS, REQUIRED_PROFILE_FACTS,
                             missing_required_profile_facts)
 from career_agent import sources
+from career_agent import integrations as integrations_module
+from career_agent.identity import identity_key
+from career_agent.attempts import AttemptState
+from career_agent.suppression import SuppressionReason
 from career_agent.acceptance_evidence import ROUTE_REQUIREMENTS, EvidenceKind
 from career_agent import backup as backup_module
 from career_agent import contact_export
@@ -43,7 +47,6 @@ from career_agent.event_log import log_path, read_lines
 import career_agent.store as store_module
 from career_agent import desktop_logic as logic
 from career_agent.attempts import AttemptState
-from career_agent.suppression import SuppressionReason
 from career_agent.notifications import Cadence, DeliveryChannel
 from career_agent.store import SCHEMA_VERSION, CareerStore, StoredRecordError, UnavailableStore
 
@@ -9607,3 +9610,182 @@ class SourcesAndEvidenceTabTests(HandlerTestCase):
         self.assertIn("evidence for one of them opens none of the others", said)
         self.assertIn("an already-recorded requirement is never written over", said)
         self.assertIsNotNone(app.evidence_summary.get())
+
+
+class FollowUpDispatchTests(HandlerTestCase):
+    """The first in-application caller of the central dispatch guard.
+
+    ``guarded_dispatch`` has carried the whole order - do-not-contact, what is already recorded,
+    the authorisation, the enabling gate, the integration - since it was written, and nothing a
+    person could press reached it: the follow-up tab stopped at a read-only draft. These tests
+    drive the button that now does, and the property they care about most is that there is no way
+    through it: even with a full authorisation and an integration that would happily accept the
+    message, the window refuses, because the route's gate is closed in this build.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "dispatch.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def with_a_follow_up(self, app, *, address="hr.one@example.invalid", name="Sample Person One"):
+        job = JobListing(
+            listing_id="job-dispatch", source_id="manual", source_name="Typed in",
+            source_listing_url="https://example.invalid/jobs/dispatch",
+            employer_name="Sample Employer One", role_title="AI Engineer")
+        app.store.save_job(job)
+        app.store.save_tracker(ApplicationTracker(
+            listing_id="job-dispatch", status=ApplicationStatus.DISCOVERED,
+            follow_up_on=date.today(), follow_up_note="checking in"))
+        csv_path = Path(self._directory.name) / "dispatch-contacts.csv"
+        csv_path.write_bytes(
+            (CONTACT_HEADER + f"{address},{name},Sample Employer One,1,\r\n").encode("utf-8"))
+        app.store.import_contacts(contacts_module.read_contact_csv(csv_path))
+        app._refresh_follow_ups()
+        app.follow_up_tree.selection_set("job-dispatch")
+        app.follow_up_recipient.set(f"{name} <{address}>")
+        return job
+
+    def test_the_recipients_offered_are_stored_contacts_and_never_a_typed_address(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        self.assertEqual(app.follow_up_recipient_box.options["values"],
+                         ("Sample Person One <hr.one@example.invalid>",))
+        self.assertEqual(app.follow_up_recipient_box.options["state"], "readonly")
+
+    def test_nothing_is_attempted_without_a_recipient(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.follow_up_recipient.set("")
+        before = app.store._connection.total_changes
+
+        app._send_follow_up_email()
+
+        self.assertIn("Nothing was sent", MESSAGES.titles("showerror"))
+        self.assertIn("stored HR contacts", MESSAGES.text("showerror"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_attempts(), ())
+
+    def test_the_question_states_the_order_the_guard_checks_things_in(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = False
+        before = app.store._connection.total_changes
+
+        app._send_follow_up_email()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("hr.one@example.invalid", asked)
+        self.assertIn("do-not-contact list, which is checked before any attempt is written", asked)
+        self.assertIn("unknown outcome", asked)
+        self.assertIn("disabled", asked)
+        self.assertEqual(app.store._connection.total_changes, before,
+                         "a declined confirmation changed the database")
+        self.assertEqual(app.store.list_attempts(), ())
+
+    def test_a_confirmed_attempt_is_refused_recorded_and_explained(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        attempts = app.store.list_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertIs(attempts[0].state, AttemptState.REFUSED)
+        self.assertEqual(attempts[0].action, "email_send")
+        self.assertEqual(app.store.unresolved_attempts(), ())
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("Nothing was sent", shown)
+        self.assertIn("Nothing left this machine", shown)
+        self.assertIn("recorded as operation", app.status.get())
+
+    def test_a_refusal_does_not_spend_the_daily_allowance(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        self.assertEqual(
+            app.store.actions_done_today("email_send",
+                                         now=datetime.now(timezone.utc)), 0)
+
+    def test_an_address_on_the_do_not_contact_list_is_neither_offered_nor_attempted(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.store.suppress_contact("hr.one@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP, note="they asked")
+        app._refresh_follow_ups()
+        self.assertEqual(app.follow_up_recipient_box.options["values"], ())
+
+        # Forced past the chooser, the guard still refuses - and before any attempt is recorded.
+        app.follow_up_tree.selection_set("job-dispatch")
+        app.follow_up_recipient.set("Sample Person One <hr.one@example.invalid>")
+        CONFIG["Try to send this follow-up"] = True
+        app._send_follow_up_email()
+
+        self.assertEqual(app.store.list_attempts(), ())
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("do-not-contact", shown.casefold())
+
+    def test_the_same_message_twice_is_reported_rather_than_attempted_again(self):
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        CONFIG["Try to send this follow-up"] = True
+        app._send_follow_up_email()
+        RecordingLabel.created = []
+
+        app._send_follow_up_email()
+
+        self.assertEqual(len(app.store.list_attempts()), 1)
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("already attempted", shown)
+        self.assertIn("recorded as refused", shown)
+
+    def test_an_unresolved_attempt_at_the_same_job_blocks_the_next_one(self):
+        app = self.build_window()
+        job = self.with_a_follow_up(app)
+        app.store.begin_attempt(operation_id="earlier-attempt",
+                                identity_key=identity_key(job), action="email_send")
+        CONFIG["Try to send this follow-up"] = True
+
+        app._send_follow_up_email()
+
+        self.assertEqual(len(app.store.list_attempts()), 1,
+                         "a new attempt row was written while an outcome was unresolved")
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("earlier-attempt", shown)
+
+    def test_even_a_full_authorisation_and_a_working_integration_cannot_send(self):
+        """The gate is closed in code for this route, and no authorisation opens a gate."""
+        from career_agent.policy import ActionKind as PermissionKind  # noqa: PLC0415
+        from career_agent.policy import GlobalPolicy  # noqa: PLC0415
+
+        app = self.build_window()
+        self.with_a_follow_up(app)
+        app.store.save_global_policy(GlobalPolicy(
+            allowed=frozenset({("manual", PermissionKind.EMAIL_SEND)}),
+            daily_limits={PermissionKind.EMAIL_SEND: 5}))
+        working = integrations_module.LocalMockIntegration()
+        CONFIG["Try to send this follow-up"] = True
+
+        with mock.patch.object(integrations_module, "default_integration",
+                               return_value=working):
+            app._send_follow_up_email()
+
+        self.assertFalse(working.attempts, "the integration was reached despite the closed gate")
+        attempts = app.store.list_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertIs(attempts[0].state, AttemptState.REFUSED)
+        shown = " ".join(label.text for label in RecordingLabel.created
+                         if isinstance(label.text, str))
+        self.assertIn("Nothing was sent", shown)
+        self.assertIn("gate", shown.casefold())

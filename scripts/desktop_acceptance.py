@@ -2837,6 +2837,89 @@ def workflow_h_follow_ups_and_actions(run: Run) -> None:
         require(listing_b not in listed, f"the reminder whose record is gone is still listed: {listed}")
         require(listing_c in listed, f"the tab lost the reminders it can still show: {listed}")
 
+    with results.step("H15 trying to send a follow-up offers only stored contacts, and refuses without one"):
+        from career_agent import contacts as contact_reader  # noqa: PLC0415
+
+        policy.reset()
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        require(app.follow_up_recipient_box.cget("values") in ((), "", []),
+                f"a recipient is offered before any contact is stored: "
+                f"{app.follow_up_recipient_box.cget('values')!r}")
+        csv_path = workspace.folder / "acceptance-contacts.csv"
+        csv_path.write_bytes(
+            b"Email,Name,Company Label,Source Rows,Review Reason\r\n"
+            b"acceptance.contact@example.invalid,Acceptance Contact,Fixture Employer,1,\r\n")
+        app.store.import_contacts(contact_reader.read_contact_csv(csv_path))
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        offered = tuple(app.follow_up_recipient_box.cget("values"))
+        require(any("acceptance.contact@example.invalid" in str(choice) for choice in offered),
+                f"the stored contact is not offered as a recipient: {offered!r}")
+        select_follow_up_row(app, listing_c, workspace.root)
+        app.follow_up_recipient.set("")
+        before = app.store._connection.total_changes
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        require("Nothing was sent" in policy.titles("showerror"),
+                f"no refusal was shown without a recipient; dialogs: {policy.titles()!r}")
+        require(app.store._connection.total_changes == before,
+                "an attempt with no recipient changed the database")
+
+    with results.step("H16 the question names the order the guard checks things in, and a no writes nothing"):
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = False
+        select_follow_up_row(app, listing_c, workspace.root)
+        app.follow_up_recipient.set(
+            next(str(choice) for choice in app.follow_up_recipient_box.cget("values")
+                 if "acceptance.contact@example.invalid" in str(choice)))
+        before = app.store._connection.total_changes
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        asked = policy.said("Try to send this follow-up")
+        require("do-not-contact" in asked,
+                "the question does not say the do-not-contact list is checked first")
+        require("unknown outcome" in asked,
+                "the question does not say the attempt is written down before it is made")
+        require(app.store._connection.total_changes == before,
+                "a declined confirmation changed the database")
+        require(app.store.list_attempts(action="email_send") == (),
+                "a declined confirmation wrote an attempt row")
+
+    with results.step("H17 a confirmed attempt is refused by the closed gate, and the refusal is recorded"):
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from career_agent.attempts import AttemptState  # noqa: PLC0415
+
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = True
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        attempts = app.store.list_attempts(action="email_send")
+        require(len(attempts) == 1, f"{len(attempts)} attempt row(s) were written by one press")
+        require(attempts[0].state is AttemptState.REFUSED,
+                f"the attempt is recorded as {attempts[0].state!r} rather than refused")
+        require(app.store.unresolved_attempts() == (),
+                "a refusal was left as an unresolved outcome")
+        require(app.store.actions_done_today("email_send",
+                                             now=datetime.now(timezone.utc)) == 0,
+                "a refusal spent the daily allowance")
+
+    with results.step("H18 the same message again is reported, not attempted a second time"):
+        policy.reset()
+        policy.answers["Try to send this follow-up"] = True
+        press(app.follow_up_tab, "Try to send this follow-up...", workspace.root)
+        require(len(app.store.list_attempts(action="email_send")) == 1,
+                "a second press wrote a second attempt row for the same message")
+
+    with results.step("H19 an address on the do-not-contact list is withdrawn from the chooser"):
+        from career_agent.suppression import SuppressionReason  # noqa: PLC0415
+
+        app.store.suppress_contact("acceptance.contact@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP,
+                                   note="fixture: they asked us to stop")
+        press(app.follow_up_tab, "Refresh", workspace.root)
+        offered = tuple(app.follow_up_recipient_box.cget("values"))
+        require(not any("acceptance.contact@example.invalid" in str(choice) for choice in offered),
+                f"a suppressed address is still offered as a recipient: {offered!r}")
+        # Put the workspace back as the later steps expect it: the mark was this step's own fixture.
+        app.store.lift_suppression("acceptance.contact@example.invalid",
+                                   note="fixture cleanup for the following steps")
+
     with results.step("H14 nothing here is recorded as an employer decision or as a career outcome"):
         from career_agent import analytics  # noqa: PLC0415
 

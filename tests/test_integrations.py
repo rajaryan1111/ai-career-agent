@@ -906,5 +906,65 @@ class OperationIdStabilityTests(unittest.TestCase):
         self.assertEqual(before, f"email-{expected}")
 
 
+class RepeatedOperationTests(unittest.TestCase):
+    """The same message, dispatched twice: reported, not raised, and never attempted again.
+
+    An operation id is derived from the message's own content on purpose - the same draft asked for
+    twice is the same operation - and the write-ahead row for it has already been settled. Settling
+    a settled attempt is refused by the ledger, which used to surface as an ``AttemptError`` out of
+    the store the first time anything in the application pressed the same button twice. A caller
+    asking "can I send this?" deserves an answer, not an exception.
+    """
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        from career_agent.store import CareerStore  # noqa: PLC0415 - the ledger lives in the store
+
+        self.store = CareerStore(Path(self._directory.name) / "repeat.sqlite3")
+        self.addCleanup(self.store.close)
+        self.draft = integrations.EmailDraft(
+            subject="Following up", body="Hello,\n\nJust checking in.",
+            listing_id="job-1", recipient="hr@example.invalid")
+
+    def dispatch(self, integration=None):
+        return integrations.guarded_dispatch(
+            self.store, integration or integrations.default_integration(), self.draft,
+            identity_key="job:repeat", policy=self.store.get_global_policy(),
+            source_id="manual", now=datetime(2026, 10, 18, 9, 0, tzinfo=timezone.utc),
+            done_today=integrations.COUNT_FROM_RECORDS, source_gate_allows=False)
+
+    def test_the_second_dispatch_of_one_message_answers_instead_of_raising(self):
+        first = self.dispatch()
+        self.assertFalse(first.performed)
+        second = self.dispatch()
+        self.assertFalse(second.performed)
+        self.assertIs(second.outcome, integrations.Outcome.INVALID)
+        self.assertIn("already attempted", second.message)
+        self.assertIn("recorded as refused", second.message)
+        self.assertEqual(second.operation_id, first.operation_id)
+
+    def test_the_second_dispatch_writes_no_second_attempt_row(self):
+        self.dispatch()
+        before = len(self.store.list_attempts())
+        self.dispatch()
+        self.assertEqual(len(self.store.list_attempts()), before)
+        self.assertEqual(self.store.unresolved_attempts(), ())
+
+    def test_an_unresolved_attempt_at_the_same_operation_is_still_blocked_by_the_ledger(self):
+        self.store.begin_attempt(operation_id=self.draft.operation_id,
+                                 identity_key="job:repeat", action="email_send")
+        result = self.dispatch()
+        self.assertFalse(result.performed)
+        self.assertIn("outcome", result.message.casefold())
+        self.assertEqual(len(self.store.list_attempts()), 1)
+
+    def test_a_working_integration_is_still_never_reached_through_a_closed_gate(self):
+        working = integrations.LocalMockIntegration()
+        result = self.dispatch(working)
+        self.assertFalse(result.performed)
+        self.assertFalse(working.attempts)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

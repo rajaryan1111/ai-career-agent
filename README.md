@@ -1054,6 +1054,38 @@ draft-and-record path in an interpreter where creating a socket raises). What th
 that a request the network dropped never arrived — that is provider-side idempotency, and it is why a real
 integration is a decision with evidence behind it rather than a flag.
 
+### Pressing the button that is expected to say no
+
+The **Follow-ups** tab has a third control now: **Try to send this follow-up...**, next to the draft. It
+is the first thing in the application that reaches the central dispatch guard, and it exists because a
+guard nothing calls is a guard nobody has tested in the only situation that matters.
+
+What it does, in this order — all of it inside `integrations.guarded_dispatch`, with no path around it:
+
+1. **the do-not-contact list**, before any attempt is written down at all;
+2. **what is already recorded for this job**: an attempt that succeeded, or one whose outcome nobody
+   established, stops this one — no blind retry;
+3. **your standing authorisation**: the action, the source, the daily limit, the quiet hours and every
+   condition you set;
+4. **the enabling gate for the route**, which no authorisation can open;
+5. **the integration**, which in this build is the disabled one.
+
+Before anything is attempted, the attempt is written into your records with an unknown outcome, so a crash
+halfway through leaves evidence instead of silence; what actually happened is written over it afterwards,
+and a failure in flight stays *unknown* rather than becoming *failed*. A refusal does not spend your daily
+allowance, because nothing left the machine.
+
+**The recipient can only be one of your stored HR contacts.** You cannot type an address here, and an
+address on the do-not-contact list is not offered at all — the guard would refuse it anyway, but offering
+it would be an invitation to find that out by pressing the button.
+
+**In this build the answer is always a refusal with a reason.** No mailbox has ever been authorised, so
+the default integration is the disabled one and the gate for this route is closed; a test proves that even
+a full standing authorisation and a working local integration cannot get a message out of this window.
+What you get is the refusal, written into your records where the **What's happening** tab can show it. When
+a mailbox is one day authorised, "the provider accepted it" will still not mean delivered, read or
+replied to: those need the inbox permission this project does not have.
+
 ## Run scheduled tasks (local worker)
 
 The app can keep a schedule of its own work. Three tasks are created for you, and all of them run on

@@ -60,7 +60,7 @@ that check); and a write that failed part way left a ten-byte fragment of the ex
 path while reporting that nothing had been written. Evidence: `tests/test_diagnostics.py::PathRedactionTests`
 and `tests/test_store.py::PrivateBytesWriteTests`, run `38891340290` at `546d065` (13/13 jobs).
 
-**Next Arena task (candidates, smallest first):** **an in-application caller for `guarded_dispatch`** - the central guard (do-not-contact, duplicate and unresolved-outcome blocking, write-ahead attempt row, settlement with evidence) is covered by tests and reachable from nothing a person can press, so the follow-up tab stops at a read-only draft; or **suppressing an address that is not in the stored contacts**, which neither the window nor a CLI flag offers. Mailbox authorisation, delivery and reply evidence (P8 item 7) stay blocked on an external permission this project does not have.
+**Next Arena task (candidates, smallest first):** **suppressing an address that is not in the stored contacts** - the do-not-contact list can still only be added to through a stored contact row, and neither the window nor a CLI flag offers it; or **a first tailored document built from the window**, which the artifacts tab can only display. Mailbox authorisation, delivery and reply evidence (P8 item 7) stay blocked on an external permission this project does not have, and so does any claim that discovery runs twice a day.
 
 ## P1 — Resume intelligence and one-time onboarding
 - [ ] Inspect existing resume ingestion and reuse supported PDF/DOCX/text paths.
@@ -97,7 +97,7 @@ and `tests/test_store.py::PrivateBytesWriteTests`, run `38891340290` at `546d065
 ## P5 — Private HR outreach and inbox reconciliation
 - [ ] Connect a supported mail provider with least-privilege permissions; never store plaintext passwords or commit tokens.
 - [ ] Keep HR contacts in private local storage; retain provenance and review ambiguous records.
-- [ ] Enforce email normalization, duplicate checks, opt-out/suppression, prior-send checks, campaign limits and contact-level idempotency.
+- [ ] Enforce email normalization, duplicate checks, opt-out/suppression, prior-send checks, campaign limits and contact-level idempotency. **Reachable from the window (2026-10-18):** the Follow-ups tab's *Try to send this follow-up...* is the first in-application caller of `integrations.guarded_dispatch`; the recipient can only be a stored HR contact and a suppressed address is not offered. Pressing it writes a refusal into the attempt records - `FollowUpDispatchTests` (9) pins that a full standing authorisation and a working `LocalMockIntegration` still cannot send, because the route's gate is closed in code. Giving the guard a caller exposed one defect, fixed with `RepeatedOperationTests` (4): a settled operation id is now answered rather than raised. Real sending stays blocked on an authorised mailbox.
 - [ ] Generate personalized internship outreach and attach the correct resume version.
 - [ ] Enable real sending only after explicit global authorization, permission checks and end-to-end safety tests.
 - [ ] With separately authorized mailbox access, track actual replies, bounces and delivery evidence; do not infer replies.

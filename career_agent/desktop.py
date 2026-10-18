@@ -63,6 +63,8 @@ from .desktop_logic import (
     evidence_detail_text, evidence_kind_rows, evidence_record_question, evidence_route_rows,
     evidence_summary_text, evidence_withdraw_question, source_detail_text, source_rows,
     source_summary_text,
+    DISPATCH_CHECK_ORDER, address_from_choice, dispatch_question, dispatch_recipient_choices,
+    dispatch_result_text,
 )
 from .acceptance_evidence import EVIDENCE_TITLES, EvidenceError, EvidenceKind, get_route
 # Aliased on import: this module already has an ActionKind - the next-actions vocabulary - and the two
@@ -75,6 +77,7 @@ from .policy import (
 from .sources import SOURCE_DECISIONS, discovery_gate, submission_gate
 from . import reporting
 from .attempts import AttemptError, AttemptState
+from .identity import identity_key
 from .suppression import (
     PERMANENT_REASONS, REASON_LABELS, SuppressionError, SuppressionReason, normalise_address,
 )
@@ -3876,6 +3879,15 @@ class CareerAgentApp:
                    command=self._draft_follow_up_email).pack(side="left", padx=8)
         ttk.Button(actions_row_two, text="Export to a calendar file",
                    command=self._export_follow_ups).pack(side="left", padx=8)
+        sending = ttk.Frame(actions)
+        sending.pack(fill=X, pady=(6, 0))
+        ttk.Label(sending, text="Send to (a stored HR contact)").pack(side="left")
+        self.follow_up_recipient = tk.StringVar(value="")
+        self.follow_up_recipient_box = ttk.Combobox(
+            sending, textvariable=self.follow_up_recipient, state="readonly", width=44, values=())
+        self.follow_up_recipient_box.pack(side="left", padx=(4, 8))
+        ttk.Button(sending, text="Try to send this follow-up...",
+                   command=self._send_follow_up_email).pack(side="left", padx=8)
         ttk.Label(
             self.follow_up_tab, wraplength=_TAB_TEXT_WRAP,
             text=("A follow-up is a day you plan to act on, not a status: setting one never moves the "
@@ -4007,6 +4019,30 @@ class CareerAgentApp:
             self.follow_up_summary.set(
                 f"{summary(found)} {missing} record(s) have a day but no stored listing any more; "
                 "they are not listed here.")
+        self._refresh_follow_up_recipients()
+
+    def _refresh_follow_up_recipients(self) -> None:
+        """Offer the stored HR contacts as recipients, minus anybody marked do-not-contact.
+
+        Read from the same rows the contacts tab shows, every time the list is drawn: an address
+        marked do-not-contact in another tab stops being offered here without this window being
+        reopened. The guard checks the list again anyway - this only keeps the window from inviting
+        a press whose answer is already known.
+        """
+        if not hasattr(self, "follow_up_recipient_box"):
+            return
+        try:
+            contacts = self.store.list_contacts()
+            blocked = [entry.address for entry in self.store.list_suppressions()]
+        except (StoredRecordError, SuppressionError, sqlite3.Error):
+            # A contact list that cannot be read is not a reason to break the reminders list, and a
+            # do-not-contact list that cannot be read must not quietly become an empty one: with no
+            # choices offered, nothing here can be attempted at all.
+            contacts, blocked = (), ()
+        choices = dispatch_recipient_choices(contacts, blocked)
+        self.follow_up_recipient_box.configure(values=choices)
+        if self.follow_up_recipient.get() not in choices:
+            self.follow_up_recipient.set("")
 
     def _follow_up_when(self, reminder) -> str:
         """How far away a reminder's day is, in words, from the day this window is being used."""
@@ -4218,6 +4254,113 @@ class CareerAgentApp:
             ttk.Label(scrolled, text=line, wraplength=830, justify="left").pack(anchor=W)
         self.status.set("Draft written in this window only: nothing was sent, and no email account is "
                         "connected.")
+
+    def _send_follow_up_email(self):
+        """Try to send the selected follow-up, through the one guarded path out of this machine.
+
+        Nothing here decides anything. The window builds the draft from records, asks once, and
+        hands the whole thing to :func:`integrations.guarded_dispatch`, which is where the order
+        lives: the do-not-contact list first, then what is already recorded for this job, then the
+        standing authorisation, then the enabling gate, then the integration. There is deliberately
+        no path around it - this method cannot call an integration directly, and the result it
+        shows is whatever the guard returned.
+
+        In this build the answer is always a refusal with a reason: no mailbox has ever been
+        authorised, so the default integration is the disabled one and the gate for this route is
+        closed. The refusal is written into the attempt records, which is the point of pressing a
+        button that is expected to say no.
+        """
+        listing_id = self._selected_follow_up_id()
+        if not listing_id:
+            messagebox.showinfo("Select an application",
+                                "Select the reminder this follow-up is about first.",
+                                parent=self.root)
+            return
+        choice = self.follow_up_recipient.get()
+        recipient = address_from_choice(choice)
+        if not recipient:
+            messagebox.showerror(
+                "Nothing was sent",
+                "Choose one of your stored HR contacts to send to. This window will not send to an "
+                "address you type in: every recipient here comes from a list you imported and "
+                "reviewed.", parent=self.root)
+            self.status.set("Nothing was sent; no recipient was chosen.")
+            return
+        try:
+            tracker = self.store.get_tracker(listing_id)
+            job = self.store.get_job(listing_id)
+            policy = self.store.get_global_policy()
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if tracker is None:
+            self._report_stale_selection(listing_id)
+            return
+        if job is None or tracker.follow_up_on is None:
+            messagebox.showinfo(
+                "Nothing to send",
+                "This application has no follow-up day recorded, so there is nothing to follow up "
+                "on. Set the day on this tab first.", parent=self.root)
+            return
+        today = datetime.now().date()
+        reminder = reminder_for(tracker, job, today)
+        if reminder is None:
+            messagebox.showinfo(
+                "Nothing to send",
+                "This application's follow-up day is not in the window this list covers, so there "
+                "is nothing to send about it today.", parent=self.root)
+            return
+        integration = integrations.default_integration()
+        if not messagebox.askyesno(
+                "Try to send this follow-up",
+                dispatch_question(job.employer_name, job.role_title, recipient,
+                                  integration_name=integration.name), parent=self.root):
+            self.status.set("Nothing was sent.")
+            return
+        try:
+            draft = integrations.draft_for_follow_up(reminder, recipient=recipient)
+            result = integrations.guarded_dispatch(
+                self.store, integration, draft,
+                identity_key=identity_key(job),
+                policy=policy,
+                source_id=job.source_id,
+                now=datetime.now(timezone.utc),
+                done_today=integrations.COUNT_FROM_RECORDS,
+                # No mailbox route has ever been enabled in this build, so the gate for this
+                # capability is closed by construction. It is passed explicitly rather than read
+                # from the discovery decisions: reading a job source's gate here would let a
+                # decision about *reading* a site stand in for permission to write to a person.
+                source_gate_allows=False,
+            )
+        except (AttemptError, PolicyError, SuppressionError,
+                integrations.IntegrationLedgerError, ValueError) as exc:
+            messagebox.showerror("Nothing was sent", str(exc), parent=self.root)
+            self.status.set("Nothing was sent; the attempt was refused before anything was tried.")
+            return
+        except StoredRecordError as exc:
+            self._report_unreadable_record(exc)
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        scrolled = self._open_read_only_dialog(
+            title="What the guarded path answered",
+            heading=f"Follow-up to {recipient} about {job.role_title} at {job.employer_name}",
+            intro=("This is what the guard returned. The attempt - including a refusal - is "
+                   "written into your records, and you can read it again on the What's happening "
+                   "tab."),
+        )
+        self._add_read_only_lines(scrolled, dispatch_result_text(
+            result.outcome.value, result.performed, result.message,
+            integration_name=result.integration_name).splitlines())
+        self._refresh_report()
+        self.status.set(
+            f"{'Performed' if result.performed else 'Nothing was sent'}: "
+            f"recorded as operation {result.operation_id}."
+            if result.operation_id else "Nothing was sent; nothing was recorded.")
 
     def _refresh_scheduler(self):
         """Re-read the schedule and the run history; change nothing.

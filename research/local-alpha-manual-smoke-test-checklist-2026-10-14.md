@@ -1,7 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 163 steps — at this revision **22 PASS, 141 BLOCKED, 0 FAIL, no box ticked** (the seven
-newest steps, 157-163, are for the Sources & evidence tab and all seven are BLOCKED; steps 151-156,
+**Status:** 169 steps — at this revision **22 PASS, 147 BLOCKED, 0 FAIL, no box ticked** (the six
+newest steps, 164-169, are for trying to send a follow-up through the guard, and the seven before
+them, 157-163, are for the Sources & evidence tab; all thirteen are BLOCKED. Steps 151-156,
 for the conditions and the quiet window, 137-143, for the What's happening tab, and 144-150, for the
 do-not-contact list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
@@ -1481,3 +1482,26 @@ second verification pass, after the first run was already green.
     selected requirement is missing.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment. The
     disabled state is asserted in the handler tests; focus order and announcement are not.**
+
+## Follow-ups: trying to send one, through the guard (added 2026-10-18)
+
+164. [ ] Open **Follow-ups** with no HR contacts stored. Check that the recipient box offers nothing,
+    and that pressing **Try to send this follow-up...** explains rather than acting.
+    → **BLOCKED — acceptance check H15 asserts the empty chooser and the refusal; no display-backed run.**
+165. [ ] Import a contact list, choose a recipient, and read the question before answering. Judge
+    whether the order of checks it describes is something you would be willing to rely on.
+    → **BLOCKED — acceptance check H16 asserts the question's content and that a declined dialog writes
+    nothing; whether it is convincing is a person's judgement.**
+166. [ ] Say yes. Check that nothing is sent, that the reason given is specific, and that the attempt
+    appears in your records on the **What's happening** tab.
+    → **BLOCKED — acceptance check H17 asserts the single refused attempt row and the untouched daily
+    allowance; reading it on the other tab needs a window.**
+167. [ ] Press it again with the same message. Check the window reports the earlier attempt rather than
+    writing a second one.
+    → **BLOCKED — acceptance check H18 and a ledger regression test assert this; no display-backed run.**
+168. [ ] Mark that contact do-not-contact on the **HR contacts** tab, come back, and check the address is
+    no longer offered as a recipient.
+    → **BLOCKED — acceptance check H19 asserts the withdrawal from the chooser; no display-backed run.**
+169. [ ] Keyboard and screen reader: reach the recipient box and the button with **Tab** alone, and
+    check the chooser is announced as a list you select from rather than a field you type into.
+    → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**

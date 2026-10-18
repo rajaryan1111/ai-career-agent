@@ -933,3 +933,70 @@ class AcceptanceEvidenceTextTests(unittest.TestCase):
         self.assertIn("their terms changed", question)
         self.assertIn("goes back to missing", question)
         self.assertIn("nothing was switched on by the record", question)
+
+
+class DispatchTextTests(unittest.TestCase):
+    """The sentences around the one guarded path out of this machine.
+
+    The guard decides; these strings only have to describe it truthfully - in particular that the
+    do-not-contact list is checked first, that an attempt is written down before it is made, and
+    that "the provider accepted it" is not "it was delivered".
+    """
+
+    def contact(self, email, name="", suppressed=False):
+        return SimpleNamespace(email=email, name=name, suppressed=suppressed)
+
+    def test_only_stored_unsuppressed_contacts_are_offered_and_they_are_sorted(self):
+        offered = logic.dispatch_recipient_choices([
+            self.contact("zoe@example.invalid", "Zoe"),
+            self.contact("amir@example.invalid", "Amir"),
+            self.contact("blank@example.invalid", "", suppressed=True),
+            self.contact("", "Nobody"),
+        ])
+        self.assertEqual(offered, ("Amir <amir@example.invalid>", "Zoe <zoe@example.invalid>"))
+
+    def test_an_address_on_the_do_not_contact_list_is_not_offered_however_it_is_written(self):
+        offered = logic.dispatch_recipient_choices(
+            [self.contact("Amir@Example.invalid", "Amir")], ["  amir@example.invalid "])
+        self.assertEqual(offered, ())
+
+    def test_the_address_is_read_back_out_of_the_choice(self):
+        self.assertEqual(logic.address_from_choice("Amir <amir@example.invalid>"),
+                         "amir@example.invalid")
+        self.assertEqual(logic.address_from_choice(" amir@example.invalid "),
+                         "amir@example.invalid")
+        self.assertEqual(logic.address_from_choice(""), "")
+
+    def test_the_question_lists_the_checks_in_the_order_the_guard_applies_them(self):
+        question = logic.dispatch_question("Acme", "AI Engineer", "hr@acme.invalid",
+                                           integration_name="disabled")
+        self.assertIn("hr@acme.invalid", question)
+        self.assertIn("AI Engineer at Acme", question)
+        order = [question.index(check) for check in logic.DISPATCH_CHECK_ORDER]
+        self.assertEqual(order, sorted(order), "the checks are not listed in the guard's order")
+        self.assertIn("do-not-contact", logic.DISPATCH_CHECK_ORDER[0])
+        self.assertIn("written into your records as having an unknown outcome", question)
+        self.assertIn("honest expectation is a refusal", question)
+
+    def test_a_refusal_is_described_as_nothing_having_left_the_machine(self):
+        text = logic.dispatch_result_text(
+            "disabled", False, "Nothing was sent: this is not authorised.",
+            integration_name="disabled")
+        self.assertIn("Nothing was sent.", text)
+        self.assertIn("Nothing left this machine", text)
+        self.assertIn("written into your records with the reason", text)
+        self.assertNotIn("delivered", text)
+
+    def test_a_performed_dispatch_is_never_described_as_delivered_or_read(self):
+        text = logic.dispatch_result_text(
+            "completed", True, "The integration accepted it.", integration_name="local-mock")
+        self.assertIn("the integration accepted it", text.casefold())
+        self.assertIn("not that it was delivered", text)
+        self.assertIn("not that anybody replied", text)
+        self.assertIn("local-mock", text)
+
+    def test_an_unknown_outcome_says_nothing_could_be_established(self):
+        text = logic.dispatch_result_text("unknown", False, "It is not known what happened.",
+                                          integration_name="disabled")
+        self.assertIn("Nothing could be established", text)
+        self.assertIn("separate permissions", text)
