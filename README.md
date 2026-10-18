@@ -27,6 +27,19 @@ The local alpha supports manual candidate-profile entry, manual job entry, eligi
 
 Existing databases are upgraded in place to schema version 2 (one attempt per legacy tracker row, revision 0). History is not invented for records that predate the upgrade.
 
+## Install
+
+No runtime dependency beyond the Python standard library and Tk is required. An editable install adds the `career-agent` command:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+career-agent --help
+```
+
+The package declares Python 3.10–3.12 in [pyproject.toml](pyproject.toml). Editable installs are verified locally; no wheel, installer, updater, or code-signing pipeline exists yet.
+
 ## Run the desktop app
 
 Python 3.10+ with Tkinter available:
@@ -57,7 +70,13 @@ The tool intentionally does not invent a direct-link validity percentage; the ex
 
 ## Run tests
 
-Python 3.10+; no third-party packages are required.
+Python 3.10+; no third-party packages are required. The single reproducible command runs the unit suite, the tracker smoke test, `compileall`, and the CSV audit, and exits nonzero if any step fails:
+
+```bash
+python scripts/smoke_check.py
+```
+
+Run one step alone when iterating:
 
 ```bash
 python -m unittest discover -s tests -v
