@@ -1633,15 +1633,15 @@ class SchemaMigrationTests(unittest.TestCase):
         store = CareerStore(self.path)
         self.addCleanup(store.close)
 
-        self.assertEqual(SCHEMA_VERSION, 8)
-        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 8)
+        self.assertEqual(SCHEMA_VERSION, 9)
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], 9)
         tables = {
             row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         }
         # ``4`` here was the version at the time; the point is that the fresh file has *exactly* the tables
         # the current version's contract names - so it is written as the version it is checking.
-        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[8]))
+        self.assertEqual(tables, set(SCHEMA_TABLES_BY_VERSION[9]))
 
     def test_the_migration_list_describes_every_version_up_to_the_current_one(self):
         steps = store_module._MIGRATIONS
@@ -1918,6 +1918,50 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], before)
         self.assertEqual([entry.fact for entry in store.get_profile_fact_provenance()], ["country"],
                          "re-running the step does not disturb an origin that was already recorded")
+
+    def test_the_strategy_step_adds_its_table_to_a_database_full_of_records(self):
+        """The v8 file a person has been using: every row stays, the strategy table arrives empty.
+
+        A migration cannot invent a statement of intent, so an upgraded file must hold no strategies
+        until the person writes one - and must be usable the moment they do, which is the part a
+        version check alone cannot tell you.
+        """
+        older = self._open_at_version(8)
+        self.assertNotIn("role_strategy_version", {
+            row[0] for row in older._connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }, "version 8 predates the strategy table")
+        profile = CandidateProfile(candidate_country="India", skills=frozenset({"Python"}))
+        older.save_profile(profile)
+        older.save_job(self._job())
+        older.close()
+
+        upgraded = CareerStore(self.path)
+        self.addCleanup(upgraded.close)
+
+        self.assertEqual(upgraded._connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(upgraded.get_profile(), profile, "the profile is not rebuilt by a migration")
+        self.assertEqual(upgraded.get_job("j1"), self._job())
+        self.assertEqual(upgraded.list_role_strategies(), (), "an upgrade invents no strategy")
+
+        created = upgraded.create_role_strategy(name="Backend roles", role_family="Backend engineering")
+        self.assertEqual(created.version, 1)
+        self.assertEqual(upgraded.get_role_strategy(created.strategy_id), created,
+                         "usable at once, on the file that was just upgraded")
+
+    def test_the_strategy_step_can_run_again_on_a_database_that_already_has_its_table(self):
+        """An interrupted step must never leave a database that cannot be opened by re-running it."""
+        store = CareerStore(self.path)
+        self.addCleanup(store.close)
+        strategy = store.create_role_strategy(name="Data roles", role_family="Data engineering")
+        before = store._connection.execute("PRAGMA user_version").fetchone()[0]
+
+        with store._connection:
+            store_module._migration_to_v9(store._connection)
+            store_module._migration_to_v9(store._connection)
+
+        self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], before)
+        self.assertEqual(store.role_strategy_versions(strategy.strategy_id), (strategy,),
+                         "re-running the step does not disturb a version that was already written")
 
     def test_the_history_tables_are_deleted_with_the_profile_rather_than_left_behind(self):
         """A person who deletes their profile must not leave their employment record in the file."""

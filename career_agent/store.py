@@ -29,12 +29,15 @@ from .core import (
     WorkHistoryEntry, duplicate_key, is_allowed_tracker_transition, require_confirmation_evidence,
     validate_activity_detail, validate_activity_date,
 )
+from .strategies import (
+    RoleStrategy, StrategyError, new_strategy_id, strategy_from_payload, strategy_payload,
+)
 from .tasks import (
     RunState, ScheduledTask, TaskRun, TaskValidationError, WorkerLease, WorkerLeaseHeld,
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -61,6 +64,10 @@ SCHEMA_TABLES_BY_VERSION = {
         "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
         "interview_round", "job_listings", "profile_fact_provenance", "scheduled_task", "task_run",
         "worker_lease"),
+    9: ("application_activity", "application_preparation", "application_tracker", "candidate_education",
+        "candidate_profile", "candidate_work_history", "hr_contact", "hr_contact_conflict",
+        "interview_round", "job_listings", "profile_fact_provenance", "role_strategy_version",
+        "scheduled_task", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1066,6 +1073,25 @@ def _migration_to_v8(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v9(connection: sqlite3.Connection) -> None:
+    """Schema 9: the versioned role strategies.
+
+    One new table, additive and empty. A strategy is append-only: one row per ``(strategy_id,
+    version)``, the payload holding the content and the columns holding the identity, so a version's
+    meaning never changes after it is written and an artifact can reference the exact statement of
+    intent it was made under. ``IF NOT EXISTS`` keeps the step re-runnable, like every other step.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS role_strategy_version (
+               strategy_id TEXT NOT NULL,
+               version INTEGER NOT NULL,
+               payload TEXT NOT NULL,
+               created_at TEXT NOT NULL,
+               PRIMARY KEY (strategy_id, version)
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1079,6 +1105,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (6, "add the candidate's own employment history and education", _migration_to_v6),
     (7, "add the imported HR contact list and the disagreements found in it", _migration_to_v7),
     (8, "add where each stored profile fact came from, and whether it was confirmed", _migration_to_v8),
+    (9, "add the versioned role strategies", _migration_to_v9),
 )
 
 
@@ -3693,6 +3720,134 @@ class CareerStore:
             observed_at=str(row["observed_at"] or ""),
         )
 
+    # ---------------------------------------------------------------------------- role strategies
+    #
+    # A strategy is the person's statement of intent about the roles they are pursuing
+    # (``career_agent.strategies`` owns the model and its validation). The store keeps the promise that
+    # makes the versions worth having: rows are **append-only**, one per ``(strategy_id, version)``, and
+    # nothing here updates or replaces a written version - so a document generated under version 2 can
+    # always be traced to exactly what version 2 said, even after version 3 exists.
+    #
+    # The strategy's *content* is the person's own data (a name, places, employers they rule out), so
+    # the events carry the generated identifier and the version number, and nothing else.
+
+    def create_role_strategy(self, **content: object) -> RoleStrategy:
+        """Store a new strategy as version 1 under a freshly generated identifier.
+
+        ``content`` is the strategy's own fields (see ``strategies.CONTENT_FIELDS``); every one is
+        validated by the :class:`~career_agent.strategies.RoleStrategy` constructor before anything is
+        written, so a refused strategy leaves the database exactly as it was.
+        """
+        strategy = RoleStrategy(strategy_id=new_strategy_id(), version=1, **content)  # type: ignore[arg-type]
+        self._write_strategy_row(strategy)
+        self._record("strategy.created", f"id={strategy.strategy_id} version=1")
+        return strategy
+
+    def revise_role_strategy(self, strategy_id: str, **content: object) -> RoleStrategy:
+        """Append the next version of a stored strategy, or return the current one when nothing changes.
+
+        A revision whose content matches the current version byte-for-byte writes **no row** and
+        returns the stored version as it is: a version that changed nothing would be a claim that
+        something did, and an artifact's lineage is only worth what the version numbers mean.
+        """
+        latest = self.get_role_strategy(strategy_id)
+        if latest is None:
+            raise StrategyError(
+                f"no strategy with the identifier {strategy_id!r} is stored, so there is nothing to revise")
+        candidate = RoleStrategy(strategy_id=strategy_id, version=latest.version,
+                                 **content)  # type: ignore[arg-type]
+        if candidate.content_key() == latest.content_key():
+            return latest
+        revised = RoleStrategy(strategy_id=strategy_id, version=latest.version + 1,
+                               **content)  # type: ignore[arg-type]
+        self._write_strategy_row(revised)
+        self._record("strategy.revised", f"id={strategy_id} version={revised.version}")
+        return revised
+
+    def _write_strategy_row(self, strategy: RoleStrategy) -> None:
+        """One append-only insert. A (strategy_id, version) that exists is a bug, not an upsert."""
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO role_strategy_version (strategy_id, version, payload, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (strategy.strategy_id, strategy.version, strategy_payload(strategy), _now()),
+            )
+
+    def get_role_strategy(self, strategy_id: str, version: int | None = None) -> RoleStrategy | None:
+        """One strategy: a specific version, or the newest one. ``None`` when nothing is stored.
+
+        A row this build cannot read raises :class:`StoredRecordError` rather than being passed over:
+        a strategy that exists but cannot be interpreted is a damaged record, and silently reading it
+        as absent would strand every artifact that references it.
+        """
+        if version is None:
+            row = self._connection.execute(
+                """SELECT strategy_id, version, payload FROM role_strategy_version
+                   WHERE strategy_id=? ORDER BY version DESC LIMIT 1""",
+                (strategy_id,),
+            ).fetchone()
+        else:
+            row = self._connection.execute(
+                """SELECT strategy_id, version, payload FROM role_strategy_version
+                   WHERE strategy_id=? AND version=?""",
+                (strategy_id, version),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._decode_role_strategy(row)
+
+    def list_role_strategies(self) -> tuple[RoleStrategy, ...]:
+        """The newest version of every stored strategy, by name and then identifier.
+
+        Sorted by what the person reads (the name) so two runs over one database show one order;
+        the identifier breaks a tie between two strategies with the same name.
+        """
+        rows = self._connection.execute(
+            """SELECT s.strategy_id, s.version, s.payload FROM role_strategy_version s
+               JOIN (SELECT strategy_id, MAX(version) AS newest FROM role_strategy_version
+                     GROUP BY strategy_id) m
+                 ON s.strategy_id = m.strategy_id AND s.version = m.newest"""
+        ).fetchall()
+        strategies = tuple(self._decode_role_strategy(row) for row in rows)
+        return tuple(sorted(strategies, key=lambda item: (item.name, item.strategy_id)))
+
+    def role_strategy_versions(self, strategy_id: str) -> tuple[RoleStrategy, ...]:
+        """Every version of one strategy, oldest first: the edit history a lineage report reads."""
+        rows = self._connection.execute(
+            """SELECT strategy_id, version, payload FROM role_strategy_version
+               WHERE strategy_id=? ORDER BY version ASC""",
+            (strategy_id,),
+        ).fetchall()
+        return tuple(self._decode_role_strategy(row) for row in rows)
+
+    def delete_role_strategy(self, strategy_id: str) -> int:
+        """Remove a strategy and every version of it, as one transaction; returns the rows removed.
+
+        Deletion is whole by design: versions are the history of one statement of intent, and keeping
+        some of them would keep a lineage that points at a strategy the person deleted. Returns 0 -
+        and writes nothing, records nothing - when no such strategy is stored, because deleting
+        nothing is not a change to report.
+        """
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM role_strategy_version WHERE strategy_id=?", (strategy_id,))
+            removed = cursor.rowcount
+        if removed > 0:
+            self._record("strategy.deleted", f"id={strategy_id} versions={removed}")
+        return removed
+
+    @staticmethod
+    def _decode_role_strategy(row: sqlite3.Row) -> RoleStrategy:
+        noun = "role strategy"
+        strategy_id = str(row["strategy_id"] or "")
+        if not strategy_id.strip():
+            raise StoredRecordError(noun, "it has no identifier, so no version can be referenced")
+        version = _stored_int(row["version"], noun, "version")
+        try:
+            return strategy_from_payload(strategy_id, version, row["payload"])
+        except StrategyError as exc:
+            raise StoredRecordError(noun, str(exc)) from exc
+
 
 # ---------------------------------------------------------------- reading a file without opening it
 #
@@ -3718,6 +3873,7 @@ _RECORD_DECODERS: tuple[tuple[str, str, Callable[[sqlite3.Row], object]], ...] =
     # discovered later by a screen that cannot render it.
     ("hr_contact", "contact_id", CareerStore._decode_contact),
     ("hr_contact_conflict", "conflict_id", CareerStore._decode_contact_conflict),
+    ("role_strategy_version", "strategy_id", CareerStore._decode_role_strategy),
     ("scheduled_task", "task_id", CareerStore._decode_scheduled_task),
     ("task_run", "run_id", CareerStore._decode_task_run),
     ("worker_lease", "worker_id", CareerStore._decode_worker_lease),

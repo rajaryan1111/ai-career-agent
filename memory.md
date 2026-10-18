@@ -3780,3 +3780,20 @@ disk. Evidence: 8 new tests in `tests/test_importer.py::NonStandardNumberTests` 
 focused run 51 OK, full local suite **2090 tests OK (skipped=13)**, `compileall` and `git diff --check`
 clean; schema stays **8**, export version stays **2**, all external-action gates unchanged. Note:
 [import number boundary](research/import-number-boundary-2026-10-18.md).
+
+
+## 2026-10-18 — Versioned role strategies: model and append-only store (P7, part 1)
+
+Schema **9** adds `role_strategy_version(strategy_id, version, payload, created_at)` through the
+existing migration runner; `career_agent/strategies.py` owns an industry-agnostic `RoleStrategy`
+(role family, title synonyms, seniority, locations, work modes, employment types, currency-bearing
+compensation bounds, required skills, exclusions, preferred skills) with the same numeric boundary as
+the JSON import. The store's promise: rows are append-only, a no-change revision writes no version,
+`content_key()` recognises the same statement across identity and set order, damaged rows are
+reported through the doctor's decoder, events carry the generated identifier and version and never
+the strategy's content, backup/restore carries every version, and the JSON export stays at version 2
+with the pin that says adding them is a deliberate bump. Evidence: 27 tests in
+`tests/test_strategies.py`, 2 migration tests in `tests/test_store.py`, full local suite **2119 tests
+OK (skipped=13)**; schema **9** re-pinned in both pinning tests. Deliberately next: matching/eligibility
+consumption, artifact lineage, invalidation, UI. Note:
+[role strategies: model and store](research/role-strategies-versioned-store-2026-10-18.md).
