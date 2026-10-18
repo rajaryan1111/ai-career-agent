@@ -1169,6 +1169,15 @@ confirmation:
 - a contact marked by an older build shows as **not on the list**, and the line above the list says
   how many are in that state, because quietly counting them as protected would be the dangerous lie.
 
+
+**An address that was never in your contact file can go on the list too.** On the **HR contacts** tab,
+under the list itself: type the address, choose why, and confirm once. It needs no contact row, invents
+none, and the confirmation says what the reason means - "they asked not to be contacted" is permanent in
+this application, the others are not. An address already on the list keeps the reason it was first
+recorded with; the window says so and writes nothing. This closes the gap that mattered most about this
+list: the person most likely to have asked to stop is the one who replied from an address your imported
+file never had.
+
 ## Syncing, credentials, and what is deliberately not claimed
 
 **Laptop-off operation is not available, and this project does not claim it.** The worker is a

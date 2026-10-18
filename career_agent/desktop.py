@@ -59,7 +59,8 @@ from .desktop_logic import (
     reconciliation_question, reconciliation_refusal, report_summary_text,
     required_fact_questions, required_facts_to_confirm,
     suppression_lift_question, suppression_lift_refusal, suppression_mark_question,
-    suppression_reason_choices, suppression_rows, suppression_summary_text,
+    suppression_add_question, suppression_reason_choices, suppression_rows,
+    suppression_summary_text,
     evidence_detail_text, evidence_kind_rows, evidence_record_question, evidence_route_rows,
     evidence_summary_text, evidence_withdraw_question, source_detail_text, source_rows,
     source_summary_text,
@@ -1438,6 +1439,24 @@ class CareerAgentApp:
             self.suppression_tree.heading(column, text=heading)
             self.suppression_tree.column(column, width=width, anchor=W)
         self.suppression_tree.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        # Somebody can ask to stop without ever having been in a file you imported - a reply, a call, a
+        # message to a different address than the one on the list. Until now the only way onto the list
+        # was through a stored contact row, which meant the one person whose wishes this list exists for
+        # could be the one person it could not record.
+        add_stop = ttk.Frame(body)
+        add_stop.grid(row=17, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ttk.Label(add_stop, text="Add an address that is not in your contacts").grid(
+            row=0, column=0, sticky=W, padx=(0, 5))
+        self.suppression_address = tk.StringVar(value="")
+        ttk.Entry(add_stop, textvariable=self.suppression_address, width=34).grid(
+            row=0, column=1, sticky=W, padx=(0, 12))
+        ttk.Label(add_stop, text="Why").grid(row=0, column=2, sticky=W, padx=(0, 5))
+        self.suppression_add_reason = tk.StringVar(value=suppression_reason_choices()[0][1])
+        ttk.Combobox(add_stop, textvariable=self.suppression_add_reason, state="readonly", width=26,
+                     values=[label for _value, label in suppression_reason_choices()]).grid(
+                         row=0, column=3, sticky=W, padx=(0, 12))
+        ttk.Button(add_stop, text="Add to the do-not-contact list...",
+                   command=self._add_suppression).grid(row=0, column=4, sticky=W)
         ttk.Label(
             body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=(
@@ -1447,13 +1466,13 @@ class CareerAgentApp:
                 "An address can be on this list without being in the stored contacts above: the list is "
                 "about addresses, not about rows in a file you imported."
             ),
-        ).grid(row=17, column=0, columnspan=2, sticky=W, pady=(4, 0))
+        ).grid(row=18, column=0, columnspan=2, sticky=W, pady=(4, 0))
         # The one destructive action on this tab, on its own row and under its own sentence. It is not
         # beside the mark controls for two reasons: erasing a record is not another way of annotating one,
         # and a row holding these three labels plus this button is wider than the narrowest page this tab
         # can be given - Tk clips a row rather than wrapping it.
         delete_row = ttk.Frame(body)
-        delete_row.grid(row=18, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        delete_row.grid(row=19, column=0, columnspan=2, sticky=W, pady=(10, 0))
         # Built disabled and enabled only while a stored row is selected, like the two mark controls: a
         # destructive button that cannot act is better off greyed out than offering something it will refuse.
         self.delete_contact_button = ttk.Button(
@@ -1471,7 +1490,7 @@ class CareerAgentApp:
             "way, and the delete key in this window never removes a contact file."
         ))
         ttk.Label(body, textvariable=self.contact_delete_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=19, column=0, columnspan=2, sticky=W, pady=(4, 0))
+                  justify=LEFT).grid(row=20, column=0, columnspan=2, sticky=W, pady=(4, 0))
         ttk.Label(
             body, wraplength=_TAB_TEXT_WRAP, justify=LEFT,
             text=(
@@ -1481,9 +1500,9 @@ class CareerAgentApp:
                 "where the file says, or whether this list may be used for outreach at all. A stored "
                 "contact is never written to, and no send button exists in this build."
             ),
-        ).grid(row=20, column=0, columnspan=2, sticky=W, pady=(10, 0))
+        ).grid(row=21, column=0, columnspan=2, sticky=W, pady=(10, 0))
         ttk.Label(body, text="Recorded disagreements (nothing here is merged or changed)").grid(
-            row=21, column=0, columnspan=2, sticky=W, pady=(12, 2))
+            row=22, column=0, columnspan=2, sticky=W, pady=(12, 2))
         # One disagreement per row, oldest first, in the store's own order. The columns carry the compact
         # facts and the panel below carries the two values in full: a list cell is one line and Tk clips it,
         # and a name that disagrees with another name is exactly the thing that must not be clipped.
@@ -1497,13 +1516,13 @@ class CareerAgentApp:
                 ("recorded_at", "Recorded at", 150)):
             self.contact_conflicts_tree.heading(column, text=heading)
             self.contact_conflicts_tree.column(column, width=width, anchor=W)
-        self.contact_conflicts_tree.grid(row=22, column=0, columnspan=2, sticky="nsew")
+        self.contact_conflicts_tree.grid(row=23, column=0, columnspan=2, sticky="nsew")
         self.contact_conflicts_tree.bind("<<TreeviewSelect>>", self._on_conflict_selection)
         self.contact_conflict_note = tk.StringVar(value="Reading the recorded disagreements...")
         ttk.Label(body, textvariable=self.contact_conflict_note, wraplength=_TAB_TEXT_WRAP,
-                  justify=LEFT).grid(row=23, column=0, columnspan=2, sticky=W, pady=(6, 0))
+                  justify=LEFT).grid(row=24, column=0, columnspan=2, sticky=W, pady=(6, 0))
         self.contact_conflict_text = tk.Text(body, height=8, wrap="word", state="disabled")
-        self.contact_conflict_text.grid(row=24, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.contact_conflict_text.grid(row=25, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         # The sentence this panel exists to make unnecessary to guess at: what it does, what it refuses to
         # do, and why the database is the thing that decides which value it keeps.
         ttk.Label(
@@ -1516,7 +1535,7 @@ class CareerAgentApp:
                 "shows them, changes nothing, and cannot dismiss a disagreement. Select a row above to read "
                 "both sides in full."
             ),
-        ).grid(row=25, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ).grid(row=26, column=0, columnspan=2, sticky=W, pady=(6, 0))
         # The export lives at the bottom of this tab, under its own heading and its own sentence, because
         # it is the one control here that writes a file outside the database. The sentence is a variable
         # rather than a literal so what the window claims about the file - including the part it cannot do
@@ -1813,6 +1832,74 @@ class CareerAgentApp:
         # Falling back to the permanent reason would overstate what somebody asked for; the mildest
         # reason is the honest default, and the chooser shows what was recorded afterwards.
         return SuppressionReason.OUR_OWN_DECISION
+
+    def _add_suppression(self) -> None:
+        """Put an address on the do-not-contact list without it being one of your stored contacts.
+
+        The list is about addresses, not about rows in a file somebody imported, and the person most
+        likely to have asked to stop is exactly the one whose address is not in that file. The
+        address is checked the same way every other address in this application is - the window
+        refuses an unusable one rather than storing something the sending gate could never match -
+        and a second record for an address already listed keeps the first reason, because the
+        earliest reason is the truest one.
+        """
+        # Surrounding spaces are trimmed before the address is checked, unlike a recipient typed for
+        # a draft: this box adds an address to a list that *stops* messages, so a pasted address with
+        # a stray space is worth accepting rather than arguing with. Every other rule still applies.
+        typed = self.suppression_address.get().strip()
+        try:
+            address = integrations.validate_email_address(typed)
+        except ValueError as exc:
+            messagebox.showerror(
+                "The do-not-contact list was not changed",
+                f"{exc} Nothing was changed.", parent=self.root)
+            self.status.set("The do-not-contact list was not changed; that address cannot be used.")
+            return
+        label = self.suppression_add_reason.get().strip()
+        chosen = next((value for value, text in suppression_reason_choices() if text == label), "")
+        try:
+            # The chooser carries the stored values, not the enum members; a label this build does
+            # not know would otherwise become a reason nobody chose.
+            reason = SuppressionReason(chosen)
+        except ValueError:
+            reason = SuppressionReason.OUR_OWN_DECISION
+        key = normalise_address(address)
+        try:
+            existing = self.store.suppression_for(key)
+        except (SuppressionError, StoredRecordError):
+            existing = None
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        if existing is not None:
+            messagebox.showinfo(
+                "Already on the list",
+                f"{key} is already on the do-not-contact list, recorded "
+                f"{existing.recorded_at}. The first reason recorded is kept: an address somebody "
+                f"asked to be left alone at must not quietly become something milder.",
+                parent=self.root)
+            self.status.set("Nothing was changed; that address is already on the list.")
+            return
+        if not messagebox.askyesno(
+                "Add to the do-not-contact list",
+                suppression_add_question(key, reason), parent=self.root):
+            self.status.set("The do-not-contact list was not changed.")
+            return
+        try:
+            self.store.suppress_contact(key, reason=reason)
+        except (SuppressionError, StoredRecordError) as exc:
+            messagebox.showerror("The do-not-contact list was not changed", str(exc),
+                                 parent=self.root)
+            self.status.set("The do-not-contact list was not changed.")
+            return
+        except sqlite3.Error as exc:
+            self._report_database_unavailable(exc)
+            return
+        self.suppression_address.set("")
+        self._refresh_contacts()
+        self._refresh_follow_up_recipients()
+        self.status.set(
+            f"{key} is on the do-not-contact list; nothing was sent and nothing else changed.")
 
     def _refresh_suppressions(self):
         """Re-draw the enforced do-not-contact list and the line above it. Read-only."""

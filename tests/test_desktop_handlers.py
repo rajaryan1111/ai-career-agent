@@ -9789,3 +9789,108 @@ class FollowUpDispatchTests(HandlerTestCase):
                          if isinstance(label.text, str))
         self.assertIn("Nothing was sent", shown)
         self.assertIn("gate", shown.casefold())
+
+
+class AddressNotInYourContactsTests(HandlerTestCase):
+    """Putting an address on the do-not-contact list without it being a stored contact.
+
+    The list is about addresses; the stored contacts are rows in a file somebody imported. Until
+    now the only way onto the list was through one of those rows, which meant the person most
+    likely to have asked to stop - somebody who replied from an address that was never in the file
+    - was the one person the list could not record.
+    """
+
+    def build_window(self):
+        root = RecordingToplevel()
+        app = desktop.CareerAgentApp(
+            root, database_path=Path(self._directory.name) / "stoplist.sqlite3")
+        self.addCleanup(app.store.close)
+        return app
+
+    def typed(self, app, address, reason="they asked not to be contacted"):
+        app.suppression_address.set(address)
+        app.suppression_add_reason.set(reason)
+
+    def test_an_address_nobody_imported_can_be_listed_after_one_confirmation(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "  Someone.Else@Example.Invalid ")
+
+        app._add_suppression()
+
+        entry = app.store.suppression_for("someone.else@example.invalid")
+        self.assertIsNotNone(entry)
+        self.assertIs(entry.reason, SuppressionReason.ASKED_TO_STOP)
+        self.assertTrue(app.store.is_suppressed("SOMEONE.ELSE@EXAMPLE.INVALID"))
+        self.assertEqual(app.store.contact_record_counts()["contacts"], 0,
+                         "listing an address invented a contact row")
+        self.assertEqual(app.suppression_address.get(), "")
+        self.assertIn("do-not-contact list", app.status.get())
+
+    def test_the_question_names_the_address_the_reason_and_what_it_does_not_expire(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = False
+        self.typed(app, "someone.else@example.invalid")
+        before = app.store._connection.total_changes
+
+        app._add_suppression()
+
+        asked = MESSAGES.text("askyesno")
+        self.assertIn("someone.else@example.invalid", asked)
+        self.assertIn("they asked not to be contacted", asked)
+        self.assertIn("permanent in this application", asked)
+        self.assertIn("does not have to be one of your stored contacts", asked)
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertEqual(app.store.list_suppressions(), ())
+
+    def test_an_unusable_address_is_refused_before_the_question(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        for address in ("", "   ", "not an address", "someone@", "@example.invalid"):
+            with self.subTest(address=address):
+                MESSAGES.reset()
+                self.typed(app, address)
+                app._add_suppression()
+                self.assertIn("The do-not-contact list was not changed",
+                              MESSAGES.titles("showerror"))
+                self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store.list_suppressions(), ())
+
+    def test_an_address_already_listed_keeps_its_first_reason_and_asks_nothing(self):
+        app = self.build_window()
+        app.store.suppress_contact("someone.else@example.invalid",
+                                   reason=SuppressionReason.ASKED_TO_STOP, note="they asked")
+        CONFIG["Add to the do-not-contact list"] = True
+        MESSAGES.reset()
+        self.typed(app, "Someone.Else@example.invalid", reason="our own decision")
+        before = app.store._connection.total_changes
+
+        app._add_suppression()
+
+        self.assertIn("Already on the list", MESSAGES.titles("showinfo"))
+        self.assertEqual(MESSAGES.text("askyesno"), "")
+        self.assertEqual(app.store._connection.total_changes, before)
+        self.assertIs(app.store.suppression_for("someone.else@example.invalid").reason,
+                      SuppressionReason.ASKED_TO_STOP)
+
+    def test_a_listed_address_is_shown_in_the_list_and_blocks_a_follow_up(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "someone.else@example.invalid")
+
+        app._add_suppression()
+
+        listed = {row[0] for row in app.suppression_tree.inserted}
+        self.assertIn("someone.else@example.invalid", listed)
+        self.assertNotIn("someone.else@example.invalid",
+                         " ".join(str(value) for value in app.follow_up_recipient_box.options.get(
+                             "values", ())))
+
+    def test_the_note_a_person_never_typed_is_not_invented(self):
+        app = self.build_window()
+        CONFIG["Add to the do-not-contact list"] = True
+        self.typed(app, "someone.else@example.invalid")
+
+        app._add_suppression()
+
+        self.assertEqual(app.store.suppression_for("someone.else@example.invalid").note, "")

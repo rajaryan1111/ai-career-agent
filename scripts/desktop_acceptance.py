@@ -5261,6 +5261,46 @@ def workflow_l_contact_import(run: Run) -> None:
         for fragment in ("no-such-folder", str(missing)):
             require(fragment not in written, f"{fragment!r} reached the activity log")
 
+    with results.step("L21 an address nobody imported can be put on the do-not-contact list"):
+        from career_agent.suppression import SuppressionReason  # noqa: PLC0415
+
+        policy.reset()
+        policy.answers["Add to the do-not-contact list"] = True
+        stranger = "never.imported@example.invalid"
+        before_contacts = app.store.contact_record_counts()["contacts"]
+        app.suppression_address.set(stranger)
+        app.suppression_add_reason.set("they asked not to be contacted")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        entry = app.store.suppression_for(stranger)
+        require(entry is not None, "the address was not recorded on the do-not-contact list")
+        require(entry.reason is SuppressionReason.ASKED_TO_STOP,
+                f"the reason recorded is {entry.reason!r}")
+        require(app.store.contact_record_counts()["contacts"] == before_contacts,
+                "listing an address invented a contact row")
+        require("permanent in this application" in policy.said("Add to the do-not-contact list"),
+                "the confirmation does not say what this reason means")
+
+    with results.step("L22 an unusable address is refused, and a listed one keeps its first reason"):
+        policy.reset()
+        policy.answers["Add to the do-not-contact list"] = True
+        before = app.store._connection.total_changes
+        app.suppression_address.set("not an address")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        require("The do-not-contact list was not changed" in policy.titles("showerror"),
+                f"an unusable address was not refused; dialogs: {policy.titles()!r}")
+        require(policy.titles("askyesno") == [],
+                f"an unusable address still asked the question: {policy.titles()!r}")
+        policy.reset()
+        app.suppression_address.set("Never.Imported@example.invalid")
+        app.suppression_add_reason.set("our own decision")
+        press(app.contacts_tab, "Add to the do-not-contact list...", workspace.root)
+        require("Already on the list" in policy.titles("showinfo"),
+                f"a repeat was not reported; dialogs: {policy.titles()!r}")
+        require(app.store.suppression_for("never.imported@example.invalid").reason.value
+                == "asked_to_stop", "a repeat overwrote the first reason recorded")
+        require(app.store._connection.total_changes == before,
+                "a refused and a repeated entry changed the database")
+
     workspace.close_window(host, app)
 
 

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from career_agent import sources
 from career_agent.acceptance_evidence import ROUTE_REQUIREMENTS, EvidenceKind
+from career_agent.suppression import SuppressionReason
 from career_agent import desktop_logic as logic
 from career_agent.desktop_logic import (
     ACTIVITY_KIND_CHOICES, DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED,
@@ -1000,3 +1001,30 @@ class DispatchTextTests(unittest.TestCase):
                                           integration_name="disabled")
         self.assertIn("Nothing could be established", text)
         self.assertIn("separate permissions", text)
+
+
+class SuppressionAddQuestionTests(unittest.TestCase):
+    """The confirmation for listing an address that was never in anybody's contact file."""
+
+    def test_the_question_names_the_address_and_the_reason(self):
+        question = logic.suppression_add_question("someone@example.invalid",
+                                                  SuppressionReason.BOUNCED_PERMANENTLY)
+        self.assertIn("someone@example.invalid", question)
+        self.assertIn("rejected mail permanently", question)
+        self.assertIn("Nothing on this list expires", question)
+        self.assertIn("does not have to be one of your stored contacts", question)
+
+    def test_a_permanent_reason_says_so_and_a_milder_one_does_not(self):
+        permanent = logic.suppression_add_question("a@example.invalid",
+                                                   SuppressionReason.ASKED_TO_STOP)
+        milder = logic.suppression_add_question("a@example.invalid",
+                                                SuppressionReason.OUR_OWN_DECISION)
+        self.assertIn("permanent in this application", permanent)
+        self.assertNotIn("permanent in this application", milder)
+        self.assertIn("no import can clear it", milder)
+
+    def test_the_question_never_promises_that_anything_was_sent_or_stopped_elsewhere(self):
+        question = logic.suppression_add_question("a@example.invalid",
+                                                  SuppressionReason.WRONG_PERSON)
+        self.assertIn("checked before any outbound action is attempted", question)
+        self.assertNotIn("unsubscribe", question.casefold())

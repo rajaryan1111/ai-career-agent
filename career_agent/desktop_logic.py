@@ -30,6 +30,7 @@ from .acceptance_evidence import (
     EVIDENCE_LABELS, EVIDENCE_TITLES, ROUTE_REQUIREMENTS, get_route,
 )
 from .policy import ACTION_LABELS, ActionKind, GlobalPolicy, PolicyDecision
+from .suppression import PERMANENT_REASONS, REASON_LABELS
 from .sources import (
     SOURCE_DECISIONS, SOURCE_QUALITY_GATE_PASSED, PermissionState, discovery_gate,
     enabled_discovery_sources, get_source_decision, submission_gate,
@@ -1367,6 +1368,23 @@ def evidence_withdraw_question(route_id: str, kind: object, note: str) -> str:
         "switched off by removing it."
     )
 
+
+
+def suppression_add_question(address: str, reason: object) -> str:
+    """The one confirmation before an address that is not a stored contact is put on the list."""
+    label = REASON_LABELS.get(reason, getattr(reason, "value", str(reason)))
+    permanence = ("This reason is permanent in this application: it is never lifted as part of "
+                  "anything else, and taking it off again needs a reason of your own."
+                  if reason in PERMANENT_REASONS else
+                  "Nothing on this list expires, and no import can clear it.")
+    return (
+        f"Add {address} to the do-not-contact list?\n\n"
+        f"Why: {label}\n\n"
+        f"{permanence}\n\n"
+        "This address does not have to be one of your stored contacts - the list is about "
+        "addresses. It is checked before any outbound action is attempted, and an attempt it "
+        "refuses is never recorded as something that happened."
+    )
 
 # ---------------------------------------------------------------------------------------------
 # Trying to send: the words around the one guarded path out of this machine

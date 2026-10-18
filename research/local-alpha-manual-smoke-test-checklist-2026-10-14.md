@@ -1,8 +1,8 @@
 # Local Alpha Manual Smoke-Test Checklist
 
-**Status:** 169 steps — at this revision **22 PASS, 147 BLOCKED, 0 FAIL, no box ticked** (the six
-newest steps, 164-169, are for trying to send a follow-up through the guard, and the seven before
-them, 157-163, are for the Sources & evidence tab; all thirteen are BLOCKED. Steps 151-156,
+**Status:** 172 steps — at this revision **22 PASS, 150 BLOCKED, 0 FAIL, no box ticked** (the newest
+steps are 170-172, for listing an address nobody imported, 164-169, for trying to send a follow-up
+through the guard, and 157-163, for the Sources & evidence tab; all sixteen are BLOCKED. Steps 151-156,
 for the conditions and the quiet window, 137-143, for the What's happening tab, and 144-150, for the
 do-not-contact list, are BLOCKED too). Executed on 2026-10-15 on a headless Linux machine: at that revision the 22 steps that need no window passed and 83 were blocked for named missing capabilities (see the execution results below and `research/local-alpha-manual-acceptance-run-2026-10-15.md`), and four defects found by the run were fixed. Steps have been added since and none of them changed those 22 verdicts: **of the 136 steps today, 114 are BLOCKED, 22 PASS and none failed, and the 22 that passed did so without a window.** **Still required before calling the desktop alpha verified, and not yet recorded as passed.**
 
@@ -1505,3 +1505,14 @@ second verification pass, after the first run was already green.
 169. [ ] Keyboard and screen reader: reach the recipient box and the button with **Tab** alone, and
     check the chooser is announced as a list you select from rather than a field you type into.
     → **BLOCKED — no display, no assistive technology and no Tkinter in the acceptance environment.**
+
+## HR contacts: listing an address nobody imported (added 2026-10-18)
+
+170. [ ] On the **HR contacts** tab, type an address that is not in your stored contacts, choose a
+    reason and confirm. Check it appears on the do-not-contact list and that no contact row appeared.
+    → **BLOCKED — acceptance check L21 and six handler tests assert both; no display-backed run.**
+171. [ ] Type something that is not an address. Check the window refuses before asking anything.
+    → **BLOCKED — acceptance check L22 asserts the refusal and the unasked question.**
+172. [ ] Add the same address again with a milder reason. Check the window reports it and keeps the
+    first reason recorded.
+    → **BLOCKED — acceptance check L22 asserts the report and the unchanged reason.**

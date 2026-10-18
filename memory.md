@@ -4120,3 +4120,15 @@ patched in, the window still sends nothing, because the route's gate is closed i
 authorisation opens a gate. 9 handler tests, 7 text tests, 4 ledger regressions, acceptance H15-H19
 (145 checks, 0 failed), suite 2631 OK (skipped=13). Note:
 `research/the-guard-gets-a-caller-2026-10-18.md`.
+
+## An address you never imported, 2026-10-18
+
+The do-not-contact list is the one record here that exists for somebody who is not the user, and until
+today it could only be written through a stored contact row - so the person most likely to have asked
+to stop, the one who replied from an address that was never in the imported file, was the one person it
+could not record. The HR contacts tab now takes an address directly, with the same reason chooser and
+one confirmation that says what the reason means. No contact row is invented, surrounding whitespace is
+trimmed (this box stops messages rather than addressing one), an address already listed keeps its first
+reason and writes nothing, and the Follow-ups recipient chooser drops the address at once. 6 handler
+tests, 3 text tests, acceptance L21-L22 (147 checks, 0 failed), suite 2640 OK (skipped=13). Note:
+`research/an-address-you-never-imported-2026-10-18.md`.
