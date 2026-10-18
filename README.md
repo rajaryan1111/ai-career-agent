@@ -741,7 +741,8 @@ anything the app does here.
    built from, the file those facts were read out of, the ones still marked unconfirmed, how many work
    and study records it can draw on, and what is **missing** — the skills the strategy asks for that
    your facts do not state, and separately the ones this listing asks for. Missing things are reported;
-   they are never written into the document.
+   they are never written into the document. Below that you get **the document itself**, in full, exactly
+   as it would be stored.
 3. Press **Build this document…** and confirm. What gets stored is exactly the document you just read.
    If your facts changed, or the strategy moved to a new version, or you changed what you picked while
    you were reading, the build is **refused** with the reason and nothing is written — so a document can

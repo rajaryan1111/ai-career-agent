@@ -3624,7 +3624,9 @@ def workflow_m_tailored_documents(run: Run) -> None:
         require(f"version {strategy.version}" in shown,
                 f"the preview does not name the strategy version: {shown!r}")
         require("Kubernetes" in shown,
-                f"the preview does not report the requirement the facts do not state: {shown!r}")
+                f"the listing's unstated requirement is missing from the preview: {shown!r}")
+        require("Skills for this role" in shown,
+                "the document the person is asked to approve is not shown to them")
         require(app.store._connection.total_changes == before, "previewing changed the database")
         require(len(app.store.list_tailored_artifacts()) == stored_before,
                 "previewing stored a document")

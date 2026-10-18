@@ -33,6 +33,9 @@ save a copy**.
 - `export_artifact(store, artifact_id, path)` — `require_current_artifact` first, then a provenance
   header above the document, written through `store.create_private_file(..., exclusive=True)`.
 
+The preview panel shows the inputs and then the document **in full**, unaltered: "review it before it
+is stored" is not a promise a summary can keep.
+
 The window pins the reviewed plan (`self._artifact_plan`) and will not store anything else: if the
 listing, strategy or kind chosen in the comboboxes no longer matches the plan, the build is refused
 and the person is sent back to preview. The confirmation dialog repeats the preview text rather than

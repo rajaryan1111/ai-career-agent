@@ -1087,13 +1087,22 @@ class BuildADocumentTextTests(unittest.TestCase):
         lines = ("Tailored resume for j1, under Applied AI roles version 1.",
                  "Facts it would use: skills.", "")
         question = logic.artifact_build_question(lines)
-        self.assertIn("Store this document?", question)
+        self.assertIn("Store the document shown in the window?", question)
         for line in lines[:2]:
             self.assertIn(line, question)
+        self.assertIn("the text you are looking at", question)
         self.assertIn("Nothing is sent anywhere", question)
         self.assertIn("original résumé file is not touched", question)
-        self.assertEqual(logic.artifact_plan_text(lines), "\n".join(lines[:2]))
+
+    def test_the_preview_shows_the_inputs_and_then_the_document_itself(self):
+        lines = ("Tailored resume for j1, under Applied AI roles version 1.", "")
+        self.assertEqual(logic.artifact_plan_text(lines), lines[0])
         self.assertEqual(logic.artifact_plan_text(()), "Nothing to preview.")
+        shown = logic.artifact_plan_text(lines, "Skills for this role\nPython\n")
+        self.assertIn(lines[0], shown)
+        self.assertIn("exactly as it would be stored", shown)
+        self.assertTrue(shown.rstrip().endswith("Skills for this role\nPython"),
+                        "the document is not shown in full below what it was built from")
 
     def test_what_is_said_after_storing_names_the_document_and_the_gaps(self):
         plain = logic.artifact_built_text("artifact-1", ())

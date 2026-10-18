@@ -801,10 +801,20 @@ def artifact_build_preamble(listings: int, strategies: int, has_profile: bool) -
             "anything is stored. The document is written here, from your saved facts only.")
 
 
-def artifact_plan_text(lines: Iterable[str]) -> str:
-    """The preview block: the plan's own lines, shown as they are."""
+def artifact_plan_text(lines: Iterable[str], content: str = "") -> str:
+    """The preview block: what the document would be built from, then the document itself.
+
+    The text is shown in full and unaltered, because "review it before it is stored" is not a
+    promise a summary can keep: the thing that gets stored is this, character for character.
+    """
     body = "\n".join(line for line in lines if line)
-    return body or "Nothing to preview."
+    document = str(content or "").strip()
+    if not body and not document:
+        return "Nothing to preview."
+    if not document:
+        return body
+    return (body + "\n\n" + ("-" * 60)
+            + "\nThe document itself, exactly as it would be stored:\n\n" + document)
 
 
 def artifact_build_question(lines: Iterable[str]) -> str:
@@ -813,10 +823,11 @@ def artifact_build_question(lines: Iterable[str]) -> str:
     It repeats the preview rather than summarising it: the whole point of the pairing is that what
     gets stored is what somebody read, so the last thing they see before saying yes is that text.
     """
-    return ("Store this document?\n\n"
+    return ("Store the document shown in the window?\n\n"
             + "\n".join(line for line in lines if line)
-            + "\n\nIt is written from the facts above and kept on this machine. Nothing is sent "
-              "anywhere, and your original résumé file is not touched.")
+            + "\n\nWhat gets stored is the text you are looking at, written from the facts above "
+              "and kept on this machine. Nothing is sent anywhere, and your original résumé file "
+              "is not touched.")
 
 
 def artifact_built_text(artifact_id: str, gaps: Iterable[str],

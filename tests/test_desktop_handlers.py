@@ -5259,6 +5259,8 @@ class BuildingADocumentTests(HandlerTestCase):
         self.assertIn(f"version {strategy.version}", shown)
         self.assertIn("Docker", shown, "the preview hides what the facts do not state")
         self.assertIn("Still unconfirmed", shown)
+        self.assertIn(app._artifact_plan.content.strip(), shown,
+                      "the document the person is asked to approve is not shown to them")
         self.assertEqual(app.store._connection.total_changes, before)
         self.assertEqual(app.store.list_tailored_artifacts(), ())
         self.assertFalse(app.build_artifact_button.instate(["disabled"]))

@@ -2571,7 +2571,7 @@ class CareerAgentApp:
         self.artifact_plan_box.delete("1.0", END)
         self.artifact_plan_box.insert(
             "1.0",
-            artifact_plan_text(lines) if plan is not None
+            artifact_plan_text(lines, plan.content) if plan is not None
             else "Nothing previewed yet. Choose a listing and a strategy, then show what would be "
                  "used.")
         self.artifact_plan_box.configure(state="disabled")

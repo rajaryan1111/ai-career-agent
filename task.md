@@ -198,7 +198,8 @@ feature of this application.
       the requirements the profile does not state (the gaps, never invented). **Done.** A *Build one*
       panel on the Tailored documents tab: listing chooser, strategy chooser (each line naming the
       version a document would be tied to), document chooser, and *Show what would be used...*, which
-      calls `artifacts.plan_artifact` and writes nothing. `ArtifactPlan.describe()` lists the facts,
+      calls `artifacts.plan_artifact` and writes nothing - the panel shows the document itself in full
+      below the inputs, so what is approved is what was read. `ArtifactPlan.describe()` lists the facts,
       the files they were read from, the ones still unconfirmed, the work/education counts, the
       strategy's requirements the facts do not state and - separately - the **listing's** own
       requirements they do not state either. Screening answers are not offered and are refused by
