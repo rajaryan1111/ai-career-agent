@@ -61,6 +61,7 @@ career-agent --doctor            # where is my data, and can this app read it?
 career-agent --analytics         # what the records add up to, with every denominator named
 career-agent --report            # what has been happening: unresolved things first, nothing inferred
 career-agent --report --weekly   # the same over seven days, with a fortnight of dates ahead
+career-agent --notifications     # when this application may tell you something (off by default)
 career-agent --integration-status        # whether this app can email or add events, and why not
 career-agent --preview-calendar-export   # what the .ics export would contain, without writing it
 career-agent --draft-follow-up j1        # a follow-up email draft you can read and copy out; nothing is sent
@@ -782,6 +783,18 @@ import proposes the flat profile fields only), any verification of a record agai
 use of these records in eligibility or matching. They are your notes.
 
 ## See how the search is going (and what the numbers do not mean)
+
+### When it may tell you something
+
+Off until you say otherwise. `python -m career_agent --notifications` shows the current preference;
+`--notifications daily` or `--notifications weekly` sets a cadence, and `--notifications off` stops it.
+A report is prepared only after the hour you chose, only once per period, never during the quiet hours
+recorded in your standing authorisation, and never at all while everything is stopped or your
+authorisation has been withdrawn. By default a period in which nothing needs you passes in silence.
+
+**What this cannot do.** There is no email, no push and no system notification in this build. The two
+honest channels are the window you open and a file on your own machine, and asking for anything else is
+refused rather than quietly downgraded. Nothing reaches you while the application is closed.
 
 ### What has been happening
 

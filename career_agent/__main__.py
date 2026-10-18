@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import dataclasses
 import sqlite3
 from datetime import date, datetime, time, timezone
 import platform
@@ -79,7 +80,9 @@ from .store import (
     SCHEMA_VERSION, CareerStore, PrivateWriteError, StoredRecordError, TrackerStatusError,
     unreadable_stored_records, write_private_text_file,
 )
-from . import analytics, contact_export, contacts, erasure, importer, preparation, reporting
+from . import (
+    analytics, contact_export, contacts, erasure, importer, notifications, preparation, reporting,
+)
 from . import integrations
 from .followups import calendar_file_name, reminder_for, reminders, summary, to_calendar
 from .tasks import WorkerLeaseHeld
@@ -192,6 +195,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     actions.add_argument(
         "--analytics", action="store_true",
         help="Add up what the records hold: counts, rates with their denominators, then exit (read-only).",
+    )
+    actions.add_argument(
+        "--notifications", nargs="?", const="show", choices=("show", "off", "daily", "weekly"),
+        help=("Show when this application may tell you something, or set it: 'off', 'daily' or "
+              "'weekly'. Nothing is sent anywhere; a report is prepared for the window or a file."),
     )
     actions.add_argument(
         "--report", action="store_true",
@@ -1083,6 +1091,57 @@ def run_analytics(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_notifications(args: argparse.Namespace) -> int:
+    """Show or set when this application may tell you something.
+
+    Setting a cadence stores a choice; it does not start anything. The honest part of this command
+    is the second half of what it prints: no email is sent, no push is registered, and nothing can
+    reach a person who is not looking at this machine.
+    """
+    choice = getattr(args, "notifications", None) or "show"
+    database = _database_path(args)
+    print(f"AI Career Agent {__version__} · when this application may tell you something")
+    print("")
+    if not database.exists() or _empty_database_file(database):
+        if choice != "show":
+            print("There is no database yet, so there is nothing to store a preference in. Import "
+                  "or record something first.")
+            _say_an_empty_file_was_left_alone(database)
+            return EXIT_REFUSED
+        print(notifications.NotificationPreferences().describe())
+        _say_an_empty_file_was_left_alone(database)
+        return EXIT_OK
+    try:
+        with CareerStore(database) as store:
+            if choice != "show":
+                current = store.get_notification_preferences()
+                store.save_notification_preferences(dataclasses.replace(
+                    current, cadence=notifications.Cadence(choice)))
+            preferences = store.get_notification_preferences()
+            policy = store.get_global_policy()
+            report = reporting.daily_report(store)
+            decision = notifications.notification_due(
+                preferences, now=datetime.now(timezone.utc),
+                last_delivered_at=None, quiet_hours=getattr(policy, "quiet_hours", None),
+                attention_count=report.attention_count,
+                stopped=bool(policy.stop_all or policy.revoked_at))
+    except (StoredRecordError, TrackerStatusError, sqlite3.Error) as exc:
+        return _refuse_database_problem(exc)
+    except (notifications.NotificationError, reporting.ReportError) as exc:
+        print(f"That preference was not stored: {exc}")
+        return EXIT_REFUSED
+    print(preferences.describe())
+    quiet = getattr(policy, "quiet_hours", None)
+    if quiet:
+        print(f"Quiet hours: {quiet[0]:02d}:00-{quiet[1]:02d}:00. Nothing is prepared inside them.")
+    print(decision.describe())
+    print("")
+    print("Nothing is sent anywhere: there is no email, no push and no system notification in this "
+          "build. A report is prepared for the window you open, or written to a file you choose, "
+          "and `--report` prints it whenever you ask.")
+    return EXIT_OK
+
+
 def run_report(args: argparse.Namespace) -> int:
     """Report what the stored records say has been happening, with the unresolved parts first.
 
@@ -1773,6 +1832,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_interviews(args)
         if args.analytics:
             return run_analytics(args)
+        if args.notifications:
+            return run_notifications(args)
         if args.report:
             return run_report(args)
         if args.history:

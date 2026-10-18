@@ -3938,3 +3938,21 @@ calls it an error teaches people to ignore reports). The sources section quotes 
 so it cannot drift. 21 tests, suite **2389 OK (skipped=13)**. Not built: delivery of any kind - no
 notification, no schedule, no window tab. Notes:
 `research/operational-reconciliation-2026-10-18.md`.
+
+**Quiet by default, and controls read back rather than believed, 2026-10-18:** notifications are the
+only feature here that acts on a person without being asked at that moment, so the default is OFF and
+a missing preference row reads as "no permission to interrupt" - and a damaged row raises instead of
+falling back to a default, because silently replacing somebody's choice is how an application ends up
+waking them at three in the morning. Schema 13 is one small table (`app_preference`). The decision
+reports all six of its refusals together rather than the first: not asked for, everything stopped or
+withdrawn, inside the quiet hours from the standing authorisation, before the chosen hour, already
+prepared for this period, nothing needing them. The channel limit is stated in the preference itself
+and printed every run: the window you open and a file on your machine, no email, no push, no system
+notification - and delivery is not built at all, which the note says plainly. The second half was the
+more interesting discipline: five tests that separate a control from its effect - a pause asserted on
+the task re-read from the database rather than on the value passed in, a paused task not claimed by a
+worker that was never told, a resume that schedules the next occurrence and leaves the run list empty,
+a worker status read from rows, and stop-all/withdrawal re-read from the stored authorisation,
+refusing an otherwise-allowed decision and silencing the notification in the same breath. 33 tests,
+suite **2422 OK (skipped=13)**. Note:
+`research/notification-preferences-and-read-back-controls-2026-10-18.md`.

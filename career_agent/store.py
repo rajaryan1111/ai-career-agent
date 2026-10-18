@@ -33,6 +33,9 @@ from .core import (
     validate_activity_detail, validate_activity_date,
 )
 from .attempts import AttemptError, AttemptRecord, AttemptState
+from .notifications import (
+    NotificationError, NotificationPreferences, preferences_from_payload, preferences_payload,
+)
 from .policy import (
     ActionKind, GlobalPolicy, PolicyError, no_authorisation, policy_from_payload, policy_payload,
 )
@@ -45,7 +48,7 @@ from .tasks import (
     clean_detail, next_run_after, plan_after_run, slot_key,
 )
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 
 #: Every schema version this build can open, with the tables that version leaves behind. The lists are
 #: cumulative and explicit. ``career_agent.backup`` checks a candidate file against the tables of the
@@ -89,6 +92,11 @@ SCHEMA_TABLES_BY_VERSION = {
          "hr_contact_conflict", "interview_round", "job_listings", "policy_version",
          "profile_fact_provenance", "role_strategy_version", "scheduled_task", "tailored_artifact",
          "task_run", "worker_lease"),
+    13: ("action_attempt", "app_preference", "application_activity", "application_preparation",
+         "application_tracker", "candidate_education", "candidate_profile",
+         "candidate_work_history", "hr_contact", "hr_contact_conflict", "interview_round",
+         "job_listings", "policy_version", "profile_fact_provenance", "role_strategy_version",
+         "scheduled_task", "tailored_artifact", "task_run", "worker_lease"),
 }
 SCHEMA_VERSION = _SCHEMA_VERSION
 SCHEMA_TABLES = SCHEMA_TABLES_BY_VERSION[_SCHEMA_VERSION]
@@ -1184,6 +1192,23 @@ def _migration_to_v12(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_to_v13(connection: sqlite3.Connection) -> None:
+    """Schema 13: the person's own settings, one row per named choice.
+
+    One small table, additive and empty, holding choices rather than records - today the
+    notification preferences and the time the last report was prepared. An absent row means the
+    person has not chosen, which is why the defaults in :mod:`career_agent.notifications` are the
+    quiet ones: a missing preference must never read as permission to interrupt somebody.
+    """
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS app_preference (
+               name TEXT PRIMARY KEY,
+               value TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+
+
 #: The ordered schema steps this build can run, as ``(version it reaches, what it does, how)``. This
 #: is the single definition of how a database reaches the current schema. A step is only ever
 #: appended, never rewritten or reordered: databases in the field have already run the earlier ones,
@@ -1201,6 +1226,7 @@ _MIGRATIONS: tuple[tuple[int, str, Callable[[sqlite3.Connection], None]], ...] =
     (10, "add the tailored artifacts and the basis each was built from", _migration_to_v10),
     (11, "add the versioned standing authorisation", _migration_to_v11),
     (12, "add the record of attempts and their outcomes", _migration_to_v12),
+    (13, "add the person's own settings", _migration_to_v13),
 )
 
 
@@ -3911,6 +3937,76 @@ class CareerStore:
         version = self.save_global_policy(replace(current, revoked_at=moment))
         self._record("policy.revoked", f"version={version}")
         return version
+
+    # ------------------------------------------------------------------ the person's settings
+
+    #: The stored names this build knows. A name outside this set is refused rather than kept, so a
+    #: typo cannot become a silent setting nothing ever reads.
+    PREFERENCE_NAMES = ("notifications", "notification_last_prepared_at")
+
+    def _schema_records_preferences(self) -> bool:
+        """Whether this file is new enough to hold the person's settings (schema 13)."""
+        return self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_preference'"
+        ).fetchone() is not None
+
+    def _get_preference(self, name: str) -> str | None:
+        if name not in self.PREFERENCE_NAMES:
+            raise ValueError(f"{name!r} is not a setting this build stores.")
+        if not self._schema_records_preferences():
+            return None
+        row = self._connection.execute(
+            "SELECT value FROM app_preference WHERE name = ?", (name,)).fetchone()
+        return None if row is None else str(row["value"])
+
+    def _set_preference(self, name: str, value: str) -> None:
+        if name not in self.PREFERENCE_NAMES:
+            raise ValueError(f"{name!r} is not a setting this build stores.")
+        if not self._schema_records_preferences():
+            raise NotificationError(
+                "this file records a schema older than the one that keeps your settings. Open the "
+                "application on this file to update it.")
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO app_preference (name, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (name, value, _now()))
+
+    def get_notification_preferences(self) -> NotificationPreferences:
+        """What the person asked to be told, or the quiet default when they have not said.
+
+        The default is :attr:`~career_agent.notifications.Cadence.OFF`: an application that has not
+        been asked to interrupt somebody has not been given permission to.
+        """
+        stored = self._get_preference("notifications")
+        if stored is None:
+            return NotificationPreferences()
+        try:
+            return preferences_from_payload(stored)
+        except NotificationError as exc:
+            raise StoredRecordError("notification preferences", str(exc)) from exc
+
+    def save_notification_preferences(self, preferences: NotificationPreferences) -> None:
+        """Store the person's choice. Writing the same choice again writes nothing."""
+        payload = preferences_payload(preferences)
+        if self._get_preference("notifications") == payload:
+            return
+        self._set_preference("notifications", payload)
+        self._record("notifications.saved",
+                     f"cadence={preferences.cadence.value} channel={preferences.channel.value} "
+                     f"hour={preferences.hour}")
+
+    def notification_prepared_at(self) -> str | None:
+        """When a report was last prepared for this person, or ``None``. Never inferred."""
+        return self._get_preference("notification_last_prepared_at")
+
+    def record_notification_prepared(self, *, at: str | None = None) -> str:
+        """Record that a report was prepared, so the same period is not prepared twice."""
+        moment = at or _now()
+        self._set_preference("notification_last_prepared_at", moment)
+        self._record("notifications.prepared", "report=1")
+        return moment
 
     # ------------------------------------------------------------------ attempts and outcomes
 
