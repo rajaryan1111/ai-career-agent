@@ -32,7 +32,21 @@ them both "remaining" is how a project talks itself into claiming the wrong thin
 | 14 | Cross-platform + human desktop acceptance | `scripts/desktop_acceptance.py` (134 checks), `scripts/desktop_smoke_test.py` | — | Stand-in run only | **A display and a human.** No `tkinter` in this sandbox | **blocked (environment)** |
 | 15 | CI on this PR head | `.github/workflows/tests.yml` triggers on `main` only | — | — | A maintainer enabling branch triggers | **blocked (repository settings)** |
 
-## What this sprint can actually finish
+## What this sprint actually finished (added at the end of the sprint)
+
+| Row | Was | Now | Commit |
+| --- | --- | --- | --- |
+| 1 — acceptance evidence | requirements only, `held_evidence()` hard `()` | schema 15 `route_evidence`, six routes recordable and withdrawable, on the new **Sources & evidence** tab | `e21c2ad` |
+| 4 — source status in the UI | `--sources` only | the same tab shows every reviewed source with the gate's own reason | `e21c2ad` |
+| 3 — the dispatch gap | `guarded_dispatch` had no in-app caller | **Follow-ups → Try to send this follow-up...**, plus one defect found and fixed in the guard | `31b4c93` |
+| 13 — do-not-contact | stored contacts only | any address, with one confirmation and no invented contact row | `0e5771f` |
+
+Rows 2, 5, 6, 7, 14 and 15 are unchanged and stay **blocked**: a mailbox, a permitted source, a
+permitted submission route, a display with a human, and a CI trigger for this branch are all outside
+this repository. Row 11 (nothing in the window builds a *first* tailored document) is the largest
+remaining piece of work that is not blocked on anybody else.
+
+## What this sprint could actually finish
 
 Rows **1, 3, 4** are the only ones whose blocker is "nobody has written it yet". Everything else is
 either done or waiting on something that cannot be conjured: a mailbox, a partner agreement, a
