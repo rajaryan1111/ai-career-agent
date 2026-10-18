@@ -226,6 +226,81 @@ class CareerStore:
             jobs = tuple(job for job in jobs if job.availability_status is status)
         return jobs
 
+    def job_timestamps(self, listing_id: str) -> tuple[str, str] | None:
+        """Return ``(first_seen_at, last_seen_at)`` for a stored listing."""
+        row = self._connection.execute(
+            "SELECT first_seen_at, last_seen_at FROM job_listings WHERE listing_id=?",
+            (listing_id,),
+        ).fetchone()
+        return (row["first_seen_at"], row["last_seen_at"]) if row else None
+
+    def attempt_updated_at(self, listing_id: str, attempt_number: int) -> str | None:
+        row = self._connection.execute(
+            "SELECT updated_at FROM application_tracker WHERE listing_id=? AND attempt_number=?",
+            (listing_id, attempt_number),
+        ).fetchone()
+        return row["updated_at"] if row else None
+
+    def has_data(self) -> bool:
+        """True when any user record exists, so a restore cannot silently overwrite it."""
+        for table in ("candidate_profile", "job_listings", "application_tracker", "application_events"):
+            if self._connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return True
+        return False
+
+    def import_snapshot(
+        self, *, profile: CandidateProfile | None, jobs, attempts, events, replace: bool,
+    ) -> None:
+        """Write a validated snapshot in one transaction.
+
+        With ``replace`` the existing profile, jobs, attempts and events are removed
+        inside the same transaction, so a failure rolls the whole restore back and
+        leaves the previous database intact.
+        """
+        if not replace and self.has_data():
+            raise ValueError("The database already contains data; restoring requires replacement.")
+        with self._connection:
+            if replace:
+                self._connection.execute("DELETE FROM application_events")
+                self._connection.execute("DELETE FROM application_tracker")
+                self._connection.execute("DELETE FROM job_listings")
+                self._connection.execute("DELETE FROM candidate_profile")
+            if profile is not None:
+                self._connection.execute(
+                    "INSERT INTO candidate_profile(profile_id, payload, updated_at) VALUES (1, ?, ?)",
+                    (json.dumps(asdict(profile), sort_keys=True, default=_json_default), _now()),
+                )
+            for row in jobs:
+                job = row["job"]
+                self._connection.execute(
+                    """INSERT INTO job_listings(listing_id, payload, duplicate_key, first_seen_at, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (job.listing_id, json.dumps(asdict(job), sort_keys=True, default=_json_default),
+                     duplicate_key(job), row["first_seen_at"], row["last_seen_at"]),
+                )
+            for row in attempts:
+                tracker = row["tracker"]
+                self._connection.execute(
+                    """INSERT INTO application_tracker(
+                           listing_id, attempt_number, status, status_evidence,
+                           candidate_confirmed, revision, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (tracker.listing_id, tracker.attempt_number, tracker.status.value,
+                     tracker.status_evidence, int(tracker.candidate_confirmed),
+                     tracker.revision, row["updated_at"]),
+                )
+            for event in events:
+                self._connection.execute(
+                    """INSERT INTO application_events(
+                           listing_id, attempt_number, from_status, to_status,
+                           evidence, candidate_confirmed, recorded_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (event["listing_id"], event["attempt_number"],
+                     event["from_status"].value if event["from_status"] else None,
+                     event["to_status"].value, event["evidence"],
+                     int(event["candidate_confirmed"]), event["recorded_at"]),
+                )
+
     def find_duplicate_group(self, job: JobListing) -> tuple[JobListing, ...]:
         rows = self._connection.execute(
             "SELECT payload FROM job_listings WHERE duplicate_key=? ORDER BY first_seen_at, listing_id",

@@ -15,7 +15,7 @@ from .core import (
     ApplicationStatus, Availability, CandidateProfile, Decision, JobListing,
     allowed_transitions, evaluate_eligibility, score_relevance,
 )
-from .export import write_export
+from .export import ExportFormatError, RestoreError, load_export, restore_export, validate_export, write_export
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
@@ -140,7 +140,8 @@ class CareerAgentApp:
         ttk.Button(actions, text="Update selected status", command=self._update_status).pack(side="left", padx=8)
         ttk.Button(actions, text="Re-apply after withdrawal", command=self._reapply).pack(side="left", padx=8)
         ttk.Button(actions, text="View history", command=self._view_history).pack(side="left", padx=8)
-        ttk.Button(actions, text="Export local data to JSON", command=self._export).pack(side="left", padx=8)
+        ttk.Button(actions, text="Export backup (JSON)", command=self._export).pack(side="left", padx=8)
+        ttk.Button(actions, text="Restore from backup…", command=self._restore).pack(side="left", padx=8)
         ttk.Label(self.tracker_tab, text="A confirmed application requires evidence. Earlier evidence is kept in the attempt history. Re-applying creates a new attempt; the withdrawn record is never revived.").pack(anchor=W, pady=(0, 8))
         self.tracker_tree = ttk.Treeview(self.tracker_tab, columns=("employer", "role", "attempt", "status", "evidence"), show="headings")
         for col, label, width in [("employer", "Employer", 160), ("role", "Role", 190), ("attempt", "Attempt", 60), ("status", "Status", 160), ("evidence", "Evidence / note", 360)]:
@@ -152,6 +153,8 @@ class CareerAgentApp:
     def _load_profile(self):
         profile = self.store.get_profile()
         if not profile:
+            for variable in self.profile_vars.values():
+                variable.set("")
             return
         values = {
             "country": profile.candidate_country or "", "degree": profile.degree_discipline or "",
@@ -495,9 +498,52 @@ class CareerAgentApp:
         try:
             payload = write_export(self.store, destination)
             self.status.set(f"Exported {len(payload['jobs'])} jobs to a user-selected local file.")
-            messagebox.showinfo("Export complete", "JSON export created. Keep it private; it may contain personal data.", parent=self.root)
+            messagebox.showinfo("Export complete", "Restorable JSON backup created. Keep it private; it may contain personal data.", parent=self.root)
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc), parent=self.root)
+
+    def _restore(self):
+        source = filedialog.askopenfilename(
+            parent=self.root, title="Restore from backup",
+            filetypes=[("JSON backup", "*.json"), ("All files", "*.*")],
+        )
+        if not source:
+            return
+        try:
+            payload = load_export(source)
+            validated = validate_export(payload)
+        except ExportFormatError as exc:
+            messagebox.showerror("Cannot restore backup", str(exc), parent=self.root)
+            return
+        counts = validated.counts()
+        replace = self.store.has_data()
+        if replace and not messagebox.askyesno(
+            "Replace all local data?",
+            f"This backup contains {counts['jobs']} job(s), {counts['attempts']} application attempt(s) "
+            f"and {counts['events']} history event(s).\n\n"
+            "Restoring replaces every profile, job, application and history record stored on this "
+            "device. This cannot be undone. Continue?",
+            parent=self.root,
+        ):
+            return
+        try:
+            summary = restore_export(self.store, payload, replace=replace)
+        except (ExportFormatError, RestoreError) as exc:
+            messagebox.showerror("Restore failed", str(exc), parent=self.root)
+            return
+        self.selected_job_id = None
+        self._clear_form()
+        self._load_profile()
+        self._refresh_jobs()
+        self.status.set(
+            f"Restored {summary['jobs']} job(s), {summary['attempts']} attempt(s) and "
+            f"{summary['events']} history event(s) from a local backup."
+        )
+        messagebox.showinfo(
+            "Restore complete",
+            "Backup restored locally. Nothing was sent anywhere.",
+            parent=self.root,
+        )
 
     def _report(self, text):
         if not hasattr(self, "report"):

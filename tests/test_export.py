@@ -46,15 +46,25 @@ def walk_to_confirmed(store):
 
 
 class ExportContractTests(unittest.TestCase):
-    def test_format_v2_payload_is_json_serializable(self):
+    def test_format_v3_payload_is_json_serializable(self):
         with CareerStore(":memory:") as store:
             store.save_profile(sample_profile())
-            store.save_job(sample_job())
+            store.save_job(sample_job(), observed_at="2026-10-01T00:00:00+00:00")
+            store.start_application("j1")
             payload = build_export_payload(store)
             self.assertEqual(payload["format_version"], FORMAT_VERSION)
-            self.assertEqual(payload["format_version"], 2)
+            self.assertEqual(payload["format_version"], 3)
+            self.assertEqual(payload["schema_version"], 2)
+            self.assertIn("exported_at", payload)
             self.assertEqual(payload["profile"]["skills"], ["Python", "RAG"])
             self.assertEqual(payload["profile"]["preferred_work_modes"], ["remote"])
+            job = payload["jobs"][0]
+            self.assertEqual(job["first_seen_at"], "2026-10-01T00:00:00+00:00")
+            self.assertEqual(job["last_seen_at"], "2026-10-01T00:00:00+00:00")
+            attempt = job["application_attempts"][0]
+            self.assertEqual(attempt["attempt_number"], 1)
+            self.assertEqual(attempt["revision"], 0)
+            self.assertIn("updated_at", attempt)
             json.dumps(payload)  # must not raise on frozensets/tuples
 
     def test_attempts_and_events_are_preserved_per_attempt(self):
@@ -70,6 +80,8 @@ class ExportContractTests(unittest.TestCase):
             self.assertEqual([a["attempt_number"] for a in attempts], [1, 2])
             self.assertEqual(attempts[0]["status"], "withdrawn")
             self.assertEqual(attempts[0]["status_evidence"], "Employer confirmation page shown")
+            self.assertGreater(attempts[0]["revision"], 0)
+            self.assertIn("updated_at", attempts[0])
             confirmation = [e for e in attempts[0]["application_events"] if e["to_status"] == "confirmed"]
             self.assertEqual(len(confirmation), 1)
             self.assertEqual(confirmation[0]["evidence"], "Employer confirmation page shown")

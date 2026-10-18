@@ -28,9 +28,10 @@ if __package__ in (None, ""):
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision,
-    JobListing, StaleApplicationError, evaluate_eligibility,
+    ExportFormatError, JobListing, StaleApplicationError, evaluate_eligibility,
+    restore_export,
 )
-from career_agent.export import FORMAT_VERSION, build_export_payload, write_export
+from career_agent.export import FORMAT_VERSION, build_export_payload, load_export, write_export
 from career_agent.store import CareerStore
 
 
@@ -381,19 +382,22 @@ def closed_listing_restrictions(workspace: Path) -> str:
     return "shortlisting also requires eligibility PASS in the UI; that button-level gate is not exercised headlessly"
 
 
-@scenario("format-v2 export preserves attempts and their event history")
+@scenario("format-v3 backup preserves attempts and their event history")
 def export_preserves_history(workspace: Path) -> str:
     with open_store(workspace) as store:
         store.save_profile(sample_profile())
-        store.save_job(sample_job())
+        store.save_job(sample_job(), observed_at="2026-10-01T00:00:00+00:00")
         confirmed = confirm(store, walk_to_submission(store))
         store.save_tracker(confirmed.transition(ApplicationStatus.WITHDRAWN))
         store.start_application("j1")
 
         payload = build_export_payload(store)
-        expect(payload["format_version"] == FORMAT_VERSION == 2, f"unexpected format {payload['format_version']}")
+        expect(payload["format_version"] == FORMAT_VERSION == 3, f"unexpected format {payload['format_version']}")
+        expect(payload["schema_version"] == 2, f"unexpected schema {payload['schema_version']}")
+        expect(payload["jobs"][0]["first_seen_at"] == "2026-10-01T00:00:00+00:00", "job timestamps missing")
         expect(payload["privacy_note"], "export must carry its privacy note")
         attempts = payload["jobs"][0]["application_attempts"]
+        expect(attempts[0]["revision"] > 0, "attempt revision missing")
         expect([a["attempt_number"] for a in attempts] == [1, 2], f"attempts missing: {attempts}")
         expect(attempts[0]["status"] == "withdrawn", f"attempt 1 status: {attempts[0]['status']}")
         confirmation = [e for e in attempts[0]["application_events"] if e["to_status"] == "confirmed"]
@@ -410,9 +414,61 @@ def export_preserves_history(workspace: Path) -> str:
     return ""
 
 
-@scenario("export can be restored through an import API")
+@scenario("a backup round-trips into a separate database")
 def import_round_trip(workspace: Path) -> str:
-    raise SkipScenario("the repository has no import/restore API; export is validated but not round-tripped")
+    source_dir = workspace / "source"
+    target_dir = workspace / "target"
+    with open_store(source_dir, "source.sqlite3") as source:
+        source.save_profile(sample_profile())
+        source.save_job(sample_job(), observed_at="2026-10-01T00:00:00+00:00")
+        confirmed = confirm(source, walk_to_submission(source))
+        source.save_tracker(confirmed.transition(ApplicationStatus.WITHDRAWN))
+        source.start_application("j1")
+        backup_path = source_dir / "backup.json"
+        write_export(source, backup_path)
+        expected_job = source.get_job("j1")
+        expected_timestamps = source.job_timestamps("j1")
+        expected_attempts = [
+            (a.attempt_number, a.status, a.status_evidence, a.candidate_confirmed, a.revision)
+            for a in source.list_attempts("j1")
+        ]
+        expected_events = [
+            (e.from_status, e.to_status, e.evidence, e.candidate_confirmed, e.recorded_at)
+            for e in source.list_events("j1")
+        ]
+
+    with open_store(target_dir, "target.sqlite3") as target:
+        expect(not target.has_data(), "the restore target must start empty")
+        summary = restore_export(target, load_export(backup_path))
+        expect((summary["jobs"], summary["attempts"], summary["events"]) == (1, 2, 8),
+               f"unexpected restore summary: {summary}")
+        expect(target.get_job("j1") == expected_job, "restored listing does not match the backup")
+        expect(target.job_timestamps("j1") == expected_timestamps, "restored observation timestamps changed")
+        restored_attempts = [
+            (a.attempt_number, a.status, a.status_evidence, a.candidate_confirmed, a.revision)
+            for a in target.list_attempts("j1")
+        ]
+        expect(restored_attempts == expected_attempts, f"attempts changed: {restored_attempts} != {expected_attempts}")
+        restored_events = [
+            (e.from_status, e.to_status, e.evidence, e.candidate_confirmed, e.recorded_at)
+            for e in target.list_events("j1")
+        ]
+        expect(restored_events == expected_events, "event history changed during restore")
+        expect(target.get_tracker("j1", 1).status_evidence == "Synthetic employer confirmation",
+               "confirmation evidence was lost")
+
+        # Negative control: a tampered history must be rejected and change nothing.
+        tampered = json.loads(backup_path.read_text(encoding="utf-8"))
+        tampered["jobs"][0]["application_attempts"][0]["application_events"][2]["to_status"] = "interview"
+        before = [(a.attempt_number, a.status) for a in target.list_attempts("j1")]
+        try:
+            restore_export(target, tampered, replace=True)
+            raise SmokeFailure("a tampered backup was accepted")
+        except ExportFormatError:
+            pass
+        expect([(a.attempt_number, a.status) for a in target.list_attempts("j1")] == before,
+               "a rejected restore mutated the database")
+        return "tampered backup rejected without changing the database"
 
 
 @scenario("failed operations leave the database consistent and usable")

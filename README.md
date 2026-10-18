@@ -61,9 +61,39 @@ python -m unittest discover -s tests -v
 python scripts/tracker_smoke_test.py
 ```
 
-Runs end-to-end scenarios against temporary databases only: schema version 2, attempt creation, persisted transitions, evidence surviving later status changes, fresh re-application, rejected invalid/stale/duplicate writes, withdrawal history, format-v2 export with attempts and events, consistency after failures, and in-place migration of a schema-v1 database. Exit code 0 means every scenario passed; 1 means at least one failed. Add `--keep` to retain the temporary workspace for inspection. The script never opens the application-data database.
+Runs end-to-end scenarios against temporary databases only: schema version 2, attempt creation, persisted transitions, evidence surviving later status changes, fresh re-application, rejected invalid/stale/duplicate writes, withdrawal history, format-v3 backup contents, backup round-trip into a separate database, a tampered backup being rejected without mutation, consistency after failures, and in-place migration of a schema-v1 database. Exit code 0 means every scenario passed; 1 means at least one failed. Add `--keep` to retain the temporary workspace for inspection. The script never opens the application-data database.
 
-The throwaway database, profile, and listings are synthetic. There is no import/restore API yet, so the export contract is validated but not round-tripped; the smoke test reports that scenario as SKIP, and a skip is not coverage of import/restore.
+The throwaway database, profile, and listings are synthetic. The smoke test includes a negative control: a backup with a tampered event history must be rejected, and the target database must remain unchanged.
+
+## Backup and restore
+
+The JSON file written by **Tracker → Export backup (JSON)** is a complete local backup (format version 3), not a report:
+
+- candidate profile;
+- every job with its observation timestamps and full eligibility fields;
+- every application attempt, including its revision and last-updated time;
+- the append-only event history for each attempt.
+
+The research CSV produced by `scripts/audit_job_source_csv.py` is a report over the source-audit seed file. It is **not** a backup and cannot restore the application.
+
+To restore, use **Tracker → Restore from backup…**. The file is parsed, validated, and only then written. Restoring replaces all local profile, job, attempt, and history records, so the app asks for confirmation whenever data already exists. The same operations are available in code:
+
+```python
+from career_agent import CareerStore, restore_export_file, write_export
+
+with CareerStore("backup-target.sqlite3") as store:
+    write_export(store, "backup.json")             # create a backup
+    restore_export_file(store, "backup.json")       # only into an empty database
+    restore_export_file(store, "backup.json", replace=True)  # replace after confirmation
+```
+
+Safety contract:
+
+- Validation covers the format and schema version, required fields and types, status values, duplicate listing/attempt identifiers, confirmation evidence, event ordering, and a replay of each attempt's status chain. Unknown fields, malformed JSON, non-UTF-8 input, empty files, and files over 10 MiB are rejected.
+- Restore is replace-only; it never merges. A non-empty database is refused unless replacement is explicitly requested.
+- Deleting existing data and writing restored data happen in one SQLite transaction. Any failure rolls the whole operation back, leaving the previous database intact and usable.
+- Version 2 exports are still accepted, but they lack job and attempt timestamps and revisions. Those fields default to the import time and revision 0, so a version 2 restore is semantically complete but not byte-for-byte faithful. Unsupported versions are refused.
+- There are no automatic or scheduled backups; creating one is a manual action.
 
 The GitHub Actions workflow runs this smoke test together with the unit suite, `compileall`, and the CSV audit on Python 3.10–3.12 for pushes to `main` and `fix/**`, for all pull requests, and on manual dispatch. A failing scenario fails the job.
 
