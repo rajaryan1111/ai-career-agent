@@ -93,6 +93,12 @@ Runs end-to-end scenarios against temporary databases only: schema version 2, at
 
 The throwaway database, profile, and listings are synthetic. The smoke test includes a negative control: a backup with a tampered event history must be rejected, and the target database must remain unchanged.
 
+## Job sources and discovery
+
+Discovery is **disabled** in this build. `career_agent/sources.py` defines the adapter contract — source identity, documented access method, permission evidence, review date, capabilities (discovery and submission are separate), local rate limit, timeout, and support status — plus typed outcomes that keep a valid empty result distinct from blocked, rate-limited, timeout, and transient or schema failures.
+
+The registry lists manual entry as the only enabled source. Himalayas and SmartRecruiters remain blocked because their terms conflict with automated gathering or autonomous AI workflows and no written authorization is recorded. `SOURCE_QUALITY_GATE_PASSED` stays false, the **Sources & settings** tab states this, and no adapter performs network access. Enabling a provider requires recorded permission evidence and a completed review; scraping public pages, bypassing access controls, or flipping the gate without evidence is out of scope. See [the source-quality gate assessment](research/source-quality-gate-assessment-2026-10-14.md) and [the permission decision matrix](research/source-permission-decision-matrix-2026-10-14.md).
+
 ## Backup and restore
 
 The JSON file written by **Tracker → Export backup (JSON)** is a complete local backup (format version 3), not a report:

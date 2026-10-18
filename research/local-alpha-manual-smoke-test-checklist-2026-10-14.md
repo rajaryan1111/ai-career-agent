@@ -40,6 +40,7 @@ This checklist is intentionally separate from unit tests. It requires a real des
 21. [ ] Inspect the application workflow for network access: local alpha operations must not send requests or candidate data to external services.
 22. [ ] Close and reopen the app after a forced close or normal exit; confirm the SQLite database remains readable.
 23. [ ] Select a shortlisted, eligible job and choose **Prepare application**. Confirm the readiness checklist is explicit, the draft preview uses only recorded facts and labels missing fields "Not recorded", declining the confirmation changes nothing, and accepting records `prepared` with a new history entry. With an ineligible job the action must warn and leave the tracker unchanged.
+24. [ ] Open **Sources & settings**. The banner must say discovery is disabled with manual entry only, the gate must read closed, and blocked providers should be listed with their status. No search button or network control may be present.
 
 ## Record results
 

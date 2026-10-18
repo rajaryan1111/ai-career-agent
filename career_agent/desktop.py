@@ -19,6 +19,9 @@ from .core import (
 )
 from .export import ExportFormatError, RestoreError, restore_from_backup, write_export
 from .preparation import assess_readiness, build_application_draft
+from .sources import (
+    CANDIDATE_SOURCES, discovery_available, enabled_discovery_sources, quality_gate_open,
+)
 from .store import CareerStore, StaleApplicationError
 from .validation import optional_float, optional_int, split_values
 
@@ -58,14 +61,17 @@ class CareerAgentApp:
         self.profile_tab = ttk.Frame(self.tabs, padding=12)
         self.jobs_tab = ttk.Frame(self.tabs, padding=12)
         self.tracker_tab = ttk.Frame(self.tabs, padding=12)
+        self.sources_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.profile_tab, text="Candidate profile")
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
+        self.tabs.add(self.sources_tab, text="Sources & settings")
         self.profile_vars = {}
         self.job_vars = {}
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
+        self._build_sources()
         self.status = tk.StringVar(value=f"Local database: {self.db_path}")
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
@@ -153,6 +159,54 @@ class CareerAgentApp:
             self.tracker_tree.column(col, width=width, anchor=W)
         self.tracker_tree.pack(fill=BOTH, expand=True)
         self.tracker_tree.bind("<<TreeviewSelect>>", self._select_tracker)
+
+    def _build_sources(self):
+        if discovery_available():
+            names = ", ".join(item.name for item in enabled_discovery_sources())
+            banner = f"Discovery is enabled for: {names}. Provider limits still apply."
+        else:
+            banner = (
+                "Job discovery is disabled: no source has passed permission review. "
+                "Manual entry only, and this build makes no network requests."
+            )
+        ttk.Label(self.sources_tab, text=banner, wraplength=900).pack(anchor=W, pady=(0, 8))
+        ttk.Label(
+            self.sources_tab,
+            text=(
+                "A source is enabled only after its access method, terms, attribution and rate limits "
+                "are recorded as permitted. Blocked providers stay listed here so the limitation is visible."
+            ),
+            wraplength=900,
+        ).pack(anchor=W, pady=(0, 8))
+        self.sources_tree = ttk.Treeview(
+            self.sources_tab,
+            columns=("source", "status", "capabilities", "reviewed", "notes"),
+            show="headings",
+            height=8,
+        )
+        for column, label, width in [
+            ("source", "Source", 160), ("status", "Status", 130),
+            ("capabilities", "Capabilities", 150), ("reviewed", "Reviewed", 110),
+            ("notes", "Notes", 380),
+        ]:
+            self.sources_tree.heading(column, text=label)
+            self.sources_tree.column(column, width=width, anchor=W)
+        for declaration in CANDIDATE_SOURCES:
+            capabilities = ", ".join(sorted(item.value for item in declaration.capabilities)) or "none"
+            self.sources_tree.insert("", END, iid=declaration.source_id, values=(
+                declaration.name,
+                declaration.status.value,
+                capabilities,
+                declaration.reviewed_on or "not recorded",
+                declaration.notes,
+            ))
+        self.sources_tree.pack(fill=BOTH, expand=True)
+        gate = "open" if quality_gate_open() else "closed"
+        ttk.Label(
+            self.sources_tab,
+            text=f"Source-quality gate: {gate}. Live discovery and application submission remain out of scope for this build.",
+            wraplength=900,
+        ).pack(anchor=W, pady=8)
 
     def _load_profile(self):
         profile = self.store.get_profile()
