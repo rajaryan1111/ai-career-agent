@@ -26,7 +26,7 @@ them both "remaining" is how a project talks itself into claiming the wrong thin
 | 8 | P6 dashboard / reports | `reporting.py`, `analytics.py`; window: *What's happening* tab (`52a8e95`) | — | handler + logic tests, acceptance O | None | **complete** |
 | 9 | P6 notification preferences | `notifications.py` (schema 13); window: *What's happening* tab | Delivery itself: nothing sends | logic + handler tests, acceptance O6 | A delivery channel nobody has authorised | **complete as a preference; delivery blocked** |
 | 10 | P6 pause/resume, stop-all, revocation | `policy.py`, `tasks.py`; window: scheduler tab + Permissions & limits | — | acceptance I3-I6, N4-N6 | None | **complete** |
-| 11 | P7 strategies, artifacts, lineage | `strategies.py`, `artifacts.py`; window: *Tailored documents* tab | Nothing in the window *creates* a first artifact from a résumé | acceptance M | None | **partial (recorded in the ledger)** |
+| 11 | P7 strategies, artifacts, lineage | `strategies.py`, `artifacts.py`; window: *Tailored documents* tab | ~~Nothing in the window *creates* a first artifact~~ **done 2026-10-18** (`a51fa5d`, `f8995b3`): choose, preview in full, store exactly that, save a copy; duplicate, moved-strategy, moved-facts and stale-export all refused | acceptance M1-M12 | None | **done (a display-backed run is still owed, like every other tab)** |
 | 12 | P8 conditions + quiet hours editable | `policy.py`; window: Permissions & limits (`56e5755`) | — | `PolicyConditionsTabTests`, acceptance N7-N9 | None | **complete** |
 | 13 | Do-not-contact enforcement + UI | `suppression.py` (schema 14) + `guarded_dispatch`; window: HR contacts (`e173b40`) | Suppressing an address that is **not** a stored contact | `DoNotContactListPanelTests`, acceptance L9/L9b | None | **complete for stored contacts** |
 | 14 | Cross-platform + human desktop acceptance | `scripts/desktop_acceptance.py` (134 checks), `scripts/desktop_smoke_test.py` | — | Stand-in run only | **A display and a human.** No `tkinter` in this sandbox | **blocked (environment)** |
@@ -43,8 +43,11 @@ them both "remaining" is how a project talks itself into claiming the wrong thin
 
 Rows 2, 5, 6, 7, 14 and 15 are unchanged and stay **blocked**: a mailbox, a permitted source, a
 permitted submission route, a display with a human, and a CI trigger for this branch are all outside
-this repository. Row 11 (nothing in the window builds a *first* tailored document) is the largest
-remaining piece of work that is not blocked on anybody else.
+this repository. Row 11 (nothing in the window builds a *first* tailored document) was the largest
+remaining piece of work that is not blocked on anybody else; it was finished on 2026-10-18 - see
+`research/the-first-tailored-document-2026-10-18.md`. What is left unblocked after it is smaller:
+there is no way to choose *between* several imported résumés (the store holds one profile, with each
+fact's source file recorded beside it), and the exported format is plain text only.
 
 ## What this sprint could actually finish
 
