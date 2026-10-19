@@ -1,0 +1,42 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local databases and exports: candidate data must never be committed.
+# The app stores its database in the per-user application-data directory, not here.
+*.sqlite
+*.sqlite3
+*.db
+
+# Backups, SQLite side files and restore staging files (see career_agent/backup.py):
+# a backup holds the whole database, so none of these may be committed either.
+*.sqlite3.backup-*
+*.sqlite.backup-*
+*.db.backup-*
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-journal
+*.db-wal
+*.db-shm
+*.partial
+
+# Operating-system and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

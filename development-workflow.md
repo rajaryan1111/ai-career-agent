@@ -1,13 +1,13 @@
 # AI Career Agent — Safe Development Workflow
 
-**Status:** Adopt as project guidance for future engineering work; this does not authorize implementation before the product decision gate.  
+**Status:** Active project guidance for offline-core engineering and evidence-gated integrations.
 **Created:** 2026-10-13  
 **Purpose:** Reuse the most relevant ideas from [gstack](https://github.com/garrytan/gstack) and [Superpowers](https://github.com/obra/superpowers) without importing their toolchains, blindly following agent instructions, or weakening this product's trust requirements.
 
 ## Decision in one minute
 
 - **Reuse process ideas, not whole repositories.** Keep this guide as our project-specific adaptation; do not install either repository as an application dependency or copy their skills wholesale.
-- **Research gate still applies.** The current phase remains research/product validation. This guide is not permission to write product code yet.
+- **Research gate still applies to external capabilities.** Offline storage, profile, résumé, matching, tracking, recovery and packaging work may proceed when the requirements are sufficiently specified. Live discovery, outbound communication and application submission still require their own permission and quality evidence.
 - **Evidence beats confident claims.** A plan, agent review, passing test, or accessible page is evidence of only what it actually checks—not proof of source permission, employer legitimacy, matching quality, or successful job application.
 - **User authority and product safety win.** No agent workflow may override explicit approval, local-first privacy, zero-mandatory-cost constraints, source terms, candidate truthfulness, or confirmation requirements.
 
@@ -23,7 +23,7 @@ Write down:
 - alternatives considered, trade-offs, and unresolved questions;
 - the smallest useful test that could disprove the idea.
 
-For research work, the output can be a short decision note; do not manufacture implementation plans or code tasks while the research gate remains closed.
+For research work, the output can be a short decision note. Do not manufacture permission or quality evidence for a gated integration; continue independent offline implementation where its requirements are clear.
 
 ### 2. Specify observable behavior
 
