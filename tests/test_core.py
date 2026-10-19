@@ -1,10 +1,16 @@
 import unittest
 
 from career_agent import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
+    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
     Decision, JobListing, canonicalize_url, deduplicate_listings,
-    evaluate_eligibility, score_relevance, job_to_public_dict,
+    evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
+    is_substantive_confirmation_evidence, require_confirmation_evidence, selectable_tracker_statuses,
 )
+
+
+def requirement(report, name):
+    """Return the single requirement result called ``name``."""
+    return next(result for result in report.requirements if result.requirement == name)
 
 
 def sample_profile(**overrides):
@@ -91,6 +97,108 @@ class EligibilityTests(unittest.TestCase):
         self.assertEqual(mismatch.decision, Decision.FAIL)
 
 
+    def test_a_non_finite_experience_value_is_never_a_pass(self):
+        """``nan`` is false against every bound, so an unguarded range check used to pass it.
+
+        The desktop form refuses to store ``nan`` or ``inf`` at all; this covers the value arriving
+        some other way (an older row, a hand-edited database, a future importer) and proves the
+        eligibility gate stays fail-closed for it.
+        """
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(candidate_experience=value):
+                report = evaluate_eligibility(
+                    sample_profile(experience_years=value), sample_job(minimum_experience_years=5)
+                )
+                self.assertEqual(report.decision, Decision.UNKNOWN)
+                self.assertFalse(report.can_be_ranked_as_eligible)
+                self.assertIn("experience_years", {r.requirement for r in report.unknown_requirements})
+
+    def test_a_non_finite_job_experience_bound_is_never_a_pass(self):
+        for bound in (float("nan"), float("inf")):
+            with self.subTest(bound=bound):
+                report = evaluate_eligibility(
+                    sample_profile(experience_years=0), sample_job(minimum_experience_years=bound)
+                )
+                self.assertEqual(report.decision, Decision.UNKNOWN)
+                self.assertFalse(report.can_be_ranked_as_eligible)
+
+    def test_an_ordinary_experience_range_still_passes_and_still_fails(self):
+        # The guard above must not turn a normal range into "unknown".
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=1), sample_job(minimum_experience_years=1, maximum_experience_years=2)).decision,
+            Decision.PASS,
+        )
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=3), sample_job(minimum_experience_years=1, maximum_experience_years=2)).decision,
+            Decision.FAIL,
+        )
+        self.assertEqual(
+            evaluate_eligibility(sample_profile(experience_years=0), sample_job(minimum_experience_years=1)).decision,
+            Decision.FAIL,
+        )
+
+
+class RequirementNormalizationTests(unittest.TestCase):
+    """Formatting differences must not change a hard requirement's decision."""
+
+    def test_degree_discipline_ignores_case_and_surrounding_whitespace(self):
+        report = evaluate_eligibility(
+            sample_profile(degree_discipline="  ece "), sample_job(allowed_degree_disciplines=("ECE",))
+        )
+        self.assertEqual(requirement(report, "degree_discipline").decision, Decision.PASS)
+
+    def test_study_status_ignores_case(self):
+        report = evaluate_eligibility(
+            sample_profile(study_status="Undergraduate"), sample_job(allowed_study_statuses=("undergraduate",))
+        )
+        self.assertEqual(requirement(report, "study_status").decision, Decision.PASS)
+
+    def test_work_authorization_ignores_case_and_word_separators(self):
+        job = sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))
+        for candidate_value in ("authorized_without_sponsorship", "Authorized Without Sponsorship", " AUTHORIZED_Without_Sponsorship "):
+            with self.subTest(candidate_value=candidate_value):
+                report = evaluate_eligibility(sample_profile(work_authorization=candidate_value), job)
+                self.assertEqual(requirement(report, "work_authorization").decision, Decision.PASS)
+
+    def test_genuinely_different_values_still_fail(self):
+        cases = [
+            ("degree_discipline", sample_profile(degree_discipline="Mechanical Engineering"),
+             sample_job(allowed_degree_disciplines=("ECE", "Computer Science"))),
+            ("study_status", sample_profile(study_status="graduate"),
+             sample_job(allowed_study_statuses=("undergraduate",))),
+            ("work_authorization", sample_profile(work_authorization="sponsorship_required"),
+             sample_job(allowed_work_authorizations=("authorized_without_sponsorship",))),
+            ("graduation_year", sample_profile(graduation_year=2026),
+             sample_job(allowed_graduation_years=(2027, 2028))),
+        ]
+        for name, profile, job in cases:
+            with self.subTest(requirement=name):
+                report = evaluate_eligibility(profile, job)
+                self.assertEqual(requirement(report, name).decision, Decision.FAIL)
+                self.assertEqual(report.decision, Decision.FAIL)
+
+    def test_missing_values_stay_unknown_after_normalization(self):
+        blank_report = evaluate_eligibility(
+            sample_profile(degree_discipline="   "), sample_job(allowed_degree_disciplines=("ECE",))
+        )
+        self.assertEqual(requirement(blank_report, "degree_discipline").decision, Decision.UNKNOWN)
+
+        missing_report = evaluate_eligibility(
+            sample_profile(study_status=None), sample_job(allowed_study_statuses=("undergraduate",))
+        )
+        self.assertEqual(requirement(missing_report, "study_status").decision, Decision.UNKNOWN)
+
+        no_listing_requirement = evaluate_eligibility(sample_profile(), sample_job(allowed_study_statuses=None))
+        self.assertEqual(requirement(no_listing_requirement, "study_status").decision, Decision.UNKNOWN)
+
+    def test_normalization_never_produces_a_pass_from_an_unlisted_requirement(self):
+        report = evaluate_eligibility(
+            sample_profile(degree_discipline="ECE"), sample_job(allowed_degree_disciplines=None)
+        )
+        self.assertNotEqual(report.decision, Decision.PASS)
+        self.assertEqual(requirement(report, "degree_discipline").decision, Decision.UNKNOWN)
+
+
 class MatchingAndDedupTests(unittest.TestCase):
     def test_relevance_is_explainable_and_not_probability(self):
         result = score_relevance(sample_profile(), sample_job())
@@ -140,6 +248,67 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertEqual(confirmed.status, ApplicationStatus.CONFIRMED)
         self.assertEqual(confirmed.status_evidence, "Employer confirmation page shown")
 
+    def test_confirmation_refuses_this_projects_own_instruction_text(self):
+        """The smoke-test failure mode: paste the app's guidance and it must not read as proof."""
+        guidance_texts = (
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Confirmation requires evidence; a click or attempted submission is not proof.",
+            "Evidence / note (required to confirm)",
+            "Confirm with a meaningful evidence note, then move it to response_received or interview.",
+            "To revise the evidence, move the status forward with a meaningful note, "
+            "or keep the existing record as it is.",
+        )
+        for text in guidance_texts:
+            with self.subTest(text=text[:40]):
+                tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+                with self.assertRaises(ValueError) as caught:
+                    tracker.transition(ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True)
+                self.assertIn("instruction or a placeholder", str(caught.exception))
+                self.assertIs(tracker.status, ApplicationStatus.SUBMISSION_ATTEMPTED)
+                self.assertIsNone(tracker.status_evidence)
+                self.assertFalse(tracker.candidate_confirmed)
+
+    def test_confirmation_refuses_whitespace_placeholders_and_template_markers(self):
+        for text in ("   ", "\t\n", "n/a", "TODO", "tbd", "yes", "placeholder", "<your evidence here>",
+                     "This is a test", "just testing", "sample", "lorem ipsum"):
+            with self.subTest(text=text):
+                tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+                with self.assertRaises(ValueError):
+                    tracker.transition(ApplicationStatus.CONFIRMED, evidence=text)
+
+    def test_realistic_confirmation_notes_are_not_refused(self):
+        """The evidence floor must stay narrow: ordinary observations must still be recordable."""
+        for text in (
+            "Employer portal shows Application Received on 2026-10-14",
+            "Recruiter email acknowledged the application (thread ref ABC-123)",
+            "Confirmation email received; saved a screenshot locally",
+            # contains the word "evidence" but is an observation, not a bare placeholder value
+            "Portal shows the posting requires evidence of degree completion when applying",
+            # contains "test" as a word but is not the bare placeholder
+            "Employer replied: no online test is required for this internship",
+        ):
+            with self.subTest(text=text[:40]):
+                confirmed = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED).transition(
+                    ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True
+                )
+                self.assertIs(confirmed.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(confirmed.status_evidence, text)
+
+    def test_evidence_floor_is_a_shared_helper_over_plain_values(self):
+        cases = (
+            ("Employer portal shows Application Received", True),
+            ("A confirmed application requires evidence.", False),
+            ("", False),
+            (None, False),
+            ("   ", False),
+            ("todo", False),
+            ("<placeholder>", False),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertIs(is_substantive_confirmation_evidence(text), expected)
+        self.assertEqual(require_confirmation_evidence("  Received  "), "Received")
+
     def test_confirmation_flag_survives_later_status_transitions(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
         confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page shown", candidate_confirmed=True)
@@ -147,10 +316,134 @@ class ApplicationTrackerTests(unittest.TestCase):
         self.assertTrue(response.candidate_confirmed)
         self.assertEqual(response.status_evidence, "Employer email received")
 
+    def test_withdrawn_is_terminal_and_cannot_be_un_withdrawn(self):
+        withdrawn = ApplicationTracker("j1", ApplicationStatus.WITHDRAWN, "Candidate withdrew", False)
+        for status in ApplicationStatus:
+            with self.subTest(status=status.value):
+                if status is ApplicationStatus.WITHDRAWN:
+                    continue
+                self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, status))
+                with self.assertRaisesRegex(ValueError, "Invalid application transition"):
+                    withdrawn.transition(status, evidence="Employer portal shows Application Received")
+        # Re-applying the same status remains an idempotent no-op.
+        self.assertIs(withdrawn.transition(ApplicationStatus.WITHDRAWN), withdrawn)
+        self.assertEqual(withdrawn.status_evidence, "Candidate withdrew")
+
+    def test_every_route_to_confirmed_applies_the_same_evidence_floor(self):
+        """No predecessor may reach a confirmation with instruction text or a placeholder."""
+        predecessors = (
+            ApplicationStatus.SUBMISSION_ATTEMPTED,
+            ApplicationStatus.SUBMITTED_UNVERIFIED,
+            ApplicationStatus.UNKNOWN_STATUS,
+        )
+        refused = (
+            None, "", "   ", "todo", "n/a", "yes", "test", "<your evidence here>",
+            "A confirmed application requires evidence. An attempt or timeout is not proof.",
+            "Evidence / note (required to confirm)",
+        )
+        for predecessor in predecessors:
+            for text in refused:
+                with self.subTest(predecessor=predecessor.value, text=str(text)[:30]):
+                    tracker = ApplicationTracker("j1", predecessor, "earlier note", False)
+                    with self.assertRaises(ValueError):
+                        tracker.transition(ApplicationStatus.CONFIRMED, evidence=text, candidate_confirmed=True)
+                    self.assertIs(tracker.status, predecessor)
+                    self.assertEqual(tracker.status_evidence, "earlier note")
+                    self.assertFalse(tracker.candidate_confirmed)
+
+        accepted = "Employer portal shows Application Received on 2026-10-14"
+        for predecessor in predecessors:
+            with self.subTest(predecessor=predecessor.value):
+                confirmed = ApplicationTracker("j1", predecessor, "earlier note", False).transition(
+                    ApplicationStatus.CONFIRMED, evidence=accepted, candidate_confirmed=True
+                )
+                self.assertIs(confirmed.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(confirmed.status_evidence, accepted)
+                self.assertTrue(confirmed.candidate_confirmed)
+
+    def test_the_evidence_floor_never_asserts_confirmation_on_its_own(self):
+        """A valid transition still records only what the caller passed: the flag is never invented."""
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED)
+        confirmed = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer portal shows Application Received")
+        self.assertFalse(confirmed.candidate_confirmed, "the domain must not claim a confirmation nobody made")
+
     def test_invalid_transition_is_rejected(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.DISCOVERED)
         with self.assertRaises(ValueError):
             tracker.transition(ApplicationStatus.CONFIRMED, evidence="confirmation")
+
+    def test_no_op_transition_returns_the_tracker_unchanged(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "original evidence", True)
+        unchanged = tracker.transition(ApplicationStatus.CONFIRMED, evidence="replacement evidence")
+        self.assertIs(unchanged, tracker)
+        self.assertEqual(unchanged.status_evidence, "original evidence")
+
+    def test_transition_carries_the_new_status_and_evidence(self):
+        tracker = ApplicationTracker("j1", ApplicationStatus.SUBMISSION_ATTEMPTED, "attempt recorded", False)
+        updated = tracker.transition(ApplicationStatus.CONFIRMED, evidence="Employer confirmation page", candidate_confirmed=True)
+        self.assertEqual(updated.status, ApplicationStatus.CONFIRMED)
+        self.assertEqual(updated.status_evidence, "Employer confirmation page")
+        self.assertTrue(updated.candidate_confirmed)
+
+    def test_is_allowed_tracker_transition_matches_the_state_machine(self):
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.SHORTLISTED))
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.FAILED, ApplicationStatus.AWAITING_USER))
+        self.assertTrue(is_allowed_tracker_transition(ApplicationStatus.CONFIRMED, ApplicationStatus.CONFIRMED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.CONFIRMED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.WITHDRAWN, ApplicationStatus.SHORTLISTED))
+        self.assertFalse(is_allowed_tracker_transition(ApplicationStatus.INTERVIEW, ApplicationStatus.DISCOVERED))
+
+
+class SelectableTrackerStatusTests(unittest.TestCase):
+    """The chooser's vocabulary is derived from the state machine, not maintained beside it.
+
+    The expected set is recomputed here from ``is_allowed_tracker_transition`` — the rule the storage
+    layer enforces — rather than from a second hand-written table, so the UI and the domain cannot
+    drift apart without a test failing.
+    """
+
+    def permitted(self, current):
+        return {status for status in ApplicationStatus if is_allowed_tracker_transition(current, status)}
+
+    def test_offered_statuses_are_exactly_the_permitted_ones_for_every_status(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                offered = selectable_tracker_statuses(current)
+                self.assertEqual(set(offered), self.permitted(current))
+                self.assertIn(current, offered, "re-applying the current status must stay possible")
+
+    def test_nothing_outside_the_domain_vocabulary_is_offered(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                for status in selectable_tracker_statuses(current):
+                    self.assertIsInstance(status, ApplicationStatus)
+
+    def test_the_order_is_stable_and_follows_the_declaration_order(self):
+        for current in ApplicationStatus:
+            with self.subTest(current=current.value):
+                offered = selectable_tracker_statuses(current)
+                self.assertEqual(list(offered), sorted(offered, key=lambda status: list(ApplicationStatus).index(status)))
+
+    def test_a_new_record_offers_only_the_initial_status_and_its_permitted_moves(self):
+        self.assertEqual(
+            tuple(status.value for status in selectable_tracker_statuses(INITIAL_APPLICATION_STATUS)),
+            ("discovered", "shortlisted", "withdrawn"),
+        )
+
+    def test_terminal_statuses_offer_only_themselves(self):
+        for current in (ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED_BY_EMPLOYER):
+            with self.subTest(current=current.value):
+                self.assertEqual(selectable_tracker_statuses(current), (current,))
+
+    def test_no_status_is_offered_that_the_state_machine_would_refuse(self):
+        # The property that matters: a choice presented by the interface must be applicable.
+        for current in ApplicationStatus:
+            for offered in selectable_tracker_statuses(current):
+                with self.subTest(current=current.value, offered=offered.value):
+                    tracker = ApplicationTracker("j1", current, None, False)
+                    if offered is current:
+                        continue  # no-ops keep the record as it is, so they cannot be validated here
+                    self.assertTrue(is_allowed_tracker_transition(current, offered))
 
 
 if __name__ == "__main__":
