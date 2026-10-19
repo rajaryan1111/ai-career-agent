@@ -517,6 +517,10 @@ def create_backup(database_path: str | Path, destination: str | Path, *,
     try:
         info = validate_app_database(target)
         require_owner_only(target, noun="backup")
+        # A WAL-mode source with an open connection can leave a -shm sidecar in the copy.
+        # The caller must receive a self-contained backup with no sidecars, so remove any that
+        # were created: the main file already holds all committed rows (verified above).
+        _remove_sidecars(target)
     except (BackupError, PrivateWriteError) as exc:
         raise BackupError(
             f"The backup did not verify, so it was not kept ({exc}). {_discard(target)}."

@@ -24,3 +24,14 @@ Thumbs.db
 
 # Test helper not shipped with the product
 tests/sitecustomize.py
+
+# Backup and restore files created by career_agent.backup
+# These use the database filename as a prefix, so they need explicit patterns
+# to be ignored regardless of the database name.
+*.backup-*.sqlite3
+*.restore-*.partial
+.*.restore-*.partial
+
+# Pre-restore snapshots (raw copies of the database before restore)
+# These don't end in .sqlite3 so need their own pattern
+*backup-*
