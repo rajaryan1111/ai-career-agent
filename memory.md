@@ -3765,3 +3765,21 @@ tests all passed. The repository suite then ran 2082 tests with 1 skip; `compile
 `git diff --check` passed; the real-window desktop smoke and acceptance harnesses reported 14 and 113
 checks passed. The limitation remains explicit: this is a DTD/entity boundary, not a general malware
 scanner. Human GUI acceptance remains separate and blocked.
+
+## 2026-10-19 — JSON import atomicity and release metadata hardened
+
+The import audit identified that `apply_import` called independently committing store methods, so a late
+storage error could leave a profile, history, listing or tracker behind while the UI reported a failure.
+The fix keeps the existing version-2 JSON rules but runs the read-only plan and all import writes inside an
+internal `BEGIN IMMEDIATE` transaction. Store write helpers now compose with that transaction, write events
+are deferred until commit, and standalone commit failures roll back before the error is returned. The
+desktop failure message now says the import was rolled back rather than claiming earlier rows were applied.
+Regression coverage injects an actual activity-insert failure, checks all earlier rows and events are absent,
+checks successful event publication, and verifies a failed standalone commit leaves the store usable.
+
+Local verification at this head: **2086 tests OK**, `compileall`, `tabnanny` and `git diff --check` passed;
+the real-display desktop smoke and acceptance harnesses reported **14** and **113** checks passed. The
+package metadata now declares Python 3.14 because CI tests it, and the packaging test checks that every
+Python version named by CI has a matching classifier. Wheel/source builds and a fresh isolated wheel
+installation were exercised; no installer, signed bundle, source integration, external submission or
+mailbox access was enabled. Human desktop acceptance and the existing source/action gates remain blocked.

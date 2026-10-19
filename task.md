@@ -159,6 +159,14 @@ the DOCX extraction class **13 OK**, the full résumé module **86 OK**, and the
 harness also passed. Source-quality and external-action gates remain unchanged. Evidence: [DOCX DTD
 boundary note](research/docx-dtd-boundary-2026-10-18.md).
 
+**Import atomicity hardening, 2026-10-19:** JSON export imports now take one `BEGIN IMMEDIATE` transaction
+from the read-only plan through every profile, history, listing, tracker, follow-up and activity write.
+The store mutators used by this flow leave the outer transaction open, and their activity events are held
+until commit so a late storage failure cannot leave either partial candidate data or a false success trail.
+The regression injects a failure at the final activity write and verifies that all earlier rows and events
+are absent; the focused importer/store run passed **241 tests**, and the full local suite passed **2086
+tests**. This does not change the import's version-2 JSON contract or any external-action gate.
+
 ## Non-negotiable engineering rules
 - Inspect and reuse existing implementation before adding modules, schemas or abstractions.
 - Keep main unchanged and do not merge/close PR #2 as part of this work.

@@ -432,11 +432,10 @@ def plan_import(store: CareerStore, document: Mapping[str, Any], *, source: str 
         raise ImportRefused("The document's jobs entry is not a list, so nothing was imported.")
     stored_jobs = store.list_jobs()
     stored_by_key = {duplicate_key(job): job for job in stored_jobs}
-    # Identity decides linking; the identifier decides whether a write can happen at all. The two are not
-    # the same rule, and this is the gap they leave: a record whose listing_id is already stored but whose
-    # identity differs matches nothing above, so it was planned as new - and `save_job`, which upserts by
-    # listing_id, then replaced the stored listing's payload. The row's facts changed, the report said
-    # "Nothing was replaced", and the tracker that names that id was left pointing at a different listing.
+    # Identity decides linking; the identifier separately decides whether a write can happen at all. A
+    # record whose listing_id is already stored but whose identity differs matches nothing above, so it
+    # must be rejected rather than passed to `save_job`, which upserts by listing_id and would replace the
+    # stored listing's payload while leaving its tracker attached to a different listing.
     stored_ids = {job.listing_id for job in stored_jobs}
     file_keys: dict[str, str] = {}
     file_ids: dict[str, int] = {}
@@ -551,6 +550,14 @@ def _plan_application_record(store: CareerStore, plan: ImportPlan, record: Mappi
 
 def apply_import(store: CareerStore, document: Mapping[str, Any], *, source: str = "the chosen file",
                  document_name: str | None = None) -> ImportOutcome:
+    """Apply an import as one database transaction, including its plan reads and event history."""
+    with store._transaction():
+        return _apply_import_in_transaction(store, document, source=source, document_name=document_name)
+
+
+def _apply_import_in_transaction(store: CareerStore, document: Mapping[str, Any], *,
+                                  source: str = "the chosen file", document_name: str | None = None
+                                  ) -> ImportOutcome:
     """Apply an import, writing only what the plan describes.
 
     The plan is recomputed here rather than trusted from the caller, so the writes and the promise cannot

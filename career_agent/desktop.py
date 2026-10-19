@@ -4881,8 +4881,9 @@ class CareerAgentApp:
             self._report_database_unavailable(exc)
             return
         except ValueError as exc:
-            messagebox.showerror("Import stopped", f"{exc}\n\nWhat was listed above was applied; "
-                                                  "nothing else was.", parent=self.root)
+            messagebox.showerror("Import stopped", f"{exc}\n\nThe import was rolled back; "
+                                                  "nothing was written.", parent=self.root)
+            self.status.set("Import rolled back; nothing was written.")
             self._record("import.failed", "reason=a stored record was refused")
             return
         self._refresh_jobs()

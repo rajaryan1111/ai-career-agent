@@ -159,6 +159,41 @@ class CareerStoreTests(unittest.TestCase):
         self.assertEqual({j.listing_id for j in self.store.find_duplicate_group(self.job)}, {"j1", "j2"})
 
 
+class _CommitFailureConnection:
+    """Delegate a SQLite connection while refusing its first commit."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def commit(self):
+        raise sqlite3.OperationalError("simulated commit failure")
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+class WriteTransactionFailureTests(unittest.TestCase):
+    def test_a_failed_standalone_commit_rolls_back_and_leaves_the_store_usable(self):
+        store = CareerStore(":memory:")
+        self.addCleanup(store.close)
+        connection = store._connection
+        store._connection = _CommitFailureConnection(connection)
+        try:
+            with mock.patch("career_agent.event_log.record_event") as record_event:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "simulated commit failure"):
+                    store.save_job(sample_job())
+                event_names = [call.args[0] for call in record_event.call_args_list]
+                self.assertNotIn("job.saved", event_names)
+
+            self.assertFalse(store._connection.in_transaction)
+            store._connection = connection
+            self.assertIsNone(store.get_job("j1"))
+            store.save_job(sample_job())
+            self.assertIsNotNone(store.get_job("j1"))
+        finally:
+            store._connection = connection
+
+
 class TrackerInvariantTests(unittest.TestCase):
     """The store must not persist states the domain state machine would reject."""
 

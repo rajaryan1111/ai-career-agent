@@ -195,6 +195,20 @@ class SupportedEnvironmentTests(unittest.TestCase):
         self.assertIn(f'"{OLDEST_SUPPORTED}"', workflow, "CI must run the oldest interpreter the metadata allows")
         self.assertIsNotNone(re.search(r"python-version:\s*\[", workflow), "the CI matrix must stay explicit")
 
+    def test_every_python_version_named_by_ci_is_declared_as_a_classifier(self):
+        data = load_pyproject()
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        ci_versions: set[str] = set()
+        for matrix, single in re.findall(r"python-version:\s*(?:\[([^\]]+)\]|\"([^\"]+)\")", workflow):
+            values = single or matrix
+            ci_versions.update(re.findall(r"\"(3\.\d+)\"", values))
+        classifiers = set(data["project"].get("classifiers", []))
+        missing = sorted(
+            version for version in ci_versions
+            if f"Programming Language :: Python :: {version}" not in classifiers
+        )
+        self.assertFalse(missing, f"CI tests Python versions missing from package classifiers: {missing}")
+
     def test_the_doctor_checks_the_same_interpreter_floor_the_metadata_declares(self):
         """``--doctor`` repeats the floor so it can check it without packaging metadata; keep them equal."""
         self.assertEqual(

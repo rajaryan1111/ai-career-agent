@@ -7,6 +7,7 @@ cannot drift apart.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -1415,6 +1416,7 @@ class CareerStore:
 
     def __init__(self, database_path: str | Path):
         self.database_path = str(database_path)
+        self._deferred_events: list[tuple[str, str | None]] | None = None
         self._connection = sqlite3.connect(self.database_path)
         try:
             self._connection.row_factory = sqlite3.Row
@@ -1448,9 +1450,67 @@ class CareerStore:
         import graph acyclic without moving the owner-only write primitive out of this module, which is
         the one place that decides what "owner-only" means.
         """
+        if self._deferred_events is not None:
+            # A multi-record operation must not publish events for writes that may still be rolled back.
+            # Keep the same event vocabulary, but flush it only after the enclosing transaction commits.
+            self._deferred_events.append((event, detail))
+            return
         from .event_log import record_event  # local import: avoids a circular import at load time
 
         record_event(event, detail=detail, database_path=self.database_path)
+
+    @contextmanager
+    def _transaction(self):
+        """Run the importer's group of store writes atomically.
+
+        The context takes the write lock before its first read, so the plan and the writes observe the
+        same database state. This is an internal coordination primitive: store mutators used by the
+        importer use :meth:`_write_transaction`, which notices the already-open transaction and does not
+        commit it prematurely. Activity/events are deferred until the commit succeeds, so a rolled-back
+        operation cannot leave a false history trail.
+        """
+        if self._connection.in_transaction:
+            raise sqlite3.OperationalError("a store transaction is already active")
+        self._connection.execute("BEGIN IMMEDIATE")
+        previous = self._deferred_events
+        events: list[tuple[str, str | None]] = []
+        self._deferred_events = events
+        committed = False
+        try:
+            yield self._connection
+            self._connection.execute("COMMIT")
+            committed = True
+        except BaseException:
+            self._roll_back_quietly()
+            raise
+        finally:
+            self._deferred_events = previous
+        if committed:
+            for event, detail in events:
+                self._record(event, detail)
+
+    @contextmanager
+    def _write_transaction(self):
+        """Commit one write when standalone, or leave it to :meth:`_transaction` when nested."""
+        owns_transaction = not self._connection.in_transaction
+        if owns_transaction:
+            self._connection.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            if owns_transaction:
+                self._connection.rollback()
+            raise
+        else:
+            if owns_transaction:
+                try:
+                    self._connection.commit()
+                except BaseException:
+                    # A failed commit can leave sqlite3's transaction open. Roll it back before the
+                    # exception reaches the caller, otherwise later writes can be accidentally grouped
+                    # with this one and their events can describe data that is eventually discarded.
+                    self._roll_back_quietly()
+                    raise
 
     def _initialize(self) -> None:
         """Bring the database to the schema this build expects, one recorded step at a time."""
@@ -1593,7 +1653,7 @@ class CareerStore:
         recorded = changed if records_origins else ()
         payload = json.dumps(asdict(profile), sort_keys=True, default=_json_default)
         now = _now()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """INSERT INTO candidate_profile(profile_id, payload, updated_at) VALUES (1, ?, ?)
                    ON CONFLICT(profile_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
@@ -1761,7 +1821,7 @@ class CareerStore:
         if current is not None and current.is_confirmed:
             return current
         now = _now()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """INSERT INTO profile_fact_provenance
                        (fact, source, verification, document_name, recorded_at, confirmed_at)
@@ -1778,7 +1838,7 @@ class CareerStore:
     def save_job(self, job: JobListing, *, observed_at: str | None = None) -> None:
         timestamp = observed_at or _now()
         payload = json.dumps(asdict(job), sort_keys=True, default=_json_default)
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """INSERT INTO job_listings(listing_id, payload, duplicate_key, first_seen_at, last_seen_at)
                    VALUES (?, ?, ?, ?, ?)
@@ -1885,7 +1945,7 @@ class CareerStore:
                 follow_up_guard = " AND IFNULL(follow_up_on, '') = ? AND IFNULL(follow_up_note, '') = ?"
                 parameters.extend([str(expected.get("follow_up_on") or ""),
                                    str(expected.get("follow_up_note") or "")])
-            with self._connection:
+            with self._write_transaction():
                 cursor = self._connection.execute(
                     """UPDATE application_tracker
                           SET status = ?, status_evidence = ?, candidate_confirmed = ?,
@@ -1904,7 +1964,7 @@ class CareerStore:
                 )
             return
         try:
-            with self._connection:
+            with self._write_transaction():
                 self._connection.execute(
                     """INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed,
                                                      follow_up_on, follow_up_note, updated_at)
@@ -1978,7 +2038,7 @@ class CareerStore:
         detail = validate_activity_detail(activity.detail)
         occurred_on = validate_activity_date(activity.occurred_on)
         try:
-            with self._connection:
+            with self._write_transaction():
                 cursor = self._connection.execute(
                     """INSERT INTO application_activity(listing_id, occurred_on, recorded_at, kind, detail)
                        VALUES (?, ?, ?, ?, ?)""",
@@ -2020,7 +2080,7 @@ class CareerStore:
 
     def delete_activity(self, activity_id: int) -> bool:
         """Remove one entry; return whether a row was deleted. Explicit, like the other deletions."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM application_activity WHERE activity_id = ?", (int(activity_id),)
             )
@@ -2080,7 +2140,7 @@ class CareerStore:
                 "Finish or delete that one instead of adding it twice."
             )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 """INSERT INTO application_preparation(listing_id, title, kind, due_on, created_at,
                                                        updated_at, done_at)
@@ -2135,7 +2195,7 @@ class CareerStore:
             state = "already marked done" if done else "not marked done"
             raise ValueError(f"That preparation item is {state}; nothing was changed.")
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 "UPDATE application_preparation SET done_at=?, updated_at=? WHERE preparation_id=?",
                 (timestamp if done else None, timestamp, int(preparation_id)),
@@ -2152,7 +2212,7 @@ class CareerStore:
 
     def delete_preparation(self, preparation_id: int) -> bool:
         """Remove one item; return whether a row was deleted. Explicit, like the other deletions."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM application_preparation WHERE preparation_id=?", (int(preparation_id),)
             )
@@ -2183,7 +2243,7 @@ class CareerStore:
                 "than the same one twice."
             )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 """INSERT INTO interview_round(listing_id, stage, scheduled_on, mode, outcome, notes,
                                                created_at, updated_at)
@@ -2237,7 +2297,7 @@ class CareerStore:
             mode=current.mode, outcome=outcome, notes=current.notes if notes is None else notes,
             round_id=current.round_id, created_at=current.created_at,
         )
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 "UPDATE interview_round SET outcome=?, notes=?, updated_at=? WHERE round_id=?",
                 (updated.outcome.value, updated.notes, _now(), int(round_id)),
@@ -2249,7 +2309,7 @@ class CareerStore:
 
     def delete_interview(self, round_id: int) -> bool:
         """Remove one round; return whether a row was deleted."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM interview_round WHERE round_id=?", (int(round_id),)
             )
@@ -2353,7 +2413,7 @@ class CareerStore:
                     f"{entry.start_date.isoformat()}. Edit that one instead of adding it twice."
                 )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 """INSERT INTO candidate_work_history(employer, job_title, employment_type, start_date,
                                                       end_date, is_current, summary, created_at, updated_at)
@@ -2410,7 +2470,7 @@ class CareerStore:
                     f"{updated.start_date.isoformat()}. Edit that one, or change this one so the two differ."
                 )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """UPDATE candidate_work_history
                       SET employer=?, job_title=?, employment_type=?, start_date=?, end_date=?, is_current=?,
@@ -2428,7 +2488,7 @@ class CareerStore:
 
     def delete_work_history(self, entry_id: int) -> bool:
         """Remove one employment record; return whether a row was deleted."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM candidate_work_history WHERE entry_id=?", (int(entry_id),)
             )
@@ -2458,7 +2518,7 @@ class CareerStore:
                     + ". Edit that one instead of adding it twice."
                 )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 """INSERT INTO candidate_education(institution, qualification, discipline, start_date,
                                                     completion_date, is_ongoing, created_at, updated_at)
@@ -2516,7 +2576,7 @@ class CareerStore:
                     "Edit that one, or change this one so the two differ."
                 )
         timestamp = _now()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """UPDATE candidate_education
                       SET institution=?, qualification=?, discipline=?, start_date=?, completion_date=?,
@@ -2534,7 +2594,7 @@ class CareerStore:
 
     def delete_education(self, entry_id: int) -> bool:
         """Remove one education record; return whether a row was deleted."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM candidate_education WHERE entry_id=?", (int(entry_id),)
             )
@@ -2650,7 +2710,7 @@ class CareerStore:
 
         stamp = _iso(moment)
         created_at = stamp if previous is None or previous.created_at is None else _iso(previous.created_at)
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute(
                 """INSERT INTO scheduled_task(
                        task_id, name, kind, timezone, schedule_times, enabled, timeout_seconds,
@@ -2700,7 +2760,7 @@ class CareerStore:
 
     def delete_scheduled_task(self, task_id: str) -> bool:
         """Remove a task and its run history; return whether a row was deleted."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM scheduled_task WHERE task_id = ?", (str(task_id),)
             )
@@ -2877,7 +2937,7 @@ class CareerStore:
         if worker_id is not None:
             statement += " AND worker_id = ?"
             parameters.append(worker_id)
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(statement, tuple(parameters))
         return cursor.rowcount == 1
 
@@ -3005,7 +3065,7 @@ class CareerStore:
     def heartbeat_worker_lease(self, worker_id: str, *, now: datetime | None = None) -> WorkerLease | None:
         """Refresh the lease if this worker holds it; ``None`` when it does not."""
         moment = now or datetime.now(timezone.utc)
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "UPDATE worker_lease SET heartbeat_at = ? WHERE lease_name = ? AND worker_id = ?",
                 (_iso(moment), _LEASE_NAME, str(worker_id)),
@@ -3023,7 +3083,7 @@ class CareerStore:
 
     def release_worker_lease(self, worker_id: str) -> bool:
         """Give up the lease; return whether this worker held it. Only the holder can release it."""
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute(
                 "DELETE FROM worker_lease WHERE lease_name = ? AND worker_id = ?",
                 (_LEASE_NAME, str(worker_id)),
@@ -3308,7 +3368,7 @@ class CareerStore:
         person asked for their candidate data to go, not for a row of it to go.
         """
         counts = self.profile_record_counts()
-        with self._connection:
+        with self._write_transaction():
             self._connection.execute("DELETE FROM candidate_work_history")
             self._connection.execute("DELETE FROM candidate_education")
             # The origins go with the profile they describe, in the same transaction: a row saying "this
@@ -3325,7 +3385,7 @@ class CareerStore:
         return removed
 
     def delete_job(self, listing_id: str) -> bool:
-        with self._connection:
+        with self._write_transaction():
             cursor = self._connection.execute("DELETE FROM job_listings WHERE listing_id=?", (listing_id,))
         removed = cursor.rowcount > 0
         if removed:
@@ -3582,14 +3642,14 @@ class CareerStore:
                 "that holds it first; nothing was changed."
             )
         if suppressed:
-            with self._connection:
+            with self._write_transaction():
                 self._connection.execute(
                     "UPDATE hr_contact SET suppressed = 1, suppressed_at = ?, suppressed_note = ? "
                     "WHERE email_key = ?",
                     (_now(), note, key),
                 )
         else:
-            with self._connection:
+            with self._write_transaction():
                 self._connection.execute(
                     "UPDATE hr_contact SET suppressed = 0, suppressed_at = NULL, suppressed_note = NULL "
                     "WHERE email_key = ?",

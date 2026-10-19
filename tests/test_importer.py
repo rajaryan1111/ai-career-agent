@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from career_agent import importer
 from career_agent.core import (
@@ -25,6 +27,21 @@ from career_agent.core import (
 from career_agent.store import CareerStore
 
 STAMP = date(2026, 10, 15)
+
+
+class _ActivityInsertFailureConnection:
+    """Delegate a SQLite connection while failing at the final import write."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, statement, *parameters):
+        if "INSERT INTO application_activity" in statement:
+            raise sqlite3.OperationalError("simulated activity storage failure")
+        return self._connection.execute(statement, *parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
 
 
 def job(listing_id: str = "j1", *, url: str | None = None, employer: str = "Sandbox Systems",
@@ -228,6 +245,41 @@ class ImportTestCase(unittest.TestCase):
         self.assertIn("added 1 education record(s)", text)
         self.assertIn("skipped 1 unusable record(s)", text,
                       "the record the write refused is counted among the skipped, not hidden")
+
+    def test_a_late_storage_failure_rolls_back_every_earlier_import_write(self):
+        """An import cannot leave a profile, listing or tracker behind after a later write fails."""
+        path, document = self.export_file()
+        with self.target_store() as store:
+            store._connection = _ActivityInsertFailureConnection(store._connection)
+            with mock.patch("career_agent.event_log.record_event") as record_event:
+                with self.assertRaisesRegex(sqlite3.OperationalError,
+                                            "simulated activity storage failure"):
+                    importer.apply_import(store, document, source=str(path), document_name=path.name)
+
+            self.assertIsNone(store.get_profile())
+            self.assertEqual(store.list_jobs(), ())
+            self.assertIsNone(store.get_tracker("j1"))
+            self.assertEqual(store.list_work_history(), ())
+            self.assertEqual(store.list_education(), ())
+            self.assertEqual(store.list_activity("j1"), ())
+            event_names = [call.args[0] for call in record_event.call_args_list]
+            self.assertNotIn("profile.saved", event_names)
+            self.assertNotIn("job.saved", event_names)
+            self.assertNotIn("tracker.saved", event_names)
+
+    def test_a_successful_import_publishes_store_events_after_commit(self):
+        """The atomic path still records the writes it committed, and only after the commit."""
+        path, document = self.export_file()
+        with self.target_store() as store:
+            with mock.patch("career_agent.event_log.record_event") as record_event:
+                outcome = importer.apply_import(store, document, source=str(path), document_name=path.name)
+
+            self.assertEqual(outcome.added_jobs, 1)
+            event_names = [call.args[0] for call in record_event.call_args_list]
+            self.assertIn("profile.saved", event_names)
+            self.assertIn("job.saved", event_names)
+            self.assertIn("tracker.saved", event_names)
+            self.assertIn("activity.added", event_names)
 
     def test_a_file_full_of_bad_records_imports_no_history_at_all_and_says_so(self):
         _, document = self.export_file()

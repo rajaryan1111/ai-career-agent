@@ -619,6 +619,10 @@ the same plan the window shows. Refusals exit with status `2`.
   entry that cannot be read.
 - Activity history is appended, and an entry already present (same day, same kind, same text) is not
   duplicated, so importing the same file twice does not double your timeline.
+- A confirmed import is one database transaction from its read-only plan through the last write. A
+  storage failure rolls back the profile, history, listing, tracker, follow-up and activity rows together;
+  the corresponding write events are published only after the transaction commits, so a partial import is
+  never reported as a completed one.
 - Employment and education records **either all come across or none do**: if you already have any record
   of your own stored here, the plan says how many it is keeping and imports none of the file's, because
   two half-CVs mixed into one list is a record of nobody. Delete the stored records first if you want the
@@ -629,8 +633,9 @@ the same plan the window shows. Refusals exit with status `2`.
   were`.
 
 The window writes `import.written`, `import.refused` or `import.failed` to the activity log, so an import
-that changed your data is visible in the same place as every other write. Nothing about an import leaves
-the machine, and the file you read is the file you chose.
+that changed your data is visible in the same place as every other write. Store-level write events for an
+import are held until its transaction commits. Nothing about an import leaves the machine, and the file you
+read is the file you chose.
 
 
 ## Where listings would come from (and why nothing is fetched yet)
