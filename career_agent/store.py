@@ -7,7 +7,9 @@ cannot drift apart.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from enum import Enum
+
 from datetime import datetime, timezone
 import errno
 import json
@@ -21,13 +23,40 @@ from .core import (
     require_confirmation_evidence,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 #: Public names for the schema contract. ``career_agent.backup`` validates a candidate backup file
 #: against these instead of repeating the schema, so the two can never disagree (a drift test in
 #: ``tests/test_backup.py`` compares them with a freshly initialised database).
 SCHEMA_VERSION = _SCHEMA_VERSION
-SCHEMA_TABLES = ("application_tracker", "candidate_profile", "job_listings")
+SCHEMA_TABLES = ("application_tracker", "candidate_profile", "job_listings", "notification_records", "schedule_definitions", "run_records")
+
+# Notification status values for the persistent store.
+class NotificationStatus(str, Enum):
+    """Status of a notification record in the persistent store."""
+    PENDING = "pending"
+    SHOWN = "shown"
+    DISMISSED = "dismissed"
+    ARCHIVED = "archived"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True)
+class NotificationRecord:
+    """Persistent record of a notification, survives app restarts."""
+    id: str
+    type: str
+    title: str
+    message: str
+    timestamp: str  # ISO format when created
+    scheduled_time: str | None = None  # ISO format when next reminder is due
+    status: NotificationStatus = NotificationStatus.PENDING
+    dedup_key: str | None = None
+    retry_count: int = 0
+    max_retries: int = 3
+    created_by: str | None = None
 
 #: Owner read/write only: the database holds candidate PII and should not be group/world readable.
 _OWNER_ONLY_MODE = 0o600
@@ -292,6 +321,8 @@ def _json_default(value):
         return sorted(value)
     if isinstance(value, (ApplicationStatus, Availability)):
         return value.value
+    if isinstance(value, Enum):
+        return value.value
     raise TypeError(f"Unsupported JSON value: {type(value).__name__}")
 
 
@@ -377,6 +408,39 @@ class CareerStore:
                     status_evidence TEXT,
                     candidate_confirmed INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS notification_records (
+                    record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    notification_id TEXT NOT NULL UNIQUE,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    scheduled_time TEXT,
+                    status TEXT NOT NULL,
+                    dedup_key TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 3,
+                    created_by TEXT,
+                    recorded_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS schedule_definitions (
+                    schedule_id TEXT PRIMARY KEY,
+                    cron_expression TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_run_at TEXT,
+                    next_run_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS run_records (
+                    run_id TEXT PRIMARY KEY,
+                    schedule_id TEXT NOT NULL REFERENCES schedule_definitions(schedule_id) ON DELETE CASCADE,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    exit_code INTEGER,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL
                 );
             """)
             self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -622,3 +686,234 @@ class CareerStore:
             return JobListing(**values)
         except TypeError as exc:
             raise StoredRecordError(noun, f"it holds field(s) this version cannot use ({exc})") from exc
+
+    # --------------------------------------------------------------- notification
+
+    def save_notification(self, notification: NotificationRecord) -> NotificationRecord:
+        """Persist a notification record."""
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO notification_records
+                   (notification_id, type, title, message, timestamp, scheduled_time,
+                    status, dedup_key, retry_count, max_retries, created_by, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (notification.id, notification.type, notification.title, notification.message,
+                 notification.timestamp, notification.scheduled_time, notification.status.value,
+                 notification.dedup_key, notification.retry_count, notification.max_retries,
+                 notification.created_by, notification.timestamp),
+            )
+        return notification
+
+    def list_notifications(self, status: str | None = None) -> tuple[NotificationRecord, ...]:
+        """List notification records, optionally filtered by status.
+
+        Args:
+            status: Filter by status string (e.g. 'pending', 'shown', 'dismissed', 'archived').
+                    If None, all records are returned.
+
+        Returns:
+            Tuple of NotificationRecord objects, ordered by recorded_at descending.
+        """
+        query = "SELECT * FROM notification_records"
+        params: list[object] = []
+        if status is not None:
+            query += " WHERE status=?"
+            params.append(status)
+        query += " ORDER BY recorded_at DESC"
+        rows = self._connection.execute(query, params).fetchall()
+        return tuple(
+            NotificationRecord(
+                id=row['notification_id'],
+                type=row['type'],
+                title=row['title'],
+                message=row['message'],
+                timestamp=row['timestamp'],
+                scheduled_time=row['scheduled_time'] if 'scheduled_time' in row.keys() else None,
+                status=NotificationStatus(row['status']),
+                dedup_key=row['dedup_key'] if 'dedup_key' in row.keys() else None,
+                retry_count=row['retry_count'] if 'retry_count' in row.keys() else 0,
+                max_retries=row['max_retries'] if 'max_retries' in row.keys() else 3,
+                created_by=row['created_by'] if 'created_by' in row.keys() else None,
+            )
+            for row in rows
+        )
+
+    def get_pending_notifications(self) -> tuple[NotificationRecord, ...]:
+        """Return all notification records with status PENDING.
+
+        Returns:
+            Tuple of NotificationRecord objects with PENDING status, ordered by recorded_at descending.
+        """
+        return self.list_notifications(status=NotificationStatus.PENDING.value)
+
+    def clear_notifications(self, dedup_keys: tuple[str, ...] = ()) -> int:
+        """Clear notifications by dedup keys.
+
+        Deletes all notification records whose dedup_key is in the given tuple.
+        Returns the number of deleted rows.
+        """
+        if not dedup_keys:
+            return 0
+        # Collect notification IDs matching the dedup keys
+        placeholders = ','.join('?' * len(dedup_keys))
+        rows = self._connection.execute(
+            f"SELECT notification_id FROM notification_records WHERE dedup_key IN ({placeholders})",
+            dedup_keys,
+        ).fetchall()
+        notification_ids = [row["notification_id"] for row in rows]
+        if not notification_ids:
+            return 0
+        return self.clear_notifications_by_ids(notification_ids)
+
+    def get_notification(self, notification_id: str) -> NotificationRecord | None:
+        """Retrieve a notification record by ID."""
+        row = self._connection.execute(
+            "SELECT * FROM notification_records WHERE notification_id=?",
+            (notification_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        # dataclasses imported at module level, dataclass
+        # NotificationStatus is defined in this module
+        values = dict(row)
+        values['status'] = NotificationStatus(values['status'])
+        # Convert to NotificationRecord - need to handle the dataclass fields
+        return NotificationRecord(
+            id=values['notification_id'],
+            type=values['type'],
+            title=values['title'],
+            message=values['message'],
+            timestamp=values['timestamp'],
+            scheduled_time=values.get('scheduled_time'),
+            status=NotificationStatus(values['status']),
+            dedup_key=values.get('dedup_key'),
+            retry_count=values.get('retry_count', 0),
+            max_retries=values.get('max_retries', 3),
+            created_by=values.get('created_by'),
+        )
+
+    def update_notification_status(self, notification_id: str, status: str | NotificationStatus, retry_count: int = 0) -> None:
+        """Update the status of a notification record."""
+        status_val = status.value if isinstance(status, NotificationStatus) else status
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE notification_records SET status=?, retry_count=? WHERE notification_id=?",
+                (status_val, retry_count, notification_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Notification {notification_id} not found")
+
+    def clear_notifications_by_ids(self, notification_ids: list[str]) -> int:
+        """Clear notifications by their IDs. Returns the number of deleted rows."""
+        with self._connection:
+            placeholders = ','.join('?' * len(notification_ids))
+            cursor = self._connection.execute(
+                f"DELETE FROM notification_records WHERE notification_id IN ({placeholders})",
+                notification_ids,
+            )
+            return cursor.rowcount
+
+    # --------------------------------------------------------------- schedule
+
+    def save_schedule_definition(self, definition) -> None:
+        """Persist a schedule definition."""
+        from .scheduler import ScheduleDefinition  # local import to avoid circular dependency
+        definition = definition if isinstance(definition, ScheduleDefinition) else ScheduleDefinition(**definition)
+        with self._connection:
+            self._connection.execute(
+                """INSERT OR REPLACE INTO schedule_definitions
+                   (schedule_id, cron_expression, timezone, created_at, last_run_at, next_run_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (definition.id, definition.cron_expression, definition.timezone,
+                 definition.created_at or _now(), definition.last_run_at, definition.next_run_at),
+            )
+
+    def list_schedule_definitions(self) -> list[dict]:
+        """List all schedule definitions."""
+        rows = self._connection.execute(
+            "SELECT schedule_id, cron_expression, timezone, created_at, last_run_at, next_run_at FROM schedule_definitions"
+        ).fetchall()
+        return [
+            {
+                'schedule_id': row['schedule_id'],
+                'cron_expression': row['cron_expression'],
+                'timezone': row['timezone'],
+                'created_at': row['created_at'],
+                'last_run_at': row['last_run_at'],
+                'next_run_at': row['next_run_at'],
+            }
+            for row in rows
+        ]
+
+    def get_schedule_definition(self, schedule_id: str) -> dict | None:
+        """Get a schedule definition by ID."""
+        row = self._connection.execute(
+            "SELECT schedule_id, cron_expression, timezone, created_at, last_run_at, next_run_at FROM schedule_definitions WHERE schedule_id=?",
+            (schedule_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            'schedule_id': row['schedule_id'],
+            'cron_expression': row['cron_expression'],
+            'timezone': row['timezone'],
+            'created_at': row['created_at'],
+            'last_run_at': row['last_run_at'],
+            'next_run_at': row['next_run_at'],
+        }
+
+    def save_run_record(self, run_id: str, schedule_id: str, status: str, started_at: str) -> None:
+        """Persist a run record."""
+        with self._connection:
+            self._connection.execute(
+                """INSERT OR REPLACE INTO run_records
+                   (run_id, schedule_id, status, started_at)
+                   VALUES (?, ?, ?, ?)""",
+                (run_id, schedule_id, status, started_at),
+            )
+
+    def get_run_record(self, run_id: str) -> dict | None:
+        """Get a run record by ID."""
+        row = self._connection.execute(
+            "SELECT run_id, schedule_id, status, started_at, completed_at, exit_code, error_message, created_at FROM run_records WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            'run_id': row['run_id'],
+            'schedule_id': row['schedule_id'],
+            'status': row['status'],
+            'started_at': row['started_at'],
+            'completed_at': row['completed_at'],
+            'exit_code': row['exit_code'],
+            'error_message': row['error_message'],
+            'created_at': row['created_at'],
+        }
+
+    def list_run_records(self, schedule_id: str | None = None) -> list[dict]:
+        """List run records, optionally filtered by schedule_id."""
+        if schedule_id:
+            rows = self._connection.execute(
+                "SELECT run_id, schedule_id, status, started_at, completed_at, exit_code, error_message, created_at FROM run_records WHERE schedule_id=? ORDER BY started_at DESC",
+                (schedule_id,),
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT run_id, schedule_id, status, started_at, completed_at, exit_code, error_message, created_at FROM run_records ORDER BY started_at DESC"
+            ).fetchall()
+        return [
+            {
+                'run_id': row['run_id'],
+                'schedule_id': row['schedule_id'],
+                'status': row['status'],
+                'started_at': row['started_at'],
+                'completed_at': row['completed_at'],
+                'exit_code': row['exit_code'],
+                'error_message': row['error_message'],
+                'created_at': row['created_at'],
+            }
+            for row in rows
+        ]
+
+
