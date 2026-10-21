@@ -10,8 +10,14 @@ from unittest import mock
 from career_agent import ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing
 from career_agent.core import duplicate_key
 from career_agent.store import (
-    CareerStore, PrivateWriteError, StaleTrackerRecord, StoredRecordError, TrackerStatusError,
-    create_private_file, require_owner_only, write_private_text_file,
+    CareerStore,
+    PrivateWriteError,
+    StaleTrackerRecord,
+    StoredRecordError,
+    TrackerStatusError,
+    create_private_file,
+    require_owner_only,
+    write_private_text_file,
 )
 
 #: A fixed, clearly local timestamp so a test never depends on the clock.
@@ -621,7 +627,7 @@ class DurabilityTests(unittest.TestCase):
         self.assertEqual(tracker.status_evidence, "Employer email")
         self.assertTrue(tracker.candidate_confirmed)
         version = reopened._connection.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 1)
+        self.assertEqual(version, 2)
 
     def test_deletion_survives_close_and_reopen(self):
         store = CareerStore(self.path)
@@ -641,7 +647,7 @@ class DurabilityTests(unittest.TestCase):
         for _ in range(2):
             reopened = CareerStore(self.path)
             self.assertEqual(len(reopened.list_jobs()), 1)
-            self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(reopened._connection.execute("PRAGMA user_version").fetchone()[0], 2)
             reopened.close()
 
     def test_newer_schema_is_refused_instead_of_overwritten(self):
