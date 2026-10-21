@@ -5,28 +5,51 @@ Domain rules, validation, and form mapping live in ``core.py``, ``store.py``,
 ``validation.py``, and ``desktop_logic.py``; this module only wires them to widgets.
 """
 from __future__ import annotations
+
 import json
 import sqlite3
+import tkinter as tk
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
+from . import resume
 from .backup import (
-    BACKUP_SUFFIX, BackupError, create_backup, restore_backup, suggested_backup_name,
+    BACKUP_SUFFIX,
+    BackupError,
+    create_backup,
+    restore_backup,
+    suggested_backup_name,
     validate_app_database,
 )
 from .core import (
-    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, Decision,
-    evaluate_eligibility, score_relevance, selectable_tracker_statuses,
+    INITIAL_APPLICATION_STATUS,
+    ApplicationStatus,
+    ApplicationTracker,
+    Availability,
+    score_relevance,
+    selectable_tracker_statuses,
 )
 from .desktop_logic import (
-    JobSaveMode, build_candidate_profile, default_database_path, format_stored_timestamp,
-    form_values, job_form_values, plan_job_save, profile_fields_not_matching, profile_form_values,
+    JobSaveMode,
+    build_candidate_profile,
+    default_database_path,
+    form_values,
+    format_stored_timestamp,
+    job_form_values,
+    plan_job_save,
+    profile_fields_not_matching,
+    profile_form_values,
 )
-from . import resume
 from .diagnostics import describe_startup_failure, record_startup_failure
+from .matching import assess_strategy
+from .notifications import NotificationManager
+from .policy import ActionStatus, check_policy
+from .reporting import (
+    build_eligibility_insights,
+)
+from .scheduler import SchedulerEngine, SchedulerStatus
 from .store import (
     CareerStore,
     PrivateWriteError,
@@ -52,6 +75,12 @@ def stored_status_text(row: dict | None) -> str:
         return ApplicationStatus(row["status"]).value
     except ValueError:
         return f"{row['status']} (not recognised by this version)"
+
+
+#: Controlled interval between scheduler polls, in milliseconds. The cron
+#: scheduler only schedules to minute granularity, so a one-minute poll
+#: introduces at most one minute of delay after the computed due time.
+SCHEDULER_POLL_MS = 60_000
 
 
 class CareerAgentApp:
@@ -81,8 +110,9 @@ class CareerAgentApp:
         self.tabs.add(self.jobs_tab, text="Jobs & eligibility")
         self.tabs.add(self.tracker_tab, text="Application tracker")
         self.tabs.add(self.data_tab, text="Data safety")
-        self.profile_vars = {}
-        self.job_vars = {}
+        self.profile_vars: dict[str, str] = {}
+        self.job_vars: dict[str, str] = {}
+        self.notification_manager = NotificationManager(self.store)
         self._build_profile()
         self._build_jobs()
         self._build_tracker()
@@ -91,6 +121,12 @@ class CareerAgentApp:
         ttk.Label(root, textvariable=self.status, relief="sunken", anchor=W, padding=5).pack(fill=X, side="bottom")
         self._load_profile()
         self._refresh_jobs()
+        # - Scheduler runtime ------------------------------------------------
+        # The persisted SQLite store is authoritative: schedules, run state
+        # and notifications are all read from and written to the store, never
+        # only in-memory. The Tk event loop drives the engine via a single
+        # non-blocking ``after`` timer; no background thread is started.
+        self._start_scheduler_runtime()
 
     def _entry(self, parent, label, key, row, col, variables, *, choices=None, width=26):
         ttk.Label(parent, text=label).grid(row=row, column=col * 2, sticky=W, padx=(0, 5), pady=4)
@@ -332,7 +368,7 @@ class CareerAgentApp:
         try:
             self.store = CareerStore(self.db_path)
         except Exception as exc:  # reported, never hidden: the app cannot work without the store
-            self.store = UnavailableStore(self.db_path, f"{type(exc).__name__}: {exc}")
+            self.store = UnavailableStore(self.db_path, f"{type(exc).__name__}: {exc}")  # type: ignore[assignment]
             messagebox.showerror(
                 "Database unavailable",
                 f"The local database could not be reopened ({exc}). Restart the app once the problem "
@@ -420,7 +456,7 @@ class CareerAgentApp:
             )
             self.status.set("Resume not imported; the profile was not changed.")
             return
-        except Exception as exc:  # noqa: BLE001 - defensive: a Tk callback has no handler above it
+        except Exception as exc:
             # The reader is written to refuse every unreadable file with a ResumeImportError, so this
             # is the last line of defence against a failure shape this build does not know about. Only
             # the exception's *type* is shown: an unexpected message could quote document text, and an
@@ -866,15 +902,48 @@ class CareerAgentApp:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
             self.tabs.select(self.profile_tab)
             return
-        report = evaluate_eligibility(profile, job)
+        # Use Phase 5 matching strategy for assessable results
+        strategy = assess_strategy(profile, job)
+        # Use Phase 5 reporting for structured insights
+        summary = build_eligibility_insights(profile, job)
+        # Check policy at the evaluation boundary
+        policy_check = check_policy("evaluate_eligibility", strategy,
+                                     user_authorized=False, has_credentials=False)
+        # Compute relevance for skill overlap display
         relevance = score_relevance(profile, job)
-        lines = [f"ELIGIBILITY: {report.decision.value.upper()}", "Only explicit PASS is eligible. UNKNOWN is not eligible.", ""]
-        lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.explanation}" for item in report.requirements]
-        lines += ["", f"Skill overlap: {relevance.get('skill_overlap', 'n/a')} (not a hiring probability)",
-                  "Matched skills: " + (", ".join(relevance.get("matched_skills", [])) or "None recorded"),
-                  "Missing required skills: " + (", ".join(relevance.get("missing_required_skills", [])) or "None recorded")]
+
+        lines = [f"ELIGIBILITY: {strategy.overall_decision.value.upper()}",
+                 f"Recommendation: {strategy.recommendation.value}",
+                 f"Confidence: {strategy.confidence}",
+                 f"Verification required: {strategy.verification_required}",
+                 "", f"Skill overlap: {relevance.get('skill_overlap', 'n/a')} (not a hiring probability)",
+                 ""]
+        lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.reason}"
+                  for item in summary.confirmed_facts]
+        lines += ["  (provenance: {item.provenance})" for item in summary.confirmed_facts]
+        lines += ["", "Inferred facts:"]
+        lines += [f"  {item.requirement}: {item.reason} (provenance: {item.provenance})"
+                  for item in summary.inferred_facts]
+        lines += ["", "Missing requirements:"]
+        lines += [f"  {r}" for r in summary.missing_requirements]
+        lines += ["", f"Overall: {summary.overall_decision.value}"]
+        lines += ["", "Recommendations:"]
+        lines += [f"  {r}" for r in summary.recommendations]
+        lines += ["", f"Policy: {policy_check.status.value}"]
+        lines += [f"  {policy_check.reason}"]
+        if policy_check.requires_auth:
+            lines += ["  (requires explicit user authorization)"]
+        lines += ["", policy_check.blocking_issue or ""]
         self._report("\n".join(lines))
-        self.status.set(f"Eligibility for {job.role_title}: {report.decision.value}.")
+        # Show follow-up reminder if eligibility is uncertain or a fail
+        if hasattr(self, "notification_manager"):
+            reminder = self.notification_manager.check_followup_reminder(
+                f"eligibility_{job.listing_id}",
+                min_interval_hours=24,
+            )
+            if reminder is not None:
+                self._report(f"\nFollow-up reminder: {reminder.message}")
+        self.status.set(f"Eligibility for {job.role_title}: {strategy.overall_decision.value} ({strategy.recommendation.value}).")
 
     def _shortlist(self):
         listing_id = self._selected_listing_id()
@@ -905,11 +974,32 @@ class CareerAgentApp:
         if not profile:
             messagebox.showinfo("Profile required", "Save your candidate profile first.", parent=self.root)
             return
-        report = evaluate_eligibility(profile, job)
-        if report.decision is not Decision.PASS:
-            messagebox.showwarning("Not eligible to shortlist", f"Eligibility is {report.decision.value.upper()}. Resolve unknown/failed requirements first.", parent=self.root)
-            self._evaluate()
+        # Use Phase 5 matching strategy
+        strategy = assess_strategy(profile, job)
+        # Check policy before shortlisting
+        policy_check = check_policy("shortlist_application", strategy,
+                                     user_authorized=False, has_credentials=False)
+
+        if policy_check.status == ActionStatus.BLOCKED:
+            messagebox.showwarning("Cannot shortlist", f"{policy_check.reason}\n\n{policy_check.blocking_issue}", parent=self.root)
             return
+        if policy_check.status == ActionStatus.UNCERTAIN:
+            messagebox.showwarning("Cannot shortlist", f"{policy_check.reason}\n\nResolve missing evidence first.", parent=self.root)
+            return
+
+        if policy_check.status == ActionStatus.CONDITIONAL:
+            if not messagebox.askyesno(
+                "Conditional shortlist",
+                f"{policy_check.reason}\n\nProceed with shortlisting despite conditional status?",
+                parent=self.root,
+            ):
+                return
+
+        if policy_check.status == ActionStatus.PERMITTED:
+            # Full pass - shortlist normally
+            pass
+
+        # Proceed with shortlisting
         try:
             tracker = self.store.get_tracker(listing_id)
             if tracker is None:
@@ -1132,7 +1222,7 @@ class CareerAgentApp:
                 )
                 self.status.set("Status not saved (local database error).")
                 return
-            except Exception as exc:  # noqa: BLE001 - unexpected failures are reported, never hidden
+            except Exception as exc:
                 # A last boundary: an unforeseen error must not close the dialog as if the change had
                 # been saved. Nothing is claimed and the saved record is untouched.
                 messagebox.showerror(
@@ -1226,7 +1316,145 @@ class CareerAgentApp:
         self.report.insert("1.0", text)
         self.report.configure(state="disabled")
 
+    # ------------------------------------------------------------- scheduler runtime
+
+    def _start_scheduler_runtime(self):
+        """Bring the persisted scheduler up for this session.
+
+        Recovery policy (safe, bounded):
+        - Runs still marked RUNNING from a previous process are failed with
+          an explicit reason. ``SchedulerEngine.complete_run`` then applies
+          the bounded retry policy instead of leaving a zombie state, and no
+          side effects of the interrupted run are re-attempted silently.
+        - Due schedules are processed once at resume by the first tick; the
+          engine then computes the next cron occurrence, so a long closure
+          produces one catch-up execution, never a storm.
+        """
+        # Runtime state is owned here so the scheduler works identically
+        # whether or not the full __init__ path built it first.
+        self._scheduler_closing = False
+        self._scheduler_after_id = None
+        self._scheduler_polling_active = False
+        self.scheduler_engine = SchedulerEngine(self.store)
+        self._recover_interrupted_runs()
+        self._scheduler_polling_active = True
+        self._scheduler_schedule_tick()
+        self._report_scheduler_status()
+
+    def _recover_interrupted_runs(self):
+        """Close out runs that were interrupted by a previous process."""
+        recovered = 0
+        for run in self.scheduler_engine.get_pending_runs():
+            if run.status is SchedulerStatus.RUNNING:
+                self.scheduler_engine.complete_run(
+                    run.id,
+                    SchedulerStatus.FAILED,
+                    error_message="interrupted by application restart",
+                )
+                recovered += 1
+        return recovered
+
+    def _scheduler_schedule_tick(self, delay_ms=None):
+        """Queue the next poll on the UI event loop (never blocking it)."""
+        if self._scheduler_closing or not self._scheduler_polling_active:
+            return
+        after = getattr(self.root, "after", None)
+        if after is None:
+            # Test stubs are driven by calling _scheduler_tick directly.
+            return
+        self._scheduler_after_id = after(
+            SCHEDULER_POLL_MS if delay_ms is None else delay_ms,
+            self._scheduler_tick,
+        )
+
+    def _scheduler_tick(self):
+        """One scheduler poll. Runs the engine, executes due schedules, and
+        re-arms itself. Exceptions are reported; they must not crash the UI
+        loop or kill the polling cycle."""
+        self._scheduler_after_id = None
+        try:
+            due_runs = self.scheduler_engine.check_due_runs()
+        except Exception as exc:  # engine or storage failure: keep polling
+            self.status.set(f"Scheduler check failed: {type(exc).__name__}: {exc}")
+            self._scheduler_schedule_tick()
+            return
+        for run in due_runs:
+            try:
+                self._execute_scheduled_run(run)
+            except Exception as exc:
+                self.scheduler_engine.complete_run(
+                    run.id,
+                    SchedulerStatus.FAILED,
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+        self._report_scheduler_status()
+        self._scheduler_schedule_tick()
+
+    def _execute_scheduled_run(self, run):
+        """Execute the action attached to a due scheduled run.
+
+        Local-alpha actions are deliberately bounded: a run produces one
+        persistent follow-up reminder notification describing the scheduled
+        job listing. Nothing here sends email or submits an application;
+        those boundaries live in the approval-gated flows.
+        """
+        schedule = self.scheduler_engine.get_schedule(run.schedule_id)
+        if schedule is None:
+            self.scheduler_engine.complete_run(
+                run.id, SchedulerStatus.FAILED, error_message="schedule definition missing"
+            )
+            return
+        if not schedule.enabled:
+            self.scheduler_engine.complete_run(
+                run.id, SchedulerStatus.CANCELLED, error_message="schedule disabled"
+            )
+            return
+        listing = self.store.get_job(schedule.job_listing_id)
+        if listing is None:
+            self.scheduler_engine.complete_run(
+                run.id, SchedulerStatus.FAILED, error_message="job listing no longer stored"
+            )
+            return
+        # Dedup key: one reminder per schedule per calendar day; repeated
+        # polls of the same due schedule cannot create duplicates.
+        dedup_key = f"schedule:{schedule.id}:{run.started_at[:10]}"
+        reminder = self.notification_manager.check_followup_reminder(dedup_key)
+        if reminder is not None:
+            note = f"follow-up reminder created for {listing.role_title} ({listing.employer_name})"
+        else:
+            note = f"follow-up reminder already pending for {listing.role_title} ({listing.employer_name})"
+        self.scheduler_engine.complete_run(run.id, SchedulerStatus.COMPLETED, output=note)
+        if reminder is not None:
+            self._refresh_tracker()
+
+    def _report_scheduler_status(self):
+        try:
+            schedules = self.scheduler_engine.list_schedules()
+            enabled = sum(1 for s in schedules if s.enabled)
+            self.status.set(
+                f"Scheduler: active · {enabled}/{len(schedules)} schedule(s)"
+                f" · poll every {SCHEDULER_POLL_MS // 1000}s"
+            )
+        except Exception:
+            pass
+
+    def _stop_scheduler_runtime(self):
+        """Stop polling and release the pending timer (graceful shutdown)."""
+        self._scheduler_closing = True
+        self._scheduler_polling_active = False
+        after_id = getattr(self, "_scheduler_after_id", None)
+        if after_id is not None:
+            after_cancel = getattr(self.root, "after_cancel", None)
+            if after_cancel is not None:
+                try:
+                    after_cancel(after_id)
+                except Exception:
+                    pass
+            self._scheduler_after_id = None
+
     def close(self):
+        # Stop the scheduler loop before releasing the store it depends on.
+        self._stop_scheduler_runtime()
         self.store.close()
         self.root.destroy()
 

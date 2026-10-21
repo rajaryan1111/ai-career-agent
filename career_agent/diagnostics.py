@@ -11,12 +11,12 @@ Nothing here sends anything anywhere, and nothing here changes or repairs a data
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable
 import os
 import re
 import sqlite3
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from pathlib import Path
 
 from .store import PrivateWriteError, write_private_text_file
 
@@ -290,7 +290,9 @@ def diagnostic_log_path(database_path: str | Path | None = None, *, data_folder:
     elif database_path is not None:
         base = Path(database_path).parent
     else:
-        from .desktop_logic import default_data_folder  # local import: keeps this module import-light
+        from .desktop_logic import (
+            default_data_folder,  # local import: keeps this module import-light
+        )
         base = default_data_folder()
     return base / "logs" / DIAGNOSTIC_FILE_NAME
 

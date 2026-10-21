@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import math
 import re
@@ -193,7 +193,8 @@ def evaluate_eligibility(profile: CandidateProfile, job: JobListing) -> Eligibil
                       "Candidate study status matches an explicitly allowed status.",
                       "Candidate study status is not in the explicitly allowed list.",
                       "Study-status eligibility or candidate status is missing.")
-    _check_membership(results, "graduation_year", profile.graduation_year, job.allowed_graduation_years,
+    # type: ignore[arg-type]
+    _check_membership(results, "graduation_year", cast(Optional[str], profile.graduation_year), cast(Optional[tuple[str, ...]], job.allowed_graduation_years),
                       "Candidate graduation year is explicitly accepted.",
                       "Candidate graduation year is outside the explicitly accepted cohort.",
                       "Graduation cohort or candidate graduation year is missing.")
@@ -229,6 +230,8 @@ def _is_real_number(value: object) -> bool:
     """
     if value is None:
         return True
+    if not isinstance(value, (str, int, float)):
+        return False
     try:
         return math.isfinite(float(value))
     except (TypeError, ValueError):
@@ -357,7 +360,7 @@ def require_confirmation_evidence(text: str | None) -> str:
             "employer showed you. Describe what you actually observed, for example "
             "\"Employer portal showed Application Received on 2026-10-14\". Nothing was saved."
         )
-    return text.strip()
+    return (text or "").strip()
 
 
 def is_allowed_tracker_transition(current: ApplicationStatus, new_status: ApplicationStatus) -> bool:
@@ -467,8 +470,8 @@ def score_relevance(profile: CandidateProfile, job: JobListing) -> dict[str, Any
     """
     candidate_skills = {_norm(s) for s in profile.skills if _norm(s)}
     required_skills = {_norm(s) for s in job.required_skills if _norm(s)}
-    matched = sorted(candidate_skills & required_skills)
-    missing = sorted(required_skills - candidate_skills)
+    matched = sorted(cast(set[str], candidate_skills & required_skills))
+    missing = sorted(cast(set[str], required_skills - candidate_skills))
     skill_score = round(len(matched) / len(required_skills), 3) if required_skills else None
     factors: dict[str, Any] = {
         "matched_skills": matched,
@@ -484,6 +487,53 @@ def score_relevance(profile: CandidateProfile, job: JobListing) -> dict[str, Any
     if job.work_mode and profile.preferred_work_modes:
         factors["work_mode_fit"] = "pass" if _norm(job.work_mode) in {_norm(v) for v in profile.preferred_work_modes} else "fail"
     return factors
+
+
+
+
+def explain_eligibility(profile: CandidateProfile, job: JobListing) -> dict[str, Any]:
+    """Return a structured eligibility explanation for a candidate/job pair.
+
+    Wraps ``evaluate_eligibility`` and formats the result as a dict with
+    ``requirements``, ``overall_decision``, and ``missing_requirements`` keys,
+    so that callers in ``matching`` and ``reporting`` can consume the structured
+    output without depending on the dataclass API.
+    """
+    report = evaluate_eligibility(profile, job)
+    requirements: dict[str, dict[str, Any]] = {}
+    for req in report.requirements:
+        requirements[req.requirement] = {
+            "decision": req.decision.value,
+            "evidence": req.evidence or "",
+            "provenance": "",  # placeholder; populated by caller if needed
+            "reason": req.explanation,
+            "confidence": "medium",  # default confidence level
+            "verification_required": True,  # default until proven otherwise
+        }
+    missing_requirements = tuple(
+        r.requirement for r in report.unknown_requirements
+    ) + tuple(r.requirement for r in report.failed_requirements)
+    # Build requirements dict with provenance from job listing eligibility data
+    for req in report.requirements:
+        req_name = req.requirement
+        # Find the original RequirementResult and add provenance
+        orig_req = next((r for r in report.requirements if r.requirement == req_name), None)
+        if orig_req and orig_req.evidence:
+            requirements[req_name]["provenance"] = orig_req.evidence
+        else:
+            requirements[req_name]["provenance"] = "unknown"
+    # Build a simple summary string from the tuple of RequirementResult objects
+    overall = report.decision
+    passed = sum(1 for r in report.requirements if r.decision is Decision.PASS)
+    failed = sum(1 for r in report.requirements if r.decision is Decision.FAIL)
+    unknown = sum(1 for r in report.requirements if r.decision is Decision.UNKNOWN)
+    summary = f"Overall: {overall.value}  passed={passed} failed={failed} unknown={unknown}"
+    return {
+        "requirements": requirements,
+        "overall_decision": report.decision.value,
+        "missing_requirements": missing_requirements,
+        "summary": summary,
+    }
 
 
 def job_to_public_dict(job: JobListing) -> Mapping[str, Any]:

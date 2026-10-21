@@ -20,12 +20,20 @@ from pathlib import Path
 from unittest import mock
 
 from career_agent import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
+    ApplicationStatus,
+    ApplicationTracker,
+    Availability,
+    CandidateProfile,
+    JobListing,
 )
 from career_agent import backup as backup_module
 from career_agent.__main__ import main as cli_main
 from career_agent.backup import (
-    BackupError, automatic_backup_path, create_backup, restore_backup, suggested_backup_name,
+    BackupError,
+    automatic_backup_path,
+    create_backup,
+    restore_backup,
+    suggested_backup_name,
     validate_app_database,
 )
 from career_agent.store import SCHEMA_TABLES, SCHEMA_VERSION, CareerStore

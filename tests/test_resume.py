@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import io
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,8 +21,14 @@ from xml.sax.saxutils import escape
 
 from career_agent import resume
 from career_agent.resume import (
-    DocumentFormat, FieldProposal, ProposalConfidence, ResumeEncrypted, ResumeImportError,
-    ResumeNoText, ResumeTooLarge, ResumeUnreadable,
+    DocumentFormat,
+    FieldProposal,
+    ProposalConfidence,
+    ResumeEncrypted,
+    ResumeImportError,
+    ResumeNoText,
+    ResumeTooLarge,
+    ResumeUnreadable,
 )
 
 PDF_AVAILABLE = resume.PDF_SUPPORT_AVAILABLE

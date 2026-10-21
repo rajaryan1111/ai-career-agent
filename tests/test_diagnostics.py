@@ -17,11 +17,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from career_agent import __version__
 from career_agent import __main__ as cli
+from career_agent import __version__
 from career_agent.diagnostics import (
-    DIAGNOSTIC_FILE_NAME, MAX_DIAGNOSTIC_LENGTH, describe_startup_failure, diagnostic_log_path,
-    record_startup_failure, redact_paths,
+    DIAGNOSTIC_FILE_NAME,
+    MAX_DIAGNOSTIC_LENGTH,
+    describe_startup_failure,
+    diagnostic_log_path,
+    record_startup_failure,
+    redact_paths,
 )
 from career_agent.store import SCHEMA_VERSION, CareerStore, PrivateWriteError, TrackerStatusError
 

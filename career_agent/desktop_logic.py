@@ -11,15 +11,16 @@ from __future__ import annotations
 
 import os
 import platform
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Mapping
 
 from .core import Availability, CandidateProfile, JobListing
 from .urls import validate_public_http_url
 from .validation import optional_float, optional_int, split_values
+from typing import cast
 
 APPLICATION_FOLDER_NAME = "AI Career Agent"
 DATABASE_FILE_NAME = "career_agent.sqlite3"
@@ -242,7 +243,7 @@ def build_job_listing(values: Mapping[str, str], *, listing_id: str) -> JobListi
         allowed_work_authorizations=_split_or_none(values.get("allowed_work_authorizations") or ""),
         allowed_degree_disciplines=_split_or_none(values.get("degrees") or ""),
         allowed_study_statuses=_split_or_none(values.get("study_statuses") or ""),
-        allowed_graduation_years=graduation_years or None,
+        allowed_graduation_years=(cast(tuple[int, ...] | None, graduation_years) if graduation_years else None),
         minimum_experience_years=minimum,
         maximum_experience_years=maximum,
         required_skills=frozenset(split_values(values.get("required_skills") or "")),

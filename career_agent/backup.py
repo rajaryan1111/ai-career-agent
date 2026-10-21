@@ -52,7 +52,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .store import (
-    SCHEMA_TABLES, SCHEMA_VERSION, PrivateWriteError, create_private_file, require_owner_only,
+    SCHEMA_TABLES,
+    SCHEMA_VERSION,
+    PrivateWriteError,
+    create_private_file,
+    require_owner_only,
 )
 
 #: Default file name offered when the user chooses where to write a backup.
@@ -658,7 +662,7 @@ def _describe_failed_install(database_path: Path, pre_backup: Path | None, pre_v
         os.replace(staged, database_path)
         _remove_sidecars(database_path)
         validate_app_database(database_path)
-    except Exception as exc:  # noqa: BLE001 - the rollback path must report, never raise
+    except Exception as exc:
         return (
             f"{note} Putting the previous database back also failed ({exc}); it is preserved at "
             f"{pre_backup}. {_discard(staged)}."

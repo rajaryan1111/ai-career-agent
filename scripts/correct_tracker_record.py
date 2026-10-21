@@ -50,13 +50,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from career_agent.backup import BackupError, automatic_backup_path, create_backup  # noqa: E402
 from career_agent.core import (  # noqa: E402  (imports need the repository root on sys.path)
     ApplicationStatus,
     ApplicationTracker,
     is_allowed_tracker_transition,
     is_substantive_confirmation_evidence,
 )
-from career_agent.backup import BackupError, automatic_backup_path, create_backup  # noqa: E402
 from career_agent.store import CareerStore  # noqa: E402
 
 EXIT_OK = 0

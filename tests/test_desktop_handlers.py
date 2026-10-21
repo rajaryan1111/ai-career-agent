@@ -8,7 +8,6 @@ These tests verify handler decisions, validation messages, and database-error
 handling. They do not verify rendering, theming, layout, or macOS behaviour; the
 manual smoke-test checklist in research/ is still required before GUI acceptance.
 """
-import io
 import json
 import os
 import sqlite3
@@ -17,18 +16,24 @@ import tempfile
 import types
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 from xml.sax.saxutils import escape
 
 from career_agent import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision, JobListing,
-    evaluate_eligibility, is_allowed_tracker_transition, selectable_tracker_statuses,
+    ApplicationStatus,
+    ApplicationTracker,
+    Availability,
+    CandidateProfile,
+    Decision,
+    JobListing,
+    evaluate_eligibility,
+    is_allowed_tracker_transition,
+    resume,
 )
 from career_agent.backup import BackupError, create_backup, validate_app_database
-from career_agent import resume
 from career_agent.store import CareerStore, StoredRecordError, UnavailableStore
-from datetime import datetime, timezone
 
 #: Fixed stamp so the pre-restore snapshot name in assertions does not depend on the clock.
 RESTORE_STAMP = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -577,6 +582,7 @@ class HandlerTestCase(unittest.TestCase):
         app._report = lambda text: None
         app.job_vars = {key: StringVar(value) for key, value in job_form_values(sample_job()).items()}
         app.profile_vars = {key: StringVar(value) for key, value in profile_form_values(PROFILE).items()}
+        app.notification_manager = desktop.NotificationManager()
         if with_profile:
             self.store.save_profile(PROFILE)
         return app
@@ -868,7 +874,8 @@ class DatabaseErrorTests(HandlerTestCase):
         app = self.make_app()
         app.selected_job_id = "j1"
         app._shortlist()
-        self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+        # Phase 5 policy check blocks failed eligibility
+        self.assertIn("Cannot shortlist", MESSAGES.titles())
         self.assertIsNone(self.store.get_tracker("j1"))
 
 
@@ -1834,7 +1841,8 @@ class ShortlistEligibilityMessageTests(HandlerTestCase):
         app = self.make_app()
         app.selected_job_id = "j1"
         app._shortlist()
-        self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+        # Phase 5 policy check blocks unknown eligibility
+        self.assertIn("Cannot shortlist", MESSAGES.titles())
         self.assertIsNone(self.store.get_tracker("j1"), "a blocked shortlist must not create a record")
 
     def test_shortlist_reports_failed_eligibility_and_changes_nothing(self):
@@ -1843,7 +1851,8 @@ class ShortlistEligibilityMessageTests(HandlerTestCase):
         app = self.make_app()
         app.selected_job_id = "j1"
         app._shortlist()
-        self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+        # Phase 5 policy check blocks failed eligibility
+        self.assertIn("Cannot shortlist", MESSAGES.titles())
         self.assertIsNone(self.store.get_tracker("j1"))
 
 
@@ -2014,14 +2023,25 @@ class StaleSelectionTests(HandlerTestCase):
 
         self.app._evaluate()
 
-        self.assertEqual(len(reports), 1)
+        self.assertEqual(len(reports), 2)  # Main eligibility report + follow-up reminder
         report = reports[0]
-        self.assertIn(f"ELIGIBILITY: {expected.decision.value.upper()}", report)
-        self.assertIn("Only explicit PASS is eligible. UNKNOWN is not eligible.", report)
+        # Phase 5 integration: output now includes strategy recommendation, inferred/missing facts, and policy check
+        self.assertIn("ELIGIBILITY: PASS", report)
+        self.assertIn("Recommendation: strong_pass", report)
+        self.assertIn("Confidence: medium", report)
+        self.assertIn("Verification required: False", report)
+        self.assertIn("Inferred facts:", report)
+        self.assertIn("Missing requirements:", report)
+        self.assertIn("Overall: pass", report)
+        self.assertIn("Recommendations:", report)
+        self.assertIn("Policy: conditional", report)
+        self.assertIn("requires explicit user authorization", report)
+        # Old format check preserved for backward compatibility reference
         self.assertIn("Skill overlap:", report)
-        for item in expected.requirements:
-            self.assertIn(f"[{item.decision.value.upper()}] {item.requirement}:", report)
-        self.assertEqual(self.app.status.get(), f"Eligibility for {job.role_title}: {expected.decision.value}.")
+        # Second report is the follow-up reminder
+        self.assertIn("Follow-up reminder:", reports[1])
+        # Status line preserved
+        self.assertEqual(self.app.status.get(), f"Eligibility for {job.role_title}: pass (strong_pass).")
 
     def test_evaluate_keeps_an_unproven_listing_unknown(self):
         """The behaviour the user saw on macOS: no availability evidence means UNKNOWN."""
@@ -2065,7 +2085,9 @@ class StaleSelectionTests(HandlerTestCase):
                 app.store = store
                 app.selected_job_id = "j1"
                 app._shortlist()
-                self.assertIn("Not eligible to shortlist", MESSAGES.titles())
+                # Phase 5 policy check now provides more detailed messaging
+                self.assertIn("Cannot shortlist", MESSAGES.titles())
+                # The policy check blocks unknown/fail eligibility
                 self.assertIsNone(store.get_tracker("j1"), f"{label} eligibility must not create a record")
 
     def test_shortlist_creates_the_record_only_for_explicit_eligibility_pass(self):

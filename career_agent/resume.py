@@ -30,10 +30,10 @@ import io
 import logging
 import re
 import zipfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
 from xml.etree import ElementTree
 
 try:  # optional: PDF import needs it, everything else works without it
@@ -209,7 +209,7 @@ _STUDY_STATUS_CHOICES = ("undergraduate", "graduate", "postgraduate", "doctoral"
 #: Countries recognised on an explicit location line. A fixed list keeps this deterministic and
 #: reviewable: the alternative (guessing from a city or from a template) invents facts, and country
 #: feeds eligibility checks.
-_KNOWN_COUNTRIES: tuple[tuple[str, str], ...] = (
+_KNOWN_COUNTRIES: tuple[tuple[str, ...], ...] = (
     ("India", "india"),
     ("United States", "united states", "usa", "u.s.a.", "us"),
     ("United Kingdom", "united kingdom", "uk", "u.k.", "england", "scotland", "wales"),
@@ -1024,7 +1024,7 @@ def _country_proposal(lines: Sequence[str]) -> FieldProposal | None:
     for line in lines:
         location_label = _LABEL_PATTERNS[1][1].search(line)
         if location_label:
-            country = _country_from_label(location_label.group(1))
+            country = _country_from_label(location_label.group(1))  # type: ignore[assignment]
             if country:
                 return FieldProposal(
                     key="country", label="Country", value=country,
@@ -1163,10 +1163,7 @@ def parse_resume(path: str | Path) -> ResumeParseResult:
     document = extract_text(source)
     proposals, unmapped, notes = parse_resume_text(document.text)
     if not proposals:
-        notes = notes + (
-            "No supported profile value could be read from this document. The saved profile is "
-            "unchanged; you can type the values yourself.",
-        )
+        notes = (*notes, "No supported profile value could be read from this document. The saved profile is " "unchanged; you can type the values yourself.")
     return ResumeParseResult(
         file_name=source.name,
         source_format=document.source_format,

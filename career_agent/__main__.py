@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     except BackupError as exc:  # defensive: the actions above already handle their own failures
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
-    except Exception as exc:  # noqa: BLE001 - report honestly rather than showing a bare traceback
+    except Exception as exc:
         # Start-up failures are explained in plain language with local paths redacted, and kept in a
         # bounded owner-only note beside the app data, because a terminal transcript is easy to paste
         # somewhere and must not carry candidate data, credentials, or filesystem locations.

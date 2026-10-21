@@ -9,9 +9,19 @@ from pathlib import Path
 
 from career_agent import Availability, CandidateProfile, JobListing
 from career_agent.desktop_logic import (
-    DATABASE_FILE_NAME, HIGH_CONSEQUENCE_FIELDS, TIMESTAMP_NOT_RECORDED, JobSaveMode,
-    build_candidate_profile, build_job_listing, career_agent_data_root, default_database_path,
-    format_stored_timestamp, form_values, job_form_values, plan_job_save, profile_fields_not_matching,
+    DATABASE_FILE_NAME,
+    HIGH_CONSEQUENCE_FIELDS,
+    TIMESTAMP_NOT_RECORDED,
+    JobSaveMode,
+    build_candidate_profile,
+    build_job_listing,
+    career_agent_data_root,
+    default_database_path,
+    form_values,
+    format_stored_timestamp,
+    job_form_values,
+    plan_job_save,
+    profile_fields_not_matching,
     profile_form_values,
 )
 

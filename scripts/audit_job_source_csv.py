@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_CSV = Path("research/job-source-audit-seed-2026-10-13.csv")
 
 

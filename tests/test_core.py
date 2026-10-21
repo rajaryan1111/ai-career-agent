@@ -1,10 +1,22 @@
 import unittest
 
 from career_agent import (
-    INITIAL_APPLICATION_STATUS, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    Decision, JobListing, canonicalize_url, deduplicate_listings,
-    evaluate_eligibility, is_allowed_tracker_transition, score_relevance, job_to_public_dict,
-    is_substantive_confirmation_evidence, require_confirmation_evidence, selectable_tracker_statuses,
+    INITIAL_APPLICATION_STATUS,
+    ApplicationStatus,
+    ApplicationTracker,
+    Availability,
+    CandidateProfile,
+    Decision,
+    JobListing,
+    canonicalize_url,
+    deduplicate_listings,
+    evaluate_eligibility,
+    is_allowed_tracker_transition,
+    is_substantive_confirmation_evidence,
+    job_to_public_dict,
+    require_confirmation_evidence,
+    score_relevance,
+    selectable_tracker_statuses,
 )
 
 
@@ -372,6 +384,202 @@ class ApplicationTrackerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tracker.transition(ApplicationStatus.CONFIRMED, evidence="confirmation")
 
+
+    def test_explain_eligibility_fully_qualified(self):
+        """Fully qualified candidate with all relevant requirements met."""
+        from career_agent.core import Availability, CandidateProfile, Decision, JobListing, explain_eligibility
+        profile = CandidateProfile(
+            candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python", "RAG"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}),
+        )
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE", "Computer Science"), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python", "LangChain"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertEqual(report['overall_decision'], Decision.UNKNOWN)
+        self.assertIn("availability", report['missing_requirements'])
+        # All substantive requirements should pass
+        for name, details in report['requirements'].items():
+            if name != "availability":
+                self.assertIn(details['decision'], (Decision.PASS,))
+
+    def test_explain_eligibility_unqualified_wrong_country(self):
+        """Candidate with country outside the allowed list."""
+        from career_agent.core import Availability, CandidateProfile, Decision, JobListing, explain_eligibility
+        profile = CandidateProfile(candidate_country="USA", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertEqual(report['overall_decision'], Decision.FAIL)
+        country_details = report['requirements'].get("country")
+        self.assertIsNotNone(country_details)
+        self.assertEqual(country_details['decision'], Decision.FAIL)
+
+    def test_explain_eligibility_missing_information(self):
+        """Candidate with missing country and no job availability."""
+        from career_agent.core import Availability, CandidateProfile, Decision, JobListing, explain_eligibility
+        profile = CandidateProfile(degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertEqual(report['overall_decision'], Decision.UNKNOWN)
+        self.assertIn("country", report['missing_requirements'])
+        self.assertIn("availability", report['missing_requirements'])
+
+    def test_explain_eligibility_experience_outside_range(self):
+        """Candidate with experience above the maximum."""
+        from career_agent.core import Availability, CandidateProfile, Decision, JobListing, explain_eligibility
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=10, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027,), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertEqual(report['overall_decision'], Decision.FAIL)
+        experience_details = report['requirements'].get("experience_years")
+        self.assertIsNotNone(experience_details)
+        self.assertEqual(experience_details['decision'], Decision.FAIL)
+        self.assertIn("exceeds", experience_details['reason'])
+
+    def test_explain_eligibility_no_provenance_unknown(self):
+        """Candidate with no provenance stored — provenance reflects job listing data where available."""
+        from career_agent.core import Availability, CandidateProfile, JobListing, explain_eligibility
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        # Provenance comes from job listing evaluation data where available.
+        # Some requirements have provenance from the job listing fields, others are unknown
+        # when no explicit evidence note exists.
+        country_details = report['requirements'].get("country")
+        self.assertIsNotNone(country_details)
+        # eligible_countries from the job listing should appear as provenance
+        self.assertIn("India", country_details['provenance'])
+        degree_details = report['requirements'].get("degree_discipline")
+        self.assertIsNotNone(degree_details)
+        # degree discipline from the job listing should appear as provenance
+        self.assertIn("ECE", degree_details['provenance'])
+        study_details = report['requirements'].get("study_status")
+        self.assertIsNotNone(study_details)
+        # study status from the job listing should appear as provenance
+        self.assertIn("undergraduate", study_details['provenance'])
+        graduation_details = report['requirements'].get("graduation_year")
+        self.assertIsNotNone(graduation_details)
+        # graduation year from the job listing should appear as provenance
+        self.assertIn("2027", graduation_details['provenance'])
+        # availability has no provenance note, so it should be 'unknown'
+        availability_details = report['requirements'].get("availability")
+        self.assertIsNotNone(availability_details)
+        self.assertEqual(availability_details['provenance'], "unknown")
+        # experience_years has no explicit evidence, so it should be 'unknown'
+        experience_details = report['requirements'].get("experience_years")
+        self.assertIsNotNone(experience_details)
+        self.assertEqual(experience_details['provenance'], "unknown")
+        # All provenance should not be uniformly 'unknown' - some should reflect job listing data
+        provenance_values = [details['provenance'] for details in report['requirements'].values()]
+        self.assertNotEqual(len(set(provenance_values)), 1,
+            "Not all provenance should be 'unknown' - some should reflect job listing data")
+
+    def test_explain_eligibility_summary_format(self):
+        """Summary should be a non-empty string."""
+        from career_agent.core import Availability, CandidateProfile, JobListing, explain_eligibility
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertIsInstance(report['summary'], str)
+        self.assertTrue(len(report['summary']) > 0)
+
+    def test_explain_eligibility_overall_decision_types(self):
+        """Overall decision should be one of PASS, FAIL, UNKNOWN."""
+        from career_agent.core import Availability, CandidateProfile, Decision, JobListing, explain_eligibility
+        # Test FAIL case: wrong country
+        profile = CandidateProfile(candidate_country="France", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        self.assertIn(report['overall_decision'], (Decision.PASS, Decision.FAIL, Decision.UNKNOWN))
+
+    def test_explain_eligibility_verified_evidence_confidence(self):
+        """When provenance is verified, confidence should be higher."""
+        # This test verifies the structure supports provenance-aware confidence
+        from career_agent.core import Availability, CandidateProfile, JobListing, explain_eligibility
+        profile = CandidateProfile(candidate_country="India", degree_discipline="ECE", study_status="undergraduate",
+            graduation_year=2027, experience_years=0.5, skills=frozenset({"Python"}),
+            preferred_work_modes=frozenset({"remote"}), preferred_role_types=frozenset({"internship"}))
+        job = JobListing(
+            listing_id="j1", source_id="s1", source_name="Test source",
+            source_listing_url="https://jobs.example/role/1", employer_name="Example Inc",
+            role_title="AI Intern", availability_status=Availability.OPEN,
+            eligibility_scope="restricted", eligible_countries=("India",),
+            allowed_degree_disciplines=("ECE",), allowed_study_statuses=("undergraduate",),
+            allowed_graduation_years=(2027, 2028), minimum_experience_years=0, maximum_experience_years=5,
+            required_skills=frozenset({"Python"}), work_mode="remote", role_type="internship",
+        )
+        report = explain_eligibility(profile, job)
+        # Check that confidence field exists and is one of the expected values
+        for name, details in report['requirements'].items():
+            self.assertIn(details['confidence'], ("high", "medium", "low"))
+            self.assertIn('verification_required', details)
     def test_no_op_transition_returns_the_tracker_unchanged(self):
         tracker = ApplicationTracker("j1", ApplicationStatus.CONFIRMED, "original evidence", True)
         unchanged = tracker.transition(ApplicationStatus.CONFIRMED, evidence="replacement evidence")

@@ -10,18 +10,36 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
 dependencies = []
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Operating System :: MacOS",
-    "Operating System :: POSIX :: Linux",
-    "Operating System :: Microsoft :: Windows",
-]
 
 [project.scripts]
 career-agent = "career_agent.cli:main"
 
 [tool.setuptools]
 packages = ["career_agent"]
+
+# Quality gates configuration
+
+# ruff: linting and formatting (v0.17.1 compatible)
+[tool.ruff]
+select = ["E", "F", "W", "I", "UP", "B", "A", "RUF"]
+exclude = ["__pycache__", ".git", ".eggs", "*.egg", "build", "dist"]
+line-length = 120
+
+# mypy: type checking
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+show_error_codes = true
+
+# Only check core modules that can reasonably be typed
+[mypy.career_agent]
+strict = true
+
+[mypy.tests]
+strict = false
+
+[mypy.career_agent.cli]
+strict = false
+
+[mypy.setup]
+ignore_missing_imports = true
