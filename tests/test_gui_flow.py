@@ -4,6 +4,9 @@ They exercise the real widget tree with stubbed dialogs, so they need a usable
 display. Where no display or Tkinter is available the module skips rather than
 hiding a failure; CI without a virtual display will report the skips.
 """
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,14 +22,25 @@ except Exception:  # Tkinter is missing or cannot initialise on this interpreter
 
 
 def display_available() -> bool:
+    """Return True only when a Tk window can actually be created.
+
+    The probe runs in a child interpreter: some Tk builds abort the process
+    instead of raising when no display is reachable, which would kill test
+    collection before any skip could be reported.
+    """
     if tk is None or desktop is None:
         return False
-    try:
-        root = tk.Tk()
-    except Exception:
+    if os.environ.get("CAREER_AGENT_SKIP_GUI_TESTS"):
         return False
-    root.destroy()
-    return True
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", "import tkinter; root = tkinter.Tk(); root.destroy()"],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
 
 
 DISPLAY_AVAILABLE = display_available()
