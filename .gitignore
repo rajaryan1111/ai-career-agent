@@ -1,0 +1,23 @@
+# Local candidate databases and SQLite side files — never commit these.
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+
+# OS noise
+.DS_Store
+Thumbs.db

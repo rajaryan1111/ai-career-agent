@@ -1,5 +1,7 @@
 """Command-line entry point for the AI Career Agent desktop app."""
-from .desktop import main
+import sys
+
+from .cli import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,18 +1,45 @@
-"""SQLite persistence for AI Career Agent; storage is local and has no network code."""
+"""SQLite persistence for AI Career Agent; storage is local and has no network code.
+
+Schema version 2 makes two guarantees that the UI relies on:
+
+* An application attempt is addressed by ``(listing_id, attempt_number)`` so a
+  re-application after withdrawal is a new, separate record rather than a revived one.
+* Every persisted change appends an immutable row to ``application_events``, so the
+  evidence behind a confirmation survives later status changes.
+
+Schema version 3 adds ``eligibility_decisions``: an append-only record of each
+hard-eligibility decision, the rule version that produced it, and versioned
+fingerprints of the inputs. Raw candidate values are not duplicated there.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import os
 import sqlite3
 from pathlib import Path
 
+from .audit import (
+    EligibilityDecision, requirements_from_json, requirements_to_json, validate_decision,
+)
 from .core import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    JobListing, duplicate_key,
+    ApplicationEvent, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
+    Decision, JobListing, REAPPLICATION_ALLOWED_FROM, TERMINAL_STATUSES, _TRACKER_TRANSITIONS,
+    duplicate_key,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
+
+_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in ApplicationStatus)
+
+# A duplicate observation only blocks a sibling once it has actually been committed to.
+# A merely discovered sibling is not yet an application and must not freeze the other.
+_DUPLICATE_NON_BLOCKING = TERMINAL_STATUSES | {ApplicationStatus.DISCOVERED}
+
+
+class StaleApplicationError(ValueError):
+    """Persisted application changed since it was read; reload before saving."""
 
 
 def _now() -> str:
@@ -35,7 +62,26 @@ class CareerStore:
         self._connection = sqlite3.connect(self.database_path)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
-        self._initialize()
+        try:
+            self._initialize()
+        except Exception:
+            self._connection.close()
+            raise
+        self._restrict_file_permissions()
+
+    def _restrict_file_permissions(self) -> None:
+        """Best-effort 0600 on the local database file for multi-user machines.
+
+        SQLite creates files with the process umask, which can be group- or
+        world-readable. Failure here is not fatal: the database still works and
+        the caller can restrict it further with operating-system tools.
+        """
+        if self.database_path == ":memory:" or os.name != "posix":
+            return
+        try:
+            os.chmod(self.database_path, 0o600)
+        except OSError:
+            pass
 
     def close(self) -> None:
         self._connection.close()
@@ -46,35 +92,233 @@ class CareerStore:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    # ------------------------------------------------------------------ schema
+
     def _initialize(self) -> None:
         version = self._connection.execute("PRAGMA user_version").fetchone()[0]
         if version > _SCHEMA_VERSION:
-            self._connection.close()
             raise RuntimeError(f"Database schema {version} is newer than supported schema {_SCHEMA_VERSION}.")
-        with self._connection:
-            self._connection.executescript("""
-                CREATE TABLE IF NOT EXISTS candidate_profile (
-                    profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS job_listings (
-                    listing_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    duplicate_key TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key);
-                CREATE TABLE IF NOT EXISTS application_tracker (
-                    listing_id TEXT PRIMARY KEY REFERENCES job_listings(listing_id) ON DELETE CASCADE,
-                    status TEXT NOT NULL,
-                    status_evidence TEXT,
-                    candidate_confirmed INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                );
-            """)
-            self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        if version == _SCHEMA_VERSION:
+            # An earlier build could mark a database current while a failed upgrade
+            # had stranded the legacy tracker table. Repair it before returning.
+            if self._has_table("application_tracker_v1"):
+                self._migrate_to_v2()
+            return
+        # Table rebuilds are only safe with foreign keys disabled, and the pragma is a
+        # no-op inside a transaction, so it is toggled around the migration block.
+        self._connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with self._connection:
+                # Explicit ladder: every older version runs the steps it still needs.
+                if self._has_table("application_tracker") or self._has_table("application_tracker_v1"):
+                    self._migrate_to_v2()
+                else:
+                    self._create_schema_v2()
+                if self._has_table("application_tracker_v1"):
+                    raise RuntimeError(
+                        "The database upgrade left an unresolved legacy tracker table; "
+                        "refusing to mark the database as schema 3."
+                    )
+                self._migrate_to_v3()
+                self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        finally:
+            self._connection.execute("PRAGMA foreign_keys = ON")
+
+    def _has_table(self, name: str) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        return row is not None
+
+    def _create_schema_v2(self) -> None:
+        # Individual statements keep callers that are inside a savepoint atomic;
+        # executescript() would implicitly commit the pending transaction.
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS candidate_profile (
+                   profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
+                   payload TEXT NOT NULL,
+                   updated_at TEXT NOT NULL
+               )"""
+        )
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS job_listings (
+                   listing_id TEXT PRIMARY KEY,
+                   payload TEXT NOT NULL,
+                   duplicate_key TEXT NOT NULL,
+                   first_seen_at TEXT NOT NULL,
+                   last_seen_at TEXT NOT NULL
+               )"""
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key)"
+        )
+        self._create_application_tables()
+
+    def _create_application_tables(self) -> None:
+        self._connection.execute(
+            f"""CREATE TABLE IF NOT EXISTS application_tracker (
+                   listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+                   attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+                   status TEXT NOT NULL CHECK (status IN ({_STATUS_VALUES})),
+                   status_evidence TEXT,
+                   candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
+                   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+                   updated_at TEXT NOT NULL,
+                   PRIMARY KEY (listing_id, attempt_number),
+                   CHECK (status <> 'confirmed'
+                          OR (status_evidence IS NOT NULL AND length(trim(status_evidence)) > 0))
+               )"""
+        )
+        self._connection.execute(
+            f"""CREATE TABLE IF NOT EXISTS application_events (
+                   event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   listing_id TEXT NOT NULL,
+                   attempt_number INTEGER NOT NULL,
+                   from_status TEXT,
+                   to_status TEXT NOT NULL CHECK (to_status IN ({_STATUS_VALUES})),
+                   evidence TEXT,
+                   candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
+                   recorded_at TEXT NOT NULL,
+                   FOREIGN KEY (listing_id, attempt_number)
+                       REFERENCES application_tracker(listing_id, attempt_number) ON DELETE CASCADE
+               )"""
+        )
+        self._connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_application_events_attempt
+                   ON application_events(listing_id, attempt_number, event_id)"""
+        )
+
+    def _migrate_to_v3(self) -> None:
+        """Add the append-only decision audit table; existing rows are not rewritten.
+
+        A savepoint (rather than ``executescript``, which implicitly commits) makes
+        the table and index atomic even when an earlier migration step left a
+        transaction open: a failure removes both objects and re-raises.
+        """
+        self._connection.execute("SAVEPOINT migrate_v3")
+        try:
+            self._connection.execute(
+                """CREATE TABLE IF NOT EXISTS eligibility_decisions (
+                       decision_id TEXT PRIMARY KEY,
+                       listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+                       evaluated_at TEXT NOT NULL,
+                       rule_version TEXT NOT NULL,
+                       outcome TEXT NOT NULL CHECK (outcome IN ('pass', 'fail', 'unknown')),
+                       profile_fingerprint TEXT,
+                       job_fingerprint TEXT NOT NULL,
+                       requirements TEXT NOT NULL
+                   )"""
+            )
+            self._connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_eligibility_decisions_listing
+                       ON eligibility_decisions(listing_id, evaluated_at)"""
+            )
+        except Exception:
+            self._connection.execute("ROLLBACK TO SAVEPOINT migrate_v3")
+            self._connection.execute("RELEASE SAVEPOINT migrate_v3")
+            raise
+        self._connection.execute("RELEASE SAVEPOINT migrate_v3")
+
+    def _migrate_to_v2(self) -> None:
+        """Upgrade a v1 database in place, keeping every existing tracker row.
+
+        Each legacy tracker becomes attempt 1 with revision 0. History cannot be
+        reconstructed, so no event rows are fabricated for the pre-migration past.
+
+        The whole step runs inside a savepoint, so a failure leaves the database
+        exactly as it was: no half-renamed table and no stranded
+        ``application_tracker_v1``. If a previous interrupted upgrade left that
+        table behind, its rows are copied into the new table, the copy is verified,
+        and only then is the legacy table dropped. Existing rows are never
+        overwritten or discarded to make the upgrade pass: a legacy row that
+        already has an attempt 1 stops the upgrade so the owner can inspect it.
+        """
+        self._connection.execute("SAVEPOINT migrate_v2")
+        try:
+            has_tracker = self._has_table("application_tracker")
+            has_legacy = self._has_table("application_tracker_v1")
+            has_attempt_column = has_tracker and "attempt_number" in {
+                row["name"]
+                for row in self._connection.execute("PRAGMA table_info(application_tracker)")
+            }
+            if has_tracker and not has_attempt_column:
+                if has_legacy:
+                    raise RuntimeError(
+                        "The database contains both a schema-1 tracker and an "
+                        "application_tracker_v1 table; the upgrade cannot tell which "
+                        "rows are authoritative, so it made no changes."
+                    )
+                self._connection.execute(
+                    "ALTER TABLE application_tracker RENAME TO application_tracker_v1"
+                )
+                has_legacy = True
+                self._create_application_tables()
+            elif not has_tracker:
+                self._create_application_tables()
+            if has_legacy:
+                self._copy_legacy_tracker()
+            else:
+                self._create_application_tables()
+        except Exception:
+            self._connection.execute("ROLLBACK TO SAVEPOINT migrate_v2")
+            self._connection.execute("RELEASE SAVEPOINT migrate_v2")
+            raise
+        self._connection.execute("RELEASE SAVEPOINT migrate_v2")
+
+    def _copy_legacy_tracker(self) -> None:
+        """Copy missing legacy tracker rows, verify them, then drop the old table."""
+        conflicts = self._connection.execute(
+            """SELECT legacy.listing_id
+               FROM application_tracker_v1 AS legacy
+               WHERE EXISTS (
+                   SELECT 1 FROM application_tracker AS current
+                   WHERE current.listing_id = legacy.listing_id
+                     AND current.attempt_number = 1)"""
+        ).fetchall()
+        if conflicts:
+            raise RuntimeError(
+                "The legacy tracker table conflicts with existing attempt 1 rows for: "
+                + ", ".join(row["listing_id"] for row in conflicts)
+                + ". The upgrade made no changes; inspect the database before retrying."
+            )
+        rows = self._connection.execute(
+            """SELECT listing_id, status, status_evidence, candidate_confirmed, updated_at
+               FROM application_tracker_v1"""
+        ).fetchall()
+        for row in rows:
+            try:
+                self._connection.execute(
+                    """INSERT INTO application_tracker(
+                           listing_id, attempt_number, status, status_evidence,
+                           candidate_confirmed, revision, updated_at)
+                       VALUES (?, 1, ?, ?, ?, 0, ?)""",
+                    (
+                        row["listing_id"], row["status"], row["status_evidence"],
+                        row["candidate_confirmed"], row["updated_at"],
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RuntimeError(
+                    "Existing tracker rows violate the schema-2 constraints "
+                    "(invalid status, confirmation without evidence, or a missing "
+                    f"listing): {exc}"
+                ) from exc
+        missing = self._connection.execute(
+            """SELECT legacy.listing_id
+               FROM application_tracker_v1 AS legacy
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM application_tracker AS current
+                   WHERE current.listing_id = legacy.listing_id
+                     AND current.attempt_number = 1)"""
+        ).fetchall()
+        if missing:
+            raise RuntimeError(
+                "The database upgrade could not recover these legacy tracker rows: "
+                + ", ".join(row["listing_id"] for row in missing)
+            )
+        self._connection.execute("DROP TABLE application_tracker_v1")
+
+    # ----------------------------------------------------------------- profile
 
     def save_profile(self, profile: CandidateProfile) -> None:
         payload = json.dumps(asdict(profile), sort_keys=True, default=_json_default)
@@ -93,6 +337,13 @@ class CareerStore:
         for key in ("skills", "preferred_locations", "preferred_work_modes", "preferred_role_types"):
             values[key] = frozenset(values.get(key) or [])
         return CandidateProfile(**values)
+
+    def delete_profile(self) -> bool:
+        with self._connection:
+            cursor = self._connection.execute("DELETE FROM candidate_profile WHERE profile_id=1")
+        return cursor.rowcount > 0
+
+    # -------------------------------------------------------------------- jobs
 
     def save_job(self, job: JobListing, *, observed_at: str | None = None) -> None:
         timestamp = observed_at or _now()
@@ -118,6 +369,122 @@ class CareerStore:
             jobs = tuple(job for job in jobs if job.availability_status is status)
         return jobs
 
+    def job_timestamps(self, listing_id: str) -> tuple[str, str] | None:
+        """Return ``(first_seen_at, last_seen_at)`` for a stored listing."""
+        row = self._connection.execute(
+            "SELECT first_seen_at, last_seen_at FROM job_listings WHERE listing_id=?",
+            (listing_id,),
+        ).fetchone()
+        return (row["first_seen_at"], row["last_seen_at"]) if row else None
+
+    def attempt_updated_at(self, listing_id: str, attempt_number: int) -> str | None:
+        row = self._connection.execute(
+            "SELECT updated_at FROM application_tracker WHERE listing_id=? AND attempt_number=?",
+            (listing_id, attempt_number),
+        ).fetchone()
+        return row["updated_at"] if row else None
+
+    def has_data(self) -> bool:
+        """True when any user record exists, so a restore cannot silently overwrite it."""
+        for table in (
+            "candidate_profile", "job_listings", "application_tracker", "application_events",
+            "eligibility_decisions",
+        ):
+            if self._connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return True
+        return False
+
+    def delete_all_data(self) -> dict[str, int]:
+        """Delete every local candidate record in one transaction.
+
+        Returns the number of removed rows per table so the UI can report what
+        happened. An empty database is a no-op with zero counts.
+        """
+        with self._connection:
+            counts = {
+                "profile": self._connection.execute("SELECT COUNT(*) FROM candidate_profile").fetchone()[0],
+                "jobs": self._connection.execute("SELECT COUNT(*) FROM job_listings").fetchone()[0],
+                "attempts": self._connection.execute("SELECT COUNT(*) FROM application_tracker").fetchone()[0],
+                "events": self._connection.execute("SELECT COUNT(*) FROM application_events").fetchone()[0],
+                "decisions": self._connection.execute("SELECT COUNT(*) FROM eligibility_decisions").fetchone()[0],
+            }
+            self._connection.execute("DELETE FROM eligibility_decisions")
+            self._connection.execute("DELETE FROM application_events")
+            self._connection.execute("DELETE FROM application_tracker")
+            self._connection.execute("DELETE FROM job_listings")
+            self._connection.execute("DELETE FROM candidate_profile")
+        return counts
+
+    def import_snapshot(
+        self, *, profile: CandidateProfile | None, jobs, attempts, events, replace: bool,
+        decisions=(),
+    ) -> None:
+        """Write a validated snapshot in one transaction.
+
+        With ``replace`` the existing profile, jobs, attempts and events are removed
+        inside the same transaction, so a failure rolls the whole restore back and
+        leaves the previous database intact.
+        """
+        if not replace and self.has_data():
+            raise ValueError("The database already contains data; restoring requires replacement.")
+        with self._connection:
+            if replace:
+                self._connection.execute("DELETE FROM eligibility_decisions")
+                self._connection.execute("DELETE FROM application_events")
+                self._connection.execute("DELETE FROM application_tracker")
+                self._connection.execute("DELETE FROM job_listings")
+                self._connection.execute("DELETE FROM candidate_profile")
+            if profile is not None:
+                self._connection.execute(
+                    "INSERT INTO candidate_profile(profile_id, payload, updated_at) VALUES (1, ?, ?)",
+                    (json.dumps(asdict(profile), sort_keys=True, default=_json_default), _now()),
+                )
+            for row in jobs:
+                job = row["job"]
+                self._connection.execute(
+                    """INSERT INTO job_listings(listing_id, payload, duplicate_key, first_seen_at, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (job.listing_id, json.dumps(asdict(job), sort_keys=True, default=_json_default),
+                     duplicate_key(job), row["first_seen_at"], row["last_seen_at"]),
+                )
+            for row in attempts:
+                tracker = row["tracker"]
+                self._connection.execute(
+                    """INSERT INTO application_tracker(
+                           listing_id, attempt_number, status, status_evidence,
+                           candidate_confirmed, revision, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (tracker.listing_id, tracker.attempt_number, tracker.status.value,
+                     tracker.status_evidence, int(tracker.candidate_confirmed),
+                     tracker.revision, row["updated_at"]),
+                )
+            for event in events:
+                self._connection.execute(
+                    """INSERT INTO application_events(
+                           listing_id, attempt_number, from_status, to_status,
+                           evidence, candidate_confirmed, recorded_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (event["listing_id"], event["attempt_number"],
+                     event["from_status"].value if event["from_status"] else None,
+                     event["to_status"].value, event["evidence"],
+                     int(event["candidate_confirmed"]), event["recorded_at"]),
+                )
+            for decision in decisions:
+                try:
+                    validate_decision(decision, context=f"restore decision {decision.decision_id}")
+                except ValueError as exc:
+                    raise ValueError(f"Invalid eligibility decision in the snapshot: {exc}") from exc
+                self._connection.execute(
+                    """INSERT INTO eligibility_decisions(
+                           decision_id, listing_id, evaluated_at, rule_version, outcome,
+                           profile_fingerprint, job_fingerprint, requirements)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (decision.decision_id, decision.listing_id, decision.evaluated_at,
+                     decision.rule_version, decision.outcome.value,
+                     decision.profile_fingerprint, decision.job_fingerprint,
+                     requirements_to_json(decision.requirements)),
+                )
+
     def find_duplicate_group(self, job: JobListing) -> tuple[JobListing, ...]:
         rows = self._connection.execute(
             "SELECT payload FROM job_listings WHERE duplicate_key=? ORDER BY first_seen_at, listing_id",
@@ -125,43 +492,309 @@ class CareerStore:
         ).fetchall()
         return tuple(self._decode_job(row["payload"]) for row in rows)
 
-    def save_tracker(self, tracker: ApplicationTracker) -> None:
-        timestamp = _now()
-        try:
-            with self._connection:
-                self._connection.execute(
-                    """INSERT INTO application_tracker(listing_id, status, status_evidence, candidate_confirmed, updated_at)
-                       VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(listing_id) DO UPDATE SET status=excluded.status,
-                         status_evidence=excluded.status_evidence, candidate_confirmed=excluded.candidate_confirmed,
-                         updated_at=excluded.updated_at""",
-                    (tracker.listing_id, tracker.status.value, tracker.status_evidence,
-                     int(tracker.candidate_confirmed), timestamp),
-                )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("Save the job listing before its application tracker.") from exc
-
-    def get_tracker(self, listing_id: str) -> ApplicationTracker | None:
-        row = self._connection.execute(
-            "SELECT listing_id, status, status_evidence, candidate_confirmed FROM application_tracker WHERE listing_id=?",
-            (listing_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return ApplicationTracker(
-            listing_id=row["listing_id"], status=ApplicationStatus(row["status"]),
-            status_evidence=row["status_evidence"], candidate_confirmed=bool(row["candidate_confirmed"]),
-        )
-
-    def delete_profile(self) -> bool:
-        with self._connection:
-            cursor = self._connection.execute("DELETE FROM candidate_profile WHERE profile_id=1")
-        return cursor.rowcount > 0
-
     def delete_job(self, listing_id: str) -> bool:
         with self._connection:
             cursor = self._connection.execute("DELETE FROM job_listings WHERE listing_id=?", (listing_id,))
         return cursor.rowcount > 0
+
+    # --------------------------------------------------------------- tracker
+
+    def start_application(self, listing_id: str) -> ApplicationTracker:
+        """Create the first attempt, or a new attempt after a withdrawal.
+
+        Re-application is refused while the lone open attempt is active, when the
+        listing is not open, and after a terminal rejection. A new attempt never
+        inherits evidence or confirmation flags from the earlier one.
+        """
+        job = self.get_job(listing_id)
+        if job is None:
+            raise ValueError("Save the job listing before starting an application.")
+        if job.availability_status is not Availability.OPEN:
+            raise ValueError(
+                f"The listing is {job.availability_status.value}; a new application cannot be started."
+            )
+        attempts = self.list_attempts(listing_id)
+        if not attempts:
+            return self.save_tracker(ApplicationTracker(listing_id))
+        latest = attempts[-1]
+        if not latest.is_terminal:
+            raise ValueError(
+                f"Attempt {latest.attempt_number} is {latest.status.value}; "
+                "finish or withdraw it before starting another application."
+            )
+        if latest.status not in REAPPLICATION_ALLOWED_FROM:
+            raise ValueError(
+                f"A {latest.status.value} application is terminal; a new attempt is not offered."
+            )
+        return self.save_tracker(ApplicationTracker(listing_id, attempt_number=latest.attempt_number + 1))
+
+    def save_tracker(self, tracker: ApplicationTracker) -> ApplicationTracker:
+        """Persist one attempt, enforcing transition, evidence and concurrency rules.
+
+        Returns the persisted tracker with its incremented revision.
+        """
+        if not isinstance(tracker, ApplicationTracker):
+            raise TypeError("save_tracker expects an ApplicationTracker.")
+        status = tracker.status  # validated by ApplicationTracker.__post_init__
+        supplied_evidence = tracker.status_evidence.strip() if tracker.status_evidence else None
+        if status is ApplicationStatus.CONFIRMED and not supplied_evidence:
+            raise ValueError("Confirmation requires evidence; a click or attempted submission is not proof.")
+
+        row = self._connection.execute(
+            """SELECT listing_id, attempt_number, status, status_evidence,
+                      candidate_confirmed, revision, updated_at
+               FROM application_tracker WHERE listing_id=? AND attempt_number=?""",
+            (tracker.listing_id, tracker.attempt_number),
+        ).fetchone()
+        timestamp = _now()
+
+        if row is None:
+            return self._insert_tracker(tracker, supplied_evidence, timestamp)
+
+        persisted = self._decode_tracker(row)
+        if tracker.revision != persisted.revision:
+            raise StaleApplicationError(
+                "This application changed elsewhere; reload it before saving."
+            )
+        # Never let a later save silently erase evidence: carry the recorded value forward.
+        effective_evidence = supplied_evidence if supplied_evidence is not None else persisted.status_evidence
+        if status is not persisted.status:
+            if status not in _TRACKER_TRANSITIONS[persisted.status]:
+                raise ValueError(
+                    f"Invalid application transition: {persisted.status.value} -> {status.value}"
+                )
+            if status is ApplicationStatus.CONFIRMED and not supplied_evidence:
+                raise ValueError(
+                    "Confirmation requires evidence; a click or attempted submission is not proof."
+                )
+            if status is ApplicationStatus.SHORTLISTED:
+                self._reject_active_duplicate(tracker.listing_id)
+        if (
+            status is persisted.status
+            and effective_evidence == persisted.status_evidence
+            and tracker.candidate_confirmed == persisted.candidate_confirmed
+        ):
+            return persisted
+
+        updated = ApplicationTracker(
+            listing_id=persisted.listing_id,
+            status=status,
+            status_evidence=effective_evidence,
+            candidate_confirmed=tracker.candidate_confirmed,
+            attempt_number=persisted.attempt_number,
+            revision=persisted.revision + 1,
+        )
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE application_tracker
+                   SET status=?, status_evidence=?, candidate_confirmed=?, revision=?, updated_at=?
+                   WHERE listing_id=? AND attempt_number=? AND revision=?""",
+                (updated.status.value, updated.status_evidence, int(updated.candidate_confirmed),
+                 updated.revision, timestamp, updated.listing_id, updated.attempt_number, persisted.revision),
+            )
+            if cursor.rowcount != 1:
+                raise StaleApplicationError("This application changed elsewhere; reload it before saving.")
+            self._append_event(updated, from_status=persisted.status, recorded_at=timestamp)
+        return updated
+
+    def _insert_tracker(
+        self, tracker: ApplicationTracker, supplied_evidence: str | None, timestamp: str,
+    ) -> ApplicationTracker:
+        if tracker.revision != 0:
+            raise StaleApplicationError("A new application attempt cannot carry an existing revision.")
+        if tracker.status is not ApplicationStatus.DISCOVERED:
+            raise ValueError("A new application attempt must start as discovered.")
+        if tracker.candidate_confirmed:
+            raise ValueError("A new application attempt cannot start already confirmed.")
+        created = ApplicationTracker(
+            listing_id=tracker.listing_id,
+            status=ApplicationStatus.DISCOVERED,
+            status_evidence=supplied_evidence,
+            candidate_confirmed=False,
+            attempt_number=tracker.attempt_number,
+            revision=0,
+        )
+        with self._connection:
+            try:
+                self._connection.execute(
+                    """INSERT INTO application_tracker(
+                           listing_id, attempt_number, status, status_evidence,
+                           candidate_confirmed, revision, updated_at)
+                       VALUES (?, ?, ?, ?, 0, 0, ?)""",
+                    (created.listing_id, created.attempt_number, created.status.value,
+                     created.status_evidence, timestamp),
+                )
+            except sqlite3.IntegrityError as exc:
+                if not self._connection.execute(
+                    "SELECT 1 FROM job_listings WHERE listing_id=?", (created.listing_id,)
+                ).fetchone():
+                    raise ValueError("Save the job listing before its application tracker.") from exc
+                raise ValueError(f"Could not create the application attempt: {exc}") from exc
+            self._append_event(created, from_status=None, recorded_at=timestamp)
+        return created
+
+    def _reject_active_duplicate(self, listing_id: str) -> None:
+        job = self.get_job(listing_id)
+        if job is None:
+            return
+        rows = self._connection.execute(
+            """SELECT t.listing_id, t.attempt_number, t.status
+               FROM application_tracker t
+               JOIN job_listings j ON j.listing_id = t.listing_id
+               WHERE j.duplicate_key = ?
+                 AND t.listing_id <> ?
+                 AND t.attempt_number = (
+                     SELECT MAX(attempt_number) FROM application_tracker x
+                     WHERE x.listing_id = t.listing_id
+                 )""",
+            (duplicate_key(job), listing_id),
+        ).fetchall()
+        for row in rows:
+            status = ApplicationStatus(row["status"])
+            if status not in _DUPLICATE_NON_BLOCKING:
+                raise ValueError(
+                    "Another observation of this job already has an active application "
+                    f"({row['listing_id']}, attempt {row['attempt_number']}, {status.value}). "
+                    "Use that record instead of shortlisting a duplicate."
+                )
+
+    def _append_event(
+        self, tracker: ApplicationTracker, *, from_status: ApplicationStatus | None, recorded_at: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO application_events(
+                   listing_id, attempt_number, from_status, to_status,
+                   evidence, candidate_confirmed, recorded_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (tracker.listing_id, tracker.attempt_number,
+             from_status.value if from_status else None, tracker.status.value,
+             tracker.status_evidence, int(tracker.candidate_confirmed), recorded_at),
+        )
+
+    def get_tracker(self, listing_id: str, attempt_number: int | None = None) -> ApplicationTracker | None:
+        if attempt_number is None:
+            row = self._connection.execute(
+                """SELECT listing_id, attempt_number, status, status_evidence,
+                          candidate_confirmed, revision, updated_at
+                   FROM application_tracker WHERE listing_id=?
+                   ORDER BY attempt_number DESC LIMIT 1""",
+                (listing_id,),
+            ).fetchone()
+        else:
+            row = self._connection.execute(
+                """SELECT listing_id, attempt_number, status, status_evidence,
+                          candidate_confirmed, revision, updated_at
+                   FROM application_tracker WHERE listing_id=? AND attempt_number=?""",
+                (listing_id, attempt_number),
+            ).fetchone()
+        return self._decode_tracker(row) if row else None
+
+    def list_attempts(self, listing_id: str) -> tuple[ApplicationTracker, ...]:
+        rows = self._connection.execute(
+            """SELECT listing_id, attempt_number, status, status_evidence,
+                      candidate_confirmed, revision, updated_at
+               FROM application_tracker WHERE listing_id=? ORDER BY attempt_number""",
+            (listing_id,),
+        ).fetchall()
+        return tuple(self._decode_tracker(row) for row in rows)
+
+    def list_events(
+        self, listing_id: str, attempt_number: int | None = None,
+    ) -> tuple[ApplicationEvent, ...]:
+        query = """SELECT listing_id, attempt_number, from_status, to_status,
+                          evidence, candidate_confirmed, recorded_at
+                   FROM application_events WHERE listing_id=?"""
+        params: list[object] = [listing_id]
+        if attempt_number is not None:
+            query += " AND attempt_number=?"
+            params.append(attempt_number)
+        query += " ORDER BY event_id"
+        rows = self._connection.execute(query, params).fetchall()
+        return tuple(
+            ApplicationEvent(
+                listing_id=row["listing_id"],
+                attempt_number=row["attempt_number"],
+                from_status=ApplicationStatus(row["from_status"]) if row["from_status"] else None,
+                to_status=ApplicationStatus(row["to_status"]),
+                evidence=row["evidence"],
+                candidate_confirmed=bool(row["candidate_confirmed"]),
+                recorded_at=row["recorded_at"],
+            )
+            for row in rows
+        )
+
+    # ------------------------------------------------------------------ audit
+
+    def save_eligibility_decision(self, decision: EligibilityDecision) -> EligibilityDecision:
+        """Append one decision record; an existing record is never updated in place."""
+        try:
+            validate_decision(decision)
+        except ValueError as exc:
+            raise ValueError(f"Invalid eligibility decision: {exc}") from exc
+        if self.get_job(decision.listing_id) is None:
+            raise ValueError("Record the job listing before recording an eligibility decision.")
+        try:
+            with self._connection:
+                self._connection.execute(
+                    """INSERT INTO eligibility_decisions(
+                           decision_id, listing_id, evaluated_at, rule_version, outcome,
+                           profile_fingerprint, job_fingerprint, requirements)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        decision.decision_id, decision.listing_id, decision.evaluated_at,
+                        decision.rule_version, decision.outcome.value,
+                        decision.profile_fingerprint, decision.job_fingerprint,
+                        requirements_to_json(decision.requirements),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"Could not record the eligibility decision: {exc}") from exc
+        return decision
+
+    def list_eligibility_decisions(self, listing_id: str) -> tuple[EligibilityDecision, ...]:
+        """Return the append-only history for one listing, oldest first."""
+        rows = self._connection.execute(
+            """SELECT decision_id, listing_id, evaluated_at, rule_version, outcome,
+                      profile_fingerprint, job_fingerprint, requirements
+               FROM eligibility_decisions WHERE listing_id=?
+               ORDER BY evaluated_at, decision_id""",
+            (listing_id,),
+        ).fetchall()
+        return tuple(self._decode_decision(row) for row in rows)
+
+    def latest_eligibility_decision(self, listing_id: str) -> EligibilityDecision | None:
+        decisions = self.list_eligibility_decisions(listing_id)
+        return decisions[-1] if decisions else None
+
+    # --------------------------------------------------------------- decoding
+
+    def _decode_decision(self, row: sqlite3.Row) -> EligibilityDecision:
+        context = f"stored decision {row['decision_id']}"
+        try:
+            outcome = Decision(row["outcome"])
+            requirements = requirements_from_json(row["requirements"], context=context)
+        except ValueError as exc:
+            raise ValueError(f"{context} is unreadable: {exc}") from exc
+        return EligibilityDecision(
+            decision_id=row["decision_id"],
+            listing_id=row["listing_id"],
+            evaluated_at=row["evaluated_at"],
+            rule_version=row["rule_version"],
+            outcome=outcome,
+            profile_fingerprint=row["profile_fingerprint"],
+            job_fingerprint=row["job_fingerprint"],
+            requirements=requirements,
+        )
+
+    def _decode_tracker(self, row: sqlite3.Row) -> ApplicationTracker:
+        return ApplicationTracker(
+            listing_id=row["listing_id"],
+            status=ApplicationStatus(row["status"]),
+            status_evidence=row["status_evidence"],
+            candidate_confirmed=bool(row["candidate_confirmed"]),
+            attempt_number=row["attempt_number"],
+            revision=row["revision"],
+        )
 
     def _decode_job(self, payload: str) -> JobListing:
         values = json.loads(payload)

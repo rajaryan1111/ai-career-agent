@@ -47,6 +47,17 @@ Proposed states: discovered, shortlisted, rejected_by_rules, prepared, awaiting_
 
 Transitions must be auditable. A timeout after clicking submit must not be treated as a confirmed success. Retrying must first check whether a previous submission may already have succeeded.
 
+Implementation invariants (schema version 3, local SQLite):
+
+- An application attempt is keyed by `(listing_id, attempt_number)`. Re-application after withdrawal creates a new attempt; the earlier attempt and its history are immutable.
+- Every persisted change appends a row to `application_events` (from status, to status, evidence, confirmation flag, timestamp). Evidence is carried forward when a later transition supplies none, so a confirmation's supporting record is never erased.
+- The store enforces the transition map, the confirmation-evidence rule, and a database `CHECK` on status values. Persistence is not a bypass around domain rules.
+- Writes use an optimistic `revision` token; a stale read raises instead of silently overwriting a newer status.
+- Only one active attempt may exist for a canonical job identity across duplicate source observations.
+- Every explicit eligibility decision appends an immutable `eligibility_decisions` row: outcome, timestamp, the `ELIGIBILITY_RULE_VERSION` that produced it, the per-requirement trail, and versioned SHA-256 fingerprints of the eligibility-relevant profile and listing inputs. Raw candidate values are not duplicated. Fingerprints detect that inputs changed since the decision; they are change detectors, not an encryption or security boundary.
+- Audit records cascade with their listing and are removed by explicit deletion, replacement restore and "delete all local data". Backup format 4 carries them; formats 2 and 3 do not, and older builds refuse format 4 rather than dropping audit rows.
+- Version 1 databases migrate in place: each existing tracker becomes attempt 1 with revision 0, and no history is fabricated for pre-migration changes.
+
 ## 7. Reliability concepts to validate
 
 - Persistent scheduled-run records.
