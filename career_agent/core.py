@@ -112,6 +112,12 @@ class EligibilityReport:
         return tuple(r for r in self.requirements if r.decision is Decision.UNKNOWN)
 
 
+# Bump this whenever a hard-eligibility rule, branch, comparison, or default
+# changes. Every recorded decision stores the version that produced it, so a
+# historical decision can be explained after the rules move on.
+ELIGIBILITY_RULE_VERSION = "2026-10-22.1"
+
+
 def _norm(value: str | None) -> str | None:
     if value is None:
         return None

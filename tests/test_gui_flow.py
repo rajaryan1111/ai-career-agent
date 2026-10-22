@@ -142,6 +142,25 @@ class GuiFlowTests(unittest.TestCase):
         self.assertIn("READINESS: READY", self.app.report.get("1.0", "end"))
         self.assertIs(self.app.store.list_events("j1")[-1].to_status, ApplicationStatus.PREPARED)
 
+    def test_evaluate_and_shortlist_record_distinct_decisions(self):
+        from career_agent.core import ELIGIBILITY_RULE_VERSION
+
+        self.seed()
+        self.assertEqual(self.app.store.list_eligibility_decisions("j1"), ())
+        find_button(self.app.jobs_tab, "Evaluate selected").invoke()
+        self.assertIn("Decision recorded", self.app.report.get("1.0", "end"))
+        first = self.app.store.list_eligibility_decisions("j1")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0].rule_version, ELIGIBILITY_RULE_VERSION)
+        self.assertEqual(first[0].outcome.value, "pass")
+        self.assertIn("Decision recorded", self.app.status.get())
+
+        find_button(self.app.jobs_tab, "Shortlist if eligible").invoke()
+        second = self.app.store.list_eligibility_decisions("j1")
+        self.assertEqual(len(second), 2, "shortlisting appends its own decision record")
+        self.assertEqual(second[0].decision_id, first[0].decision_id)
+        self.assertIn("Decision recorded", self.app.status.get())
+
     def test_declined_preparation_changes_nothing(self):
         from career_agent import ApplicationStatus
 

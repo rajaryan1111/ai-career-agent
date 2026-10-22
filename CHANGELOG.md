@@ -3,6 +3,21 @@
 All notable changes to this repository are recorded here. The project is an
 internal local alpha; entries describe what has actually been verified.
 
+## [Unreleased]
+
+### Added
+- Eligibility-decision audit trail (database schema 3): every explicit **Evaluate** and **Shortlist** action appends an immutable record with its outcome, timestamp, the `ELIGIBILITY_RULE_VERSION` that produced it, the per-requirement explanation/evidence trail, and versioned `fp1:` SHA-256 fingerprints of the eligibility-relevant profile and listing inputs. Raw candidate values are not duplicated in audit rows or backups.
+- Backup format 4 carries the audit trail per job. Formats 2 and 3 remain readable; older builds refuse format 4 instead of dropping records. The audit table is created empty by the v2→v3 migration and by v1→v3 upgrades, without rewriting existing rows.
+- The desktop report and status bar state whether a decision was recorded. A failed audit write is reported as `Decision NOT recorded: …` and is never presented as saved.
+
+### Changed
+- Schema version is 3 and backup format is 4. Databases written by a newer build are still refused rather than downgraded.
+- Tests and the tracker smoke test now cover migration from v1 and v2, decision persistence, cascade/delete counts, fingerprint sensitivity, and backup/restore validation of audit records.
+
+### Known limitations
+- Fingerprints are change detectors, not a security boundary; they can be brute-forced by someone who already holds the database. No encryption at rest is added.
+- A decision records that an evaluation happened; it does not re-verify the listing or prove an external submission.
+
 ## [0.1.0] — 2026-10-19
 
 ### Added

@@ -7,8 +7,8 @@ from unittest import mock
 
 from career_agent import (
     ApplicationStatus, Availability, CandidateProfile, ExportFormatError, JobListing,
-    RestoreError, build_export_payload, load_export, restore_export, restore_export_file,
-    restore_from_backup, validate_export, write_export,
+    RestoreError, build_decision, build_export_payload, evaluate_eligibility, load_export,
+    restore_export, restore_export_file, restore_from_backup, validate_export, write_export,
 )
 from career_agent.export import MAX_BACKUP_BYTES
 from career_agent.store import CareerStore
@@ -62,6 +62,18 @@ def seed(store):
         sample_job("j2", Availability.UNKNOWN, "https://jobs.example/role/2"),
         observed_at="2026-10-02T00:00:00+00:00",
     )
+    seed_decisions(store)
+
+
+def seed_decisions(store):
+    """Record one deterministic decision per stored listing."""
+    profile = store.get_profile()
+    for job in store.list_jobs():
+        store.save_eligibility_decision(build_decision(
+            profile, job, evaluate_eligibility(profile, job),
+            decision_id=f"decision-{job.listing_id}",
+            evaluated_at="2026-10-03T00:00:00+00:00",
+        ))
 
 
 def snapshot(store):
@@ -77,7 +89,13 @@ def snapshot(store):
                  event.evidence, event.candidate_confirmed, event.recorded_at)
                 for event in store.list_events(job.listing_id, attempt.attempt_number)
             )
-    return {"profile": store.get_profile(), "jobs": jobs, "attempts": attempts, "events": events}
+    decisions = []
+    for job in store.list_jobs():
+        decisions.extend(store.list_eligibility_decisions(job.listing_id))
+    return {
+        "profile": store.get_profile(), "jobs": jobs, "attempts": attempts,
+        "events": events, "decisions": decisions,
+    }
 
 
 class BackupRoundTripTests(unittest.TestCase):
@@ -165,6 +183,7 @@ class BackupRoundTripTests(unittest.TestCase):
         for job in legacy["jobs"]:
             job.pop("first_seen_at")
             job.pop("last_seen_at")
+            job.pop("eligibility_decisions")
             for attempt in job["application_attempts"]:
                 attempt.pop("revision")
                 attempt.pop("updated_at")
@@ -193,15 +212,87 @@ class BackupValidationTests(unittest.TestCase):
     def attempt(self, payload, listing_index=0, attempt_index=0):
         return payload["jobs"][listing_index]["application_attempts"][attempt_index]
 
+    def decision(self, payload, listing_index=0, decision_index=0):
+        return payload["jobs"][listing_index]["eligibility_decisions"][decision_index]
+
     def test_unsupported_format_version(self):
         payload = deepcopy(self.payload)
-        payload["format_version"] = 4
+        payload["format_version"] = 5
         self.assert_invalid(payload, "Unsupported backup format version")
 
     def test_unsupported_schema_version(self):
         payload = deepcopy(self.payload)
-        payload["schema_version"] = 3
+        payload["schema_version"] = 4
         self.assert_invalid(payload, "Unsupported database schema version")
+
+    def test_format_three_cannot_carry_decisions(self):
+        payload = deepcopy(self.payload)
+        payload["format_version"] = 3
+        payload["schema_version"] = 2
+        with self.assertRaises(ExportFormatError) as caught:
+            validate_export(payload)
+        self.assertIn("requires backup format 4", str(caught.exception))
+
+    def test_missing_decisions_list_is_rejected(self):
+        payload = deepcopy(self.payload)
+        payload["jobs"][0].pop("eligibility_decisions")
+        self.assert_invalid(payload, "missing eligibility_decisions")
+
+    def test_unknown_decision_field_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["candidate_country"] = "India"
+        self.assert_invalid(payload, "unsupported field")
+
+    def test_unknown_decision_outcome_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["outcome"] = "maybe"
+        self.assert_invalid(payload, "unknown outcome")
+
+    def test_missing_rule_version_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload).pop("rule_version")
+        self.assert_invalid(payload, "rule_version")
+
+    def test_malformed_fingerprint_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["job_fingerprint"] = "sha256:not-a-fingerprint"
+        self.assert_invalid(payload, "job_fingerprint")
+
+    def test_missing_profile_fingerprint_is_allowed_but_malformed_is_not(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["profile_fingerprint"] = None
+        validate_export(payload)  # a decision recorded without a profile stays legal
+        payload = deepcopy(self.payload)
+        self.decision(payload)["profile_fingerprint"] = "fp1:xyz"
+        self.assert_invalid(payload, "profile_fingerprint")
+
+    def test_malformed_requirement_trail_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["requirements"] = [{"requirement": "availability"}]
+        self.assert_invalid(payload, "must be text")
+
+    def test_empty_requirement_trail_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["requirements"] = []
+        self.assert_invalid(payload, "must not be empty")
+
+    def test_duplicate_decision_id_is_rejected(self):
+        payload = deepcopy(self.payload)
+        payload["jobs"][1]["eligibility_decisions"].append(
+            deepcopy(payload["jobs"][0]["eligibility_decisions"][0])
+        )
+        self.assert_invalid(payload, "Duplicate decision_id")
+
+    def test_tampered_decision_is_rejected_without_mutation(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload)["requirements"][0]["explanation"] = ""
+        target = CareerStore(Path(self.folder.name) / "tampered-target.sqlite3")
+        self.addCleanup(target.close)
+        seed(target)
+        before = snapshot(target)
+        with self.assertRaises(ExportFormatError):
+            restore_export(target, payload, replace=True)
+        self.assertEqual(snapshot(target), before)
 
     def test_missing_jobs_list(self):
         payload = deepcopy(self.payload)
@@ -420,7 +511,10 @@ class RestoreConfirmationTests(unittest.TestCase):
             return True
 
         summary = restore_from_backup(target, self.backup_path, confirm=confirm)
-        self.assertEqual(seen, [{"profile": 1, "jobs": 2, "attempts": 2, "events": 10}])
+        self.assertEqual(
+            seen,
+            [{"profile": 1, "jobs": 2, "attempts": 2, "events": 10, "decisions": 2}],
+        )
         self.assertEqual(summary["jobs"], 2)
         self.assertEqual(summary["attempts"], 2)
         self.assertEqual(summary["events"], 10)

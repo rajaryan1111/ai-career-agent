@@ -6,6 +6,10 @@ Schema version 2 makes two guarantees that the UI relies on:
   re-application after withdrawal is a new, separate record rather than a revived one.
 * Every persisted change appends an immutable row to ``application_events``, so the
   evidence behind a confirmation survives later status changes.
+
+Schema version 3 adds ``eligibility_decisions``: an append-only record of each
+hard-eligibility decision, the rule version that produced it, and versioned
+fingerprints of the inputs. Raw candidate values are not duplicated there.
 """
 from __future__ import annotations
 
@@ -16,13 +20,16 @@ import os
 import sqlite3
 from pathlib import Path
 
+from .audit import (
+    EligibilityDecision, requirements_from_json, requirements_to_json,
+)
 from .core import (
     ApplicationEvent, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
-    JobListing, REAPPLICATION_ALLOWED_FROM, TERMINAL_STATUSES, _TRACKER_TRANSITIONS,
+    Decision, JobListing, REAPPLICATION_ALLOWED_FROM, TERMINAL_STATUSES, _TRACKER_TRANSITIONS,
     duplicate_key,
 )
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _STATUS_VALUES = ", ".join(f"'{status.value}'" for status in ApplicationStatus)
 
@@ -98,10 +105,12 @@ class CareerStore:
         self._connection.execute("PRAGMA foreign_keys = OFF")
         try:
             with self._connection:
+                # Explicit ladder: every older version runs the steps it still needs.
                 if self._has_table("application_tracker"):
                     self._migrate_to_v2()
                 else:
                     self._create_schema_v2()
+                self._migrate_to_v3()
                 self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         finally:
             self._connection.execute("PRAGMA foreign_keys = ON")
@@ -159,6 +168,37 @@ class CareerStore:
             CREATE INDEX IF NOT EXISTS idx_application_events_attempt
                 ON application_events(listing_id, attempt_number, event_id);
         """)
+
+    def _migrate_to_v3(self) -> None:
+        """Add the append-only decision audit table; existing rows are not rewritten.
+
+        A savepoint (rather than ``executescript``, which implicitly commits) makes
+        the table and index atomic even when an earlier migration step left a
+        transaction open: a failure removes both objects and re-raises.
+        """
+        self._connection.execute("SAVEPOINT migrate_v3")
+        try:
+            self._connection.execute(
+                """CREATE TABLE IF NOT EXISTS eligibility_decisions (
+                       decision_id TEXT PRIMARY KEY,
+                       listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+                       evaluated_at TEXT NOT NULL,
+                       rule_version TEXT NOT NULL,
+                       outcome TEXT NOT NULL CHECK (outcome IN ('pass', 'fail', 'unknown')),
+                       profile_fingerprint TEXT,
+                       job_fingerprint TEXT NOT NULL,
+                       requirements TEXT NOT NULL
+                   )"""
+            )
+            self._connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_eligibility_decisions_listing
+                       ON eligibility_decisions(listing_id, evaluated_at)"""
+            )
+        except Exception:
+            self._connection.execute("ROLLBACK TO SAVEPOINT migrate_v3")
+            self._connection.execute("RELEASE SAVEPOINT migrate_v3")
+            raise
+        self._connection.execute("RELEASE SAVEPOINT migrate_v3")
 
     def _migrate_to_v2(self) -> None:
         """Upgrade a v1 database in place, keeping every existing tracker row.
@@ -259,7 +299,10 @@ class CareerStore:
 
     def has_data(self) -> bool:
         """True when any user record exists, so a restore cannot silently overwrite it."""
-        for table in ("candidate_profile", "job_listings", "application_tracker", "application_events"):
+        for table in (
+            "candidate_profile", "job_listings", "application_tracker", "application_events",
+            "eligibility_decisions",
+        ):
             if self._connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
                 return True
         return False
@@ -276,7 +319,9 @@ class CareerStore:
                 "jobs": self._connection.execute("SELECT COUNT(*) FROM job_listings").fetchone()[0],
                 "attempts": self._connection.execute("SELECT COUNT(*) FROM application_tracker").fetchone()[0],
                 "events": self._connection.execute("SELECT COUNT(*) FROM application_events").fetchone()[0],
+                "decisions": self._connection.execute("SELECT COUNT(*) FROM eligibility_decisions").fetchone()[0],
             }
+            self._connection.execute("DELETE FROM eligibility_decisions")
             self._connection.execute("DELETE FROM application_events")
             self._connection.execute("DELETE FROM application_tracker")
             self._connection.execute("DELETE FROM job_listings")
@@ -285,6 +330,7 @@ class CareerStore:
 
     def import_snapshot(
         self, *, profile: CandidateProfile | None, jobs, attempts, events, replace: bool,
+        decisions=(),
     ) -> None:
         """Write a validated snapshot in one transaction.
 
@@ -296,6 +342,7 @@ class CareerStore:
             raise ValueError("The database already contains data; restoring requires replacement.")
         with self._connection:
             if replace:
+                self._connection.execute("DELETE FROM eligibility_decisions")
                 self._connection.execute("DELETE FROM application_events")
                 self._connection.execute("DELETE FROM application_tracker")
                 self._connection.execute("DELETE FROM job_listings")
@@ -334,6 +381,17 @@ class CareerStore:
                      event["from_status"].value if event["from_status"] else None,
                      event["to_status"].value, event["evidence"],
                      int(event["candidate_confirmed"]), event["recorded_at"]),
+                )
+            for decision in decisions:
+                self._connection.execute(
+                    """INSERT INTO eligibility_decisions(
+                           decision_id, listing_id, evaluated_at, rule_version, outcome,
+                           profile_fingerprint, job_fingerprint, requirements)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (decision.decision_id, decision.listing_id, decision.evaluated_at,
+                     decision.rule_version, decision.outcome.value,
+                     decision.profile_fingerprint, decision.job_fingerprint,
+                     requirements_to_json(decision.requirements)),
                 )
 
     def find_duplicate_group(self, job: JobListing) -> tuple[JobListing, ...]:
@@ -574,7 +632,64 @@ class CareerStore:
             for row in rows
         )
 
+    # ------------------------------------------------------------------ audit
+
+    def save_eligibility_decision(self, decision: EligibilityDecision) -> EligibilityDecision:
+        """Append one decision record; an existing record is never updated in place."""
+        if self.get_job(decision.listing_id) is None:
+            raise ValueError("Record the job listing before recording an eligibility decision.")
+        try:
+            with self._connection:
+                self._connection.execute(
+                    """INSERT INTO eligibility_decisions(
+                           decision_id, listing_id, evaluated_at, rule_version, outcome,
+                           profile_fingerprint, job_fingerprint, requirements)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        decision.decision_id, decision.listing_id, decision.evaluated_at,
+                        decision.rule_version, decision.outcome.value,
+                        decision.profile_fingerprint, decision.job_fingerprint,
+                        requirements_to_json(decision.requirements),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"Could not record the eligibility decision: {exc}") from exc
+        return decision
+
+    def list_eligibility_decisions(self, listing_id: str) -> tuple[EligibilityDecision, ...]:
+        """Return the append-only history for one listing, oldest first."""
+        rows = self._connection.execute(
+            """SELECT decision_id, listing_id, evaluated_at, rule_version, outcome,
+                      profile_fingerprint, job_fingerprint, requirements
+               FROM eligibility_decisions WHERE listing_id=?
+               ORDER BY evaluated_at, decision_id""",
+            (listing_id,),
+        ).fetchall()
+        return tuple(self._decode_decision(row) for row in rows)
+
+    def latest_eligibility_decision(self, listing_id: str) -> EligibilityDecision | None:
+        decisions = self.list_eligibility_decisions(listing_id)
+        return decisions[-1] if decisions else None
+
     # --------------------------------------------------------------- decoding
+
+    def _decode_decision(self, row: sqlite3.Row) -> EligibilityDecision:
+        context = f"stored decision {row['decision_id']}"
+        try:
+            outcome = Decision(row["outcome"])
+            requirements = requirements_from_json(row["requirements"], context=context)
+        except ValueError as exc:
+            raise ValueError(f"{context} is unreadable: {exc}") from exc
+        return EligibilityDecision(
+            decision_id=row["decision_id"],
+            listing_id=row["listing_id"],
+            evaluated_at=row["evaluated_at"],
+            rule_version=row["rule_version"],
+            outcome=outcome,
+            profile_fingerprint=row["profile_fingerprint"],
+            job_fingerprint=row["job_fingerprint"],
+            requirements=requirements,
+        )
 
     def _decode_tracker(self, row: sqlite3.Row) -> ApplicationTracker:
         return ApplicationTracker(

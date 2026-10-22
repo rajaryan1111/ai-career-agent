@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for application-tracker integrity (schema version 2).
+"""End-to-end smoke test for application-tracker integrity (schema version 3).
 
 This script exercises the real store and domain APIs against isolated temporary
 SQLite databases. It never reads or writes a user's application database, and it
@@ -28,9 +28,10 @@ if __package__ in (None, ""):
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision,
-    ExportFormatError, JobListing, StaleApplicationError, evaluate_eligibility,
-    restore_export, restore_from_backup,
+    ExportFormatError, JobListing, StaleApplicationError, build_decision,
+    evaluate_eligibility, restore_export, restore_from_backup,
 )
+from career_agent.core import ELIGIBILITY_RULE_VERSION
 from career_agent.export import FORMAT_VERSION, build_export_payload, load_export, write_export
 from career_agent.store import CareerStore
 
@@ -123,17 +124,18 @@ def row_counts(store: CareerStore) -> tuple[int, int]:
 
 # -------------------------------------------------------------------- scenarios
 
-@scenario("fresh database initializes schema version 2")
+@scenario("fresh database initializes schema version 3")
 def fresh_database(workspace: Path) -> str:
     with open_store(workspace) as store:
-        expect(schema_version(store) == 2, f"expected schema 2, found {schema_version(store)}")
+        expect(schema_version(store) == 3, f"expected schema 3, found {schema_version(store)}")
         expect(
-            {"job_listings", "application_tracker", "application_events", "candidate_profile"} <= table_names(store),
+            {"job_listings", "application_tracker", "application_events", "candidate_profile",
+             "eligibility_decisions"} <= table_names(store),
             f"missing tables: {sorted(table_names(store))}",
         )
         expect(store.get_profile() is None, "a fresh database must not contain a profile")
     with open_store(workspace) as reopened:
-        expect(schema_version(reopened) == 2, "re-opening a v2 database must not change its version")
+        expect(schema_version(reopened) == 3, "re-opening a v3 database must not change its version")
     return ""
 
 
@@ -382,7 +384,49 @@ def closed_listing_restrictions(workspace: Path) -> str:
     return "shortlisting also requires eligibility PASS in the UI; that button-level gate is not exercised headlessly"
 
 
-@scenario("format-v3 backup preserves attempts and their event history")
+@scenario("eligibility decisions survive reopen, backup/restore and deletion")
+def audit_trail(workspace: Path) -> str:
+    with open_store(workspace, "audit.sqlite3") as store:
+        store.save_profile(sample_profile())
+        store.save_job(sample_job())
+        profile, job = store.get_profile(), store.get_job("j1")
+        decision = build_decision(
+            profile, job, evaluate_eligibility(profile, job),
+            decision_id="smoke-decision", evaluated_at="2026-10-03T00:00:00+00:00",
+        )
+        store.save_eligibility_decision(decision)
+        stored = store.list_eligibility_decisions("j1")
+        expect(len(stored) == 1, f"decision was not stored: {stored}")
+        expect(stored[0].rule_version == ELIGIBILITY_RULE_VERSION, "rule version was not preserved")
+        expect(stored[0].outcome is decision.outcome, "the stored outcome changed")
+        expect(stored[0].profile_fingerprint == decision.profile_fingerprint, "profile fingerprint changed")
+        payload = build_export_payload(store)
+        exported = payload["jobs"][0]["eligibility_decisions"]
+        expect(
+            len(exported) == 1 and exported[0]["decision_id"] == "smoke-decision",
+            "the backup lost the decision record",
+        )
+    with open_store(workspace, "audit.sqlite3") as reopened:
+        expect(len(reopened.list_eligibility_decisions("j1")) == 1, "the decision did not survive reopening")
+        expect(
+            reopened.latest_eligibility_decision("j1").rule_version == ELIGIBILITY_RULE_VERSION,
+            "the rule version was lost on reopen",
+        )
+    target = CareerStore(workspace / "audit-target.sqlite3")
+    try:
+        restore_export(target, payload)
+        restored = target.list_eligibility_decisions("j1")
+        expect(len(restored) == 1, "the restore lost the audit record")
+        expect(restored[0].requirements == decision.requirements, "the restore changed the requirement trail")
+        counts = target.delete_all_data()
+        expect(counts["decisions"] == 1, f"deletion did not report the decision: {counts}")
+        expect(target.list_eligibility_decisions("j1") == (), "deletion left audit records behind")
+    finally:
+        target.close()
+    return ""
+
+
+@scenario("format-v4 backup preserves attempts and their event history")
 def export_preserves_history(workspace: Path) -> str:
     with open_store(workspace) as store:
         store.save_profile(sample_profile())
@@ -392,8 +436,8 @@ def export_preserves_history(workspace: Path) -> str:
         store.start_application("j1")
 
         payload = build_export_payload(store)
-        expect(payload["format_version"] == FORMAT_VERSION == 3, f"unexpected format {payload['format_version']}")
-        expect(payload["schema_version"] == 2, f"unexpected schema {payload['schema_version']}")
+        expect(payload["format_version"] == FORMAT_VERSION == 4, f"unexpected format {payload['format_version']}")
+        expect(payload["schema_version"] == 3, f"unexpected schema {payload['schema_version']}")
         expect(payload["jobs"][0]["first_seen_at"] == "2026-10-01T00:00:00+00:00", "job timestamps missing")
         expect(payload["privacy_note"], "export must carry its privacy note")
         attempts = payload["jobs"][0]["application_attempts"]
@@ -467,7 +511,7 @@ def import_round_trip(workspace: Path) -> str:
 
         expect(restore_from_backup(target, backup_path, confirm=decline) is None,
                "declining the restore confirmation did not cancel the restore")
-        expect(prompts == [{"profile": 1, "jobs": 1, "attempts": 2, "events": 8}],
+        expect(prompts == [{"profile": 1, "jobs": 1, "attempts": 2, "events": 8, "decisions": 0}],
                f"unexpected confirmation counts: {prompts}")
         expect([(a.attempt_number, a.status) for a in target.list_attempts("j1")] == before_cancel,
                "a cancelled restore mutated the database")
@@ -578,7 +622,7 @@ def migrate_v1(workspace: Path) -> str:
     connection.close()
 
     with CareerStore(path) as store:
-        expect(schema_version(store) == 2, f"expected schema 2 after migration, found {schema_version(store)}")
+        expect(schema_version(store) == 3, f"expected schema 3 after migration, found {schema_version(store)}")
         migrated = store.get_tracker("legacy")
         expect(migrated.attempt_number == 1, f"expected attempt 1, got {migrated.attempt_number}")
         expect(migrated.revision == 0, f"expected revision 0, got {migrated.revision}")
@@ -587,7 +631,7 @@ def migrate_v1(workspace: Path) -> str:
         expect(migrated.candidate_confirmed, "migration lost the confirmation flag")
         expect(store.list_events("legacy") == (), "migration must not fabricate history")
     with CareerStore(path) as reopened:
-        expect(schema_version(reopened) == 2, "reopening the migrated database changed its version")
+        expect(schema_version(reopened) == 3, "reopening the migrated database changed its version")
         expect(len(reopened.list_attempts("legacy")) == 1, "reopening duplicated the migrated attempt")
     return ""
 

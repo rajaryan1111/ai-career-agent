@@ -8,7 +8,7 @@ from pathlib import Path
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
-    StaleApplicationError,
+    StaleApplicationError, build_decision, evaluate_eligibility,
 )
 from career_agent.store import CareerStore, _SCHEMA_VERSION
 
@@ -369,6 +369,83 @@ class ApplicationAttemptTests(unittest.TestCase):
         self.assertEqual(self.store.list_events("j1"), ())
 
 
+def sample_decision(store, listing_id="j1", decision_id="d1", evaluated_at="2026-10-20T00:00:00+00:00"):
+    profile = store.get_profile() or CandidateProfile(candidate_country="India")
+    job = store.get_job(listing_id)
+    report = evaluate_eligibility(profile, job)
+    return build_decision(
+        profile, job, report, decision_id=decision_id, evaluated_at=evaluated_at,
+    )
+
+
+class EligibilityDecisionStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.store = CareerStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.store.save_profile(CandidateProfile(candidate_country="India", degree_discipline="ECE"))
+        self.store.save_job(sample_job())
+
+    def test_decision_round_trip_keeps_rule_version_and_trail(self):
+        decision = sample_decision(self.store)
+        self.store.save_eligibility_decision(decision)
+        stored = self.store.list_eligibility_decisions("j1")
+        self.assertEqual(stored, (decision,))
+        self.assertEqual(stored[0].rule_version, decision.rule_version)
+        self.assertEqual(stored[0].outcome, decision.outcome)
+        self.assertEqual(
+            [(item.requirement, item.decision) for item in stored[0].requirements],
+            [(item.requirement, item.decision) for item in decision.requirements],
+        )
+        self.assertTrue(stored[0].job_fingerprint.startswith("fp1:"))
+        self.assertIsNotNone(stored[0].profile_fingerprint)
+
+    def test_latest_returns_the_newest_record_and_history_is_append_only(self):
+        first = sample_decision(self.store, decision_id="d1", evaluated_at="2026-10-20T00:00:00+00:00")
+        second = sample_decision(self.store, decision_id="d2", evaluated_at="2026-10-21T00:00:00+00:00")
+        self.store.save_eligibility_decision(first)
+        self.store.save_eligibility_decision(second)
+        self.assertEqual(self.store.latest_eligibility_decision("j1"), second)
+        self.assertEqual([item.decision_id for item in self.store.list_eligibility_decisions("j1")], ["d1", "d2"])
+
+    def test_decision_requires_a_saved_listing(self):
+        self.store.save_job(sample_job("other", source_listing_url="https://jobs.example/role/other"))
+        decision = sample_decision(self.store, listing_id="other", decision_id="d9")
+        self.store.delete_job("other")
+        with self.assertRaisesRegex(ValueError, "Record the job listing"):
+            self.store.save_eligibility_decision(decision)
+
+    def test_duplicate_decision_id_is_refused(self):
+        decision = sample_decision(self.store)
+        self.store.save_eligibility_decision(decision)
+        with self.assertRaisesRegex(ValueError, "Could not record"):
+            self.store.save_eligibility_decision(decision)
+
+    def test_deleting_a_job_removes_its_decisions(self):
+        self.store.save_eligibility_decision(sample_decision(self.store))
+        self.store.delete_job("j1")
+        self.assertEqual(self.store.list_eligibility_decisions("j1"), ())
+
+    def test_malformed_stored_trail_is_reported_not_ignored(self):
+        decision = sample_decision(self.store)
+        self.store.save_eligibility_decision(decision)
+        with self.store._connection:
+            self.store._connection.execute(
+                "UPDATE eligibility_decisions SET requirements=? WHERE decision_id=?",
+                (json.dumps([{"requirement": "availability", "decision": "maybe",
+                              "explanation": "x", "evidence": None}]), "d1"),
+            )
+        with self.assertRaisesRegex(ValueError, "unreadable"):
+            self.store.list_eligibility_decisions("j1")
+
+    def test_schema_rejects_an_unknown_stored_outcome(self):
+        self.store.save_eligibility_decision(sample_decision(self.store))
+        with self.assertRaises(sqlite3.IntegrityError):
+            with self.store._connection:
+                self.store._connection.execute(
+                    "UPDATE eligibility_decisions SET outcome='maybe' WHERE decision_id='d1'"
+                )
+
+
 class MigrationTests(unittest.TestCase):
     V1_SCHEMA = """
         CREATE TABLE candidate_profile (
@@ -456,6 +533,40 @@ class MigrationTests(unittest.TestCase):
             with CareerStore(path) as store:
                 self.assertEqual(store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION)
 
+    def test_v2_database_gains_the_audit_table_without_losing_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "v2.sqlite3"
+            with CareerStore(path) as store:
+                store.save_profile(CandidateProfile(candidate_country="India"))
+                store.save_job(sample_job())
+                tracker = store.start_application("j1")
+                store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
+                # Simulate a schema-2 database: no audit table, version 2.
+                store._connection.execute("DROP TABLE eligibility_decisions")
+                store._connection.execute("PRAGMA user_version = 2")
+            with CareerStore(path) as store:
+                self.assertEqual(
+                    store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
+                )
+                self.assertEqual(store.get_profile().candidate_country, "India")
+                self.assertEqual(len(store.list_jobs()), 1)
+                self.assertEqual(store.get_tracker("j1").status, ApplicationStatus.SHORTLISTED)
+                self.assertEqual(len(store.list_events("j1")), 2)
+                self.assertEqual(store.list_eligibility_decisions("j1"), ())
+
+    def test_audit_table_survives_reopening(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "audit.sqlite3"
+            with CareerStore(path) as store:
+                store.save_profile(CandidateProfile(candidate_country="India"))
+                store.save_job(sample_job())
+                store.save_eligibility_decision(sample_decision(store))
+            with CareerStore(path) as store:
+                self.assertEqual(len(store.list_eligibility_decisions("j1")), 1)
+                self.assertEqual(
+                    store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
+                )
+
     def test_future_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "future.sqlite3"
@@ -504,21 +615,26 @@ class DeleteAllDataTests(unittest.TestCase):
         self.store.save_job(sample_job("j1"))
         tracker = self.store.start_application("j1")
         self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
+        self.store.save_eligibility_decision(sample_decision(self.store))
 
     def test_deletes_every_record_and_reports_counts(self):
         self.seed()
         counts = self.store.delete_all_data()
-        self.assertEqual(counts, {"profile": 1, "jobs": 1, "attempts": 1, "events": 2})
+        self.assertEqual(
+            counts,
+            {"profile": 1, "jobs": 1, "attempts": 1, "events": 2, "decisions": 1},
+        )
         self.assertFalse(self.store.has_data())
         self.assertIsNone(self.store.get_profile())
         self.assertEqual(self.store.list_jobs(), ())
         self.assertEqual(self.store.list_attempts("j1"), ())
         self.assertEqual(self.store.list_events("j1"), ())
+        self.assertEqual(self.store.list_eligibility_decisions("j1"), ())
 
     def test_empty_database_is_a_safe_no_op(self):
         self.assertEqual(
             self.store.delete_all_data(),
-            {"profile": 0, "jobs": 0, "attempts": 0, "events": 0},
+            {"profile": 0, "jobs": 0, "attempts": 0, "events": 0, "decisions": 0},
         )
 
     def test_database_remains_usable_after_deletion(self):

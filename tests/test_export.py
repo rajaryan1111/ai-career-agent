@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from career_agent import ApplicationStatus, Availability, CandidateProfile, JobListing
+from career_agent import (
+    ApplicationStatus, Availability, CandidateProfile, JobListing, build_decision,
+    evaluate_eligibility,
+)
 from career_agent.export import FORMAT_VERSION, build_export_payload, write_export
 from career_agent.store import CareerStore
 
@@ -46,15 +49,15 @@ def walk_to_confirmed(store):
 
 
 class ExportContractTests(unittest.TestCase):
-    def test_format_v3_payload_is_json_serializable(self):
+    def test_format_v4_payload_is_json_serializable(self):
         with CareerStore(":memory:") as store:
             store.save_profile(sample_profile())
             store.save_job(sample_job(), observed_at="2026-10-01T00:00:00+00:00")
             store.start_application("j1")
             payload = build_export_payload(store)
             self.assertEqual(payload["format_version"], FORMAT_VERSION)
-            self.assertEqual(payload["format_version"], 3)
-            self.assertEqual(payload["schema_version"], 2)
+            self.assertEqual(payload["format_version"], 4)
+            self.assertEqual(payload["schema_version"], 3)
             self.assertIn("exported_at", payload)
             self.assertEqual(payload["profile"]["skills"], ["Python", "RAG"])
             self.assertEqual(payload["profile"]["preferred_work_modes"], ["remote"])
@@ -65,7 +68,37 @@ class ExportContractTests(unittest.TestCase):
             self.assertEqual(attempt["attempt_number"], 1)
             self.assertEqual(attempt["revision"], 0)
             self.assertIn("updated_at", attempt)
+            self.assertEqual(payload["jobs"][0]["eligibility_decisions"], [])
             json.dumps(payload)  # must not raise on frozensets/tuples
+
+    def test_decisions_are_exported_without_candidate_values(self):
+        with CareerStore(":memory:") as store:
+            store.save_profile(CandidateProfile(
+                candidate_country="India", skills=frozenset({"Kubernetes"}),
+                preferred_locations=frozenset({"Bengaluru"}),
+            ))
+            store.save_job(sample_job())
+            profile = store.get_profile()
+            job = store.get_job("j1")
+            decision = build_decision(
+                profile, job, evaluate_eligibility(profile, job),
+                decision_id="d1", evaluated_at="2026-10-22T09:00:00+00:00",
+            )
+            store.save_eligibility_decision(decision)
+            payload = build_export_payload(store)
+        records = payload["jobs"][0]["eligibility_decisions"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["decision_id"], "d1")
+        self.assertEqual(records[0]["rule_version"], decision.rule_version)
+        self.assertEqual(records[0]["outcome"], decision.outcome.value)
+        self.assertTrue(records[0]["job_fingerprint"].startswith("fp1:"))
+        self.assertEqual(records[0]["profile_fingerprint"], decision.profile_fingerprint)
+        serialized = json.dumps(records)
+        # No candidate facts are duplicated: the record keeps fingerprints, and the
+        # trail carries job-side evidence only.
+        self.assertNotIn("Kubernetes", serialized)
+        self.assertNotIn("Bengaluru", serialized)
+        self.assertNotIn("candidate_country", serialized)
 
     def test_attempts_and_events_are_preserved_per_attempt(self):
         with CareerStore(":memory:") as store:

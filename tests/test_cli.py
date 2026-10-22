@@ -160,7 +160,7 @@ class DiagnosticsTests(unittest.TestCase):
                     mock.patch.object(cli, "_tk_status", return_value="stubbed"), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(cli.main(["--diagnostics"]), 0)
-            self.assertIn("schema 2", out.getvalue())
+            self.assertIn("schema 3", out.getvalue())
             self.assertIn("KiB", out.getvalue())
 
 

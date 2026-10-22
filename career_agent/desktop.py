@@ -4,6 +4,7 @@ Launch with python -m career_agent. No network calls or external service depende
 """
 from __future__ import annotations
 import re
+import sqlite3
 import sys
 import uuid
 from collections.abc import Sequence
@@ -11,6 +12,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import BOTH, END, LEFT, W, X, filedialog, messagebox, ttk
 
+from .audit import build_decision
 from .core import (
     ApplicationStatus, Availability, CandidateProfile, Decision, JobListing,
     allowed_transitions, evaluate_eligibility, score_relevance,
@@ -231,7 +233,8 @@ class CareerAgentApp:
         self._refresh_jobs()
         self.status.set(
             f"Deleted {counts['profile']} profile, {counts['jobs']} job(s), "
-            f"{counts['attempts']} attempt(s) and {counts['events']} history event(s)."
+            f"{counts['attempts']} attempt(s), {counts['events']} history event(s) and "
+            f"{counts['decisions']} eligibility decision(s)."
         )
         messagebox.showinfo(
             "Local data deleted",
@@ -465,15 +468,32 @@ class CareerAgentApp:
             messagebox.showinfo("Profile required", "Save your candidate profile first. Missing facts are never inferred.", parent=self.root)
             self.tabs.select(self.profile_tab)
             return
+        self._show_evaluation(job, profile)
+
+    def _show_evaluation(self, job, profile):
+        """Evaluate, record the decision, and render the explanation."""
         report = evaluate_eligibility(profile, job)
         relevance = score_relevance(profile, job)
+        recorded = self._record_decision(profile, job, report)
         lines = [f"ELIGIBILITY: {report.decision.value.upper()}", "Only explicit PASS is eligible. UNKNOWN is not eligible.", ""]
         lines += [f"[{item.decision.value.upper()}] {item.requirement}: {item.explanation}" for item in report.requirements]
         lines += ["", f"Skill overlap: {relevance.get('skill_overlap', 'n/a')} (not a hiring probability)",
                   "Matched skills: " + (", ".join(relevance.get("matched_skills", [])) or "None recorded"),
-                  "Missing required skills: " + (", ".join(relevance.get("missing_required_skills", [])) or "None recorded")]
+                  "Missing required skills: " + (", ".join(relevance.get("missing_required_skills", [])) or "None recorded"),
+                  "", recorded]
         self._report("\n".join(lines))
-        self.status.set(f"Eligibility for {job.role_title}: {report.decision.value}.")
+        self.status.set(f"Eligibility for {job.role_title}: {report.decision.value}. {recorded}")
+
+    def _record_decision(self, profile, job, report) -> str:
+        """Append the audit record; a failed write is reported, never claimed as saved."""
+        try:
+            decision = build_decision(profile, job, report)
+            self.store.save_eligibility_decision(decision)
+        except (ValueError, sqlite3.Error) as exc:
+            message = f"Decision NOT recorded: {exc}"
+            messagebox.showwarning("Decision not recorded", message, parent=self.root)
+            return message
+        return f"Decision recorded (rule {decision.rule_version}) at {decision.evaluated_at}."
 
     def _shortlist(self):
         listing_id = self.selected_job_id or (self.jobs_tree.selection()[0] if self.jobs_tree.selection() else None)
@@ -491,8 +511,9 @@ class CareerAgentApp:
         report = evaluate_eligibility(profile, job)
         if report.decision is not Decision.PASS:
             messagebox.showwarning("Not eligible to shortlist", f"Eligibility is {report.decision.value.upper()}. Resolve unknown/failed requirements first.", parent=self.root)
-            self._evaluate()
+            self._show_evaluation(job, profile)
             return
+        recorded = self._record_decision(profile, job, report)
         tracker = self.store.get_tracker(listing_id)
         if tracker is None:
             messagebox.showinfo("No application", "Start an application for this open listing before shortlisting.", parent=self.root)
@@ -500,7 +521,7 @@ class CareerAgentApp:
         try:
             self.store.save_tracker(tracker.transition(ApplicationStatus.SHORTLISTED))
             self._refresh_jobs()
-            self.status.set("Job shortlisted locally. No external action was taken.")
+            self.status.set(f"Job shortlisted locally. No external action was taken. {recorded}")
         except ValueError as exc:
             messagebox.showerror("Cannot shortlist", str(exc), parent=self.root)
 
@@ -740,8 +761,8 @@ class CareerAgentApp:
     def _confirm_replace(self, counts):
         return messagebox.askyesno(
             "Replace all local data?",
-            f"This backup contains {counts['jobs']} job(s), {counts['attempts']} application attempt(s) "
-            f"and {counts['events']} history event(s).\n\n"
+            f"This backup contains {counts['jobs']} job(s), {counts['attempts']} application attempt(s), "
+            f"{counts['events']} history event(s) and {counts['decisions']} recorded eligibility decision(s).\n\n"
             "Restoring replaces every profile, job, application and history record stored on this "
             "device. This cannot be undone. Continue?",
             parent=self.root,
@@ -770,8 +791,9 @@ class CareerAgentApp:
         self._load_profile()
         self._refresh_jobs()
         self.status.set(
-            f"Restored {summary['jobs']} job(s), {summary['attempts']} attempt(s) and "
-            f"{summary['events']} history event(s) from a local backup."
+            f"Restored {summary['jobs']} job(s), {summary['attempts']} attempt(s), "
+            f"{summary['events']} history event(s) and {summary['decisions']} eligibility decision(s) "
+            "from a local backup."
         )
         messagebox.showinfo(
             "Restore complete",

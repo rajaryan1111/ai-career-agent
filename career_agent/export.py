@@ -11,6 +11,9 @@ Format history:
   timestamps and per-attempt revision/updated_at, making the file a lossless
   local backup. Version 2 files are still accepted and restored with documented
   defaults.
+* version 4 — adds per-job ``eligibility_decisions`` (the append-only audit trail
+  introduced by database schema 3). Older builds refuse format 4 rather than
+  dropping audit records silently; this build still reads formats 2 and 3.
 
 Restore always validates the whole file before touching the database and writes
 inside a single transaction, so a rejected or failed restore leaves the previous
@@ -26,15 +29,21 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Callable, Mapping
 
+from .audit import (
+    EligibilityDecision, is_fingerprint, requirement_records, requirements_from_records,
+)
 from .core import (
-    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
-    allowed_transitions,
+    ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, Decision,
+    JobListing, allowed_transitions,
 )
 from .store import CareerStore
 
-FORMAT_VERSION = 3
-SUPPORTED_FORMAT_VERSIONS = (2, 3)
-SCHEMA_VERSION = 2
+FORMAT_VERSION = 4
+SUPPORTED_FORMAT_VERSIONS = (2, 3, 4)
+SCHEMA_VERSION = 3
+# A format declares which database schema it can carry; a mismatch is refused
+# rather than restored with guessed fields.
+_SCHEMAS_BY_FORMAT = {2: (None, 2), 3: (2,), 4: (3,)}
 PRIVACY_NOTE = "Export may contain personal information; store securely."
 MAX_BACKUP_BYTES = 10 * 1024 * 1024
 
@@ -51,7 +60,11 @@ _JOB_FIELDS = {
     "allowed_degree_disciplines", "allowed_study_statuses", "allowed_graduation_years",
     "minimum_experience_years", "maximum_experience_years", "required_skills",
     "provenance_note", "allowed_work_authorizations", "application_attempts",
-    "first_seen_at", "last_seen_at",
+    "first_seen_at", "last_seen_at", "eligibility_decisions",
+}
+_DECISION_FIELDS = {
+    "decision_id", "evaluated_at", "rule_version", "outcome",
+    "profile_fingerprint", "job_fingerprint", "requirements",
 }
 _ATTEMPT_FIELDS = {
     "attempt_number", "status", "status_evidence", "candidate_confirmed",
@@ -93,6 +106,7 @@ class RestoredData:
     jobs: tuple[RestoredJob, ...]
     attempts: tuple[RestoredAttempt, ...]
     events: tuple[dict[str, Any], ...]
+    decisions: tuple[EligibilityDecision, ...] = ()
 
     def counts(self) -> dict[str, int]:
         return {
@@ -100,6 +114,7 @@ class RestoredData:
             "jobs": len(self.jobs),
             "attempts": len(self.attempts),
             "events": len(self.events),
+            "decisions": len(self.decisions),
         }
 
 
@@ -155,6 +170,18 @@ def build_export_payload(store: CareerStore) -> dict[str, Any]:
                 ],
             })
         record["application_attempts"] = attempts
+        record["eligibility_decisions"] = [
+            {
+                "decision_id": decision.decision_id,
+                "evaluated_at": decision.evaluated_at,
+                "rule_version": decision.rule_version,
+                "outcome": decision.outcome.value,
+                "profile_fingerprint": decision.profile_fingerprint,
+                "job_fingerprint": decision.job_fingerprint,
+                "requirements": requirement_records(decision.requirements),
+            }
+            for decision in store.list_eligibility_decisions(job.listing_id)
+        ]
         payload["jobs"].append(record)
     return payload
 
@@ -480,6 +507,53 @@ def _parse_attempts(
     return attempt_rows, event_rows
 
 
+def _parse_decisions(
+    data: Any, listing_id: str, context: str, seen: set[str],
+) -> list[EligibilityDecision]:
+    """Validate one job's audit trail without touching the database."""
+    if not isinstance(data, (list, tuple)):
+        _fail(f"{context}: eligibility_decisions must be a list.")
+    decisions: list[EligibilityDecision] = []
+    for index, raw in enumerate(data):
+        where = f"{context}, decision {index + 1}"
+        record = _mapping(raw, where)
+        _reject_unknown(record, _DECISION_FIELDS, where)
+        decision_id = _text(record, "decision_id", where, required=True)
+        if decision_id in seen:
+            _fail(f"Duplicate decision_id {decision_id!r} in the backup.")
+        seen.add(decision_id)
+        evaluated_at = _timestamp(record.get("evaluated_at"), f"{where} evaluated_at")
+        rule_version = _text(record, "rule_version", where, required=True)
+        outcome_raw = record.get("outcome")
+        try:
+            outcome = Decision(outcome_raw)
+        except ValueError as exc:
+            raise ExportFormatError(f"{where}: unknown outcome {outcome_raw!r}.") from exc
+        profile_fingerprint = record.get("profile_fingerprint")
+        if profile_fingerprint is not None and not is_fingerprint(profile_fingerprint):
+            _fail(f"{where}: profile_fingerprint is not a recognised versioned fingerprint.")
+        job_fingerprint = record.get("job_fingerprint")
+        if not is_fingerprint(job_fingerprint):
+            _fail(f"{where}: job_fingerprint is not a recognised versioned fingerprint.")
+        try:
+            requirements = requirements_from_records(record.get("requirements"), context=where)
+        except ValueError as exc:
+            raise ExportFormatError(str(exc)) from exc
+        decisions.append(
+            EligibilityDecision(
+                decision_id=decision_id,
+                listing_id=listing_id,
+                evaluated_at=evaluated_at,
+                rule_version=rule_version,
+                outcome=outcome,
+                profile_fingerprint=profile_fingerprint,
+                job_fingerprint=job_fingerprint,
+                requirements=requirements,
+            )
+        )
+    return decisions
+
+
 def validate_export(payload: Mapping[str, Any]) -> RestoredData:
     """Validate a parsed backup completely, without touching any database."""
     if not isinstance(payload, Mapping):
@@ -493,17 +567,16 @@ def validate_export(payload: Mapping[str, Any]) -> RestoredData:
             f"Unsupported backup format version {version}; this build supports "
             f"{', '.join(str(v) for v in SUPPORTED_FORMAT_VERSIONS)}."
         )
+    declared_schema = payload.get("schema_version")
+    if declared_schema not in _SCHEMAS_BY_FORMAT[version]:
+        _fail(
+            f"Unsupported database schema version {declared_schema!r} for backup format "
+            f"{version}; this build writes schema {SCHEMA_VERSION}."
+        )
     if version >= 3:
-        if payload.get("schema_version") != SCHEMA_VERSION:
-            _fail(
-                f"Unsupported database schema version {payload.get('schema_version')!r}; "
-                f"this build supports {SCHEMA_VERSION}."
-            )
         exported_at = _timestamp(payload.get("exported_at"), "exported_at")
     else:
         exported_at = _timestamp(payload.get("exported_at") or _now(), "exported_at")
-        if payload.get("schema_version") not in (None, SCHEMA_VERSION):
-            _fail(f"Unsupported database schema version {payload.get('schema_version')!r}.")
     if payload.get("privacy_note") is not None and not isinstance(payload["privacy_note"], str):
         _fail("privacy_note must be text when present.")
 
@@ -512,8 +585,9 @@ def validate_export(payload: Mapping[str, Any]) -> RestoredData:
     jobs_data = payload.get("jobs")
     if not isinstance(jobs_data, (list, tuple)):
         _fail("The backup must contain a jobs list.")
-    jobs, attempts, events = [], [], []
+    jobs, attempts, events, decisions = [], [], [], []
     listings: set[str] = set()
+    decision_ids: set[str] = set()
     for index, raw in enumerate(jobs_data):
         record = _mapping(raw, f"job {index + 1}")
         job = _parse_job(record, f"job {index + 1}")
@@ -536,7 +610,16 @@ def validate_export(payload: Mapping[str, Any]) -> RestoredData:
         )
         attempts.extend(RestoredAttempt(row["tracker"], row["updated_at"]) for row in attempt_rows)
         events.extend(event_rows)
-    return RestoredData(profile, tuple(jobs), tuple(attempts), tuple(events))
+        context = f"job {index + 1} ({job.listing_id})"
+        if version >= 4:
+            if "eligibility_decisions" not in record:
+                _fail(f"{context}: missing eligibility_decisions list.")
+            decisions.extend(
+                _parse_decisions(record.get("eligibility_decisions"), job.listing_id, context, decision_ids)
+            )
+        elif "eligibility_decisions" in record:
+            _fail(f"{context}: eligibility_decisions requires backup format 4.")
+    return RestoredData(profile, tuple(jobs), tuple(attempts), tuple(events), tuple(decisions))
 
 
 # -------------------------------------------------------------------- restore
@@ -561,6 +644,7 @@ def restore_export(
             jobs=[{"job": row.job, "first_seen_at": row.first_seen_at, "last_seen_at": row.last_seen_at} for row in restored.jobs],
             attempts=[{"tracker": row.tracker, "updated_at": row.updated_at} for row in restored.attempts],
             events=list(restored.events),
+            decisions=list(restored.decisions),
             replace=replace,
         )
     except sqlite3.Error as exc:
