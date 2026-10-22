@@ -25,6 +25,10 @@ from .core import (
 
 FINGERPRINT_VERSION = "fp1"
 MAX_AUDIT_TEXT = 4000
+MAX_DECISION_ID = 128
+MAX_RULE_VERSION = 64
+MAX_REQUIREMENTS = 64
+MAX_AUDIT_TRAIL_CHARS = 32000
 
 # Only fields that can change the hard-eligibility outcome are fingerprinted.
 # Skills, locations and role preferences affect relevance, never eligibility.
@@ -205,3 +209,51 @@ def requirements_from_json(text: str, *, context: str = "decision") -> tuple[Req
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{context}: requirements are not valid JSON.") from exc
     return requirements_from_records(data, context=context)
+
+
+def validate_decision(
+    decision: EligibilityDecision, *, context: str = "decision"
+) -> EligibilityDecision:
+    """Validate a decision before it is written; never persists a partial record."""
+    if not isinstance(decision, EligibilityDecision):
+        raise ValueError(f"{context}: expected an EligibilityDecision value.")
+    if not isinstance(decision.decision_id, str) or not decision.decision_id.strip():
+        raise ValueError(f"{context}: decision_id must be non-empty text.")
+    if len(decision.decision_id) > MAX_DECISION_ID:
+        raise ValueError(f"{context}: decision_id exceeds {MAX_DECISION_ID} characters.")
+    if not isinstance(decision.listing_id, str) or not decision.listing_id.strip():
+        raise ValueError(f"{context}: listing_id must be non-empty text.")
+    if not isinstance(decision.rule_version, str) or not decision.rule_version.strip():
+        raise ValueError(f"{context}: rule_version must be non-empty text.")
+    if len(decision.rule_version) > MAX_RULE_VERSION:
+        raise ValueError(f"{context}: rule_version exceeds {MAX_RULE_VERSION} characters.")
+    if not isinstance(decision.outcome, Decision):
+        raise ValueError(f"{context}: outcome must be a Decision value.")
+    if not isinstance(decision.evaluated_at, str) or not decision.evaluated_at.strip():
+        raise ValueError(f"{context}: evaluated_at must be a non-empty ISO-8601 timestamp.")
+    try:
+        datetime.fromisoformat(decision.evaluated_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"{context}: evaluated_at is not a valid ISO-8601 timestamp: {decision.evaluated_at!r}."
+        ) from exc
+    if decision.profile_fingerprint is not None and not is_fingerprint(decision.profile_fingerprint):
+        raise ValueError(f"{context}: profile_fingerprint is not a recognised versioned fingerprint.")
+    if not is_fingerprint(decision.job_fingerprint):
+        raise ValueError(f"{context}: job_fingerprint is not a recognised versioned fingerprint.")
+    if len(decision.requirements) > MAX_REQUIREMENTS:
+        raise ValueError(
+            f"{context}: the requirement trail has more than {MAX_REQUIREMENTS} entries."
+        )
+    try:
+        records = requirement_records(decision.requirements)
+    except (TypeError, AttributeError) as exc:
+        raise ValueError(f"{context}: the requirement trail is malformed: {exc}") from exc
+    requirements_from_records(records, context=context)
+    size = len(_canonical_json(records))
+    if size > MAX_AUDIT_TRAIL_CHARS:
+        raise ValueError(
+            f"{context}: the requirement trail is {size} characters, above the "
+            f"{MAX_AUDIT_TRAIL_CHARS}-character limit."
+        )
+    return decision

@@ -529,6 +529,11 @@ def _parse_decisions(
             outcome = Decision(outcome_raw)
         except ValueError as exc:
             raise ExportFormatError(f"{where}: unknown outcome {outcome_raw!r}.") from exc
+        if "profile_fingerprint" not in record:
+            _fail(
+                f"{where}: missing required field 'profile_fingerprint'; "
+                "use null when no candidate profile was saved."
+            )
         profile_fingerprint = record.get("profile_fingerprint")
         if profile_fingerprint is not None and not is_fingerprint(profile_fingerprint):
             _fail(f"{where}: profile_fingerprint is not a recognised versioned fingerprint.")

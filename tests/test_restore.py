@@ -258,12 +258,17 @@ class BackupValidationTests(unittest.TestCase):
         self.decision(payload)["job_fingerprint"] = "sha256:not-a-fingerprint"
         self.assert_invalid(payload, "job_fingerprint")
 
-    def test_missing_profile_fingerprint_is_allowed_but_malformed_is_not(self):
+    def test_null_profile_fingerprint_is_allowed_but_malformed_is_not(self):
         payload = deepcopy(self.payload)
         self.decision(payload)["profile_fingerprint"] = None
         validate_export(payload)  # a decision recorded without a profile stays legal
         payload = deepcopy(self.payload)
         self.decision(payload)["profile_fingerprint"] = "fp1:xyz"
+        self.assert_invalid(payload, "profile_fingerprint")
+
+    def test_missing_profile_fingerprint_key_is_rejected(self):
+        payload = deepcopy(self.payload)
+        self.decision(payload).pop("profile_fingerprint")
         self.assert_invalid(payload, "profile_fingerprint")
 
     def test_malformed_requirement_trail_is_rejected(self):
@@ -275,6 +280,19 @@ class BackupValidationTests(unittest.TestCase):
         payload = deepcopy(self.payload)
         self.decision(payload)["requirements"] = []
         self.assert_invalid(payload, "must not be empty")
+
+    def test_missing_fingerprint_key_is_rejected_without_touching_the_database(self):
+        payload = deepcopy(self.payload)
+        for job in payload["jobs"]:
+            for decision in job["eligibility_decisions"]:
+                decision.pop("profile_fingerprint", None)
+        target = CareerStore(Path(self.folder.name) / "missing-key.sqlite3")
+        self.addCleanup(target.close)
+        seed(target)
+        before = snapshot(target)
+        with self.assertRaises(ExportFormatError):
+            restore_export(target, payload, replace=True)
+        self.assertEqual(snapshot(target), before)
 
     def test_duplicate_decision_id_is_rejected(self):
         payload = deepcopy(self.payload)

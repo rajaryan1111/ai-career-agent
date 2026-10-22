@@ -21,7 +21,7 @@ import sqlite3
 from pathlib import Path
 
 from .audit import (
-    EligibilityDecision, requirements_from_json, requirements_to_json,
+    EligibilityDecision, requirements_from_json, requirements_to_json, validate_decision,
 )
 from .core import (
     ApplicationEvent, ApplicationStatus, ApplicationTracker, Availability, CandidateProfile,
@@ -99,6 +99,10 @@ class CareerStore:
         if version > _SCHEMA_VERSION:
             raise RuntimeError(f"Database schema {version} is newer than supported schema {_SCHEMA_VERSION}.")
         if version == _SCHEMA_VERSION:
+            # An earlier build could mark a database current while a failed upgrade
+            # had stranded the legacy tracker table. Repair it before returning.
+            if self._has_table("application_tracker_v1"):
+                self._migrate_to_v2()
             return
         # Table rebuilds are only safe with foreign keys disabled, and the pragma is a
         # no-op inside a transaction, so it is toggled around the migration block.
@@ -106,10 +110,15 @@ class CareerStore:
         try:
             with self._connection:
                 # Explicit ladder: every older version runs the steps it still needs.
-                if self._has_table("application_tracker"):
+                if self._has_table("application_tracker") or self._has_table("application_tracker_v1"):
                     self._migrate_to_v2()
                 else:
                     self._create_schema_v2()
+                if self._has_table("application_tracker_v1"):
+                    raise RuntimeError(
+                        "The database upgrade left an unresolved legacy tracker table; "
+                        "refusing to mark the database as schema 3."
+                    )
                 self._migrate_to_v3()
                 self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         finally:
@@ -122,52 +131,62 @@ class CareerStore:
         return row is not None
 
     def _create_schema_v2(self) -> None:
-        self._connection.executescript(f"""
-            CREATE TABLE IF NOT EXISTS candidate_profile (
-                profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
-                payload TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS job_listings (
-                listing_id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL,
-                duplicate_key TEXT NOT NULL,
-                first_seen_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key);
-        """)
+        # Individual statements keep callers that are inside a savepoint atomic;
+        # executescript() would implicitly commit the pending transaction.
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS candidate_profile (
+                   profile_id INTEGER PRIMARY KEY CHECK (profile_id = 1),
+                   payload TEXT NOT NULL,
+                   updated_at TEXT NOT NULL
+               )"""
+        )
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS job_listings (
+                   listing_id TEXT PRIMARY KEY,
+                   payload TEXT NOT NULL,
+                   duplicate_key TEXT NOT NULL,
+                   first_seen_at TEXT NOT NULL,
+                   last_seen_at TEXT NOT NULL
+               )"""
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_job_duplicate_key ON job_listings(duplicate_key)"
+        )
         self._create_application_tables()
 
     def _create_application_tables(self) -> None:
-        self._connection.executescript(f"""
-            CREATE TABLE IF NOT EXISTS application_tracker (
-                listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
-                attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
-                status TEXT NOT NULL CHECK (status IN ({_STATUS_VALUES})),
-                status_evidence TEXT,
-                candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
-                revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (listing_id, attempt_number),
-                CHECK (status <> 'confirmed'
-                       OR (status_evidence IS NOT NULL AND length(trim(status_evidence)) > 0))
-            );
-            CREATE TABLE IF NOT EXISTS application_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                listing_id TEXT NOT NULL,
-                attempt_number INTEGER NOT NULL,
-                from_status TEXT,
-                to_status TEXT NOT NULL CHECK (to_status IN ({_STATUS_VALUES})),
-                evidence TEXT,
-                candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
-                recorded_at TEXT NOT NULL,
-                FOREIGN KEY (listing_id, attempt_number)
-                    REFERENCES application_tracker(listing_id, attempt_number) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_application_events_attempt
-                ON application_events(listing_id, attempt_number, event_id);
-        """)
+        self._connection.execute(
+            f"""CREATE TABLE IF NOT EXISTS application_tracker (
+                   listing_id TEXT NOT NULL REFERENCES job_listings(listing_id) ON DELETE CASCADE,
+                   attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+                   status TEXT NOT NULL CHECK (status IN ({_STATUS_VALUES})),
+                   status_evidence TEXT,
+                   candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
+                   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+                   updated_at TEXT NOT NULL,
+                   PRIMARY KEY (listing_id, attempt_number),
+                   CHECK (status <> 'confirmed'
+                          OR (status_evidence IS NOT NULL AND length(trim(status_evidence)) > 0))
+               )"""
+        )
+        self._connection.execute(
+            f"""CREATE TABLE IF NOT EXISTS application_events (
+                   event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   listing_id TEXT NOT NULL,
+                   attempt_number INTEGER NOT NULL,
+                   from_status TEXT,
+                   to_status TEXT NOT NULL CHECK (to_status IN ({_STATUS_VALUES})),
+                   evidence TEXT,
+                   candidate_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (candidate_confirmed IN (0, 1)),
+                   recorded_at TEXT NOT NULL,
+                   FOREIGN KEY (listing_id, attempt_number)
+                       REFERENCES application_tracker(listing_id, attempt_number) ON DELETE CASCADE
+               )"""
+        )
+        self._connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_application_events_attempt
+                   ON application_events(listing_id, attempt_number, event_id)"""
+        )
 
     def _migrate_to_v3(self) -> None:
         """Add the append-only decision audit table; existing rows are not rewritten.
@@ -205,31 +224,99 @@ class CareerStore:
 
         Each legacy tracker becomes attempt 1 with revision 0. History cannot be
         reconstructed, so no event rows are fabricated for the pre-migration past.
+
+        The whole step runs inside a savepoint, so a failure leaves the database
+        exactly as it was: no half-renamed table and no stranded
+        ``application_tracker_v1``. If a previous interrupted upgrade left that
+        table behind, its rows are copied into the new table, the copy is verified,
+        and only then is the legacy table dropped. Existing rows are never
+        overwritten or discarded to make the upgrade pass: a legacy row that
+        already has an attempt 1 stops the upgrade so the owner can inspect it.
         """
-        columns = {
-            row["name"]
-            for row in self._connection.execute("PRAGMA table_info(application_tracker)")
-        }
-        if "attempt_number" not in columns:
-            self._connection.execute("ALTER TABLE application_tracker RENAME TO application_tracker_v1")
-            self._create_application_tables()
+        self._connection.execute("SAVEPOINT migrate_v2")
+        try:
+            has_tracker = self._has_table("application_tracker")
+            has_legacy = self._has_table("application_tracker_v1")
+            has_attempt_column = has_tracker and "attempt_number" in {
+                row["name"]
+                for row in self._connection.execute("PRAGMA table_info(application_tracker)")
+            }
+            if has_tracker and not has_attempt_column:
+                if has_legacy:
+                    raise RuntimeError(
+                        "The database contains both a schema-1 tracker and an "
+                        "application_tracker_v1 table; the upgrade cannot tell which "
+                        "rows are authoritative, so it made no changes."
+                    )
+                self._connection.execute(
+                    "ALTER TABLE application_tracker RENAME TO application_tracker_v1"
+                )
+                has_legacy = True
+                self._create_application_tables()
+            elif not has_tracker:
+                self._create_application_tables()
+            if has_legacy:
+                self._copy_legacy_tracker()
+            else:
+                self._create_application_tables()
+        except Exception:
+            self._connection.execute("ROLLBACK TO SAVEPOINT migrate_v2")
+            self._connection.execute("RELEASE SAVEPOINT migrate_v2")
+            raise
+        self._connection.execute("RELEASE SAVEPOINT migrate_v2")
+
+    def _copy_legacy_tracker(self) -> None:
+        """Copy missing legacy tracker rows, verify them, then drop the old table."""
+        conflicts = self._connection.execute(
+            """SELECT legacy.listing_id
+               FROM application_tracker_v1 AS legacy
+               WHERE EXISTS (
+                   SELECT 1 FROM application_tracker AS current
+                   WHERE current.listing_id = legacy.listing_id
+                     AND current.attempt_number = 1)"""
+        ).fetchall()
+        if conflicts:
+            raise RuntimeError(
+                "The legacy tracker table conflicts with existing attempt 1 rows for: "
+                + ", ".join(row["listing_id"] for row in conflicts)
+                + ". The upgrade made no changes; inspect the database before retrying."
+            )
+        rows = self._connection.execute(
+            """SELECT listing_id, status, status_evidence, candidate_confirmed, updated_at
+               FROM application_tracker_v1"""
+        ).fetchall()
+        for row in rows:
             try:
                 self._connection.execute(
                     """INSERT INTO application_tracker(
                            listing_id, attempt_number, status, status_evidence,
                            candidate_confirmed, revision, updated_at)
-                       SELECT listing_id, 1, status, status_evidence,
-                              candidate_confirmed, 0, updated_at
-                       FROM application_tracker_v1"""
+                       VALUES (?, 1, ?, ?, ?, 0, ?)""",
+                    (
+                        row["listing_id"], row["status"], row["status_evidence"],
+                        row["candidate_confirmed"], row["updated_at"],
+                    ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise RuntimeError(
                     "Existing tracker rows violate the schema-2 constraints "
-                    f"(invalid status or confirmed without evidence): {exc}"
+                    "(invalid status, confirmation without evidence, or a missing "
+                    f"listing): {exc}"
                 ) from exc
-            self._connection.execute("DROP TABLE application_tracker_v1")
-        else:
-            self._create_application_tables()
+        missing = self._connection.execute(
+            """SELECT legacy.listing_id
+               FROM application_tracker_v1 AS legacy
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM application_tracker AS current
+                   WHERE current.listing_id = legacy.listing_id
+                     AND current.attempt_number = 1)"""
+        ).fetchall()
+        if missing:
+            raise RuntimeError(
+                "The database upgrade could not recover these legacy tracker rows: "
+                + ", ".join(row["listing_id"] for row in missing)
+            )
+        self._connection.execute("DROP TABLE application_tracker_v1")
 
     # ----------------------------------------------------------------- profile
 
@@ -383,6 +470,10 @@ class CareerStore:
                      int(event["candidate_confirmed"]), event["recorded_at"]),
                 )
             for decision in decisions:
+                try:
+                    validate_decision(decision, context=f"restore decision {decision.decision_id}")
+                except ValueError as exc:
+                    raise ValueError(f"Invalid eligibility decision in the snapshot: {exc}") from exc
                 self._connection.execute(
                     """INSERT INTO eligibility_decisions(
                            decision_id, listing_id, evaluated_at, rule_version, outcome,
@@ -636,6 +727,10 @@ class CareerStore:
 
     def save_eligibility_decision(self, decision: EligibilityDecision) -> EligibilityDecision:
         """Append one decision record; an existing record is never updated in place."""
+        try:
+            validate_decision(decision)
+        except ValueError as exc:
+            raise ValueError(f"Invalid eligibility decision: {exc}") from exc
         if self.get_job(decision.listing_id) is None:
             raise ValueError("Record the job listing before recording an eligibility decision.")
         try:

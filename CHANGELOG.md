@@ -14,6 +14,11 @@ internal local alpha; entries describe what has actually been verified.
 - Schema version is 3 and backup format is 4. Databases written by a newer build are still refused rather than downgraded.
 - Tests and the tracker smoke test now cover migration from v1 and v2, decision persistence, cascade/delete counts, fingerprint sensitivity, and backup/restore validation of audit records.
 
+### Fixed
+- A failed v1→v3 upgrade no longer strands the legacy tracker in `application_tracker_v1`: the v1 step is one atomic savepoint, schema 3 is never recorded while that table is unresolved, and a second open retries the upgrade instead of reporting success with missing application history. A schema-3 database that already carries the stray table recovers its rows on open.
+- A format-4 backup record must contain the `profile_fingerprint` key (its value may be `null`); a missing key is rejected before any restore write.
+- `save_eligibility_decision()` validates the decision before writing — non-empty decision ID and rule version, a real outcome enum, `fp1:` fingerprints, a valid non-empty requirement trail, and size limits — and leaves the database untouched when validation fails.
+
 ### Known limitations
 - Fingerprints are change detectors, not a security boundary; they can be brute-forced by someone who already holds the database. No encryption at rest is added.
 - A decision records that an evaluation happened; it does not re-verify the listing or prove an external submission.

@@ -28,6 +28,10 @@ The local alpha supports manual candidate-profile entry, local resume import for
 
 Existing databases are upgraded in place to schema version 3: a schema-1 database first becomes schema 2 (one attempt per legacy tracker row, revision 0) and then gains the `eligibility_decisions` table, which is created empty. No existing row is rewritten and history is not invented for records that predate an upgrade. A database written by a newer build is refused rather than downgraded.
 
+An upgrade that fails is rolled back and the database stays at its previous schema version; the next open retries the same upgrade rather than recording it as complete. A schema-3 database left with a stray `application_tracker_v1` table by an interrupted upgrade copies those legacy rows into attempt 1 the next time it is opened; if a legacy row already has an attempt 1, the open fails and changes nothing rather than dropping either record.
+
+The `fp1:` fingerprints in the audit trail are change detectors: they show whether the eligibility-relevant profile or listing inputs changed since a decision. They are not encryption and not a security boundary — a low-entropy value can be brute-forced from the stored hash by anyone who already holds the database file.
+
 ## Install
 
 No runtime dependency beyond the Python standard library and Tk is required. An editable install adds the `career-agent` command:

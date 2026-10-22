@@ -4,11 +4,12 @@ import sqlite3
 import stat
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from career_agent import (
     ApplicationStatus, ApplicationTracker, Availability, CandidateProfile, JobListing,
-    StaleApplicationError, build_decision, evaluate_eligibility,
+    RequirementResult, StaleApplicationError, build_decision, evaluate_eligibility,
 )
 from career_agent.store import CareerStore, _SCHEMA_VERSION
 
@@ -437,6 +438,43 @@ class EligibilityDecisionStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unreadable"):
             self.store.list_eligibility_decisions("j1")
 
+    def test_invalid_decision_is_rejected_before_writing(self):
+        good = sample_decision(self.store)
+        cases = {
+            "empty trail": replace(good, requirements=()),
+            "blank rule version": replace(good, rule_version="   "),
+            "blank decision id": replace(good, decision_id=" "),
+            "bad job fingerprint": replace(good, job_fingerprint="sha256:abc"),
+            "bad profile fingerprint": replace(good, profile_fingerprint="fp1:xyz"),
+            "string outcome": replace(good, outcome="pass"),
+            "invalid timestamp": replace(good, evaluated_at="not-a-date"),
+        }
+        for name, decision in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(ValueError):
+                    self.store.save_eligibility_decision(decision)
+        self.assertEqual(self.store.list_eligibility_decisions("j1"), ())
+
+    def test_oversized_requirement_trail_is_rejected(self):
+        good = sample_decision(self.store)
+        filler = good.requirements[0]
+        oversized = replace(good, requirements=tuple(
+            replace(filler, requirement=f"requirement-{index}", explanation="x" * 4000)
+            for index in range(9)
+        ))
+        with self.assertRaisesRegex(ValueError, "character limit"):
+            self.store.save_eligibility_decision(oversized)
+
+    def test_too_many_requirements_are_rejected(self):
+        good = sample_decision(self.store)
+        filler = good.requirements[0]
+        many = replace(good, requirements=tuple(
+            RequirementResult(f"r-{index}", filler.decision, filler.explanation, filler.evidence)
+            for index in range(65)
+        ))
+        with self.assertRaisesRegex(ValueError, "more than 64"):
+            self.store.save_eligibility_decision(many)
+
     def test_schema_rejects_an_unknown_stored_outcome(self):
         self.store.save_eligibility_decision(sample_decision(self.store))
         with self.assertRaises(sqlite3.IntegrityError):
@@ -566,6 +604,157 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(
                     store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
                 )
+
+    def test_failed_v1_upgrade_does_not_advance_schema_on_reopen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = self._v1_database(folder, status="bogus", evidence=None, confirmed=0)
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, "schema-2 constraints"):
+                    CareerStore(path)
+                connection = sqlite3.connect(path)
+                try:
+                    version = connection.execute("PRAGMA user_version").fetchone()[0]
+                    tables = {
+                        row[0] for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+                    rows = connection.execute("SELECT COUNT(*) FROM application_tracker").fetchone()[0]
+                finally:
+                    connection.close()
+                self.assertEqual(version, 1, "a failed upgrade must not advance the schema")
+                self.assertIn("application_tracker", tables)
+                self.assertNotIn("application_tracker_v1", tables)
+                self.assertEqual(rows, 1, "the legacy row must remain in the v1 table")
+
+            # Correcting the legacy row lets the same database upgrade normally.
+            connection = sqlite3.connect(path)
+            connection.execute("UPDATE application_tracker SET status='shortlisted'")
+            connection.commit()
+            connection.close()
+            with CareerStore(path) as store:
+                self.assertEqual(
+                    store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
+                )
+                tracker = store.get_tracker("j1")
+                self.assertEqual(tracker.attempt_number, 1)
+                self.assertEqual(tracker.status, ApplicationStatus.SHORTLISTED)
+                self.assertEqual(store.list_events("j1"), ())
+
+    def test_v3_failure_after_v1_upgrade_preserves_rows_and_recovers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = self._v1_database(folder)
+            connection = sqlite3.connect(path)
+            connection.execute("CREATE VIEW eligibility_decisions AS SELECT 1 AS x")
+            connection.commit()
+            connection.close()
+
+            with self.assertRaises(sqlite3.OperationalError):
+                CareerStore(path)
+
+            connection = sqlite3.connect(path)
+            try:
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                tables = {
+                    row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                rows = connection.execute("SELECT COUNT(*) FROM application_tracker").fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(version, 1)
+            self.assertNotIn("application_tracker_v1", tables, "the v1 upgrade must be durable")
+            self.assertEqual(rows, 1, "the migrated tracker row must survive a later v3 failure")
+
+            connection = sqlite3.connect(path)
+            connection.execute("DROP VIEW eligibility_decisions")
+            connection.commit()
+            connection.close()
+            with CareerStore(path) as store:
+                self.assertEqual(
+                    store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
+                )
+                tracker = store.get_tracker("j1")
+                self.assertEqual(tracker.status, ApplicationStatus.CONFIRMED)
+                self.assertEqual(tracker.status_evidence, "Legacy employer email")
+
+    def test_schema_3_database_with_stranded_legacy_tracker_is_repaired(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "stranded.sqlite3"
+            with CareerStore(path) as store:
+                store.save_profile(CandidateProfile(candidate_country="India"))
+                store.save_job(sample_job())
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """CREATE TABLE application_tracker_v1 (
+                       listing_id TEXT PRIMARY KEY,
+                       status TEXT NOT NULL,
+                       status_evidence TEXT,
+                       candidate_confirmed INTEGER NOT NULL DEFAULT 0,
+                       updated_at TEXT NOT NULL
+                   )"""
+            )
+            connection.execute(
+                "INSERT INTO application_tracker_v1 VALUES (?, ?, ?, ?, ?)",
+                ("j1", "shortlisted", None, 0, "2026-10-13T00:00:00+00:00"),
+            )
+            connection.commit()
+            connection.close()
+
+            with CareerStore(path) as store:
+                self.assertEqual(
+                    store._connection.execute("PRAGMA user_version").fetchone()[0], _SCHEMA_VERSION
+                )
+                tracker = store.get_tracker("j1")
+                self.assertEqual(tracker.attempt_number, 1)
+                self.assertEqual(tracker.status, ApplicationStatus.SHORTLISTED)
+                self.assertEqual(
+                    store._connection.execute(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name='application_tracker_v1'"
+                    ).fetchone()[0],
+                    0,
+                )
+
+    def test_stranded_legacy_row_conflicting_with_attempt_one_is_not_discarded(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "conflict.sqlite3"
+            with CareerStore(path) as store:
+                store.save_profile(CandidateProfile(candidate_country="India"))
+                store.save_job(sample_job())
+                store.start_application("j1")
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """CREATE TABLE application_tracker_v1 (
+                       listing_id TEXT PRIMARY KEY,
+                       status TEXT NOT NULL,
+                       status_evidence TEXT,
+                       candidate_confirmed INTEGER NOT NULL DEFAULT 0,
+                       updated_at TEXT NOT NULL
+                   )"""
+            )
+            connection.execute(
+                "INSERT INTO application_tracker_v1 VALUES (?, ?, ?, ?, ?)",
+                ("j1", "confirmed", "Legacy employer email", 1, "2026-10-13T00:00:00+00:00"),
+            )
+            connection.commit()
+            connection.close()
+
+            with self.assertRaisesRegex(RuntimeError, "conflicts with existing attempt 1"):
+                CareerStore(path)
+
+            connection = sqlite3.connect(path)
+            try:
+                legacy_rows = connection.execute(
+                    "SELECT status FROM application_tracker_v1"
+                ).fetchall()
+                attempt_rows = connection.execute(
+                    "SELECT attempt_number, status FROM application_tracker"
+                ).fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(legacy_rows, [("confirmed",)], "legacy data must not be dropped")
+            self.assertEqual(attempt_rows, [(1, "discovered")], "existing rows must not change")
 
     def test_future_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
